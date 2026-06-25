@@ -1,0 +1,99 @@
+"""Build a Blender armature from a Unity prefab transform hierarchy.
+
+Every transform becomes a bone whose rest matrix is the node's Unity world
+matrix conjugated into Blender space.  Bones are not connected head-to-tail
+(Unity joints are arbitrary), and bone length is purely cosmetic: skinning and
+animation correctness depend only on the rest matrix being consistent between
+bind and pose, which this guarantees.
+
+Returns maps the rest of the importer relies on:
+    file_id   -> final (uniquified) bone name
+    node path -> final bone name
+"""
+
+from __future__ import annotations
+
+try:
+    from . import coordinate, hierarchy
+except ImportError:
+    import coordinate
+    import hierarchy
+
+import numpy as np
+
+import bpy
+from mathutils import Vector
+
+_DEFAULT_BONE_LENGTH = 0.03
+
+
+def _bone_length(node):
+    """Cosmetic length: distance to the nearest child, else a small default."""
+    head = node.world.translation
+    best = None
+    for child in node.children:
+        d = (child.world.translation - head).length
+        if d > 1e-5 and (best is None or d < best):
+            best = d
+    if best is None:
+        return _DEFAULT_BONE_LENGTH
+    return max(min(best, 0.3), 0.005)
+
+
+def build_armature(context, unity_file, name="UnityArmature"):
+    nodes, roots = hierarchy.build_hierarchy(unity_file)
+
+    arm_data = bpy.data.armatures.new(name)
+    arm_obj = bpy.data.objects.new(name, arm_data)
+    context.collection.objects.link(arm_obj)
+
+    view_layer = context.view_layer
+    view_layer.objects.active = arm_obj
+    arm_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    file_id_to_bone = {}
+    edit_bones = arm_data.edit_bones
+
+    # Create bones in parent-before-child order so parenting is always valid.
+    ordered = []
+    stack = list(roots)
+    while stack:
+        node = stack.pop()
+        ordered.append(node)
+        stack.extend(node.children)
+
+    node_to_editbone = {}
+    for node in ordered:
+        eb = edit_bones.new(node.name)
+        length = _bone_length(node)
+        eb.head = (0.0, 0.0, 0.0)
+        eb.tail = (0.0, length, 0.0)
+        eb.matrix = coordinate.convert_matrix(node.world)
+        # Re-assert length along the bone's own axis (matrix set can rescale).
+        eb.length = length
+        node_to_editbone[node.file_id] = eb
+        file_id_to_bone[node.file_id] = eb.name  # Blender may uniquify the name
+
+    for node in ordered:
+        if node.parent is not None:
+            node_to_editbone[node.file_id].parent = node_to_editbone[node.parent.file_id]
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    path_to_bone = {}
+    for node in nodes.values():
+        bone_name = file_id_to_bone.get(node.file_id)
+        if bone_name and node.path:
+            path_to_bone[node.path] = bone_name
+
+    file_id_to_world = {fid: np.array(node.world, dtype=np.float64)
+                        for fid, node in nodes.items()}
+
+    return arm_obj, {
+        "nodes": nodes,
+        "roots": roots,
+        "file_id_to_bone": file_id_to_bone,
+        "path_to_bone": path_to_bone,
+        "file_id_to_world": file_id_to_world,
+    }
