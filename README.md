@@ -1,0 +1,152 @@
+# RuriRipperImporter
+
+**Unity 原生 YAML 直进 Blender,无损。不走 FBX,不重导出,不绕弯。**
+
+Unity 在「Force Text」序列化模式下,资源本身就是 YAML 文本 —— `.prefab` /
+`.asset` / `.mat` / `.anim` / `.controller` 全是人类可读的明文。这个 Blender 插件
+**直接读 Unity 这套原生 YAML**,把网格、真实骨架、带原始贴图的材质、以及全部动画
+clip 原样搬进 Blender。
+
+> FBX 那套工作流会给你重新绑骨、搞坏法线、丢顶点流、改骨骼名、再塞进一个瞎猜的坐标系。
+> RuriRipperImporter 直接读「真相本身」—— Unity 自己的序列化文本 —— 忠实重建模型。
+> **FBX 可以留在 2009 年了。**
+
+作者:**ShiyumeMeguri** · 基于 Blender **5.1** 开发验证(4.2+ 可用)。
+
+---
+
+## 它能导入什么
+
+| Unity 数据 | Blender 结果 |
+|---|---|
+| `.prefab` Transform 层级(class 1/4) | 骨架,每个 transform 一根骨,精确 rest 矩阵 |
+| `SkinnedMeshRenderer`(137)+ Mesh `.asset`(43) | 蒙皮网格:坐标、全部 UV 通道、顶点色、蒙皮权重、blendshape |
+| `LODGroup`(205) | 只导 **LOD0**;LOD1+ 和 `ShadowsOnly` 阴影代理网格直接丢弃 |
+| `MeshRenderer`/`MeshFilter`(23/33) | 静态网格,放到对应节点变换上 |
+| `.mat` 材质 | Principled BSDF;自动识别 base color / normal / emission 贴图 |
+| 贴图(`.png`,经 `.meta` 的 GUID) | 加载并连线;法线贴图设为 Non-Color |
+| Animator(95)→ `.controller` → `.anim`(74) | controller 引用的每个 clip 烘焙成一个 action;blendshape 曲线驱动 shape key |
+| MonoBehaviour 等纯引擎数据 | 按设计跳过 |
+
+**贴图识别**(按优先级,第一个有值的属性即采用):
+- Base color:`_MainTex`、`_BaseMap`、`_BaseColorMap`、`_Albedo`、`_DiffuseMap` …
+- Normal:`_BumpMap`、`_NormalMap`、`_NormalTex` …
+- Emission:`_EmissionMap`、`_EmissiveMap` …
+
+---
+
+## 安装
+
+1. 启用插件:Blender → **编辑 ▸ 偏好设置 ▸ 插件 ▸ 安装…** → 选 `RuriRipperImporter`
+   文件夹/zip → 勾选启用 **RuriRipperImporter**。
+2. 导入入口:**文件 ▸ 导入 ▸ Unity Asset (.prefab / .asset / .anim / .controller)**。
+
+插件会从你选的文件向上自动定位工程的 `Assets/` 根目录,并通过同名 `.meta` 里的 GUID
+解析每一个贴图 / clip / avatar(只有引用未命中时才扩大扫描范围)。
+
+> **OneDrive 注意**:若 `%APPDATA%\Blender` 被 OneDrive 同步,Blender 的「从磁盘安装」
+> 可能静默解压失败。要么先暂停 OneDrive 再装,要么把 Blender 指到非同步目录:设环境变量
+> `BLENDER_USER_SCRIPTS=D:\某非同步路径`,把 `RuriRipperImporter` 文件夹丢进其
+> `addons\` 子目录。
+
+---
+
+## 用法 —— 一个菜单,四种文件
+
+**文件 ▸ 导入 ▸ Unity Asset** 自动识别你给的文件类型:
+
+| 你选的文件 | 行为 |
+|---|---|
+| **`.prefab`** | 完整模型:骨架 + LOD0 蒙皮网格 + 材质 + **Animator controller 引用的所有 clip**(作为 action) |
+| **`.asset`** | 按 class 判定:Mesh(静态物体)/ AnimationClip / AnimatorController |
+| **`.anim`** | 单个 clip,烘焙成 action 应用到**当前激活的骨架**上 |
+| **`.controller`** | 它引用的**全部** clip,烘焙成 action 应用到当前骨架上 |
+
+先导模型,之后导 clip 或 controller 会直接套到这个骨架上。
+
+clip **只**来自 Animator controller —— 不靠遍历目录瞎猜。Unity 的负数 fileID(controller
+里大量使用)也能正确解析,所以嵌套在状态机和 blend tree 里的 clip 引用全都找得到。
+
+---
+
+## 只有 FBX 二进制怎么办
+
+如果某个模型在 Unity 工程里只有二进制 `.fbx`,附带的编辑器工具
+**`unity_editor/RuriYamlDumper.cs`** 能在 Unity 内把它转成同款 YAML —— 等于把手动
+「选中子资源 → Ctrl+D 抽出」对整个模型一次性自动化。
+
+1. 把 `RuriYamlDumper.cs` 丢进 Unity 工程任意 `Editor/` 文件夹。
+2. **Project Settings ▸ Editor ▸ Asset Serialization** 设为 **Force Text**。
+3. 在 Project 窗口右键模型 → **Ruri ▸ Dump Model to YAML (for Blender)**。
+4. 用本插件导入生成的 `<model>_yaml/<model>.prefab`。
+
+它会实例化模型、**完全解包** prefab 连接(让层级内联展开,而不是只留一个指向 FBX 的瘦
+引用),抽出并重指向每个 Mesh / 内嵌 Material / Avatar / AnimationClip,最后存成扁平
+prefab。已端到端验证:真实角色 FBX → dump → Blender,骨架、贴图、被自身 clip 驱动全部正常。
+
+> FBX 模型没有 `LODGroup`,所以会导入所有 LOD —— 只要 LOD0 的话,在 Blender 里把
+> `*_lod1/2/3` 网格物体删掉即可。
+
+---
+
+## 全版本支持(不硬编码 class id)
+
+派发是按 `!u!<id>` 头里那个**跨版本稳定的数字 class id** 来的,经 `class_registry.json`
+解析 —— 这张表由 **1398** 份 Unity TypeTreeDump 类表合并而成(3.4 → 6000.x)。类名在版本
+间会改(id 29 `Scene`→`SceneSettings`、id 1001 `DataTemplate`→`Prefab`);表里把每个历史
+名字都映射到它的 id,所以任何版本的 YAML 都能正确识别类型。有新的 dump 时用
+`python tools/build_class_registry.py` 重新生成。
+
+---
+
+## 原理(关键部分)
+
+- **自研 YAML 解析器** —— 零依赖、单遍扫描,超大十六进制 blob 原样保留。560 KB 的 prefab
+  约 50ms 解析完。负数 fileID、Unity 的同缩进块序列等怪写法全部吃下。
+- **网格解码** —— 按通道表读交错的顶点流,处理打包的 `dimension` 字节、遵守 Unity 的
+  16 字节流对齐、过滤某些 writer 末尾多吐的非法字符。按存储的 AABB 与权重和逐位校验。
+- **坐标转换** —— Unity 左手 Y-up,Blender 右手 Z-up。转换用反射矩阵 `C = swap(Y,Z)` 做
+  共轭 `M_blender = C · M_unity · C`,一次性搞定朝向和手性,无需逐四元数特判;三角形绕序
+  反转以保证法线朝外。
+- **bind-pose 烘焙** —— 顶点通过 `Σ wᵢ · (boneWorldᵢ · bindposeᵢ) · v_local` 变换到 bind
+  姿势的世界空间,无论模型原本在什么坐标系下创作都能与骨架对齐(这些是 3ds Max `Bip001`
+  绑定)。静止姿势下蒙皮变形为单位矩阵 → 精确 bind pose。
+- **动画** —— 每个 clip 的三次 Hermite 曲线逐帧求值,经同一个共轭恒等式写入 pose bone 的
+  `matrix_basis`,用 `foreach_set` 批量烘进 fcurve。使用 Blender 4.4+ 的 slotted action。
+
+---
+
+## 文件清单
+
+```
+RuriRipperImporter/            ← 插件本体(装这个)
+  __init__.py                  ← 单一「Unity Asset」导入算子
+  unity_yaml.py                ← Unity YAML 解析器
+  class_registry.py/.json      ← 全版本 class id ↔ 名字 表
+  asset_db.py                  ← GUID 索引 + 文件缓存
+  mesh_decoder.py              ← 顶点/索引/蒙皮/blendshape 解码
+  coordinate.py                ← Unity↔Blender 坐标转换
+  hierarchy.py armature_builder.py mesh_builder.py
+  material_builder.py animation_builder.py prefab_importer.py
+unity_editor/RuriYamlDumper.cs ← 可选:Unity 端 FBX→YAML 导出工具
+tools/build_class_registry.py  ← 重新生成 class_registry.json
+cli_import.py  selftest.py      ← 无头测试脚手架(自测:Pelica 14/14)
+```
+
+无头运行自测:
+
+```bash
+blender --background --factory-startup --python selftest.py
+```
+
+---
+
+## 限制
+
+- 一个只「引用」二进制 `.fbx` 的 prefab 里没有 YAML 几何数据 —— 先用上面的 dumper 转一下。
+- 存储的顶点法线只在能解码出合理单位向量场时才导入;打包/私有编码的退回 Blender 自算法线
+  (对干净网格永远正确)。
+- humanoid Avatar 的肌肉/重定向配置不应用 —— 你拿到的是字面意义上的通用骨架,这正是编辑和
+  做动画想要的。
+- NPR 游戏 shader 用 Principled BSDF 近似(base/normal/emission);完整 shader graph 不在范围内。
+- 超大 clip(几百根骨、60fps 密集关键帧)是纯 Python 解析,每个可能要 ~20s。
