@@ -25,24 +25,27 @@ import importlib
 from . import (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
                armature_builder, mesh_builder, material_builder,
                animation_builder, prefab_importer, bridge_asset_db,
-               pythonnet_bootstrap, pythonnet_bridge, cabmap_state, cabmap_panel)
+               pythonnet_bootstrap, pythonnet_bridge, cabmap_state, cabmap_panel,
+               scene_state, scene_panel)
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
-# three that hold real, expensive-to-rebuild process state (the claimed CLR
+# ones that hold real, expensive-to-rebuild process state (the claimed CLR
 # runtime handle, the loaded bridge/DLL type, the loaded cabmap + its 260k-row
-# cache): a reload resets a module's globals to their source-code defaults
-# even though the underlying state they were tracking (a process-wide CLR
-# runtime that can never be re-claimed once set; a cabmap already paid for
-# with a multi-second load) is still very much alive. Reloading them on every
+# cache, the discovered-but-not-yet-imported scene placements): a reload
+# resets a module's globals to their source-code defaults even though the
+# underlying state they were tracking (a process-wide CLR runtime that can
+# never be re-claimed once set; a cabmap already paid for with a
+# multi-second load) is still very much alive. Reloading them on every
 # re-register both throws away that live state for no reason AND desyncs
 # their "already done" guards from reality (this is exactly what caused a
 # second, spurious set_runtime() attempt after a Reload-Scripts-triggered
-# reload). cabmap_panel is safe to reload -- it's just UI/operator code, no
-# state of its own (its PropertyGroup data lives on bpy.types.Scene, not here).
-_STATEFUL_MODULES = (pythonnet_bootstrap, pythonnet_bridge, cabmap_state)
+# reload). cabmap_panel/scene_panel are safe to reload -- just UI/operator
+# code, no state of their own (PropertyGroup data lives on bpy.types.Scene).
+_STATEFUL_MODULES = (pythonnet_bootstrap, pythonnet_bridge, cabmap_state, scene_state)
 for _mod in (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
              armature_builder, mesh_builder, material_builder,
-             animation_builder, prefab_importer, bridge_asset_db, cabmap_panel):
+             animation_builder, prefab_importer, bridge_asset_db, cabmap_panel,
+             scene_panel):
     importlib.reload(_mod)
 
 import bpy
@@ -110,6 +113,7 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
+    scene_panel.register()
     # Claim the process-wide CLR runtime (CoreCLR) as early as possible, before
     # any other addon in this profile gets a chance to trigger its own lazy
     # `import clr` (which defaults to .NET Framework on Windows and would
@@ -128,6 +132,7 @@ def register():
 
 
 def unregister():
+    scene_panel.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
     for cls in reversed(_CLASSES):

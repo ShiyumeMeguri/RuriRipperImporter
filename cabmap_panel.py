@@ -372,10 +372,20 @@ class RURI_MT_quick_filter(bpy.types.Menu):
                 layout.separator()
 
 
-def _selected_cabs(state):
+def _selected_row(state):
     if 0 <= state.active_index < len(state.window):
-        return [state.window[state.active_index].cab]
-    return []
+        return state.window[state.active_index]
+    return None
+
+
+def _prefab_stem(display_name):
+    """Strip a trailing '.prefab' (case-insensitively) so a browser row's
+    `name` (e.g. 'gacha_char_pelica_actor.prefab') can be compared against
+    prefab_importer._prefab_display_name's output (no extension)."""
+    stem = display_name or ""
+    if stem.lower().endswith(".prefab"):
+        stem = stem[: -len(".prefab")]
+    return stem.lower()
 
 
 class RURI_OT_import_selected(bpy.types.Operator):
@@ -391,7 +401,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
-        cabs = _selected_cabs(state)
+        selected_row = _selected_row(state)
+        cabs = [selected_row.cab] if selected_row is not None else []
         if not cabs:
             self.report({"WARNING"}, "No row selected.")
             return {"CANCELLED"}
@@ -412,21 +423,32 @@ class RURI_OT_import_selected(bpy.types.Operator):
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         options = state.as_options()
         imported = 0
-        last_report = None
+        # A single selected row's dependency closure routinely resolves to
+        # MORE than one root .prefab (e.g. an actor prefab pulling in a
+        # separate portrait/"uimodel" variant as a second top-level asset) --
+        # and since discover_clip_refs_from_db's fallback scans the WHOLE
+        # shared closure db, every co-resolved root can end up reporting the
+        # SAME clip set, not a distinguishing one. "how many roots have
+        # clips" is therefore not a usable signal. Attribute the animation
+        # browser to whichever imported root's own prefab name matches what
+        # the user actually selected in the list.
+        selected_stem = _prefab_stem(selected_row.name)
+        primary_report = None
         for root_guid in roots:
             prefab_file = db.load_guid(root_guid)
             if prefab_file is None:
                 continue
             report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
             imported += 1
-            last_report = report
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
+            if _prefab_stem(prefab_importer._prefab_display_name(prefab_file)) == selected_stem:
+                primary_report = report
 
-        _populate_animation_browser(state, last_report if imported == 1 else None)
-        if imported > 1 and last_report is not None and last_report.available_clips:
-            self.report({"WARNING"}, "Animation browser only supports one character at a time -- "
-                                     "re-import a single row to browse its clips.")
+        if primary_report is None and imported > 0:
+            self.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
+                                     "animation browser not populated.")
+        _populate_animation_browser(state, primary_report)
         self.report({"INFO"}, f"Imported {imported} asset(s) from {len(cabs)} selected row(s).")
         return {"FINISHED"}
 

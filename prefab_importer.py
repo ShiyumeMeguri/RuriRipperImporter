@@ -619,6 +619,193 @@ def import_mesh(context, mesh_path, options=None):
     return report
 
 
+def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
+    """Bridge-mode sibling of import_mesh: a standalone mesh, no armature.
+    Scene placements (see scene_state.py) resolve to one specific named mesh
+    inside a multi-object FBX (e.g. "...building_001.fbx##building_001_lod2"),
+    not a full prefab/GameObject hierarchy -- there is no MeshRenderer on the
+    mesh's own CAB to read a material list from (confirmed: every scene mesh
+    CAB checked holds exactly one Mesh document, nothing else). Real
+    materials, when available, are resolved by the CALLER via a sibling
+    prefab (see _scene_materials_for) and passed in here; when none were
+    found (or import_materials is off), `materials` is None/empty and the
+    mesh imports flat, matching the prior behavior."""
+    options = _resolve_options(options)
+    report = ImportReport()
+    start = time.time()
+    mesh_doc = mesh_file.first("Mesh")
+    if mesh_doc is None:
+        report.warnings.append("No Mesh object in file")
+        return report
+    decoded = mesh_decoder.decode_mesh(mesh_doc)
+    if decoded.positions is None or len(decoded.positions) == 0:
+        report.warnings.append("Empty mesh")
+        return report
+    name = str(mesh_doc.data.get("m_Name") or "Mesh")
+    obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {}, materials or [], options)
+    report.mesh_objects.append(obj)
+    report.seconds = time.time() - start
+    return report
+
+
+def build_mesh_name_index_from_db(db):
+    """Peek every document's class+name (see _peek_class_and_name -- cheap,
+    no full parse) and index the Mesh-classed ones by LOWERCASED name. CabMap
+    only maps container path -> CAB name, not -> guid, and a single CAB can
+    host several named sub-objects (a multi-object FBX) -- this is what lets
+    a scene placement's expected sub-object name (parsed from its
+    ##subname-suffixed AssetPath, see _expected_mesh_name) resolve to a
+    specific guid once its CAB has been imported by name alone.
+    Lowercased because the hash-LUT-resolved AssetPath is consistently
+    all-lowercase while a real Mesh's m_Name preserves its original authored
+    casing (confirmed against the real game: AssetPath "...col1_um01" vs the
+    actual m_Name "...COL1_UM01") -- the same case-insensitive join CabMap's
+    own container-path normalization already needed, for the same reason."""
+    index = {}
+    for guid in db.all_guids():
+        text = db.raw_text(guid)
+        if text is None:
+            continue
+        class_name, name = _peek_class_and_name(text)
+        if class_name == "Mesh" and name:
+            index[name.lower()] = guid
+    return index
+
+
+def _expected_mesh_name(asset_path):
+    """The specific named sub-object a scene placement's hash-LUT-resolved
+    AssetPath refers to: either the ##subname suffix (a multi-object FBX,
+    e.g. "...building.fbx##building_col1"), or the file stem for a bare
+    single-object .mesh path (Unity's convention: a standalone .mesh asset's
+    own Mesh object is named after the file). Lowercased to match
+    build_mesh_name_index_from_db's keys -- see that function's docstring."""
+    if "##" in asset_path:
+        return asset_path.split("##", 1)[1].lower()
+    leaf = asset_path.rsplit("/", 1)[-1]
+    return (leaf.rsplit(".", 1)[0] if "." in leaf else leaf).lower()
+
+
+_LOD_SUFFIX_RE = re.compile(r"_lod(\d+)$", re.IGNORECASE)
+
+
+def is_lod0_or_unleveled(asset_path):
+    """True unless a scene placement's own mesh sub-object name carries an
+    explicit non-zero LOD suffix (e.g. '..._lod1', '..._lod2'). Used by
+    scene_state.placeable(lod0_only=True) to drop the lower-detail LOD chain
+    variants a real map places for every piece -- these dominate a full
+    scene's placement count without adding visible detail at the distance the
+    game actually shows them. Assets with no _lodN suffix at all (single-LOD
+    props, collision/shadow proxies) are left alone -- they aren't part of a
+    LOD chain to begin with."""
+    match = _LOD_SUFFIX_RE.search(_expected_mesh_name(asset_path))
+    return match is None or match.group(1) == "0"
+
+
+def build_material_name_index_from_db(db):
+    """Peek every document's class+name (see _peek_class_and_name) and index
+    the Material-classed ones by LOWERCASED name -- mirrors
+    build_mesh_name_index_from_db exactly, just filtering a different class.
+    Joins a scene placement's own material_asset_paths (see scene_state.py,
+    ultimately EndfieldSceneBridge.cs's FBPropertyAssetData AssetType==1
+    resolution -- the entity's own real material hash, ground-truthed
+    against EndFieldSceneLoader's SceneLoaderWindow.cs CollectAssetPathsTyped/
+    ResolveHash/AttachMeshAndMaterials) to a guid once its CAB is in the
+    resolved closure."""
+    index = {}
+    for guid in db.all_guids():
+        text = db.raw_text(guid)
+        if text is None:
+            continue
+        class_name, name = _peek_class_and_name(text)
+        if class_name == "Material" and name:
+            index[name.lower()] = guid
+    return index
+
+
+def _scene_materials_for(material_index, mat_builder, material_asset_paths):
+    """Real materials for a scene-placed mesh, resolved directly from its own
+    material_asset_paths -- the entity's actual material hash(es), resolved
+    through the same StringPathHash LUT as its mesh. [] when the entity
+    carries no material, none resolved, or import_materials is off."""
+    if mat_builder is None or not material_asset_paths:
+        return []
+    materials = []
+    for path in material_asset_paths:
+        guid = material_index.get(_expected_mesh_name(path))
+        if guid is None:
+            continue
+        mat = mat_builder.build_from_ref({"guid": guid})
+        if mat is not None:
+            materials.append(mat)
+    return materials
+
+
+def import_scene_placements(context, db, placements, options=None):
+    """Import a batch of scene placements (see scene_state.py) into the
+    current scene, against an already-resolved closure db covering every CAB
+    those placements need. Resolves each placement's expected mesh
+    sub-object by name (build_mesh_name_index_from_db) and imports each
+    DISTINCT mesh exactly once; every further placement of the same mesh
+    becomes a linked-data duplicate (shares the mesh datablock, only the
+    object-level transform differs) instead of a second full import -- a
+    real map can place the same prop (foliage, generic colliders, ...)
+    hundreds of times, and re-decoding identical mesh bytes that many times
+    would be exactly the kind of eagerly-repeated cost the animation browser
+    fix (see cabmap_state.py) already had to solve for a similar reason.
+
+    When import_materials is on, each distinct mesh's material(s) are
+    resolved directly from its own placement's material_asset_paths (see
+    scene_state.resolve_cabs, which seeds those same paths into the CAB
+    closure so their CABs -- and their own texture dependencies -- come
+    along in the same import_cabs call) via build_material_name_index_from_db
+    -- no naming-convention guess.
+    Returns (imported_count, placed_count, unresolved_count)."""
+    options = _resolve_options(options)
+    name_index = build_mesh_name_index_from_db(db)
+    mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
+    material_index = build_material_name_index_from_db(db) if mat_builder is not None else {}
+    obj_by_guid = {}
+    imported = 0
+    placed = 0
+    unresolved = 0
+
+    for placement in placements:
+        expected_name = _expected_mesh_name(placement["asset_path"])
+        guid = name_index.get(expected_name)
+        if guid is None:
+            unresolved += 1
+            continue
+
+        base_obj = obj_by_guid.get(guid)
+        if base_obj is None:
+            mesh_file = db.load_guid(guid)
+            if mesh_file is None:
+                unresolved += 1
+                continue
+            materials = _scene_materials_for(material_index, mat_builder, placement.get("material_asset_paths") or [])
+            report = import_mesh_from_db(context, db, mesh_file, options, materials)
+            if not report.mesh_objects:
+                unresolved += 1
+                continue
+            base_obj = report.mesh_objects[0]
+            obj_by_guid[guid] = base_obj
+            imported += 1
+            target = base_obj
+        else:
+            target = base_obj.copy()
+            target.data = base_obj.data
+            context.collection.objects.link(target)
+
+        unity_matrix = coordinate.unity_trs(
+            {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
+            {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
+            {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
+        target.matrix_world = coordinate.convert_matrix(unity_matrix)
+        placed += 1
+
+    return imported, placed, unresolved
+
+
 # --- unified entry point ----------------------------------------------------
 
 def import_asset(context, path, options=None):

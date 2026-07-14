@@ -149,6 +149,13 @@ def _string_array(strings):
     return System.Array[System.String](list(strings))
 
 
+def _as_root_list(vfs_roots):
+    """VFS-root parameters accept either one path (str) or a priority-ordered
+    list of paths -- normalize to a list so callers don't have to remember
+    to wrap a single root themselves."""
+    return [vfs_roots] if isinstance(vfs_roots, str) else list(vfs_roots)
+
+
 class RipperBridge:
     """One bridge session: Initialize once with the target game's hook id(s),
     then Build/Load a cabmap, browse rows, and pull a selection into memory.
@@ -190,6 +197,72 @@ class RipperBridge:
                 "deps": int(row.DependencyCount),
             }
             for row in self._bridge.EnumerateRows(self._map)
+        ]
+
+    def resolve_cabs_for_paths(self, container_paths):
+        """Resolve addressable container paths (e.g. discover_scene_placements'
+        asset_path values) to the CAB names that host them. Paths with no
+        match are silently skipped -- compare len(input) to len(result) to
+        check coverage. Requires a loaded cabmap."""
+        if self._map is None:
+            raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
+        return [str(c) for c in self._bridge.ResolveCabsForPaths(self._map, _string_array(container_paths))]
+
+    def enumerate_vfs_files(self, vfs_roots, block_type_filter=None):
+        """Every file recorded in every .blc manifest across vfs_roots (a
+        path, or a priority-ordered list of paths -- e.g. [Persistent/VFS,
+        StreamingAssets/VFS], see the C# doc comments on EnumerateVfsFiles/
+        BuildMergedFileIndex for why a hot-update overlay root and the base
+        client root normally both need to be passed together), of ANY block
+        type (not just Unity-CAB-shaped entries). Returns plain dicts
+        (file_name/file_name_hash/block_type/length/chk_path). Independent of
+        load_cab_map() -- only needs Initialize() (an active session) to have
+        run."""
+        filter_arg = _string_array(block_type_filter) if block_type_filter else None
+        return [
+            {
+                "file_name": f.FileName,
+                "file_name_hash": int(f.FileNameHash),
+                "block_type": f.BlockType,
+                "length": int(f.Length),
+                "chk_path": f.ChkPath,
+            }
+            for f in self._bridge.EnumerateVfsFiles(_string_array(_as_root_list(vfs_roots)), filter_arg)
+        ]
+
+    def extract_vfs_file(self, vfs_roots, file_name):
+        """Raw decrypted bytes of one VFS-packed file, by its exact original
+        name (as returned by enumerate_vfs_files' file_name). Tries vfs_roots
+        in priority order with fallback -- a hot-update overlay can list a
+        file it never duplicated because that patch didn't change it (see
+        ExtractFirstAvailable's C# doc comment)."""
+        return bytes(self._bridge.ExtractVfsFile(_string_array(_as_root_list(vfs_roots)), file_name))
+
+    def enumerate_scene_maps(self, vfs_roots):
+        """Every distinct map name with streaming-chunk data across vfs_roots."""
+        return [str(m) for m in self._bridge.EnumerateSceneMaps(_string_array(_as_root_list(vfs_roots)))]
+
+    def discover_scene_placements(self, vfs_roots, map_name):
+        """Every mesh-bearing entity placement for map_name's streaming chunks
+        -- plain dicts (asset_path/asset_hash/entity_name/source_chunk/
+        has_transform/px..sz/material_asset_paths). material_asset_paths is
+        the SAME hash-LUT source as asset_path (FBPropertyAssetData,
+        AssetType==1 instead of ==2) -- the entity's own real material(s),
+        not a naming-convention guess. Cheap: no dependency closure resolved,
+        no CAB loaded -- see DiscoverScenePlacements' C# doc comment."""
+        return [
+            {
+                "asset_path": p.AssetPath,
+                "asset_hash": int(p.AssetHash),
+                "entity_name": p.EntityName,
+                "source_chunk": p.SourceChunk,
+                "has_transform": bool(p.HasTransform),
+                "px": float(p.Px), "py": float(p.Py), "pz": float(p.Pz),
+                "qx": float(p.Qx), "qy": float(p.Qy), "qz": float(p.Qz), "qw": float(p.Qw),
+                "sx": float(p.Sx), "sy": float(p.Sy), "sz": float(p.Sz),
+                "material_asset_paths": [str(m) for m in p.MaterialAssetPaths],
+            }
+            for p in self._bridge.DiscoverScenePlacements(_string_array(_as_root_list(vfs_roots)), map_name)
         ]
 
     def import_cabs(self, cab_names):

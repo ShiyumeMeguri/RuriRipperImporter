@@ -1,10 +1,14 @@
 """Build Blender materials from Unity ``.mat`` assets.
 
 Game shaders vary wildly in property naming, so textures are located by trying a
-prioritised list of common names for each slot.  Per the import requirement, the
-base-colour slot accepts ``_MainTex`` or ``_BaseMap`` (and a few more), and the
-normal slot accepts ``_BumpMap`` / ``_NormalMap`` and friends.  The first
-populated candidate wins.
+prioritised list of candidate names per logical slot -- curated from the real
+HGRP/Lit and HGRP/CharacterNPR shader source (ground truth: the ported .shader
+files under E:\\SpeedProject\\AzureNihil\\Assets\\packages\\com.hg.render-
+pipelines\\runtime\\shaders\\materials, cross-checked against their HLSL
+channel-unpacking code, not guessed), with a generic keyword-substring
+fallback for the single-texture slots so an entirely unrecognised shader
+family still gets *something* instead of losing its textures outright. The
+first populated candidate wins.
 """
 
 from __future__ import annotations
@@ -23,9 +27,35 @@ NORMAL_NAMES = [
     "_BumpMap", "_NormalMap", "_NormalTex", "_Normal", "_NormalMap1", "_BumpMap1",
 ]
 EMISSION_NAMES = ["_EmissionMap", "_EmissiveMap", "_EmissionTex", "_GlowMap"]
-MASK_NAMES = ["_MaskMap", "_MetallicGlossMap", "_SpecGlossMap", "_PBRMap"]
+
+# Packed metallic/roughness(/occlusion) maps -- two conventions, ground-
+# truthed against the real shader HLSL (not guessed):
+#   HGRP/Lit._MROMap                    R=Metallic G=Roughness B=Occlusion
+#     (lit.shader: SAMPLE_TEXTURE2D(_MROMap, ...); metallicT=mro.x
+#     roughT=mro.y occT=mro.z)
+#   HGRP/CharacterNPR._MetallicGlossMap R=Metallic A=Smoothness (so
+#     Roughness = 1-A); G=Spec/B=ShadowMask have no Principled BSDF
+#     equivalent and are left unconnected (characternpr.shader:
+#     metallic=mg.r specScale=mg.g shadowMask=mg.b roughnessRaw=1.0-mg.a)
+# A material only ever has one of these (they come from different shader
+# families) -- MRO is tried first since its 3-channel packing is unambiguous.
+# No generic fallback for this slot: guessing an unknown shader's packed-map
+# channel order (MRO vs. glTF-style ORB vs. something else) risks silently
+# wrong-looking-but-incorrect metal/rough/occlusion values, which is worse
+# than leaving the slot at its default.
+MRO_NAMES = ["_MROMap"]
+METALLIC_GLOSS_NAMES = ["_MetallicGlossMap", "_SpecGlossMap"]
 
 BASE_COLOR_FACTORS = ["_BaseColor", "_Color", "_MainColor", "_TintColor"]
+
+# Last-resort fallback when a shader family isn't covered by the curated
+# lists above: substrings to look for in ANY texture env name. Safe for
+# these three slots specifically because "does this texture just BE the
+# base color/normal/emission map" has no channel-order ambiguity, unlike the
+# packed PBR slot above.
+_GENERIC_BASE_COLOR_HINTS = ("basecolor", "albedo", "diffuse", "maintex", "basemap", "colormap")
+_GENERIC_NORMAL_HINTS = ("normal", "bump")
+_GENERIC_EMISSION_HINTS = ("emission", "emissive", "glow")
 
 
 def _flatten(entries):
@@ -68,14 +98,56 @@ def _image_from_png_bytes(png, name):
     return image
 
 
-def _first_texture(tex_envs, names):
+def _first_texture(tex_envs, names, generic_hints=()):
     for name in names:
         env = tex_envs.get(name)
         if isinstance(env, dict):
             tex = env.get("m_Texture")
             if isinstance(tex, dict) and tex.get("guid"):
                 return name, tex
+    for key, env in tex_envs.items():
+        lower = key.lower()
+        if any(hint in lower for hint in generic_hints) and isinstance(env, dict):
+            tex = env.get("m_Texture")
+            if isinstance(tex, dict) and tex.get("guid"):
+                return key, tex
     return None, None
+
+
+def _wire_packed_mro(nt, bsdf, img, location):
+    """R=Metallic G=Roughness B=Occlusion (HGRP/Lit._MROMap convention). AO
+    isn't wired -- Principled BSDF has no direct occlusion socket."""
+    x, y = location
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = img
+    node.location = (x, y)
+    node.label = "MRO"
+    sep = nt.nodes.new("ShaderNodeSeparateColor")
+    sep.location = (x + 300, y)
+    nt.links.new(node.outputs["Color"], sep.inputs["Color"])
+    nt.links.new(sep.outputs["Red"], bsdf.inputs["Metallic"])
+    nt.links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+
+
+def _wire_packed_metallic_gloss(nt, bsdf, img, location):
+    """R=Metallic A=Smoothness (Roughness=1-Smoothness); G=Spec/B=ShadowMask
+    have no Principled BSDF equivalent and are left unconnected (HGRP/
+    CharacterNPR._MetallicGlossMap convention)."""
+    x, y = location
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = img
+    node.location = (x, y)
+    node.label = "MetallicGlossMap"
+    sep = nt.nodes.new("ShaderNodeSeparateColor")
+    sep.location = (x + 300, y)
+    nt.links.new(node.outputs["Color"], sep.inputs["Color"])
+    nt.links.new(sep.outputs["Red"], bsdf.inputs["Metallic"])
+    invert = nt.nodes.new("ShaderNodeMath")
+    invert.operation = "SUBTRACT"
+    invert.inputs[0].default_value = 1.0
+    invert.location = (x + 300, y - 180)
+    nt.links.new(node.outputs["Alpha"], invert.inputs[1])
+    nt.links.new(invert.outputs["Value"], bsdf.inputs["Roughness"])
 
 
 class MaterialBuilder:
@@ -150,7 +222,7 @@ class MaterialBuilder:
         nt.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
         # Base colour.
-        base_name, base_tex = _first_texture(tex_envs, BASE_COLOR_NAMES)
+        base_name, base_tex = _first_texture(tex_envs, BASE_COLOR_NAMES, _GENERIC_BASE_COLOR_HINTS)
         if base_tex:
             img = self._load_image(base_tex["guid"])
             if img:
@@ -170,7 +242,7 @@ class MaterialBuilder:
                     break
 
         # Normal map.
-        _nname, normal_tex = _first_texture(tex_envs, NORMAL_NAMES)
+        _nname, normal_tex = _first_texture(tex_envs, NORMAL_NAMES, _GENERIC_NORMAL_HINTS)
         if normal_tex:
             img = self._load_image(normal_tex["guid"], non_color=True)
             if img:
@@ -183,14 +255,29 @@ class MaterialBuilder:
                 nt.links.new(node.outputs["Color"], nmap.inputs["Color"])
                 nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
 
+        # Packed metallic/roughness(/occlusion) -- MRO tried first, then
+        # MetallicGlossMap; see the module docstring for the ground-truthed
+        # channel layout of each. No generic fallback here (see MRO_NAMES).
+        _mroname, mro_tex = _first_texture(tex_envs, MRO_NAMES)
+        if mro_tex:
+            img = self._load_image(mro_tex["guid"], non_color=True)
+            if img:
+                _wire_packed_mro(nt, bsdf, img, (-400, -420))
+        else:
+            _mgname, mg_tex = _first_texture(tex_envs, METALLIC_GLOSS_NAMES)
+            if mg_tex:
+                img = self._load_image(mg_tex["guid"], non_color=True)
+                if img:
+                    _wire_packed_metallic_gloss(nt, bsdf, img, (-400, -420))
+
         # Emission.
-        _ename, emis_tex = _first_texture(tex_envs, EMISSION_NAMES)
+        _ename, emis_tex = _first_texture(tex_envs, EMISSION_NAMES, _GENERIC_EMISSION_HINTS)
         if emis_tex:
             img = self._load_image(emis_tex["guid"])
             if img:
                 node = nt.nodes.new("ShaderNodeTexImage")
                 node.image = img
-                node.location = (-400, -550)
+                node.location = (-400, -750)
                 node.label = "Emission"
                 if "Emission Color" in bsdf.inputs:
                     nt.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
