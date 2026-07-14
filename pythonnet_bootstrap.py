@@ -40,17 +40,31 @@ def last_error():
         return _error
 
 
+def _findable(name):
+    """importlib.util.find_spec(name) without the crash: if some OTHER
+    already-loaded addon put a module into sys.modules without going through
+    normal import machinery (pythonnet's own `clr` can end up this way once
+    something else has called pythonnet.load()/set_runtime()), find_spec
+    raises ValueError("...__spec__ is None") instead of returning cleanly.
+    A module already sitting in sys.modules at all -- however it got there --
+    counts as present."""
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ValueError, ModuleNotFoundError, ImportError):
+        return False
+
+
 def _probe():
-    """Check whether pythonnet is installed WITHOUT importing `clr` -- a bare
-    `import clr` has the side effect of implicitly picking (and locking in) a
-    default CLR runtime the first time it runs, which on Windows means .NET
-    Framework. pythonnet_bridge needs to be the one to set CoreCLR explicitly
-    (via pythonnet.set_runtime) before `clr` is ever imported anywhere, or its
-    later set_runtime(get_coreclr(...)) call fails with "runtime already
-    loaded". find_spec locates the module without executing its __init__."""
-    return (importlib.util.find_spec("clr") is not None
-            and importlib.util.find_spec("pythonnet") is not None
-            and importlib.util.find_spec("clr_loader") is not None)
+    """Check whether pythonnet is installed WITHOUT importing `clr` for the
+    first time -- a bare `import clr` has the side effect of implicitly
+    picking (and locking in) a default CLR runtime, which on Windows means
+    .NET Framework. pythonnet_bridge needs to be the one to set CoreCLR
+    explicitly (via pythonnet.set_runtime) before `clr` is ever imported
+    anywhere, or its later set_runtime(get_coreclr(...)) call fails with
+    "runtime already loaded"."""
+    return _findable("clr") and _findable("pythonnet") and _findable("clr_loader")
 
 
 def _install(report_fn):
@@ -72,6 +86,27 @@ def _install(report_fn):
         return False, f"pip install failed: {exc}"
 
 
+def _try_claim_runtime(report_fn):
+    """Claim CoreCLR the moment pythonnet becomes usable -- whether it was
+    already installed (this runs from register()'s synchronous
+    claim_runtime_early() call moments before anyway, so this is a fast
+    no-op) or just got installed by this very worker thread (the one gap
+    register()'s synchronous claim can't cover, since pythonnet isn't
+    importable yet at that point) -- to close the window before anything
+    else in this Blender session could import `clr` first. Best-effort: any
+    failure here just gets logged, since the authoritative attempt still
+    happens on first real bridge use (pythonnet_bridge._ensure_runtime),
+    which raises for real if this couldn't be resolved."""
+    try:
+        from . import pythonnet_bridge
+    except ImportError:
+        import pythonnet_bridge
+    try:
+        pythonnet_bridge.claim_runtime_early()
+    except Exception as exc:
+        report_fn(f"[RuriRipper] early CoreCLR claim (post-install) skipped: {exc}")
+
+
 def ensure_pythonnet_async(report_fn=print):
     """Kick off the install (if needed) on a daemon worker thread. Idempotent:
     a call while one is already running or has already succeeded is a no-op."""
@@ -83,12 +118,15 @@ def ensure_pythonnet_async(report_fn=print):
     def _worker():
         global _ready, _error
         if _probe():
+            _try_claim_runtime(report_fn)
             with _state_lock:
                 _ready = True
             return
         report_fn("[RuriRipper] pythonnet not found -- installing into Blender's bundled Python...")
         ok, err = _install(report_fn)
         ready_now = ok and _probe()
+        if ready_now:
+            _try_claim_runtime(report_fn)
         with _state_lock:
             _ready = ready_now
             _error = None if ready_now else (err or "pythonnet still not importable after install.")

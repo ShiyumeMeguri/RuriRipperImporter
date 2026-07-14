@@ -35,26 +35,104 @@ def _dll_dir():
         f"Looked in: {candidates}")
 
 
+def _runtime_config_path():
+    dll_dir = _dll_dir()
+    # Reuse the CLI's own runtimeconfig.json (Microsoft.NETCore.App +
+    # Microsoft.AspNetCore.App only -- confirmed the core DLL needs no
+    # Microsoft.WindowsDesktop.App, that's GUI-only) rather than authoring a
+    # new one; it's built right next to the DLL already.
+    return dll_dir, os.path.join(dll_dir, "Ruri.RipperHook.CLI.runtimeconfig.json")
+
+
+def _bound_runtime_kind():
+    """Best-effort introspection of whichever runtime pythonnet already has
+    set (pythonnet._RUNTIME is not public API, so this degrades to None --
+    "unknown" -- rather than raising if a future pythonnet version removes
+    or renames it)."""
+    try:
+        import pythonnet
+        bound = getattr(pythonnet, "_RUNTIME", None)
+    except ImportError:
+        return None, None
+    if bound is None:
+        return None, None
+    return bound, f"{type(bound).__module__}.{type(bound).__qualname__}"
+
+
+def _claim_coreclr(runtime_config):
+    """The one and only set_runtime() call site. pythonnet allows exactly one
+    CLR runtime per process, ever -- if ANYTHING else in this Blender session
+    (this profile can have dozens of addons; a lazily-triggered `import clr`
+    in any of them defaults to .NET Framework on Windows) claims a runtime
+    before we do, our net10.0 DLL can never load under it. "Already loaded"
+    is only safe to swallow when what's already bound is a CoreCLR-family
+    runtime (our own earlier claim -- e.g. a second register() in this
+    process after Blender's Reload Scripts, which resets this module's own
+    globals via importlib.reload but can't un-claim the real process-wide
+    runtime -- or anything else CoreCLR-compatible); if it's .NET Framework,
+    swallowing the error here would just defer the real failure to a much
+    more confusing spot later (clr.AddReference silently not registering the
+    assembly's namespaces, surfacing as "No module named 'Ruri'" at the
+    unrelated from-import line) -- fail loudly and specifically right here
+    instead."""
+    global _runtime_set
+    if _runtime_set:
+        return
+    from clr_loader import get_coreclr
+    from pythonnet import set_runtime
+    try:
+        set_runtime(get_coreclr(runtime_config=runtime_config))
+    except RuntimeError as exc:
+        if "already been loaded" not in str(exc):
+            raise
+        bound, bound_kind = _bound_runtime_kind()
+        if bound_kind and "netfx" in bound_kind.lower():
+            raise RuntimeError(
+                "A .NET Framework runtime is already loaded in this Blender process "
+                f"({bound_kind}, {bound!r}) -- pythonnet allows only one CLR runtime per "
+                "process, and .NET Framework cannot load Ruri.RipperHook.dll (targets "
+                "net10.0). Something imported `clr` (or called pythonnet.load()) before "
+                "RuriRipperImporter's register() got a chance to claim CoreCLR. Restart "
+                "Blender with RuriRipperImporter enabled and nothing else touching it "
+                "first; if this keeps happening, another addon in this profile is the "
+                "culprit and needs to be identified."
+            ) from exc
+        # Bound to something else CoreCLR-compatible (most likely: our own
+        # earlier claim_runtime_early() in this same process) -- fine.
+    _runtime_set = True
+
+
+def claim_runtime_early():
+    """Call from register() (not lazily on first bridge use) to win the
+    single-runtime-per-process race as early as structurally possible --
+    before the user has clicked anything that might trigger some other
+    addon's own lazy pythonnet/CLR usage. Best-effort/silent: if pythonnet
+    isn't installed yet or the DLL isn't built yet, this is a no-op and
+    _ensure_runtime() will do the real work (and raise a real error if
+    appropriate) on first actual bridge use instead."""
+    try:
+        _, runtime_config = _runtime_config_path()
+    except RuntimeError:
+        return
+    if not os.path.isfile(runtime_config):
+        return
+    try:
+        _claim_coreclr(runtime_config)
+    except ImportError:
+        pass  # pythonnet/clr_loader not installed yet
+
+
 def _ensure_runtime():
-    """Boot CoreCLR (once per Blender session -- it cannot be re-pointed or
-    unloaded once set) and load Ruri.RipperHook.dll."""
-    global _runtime_set, _bridge_type
+    """Boot CoreCLR (once per Blender process -- it cannot be re-pointed or
+    unloaded once set, whether that "once" was this call or an earlier
+    claim_runtime_early()/register()) and load Ruri.RipperHook.dll."""
+    global _bridge_type
     if _bridge_type is not None:
         return
-    dll_dir = _dll_dir()
-
-    if not _runtime_set:
-        from clr_loader import get_coreclr
-        from pythonnet import set_runtime
-        # Reuse the CLI's own runtimeconfig.json (Microsoft.NETCore.App +
-        # Microsoft.AspNetCore.App only -- confirmed the core DLL needs no
-        # Microsoft.WindowsDesktop.App, that's GUI-only) rather than
-        # authoring a new one; it's built right next to the DLL already.
-        runtime_config = os.path.join(dll_dir, "Ruri.RipperHook.CLI.runtimeconfig.json")
-        if not os.path.isfile(runtime_config):
-            raise RuntimeError(f"Missing runtimeconfig.json next to the DLL: {runtime_config}")
-        set_runtime(get_coreclr(runtime_config=runtime_config))
-        _runtime_set = True
+    dll_dir, runtime_config = _runtime_config_path()
+    if not os.path.isfile(runtime_config):
+        raise RuntimeError(f"Missing runtimeconfig.json next to the DLL: {runtime_config}")
+    _claim_coreclr(runtime_config)
 
     if dll_dir not in sys.path:
         sys.path.append(dll_dir)

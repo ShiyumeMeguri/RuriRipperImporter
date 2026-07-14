@@ -13,6 +13,7 @@ CollectionProperty for display.
 
 from __future__ import annotations
 
+import re
 import time
 
 try:
@@ -32,6 +33,100 @@ _last_edit_time = 0.0
 _timer_registered = False
 _sort_column = "name"
 _sort_dir = 0  # 0 = unsorted (load order), 1 = ascending, 2 = descending
+_active_rules = ()  # whatever was last passed to apply_filter()'s `rules` arg
+
+# --- Process-Monitor-style Include/Exclude rule engine, ported from the
+# WinForms browser's MainForm.Filter.cs (FilterRule record + RowPasses /
+# RelationMatches / CompareValues / TryRegex). A "rule" is anything exposing
+# .field / .relation / .value / .action / .enabled attributes -- both a
+# bpy PropertyGroup instance (the real UI storage, see cabmap_panel.py) and
+# SimpleRule below (headless/test use) satisfy this duck type.
+#
+# Every enabled rule is a required constraint: Include(X) means the row MUST
+# match X, Exclude(X) means the row must NOT match X. A row passes only if
+# ALL enabled rules hold simultaneously (empty/all-disabled rule set => show
+# everything). MainForm.Filter.cs carries the matching fix.
+
+FILTER_FIELDS = ("name", "container", "type_names", "source", "deps")
+FIELD_LABELS = {"name": "Name", "container": "Container", "type_names": "Type",
+                 "source": "Source", "deps": "Deps"}
+
+RELATIONS = ("is", "is_not", "contains", "excludes", "begins_with", "ends_with",
+             "less_than", "more_than", "matches_regex", "not_matches_regex")
+RELATION_LABELS = {
+    "is": "is", "is_not": "is not", "contains": "contains", "excludes": "excludes",
+    "begins_with": "begins with", "ends_with": "ends with",
+    "less_than": "less than", "more_than": "more than",
+    "matches_regex": "matches regex", "not_matches_regex": "not matches regex",
+}
+
+ACTIONS = ("include", "exclude")
+
+
+class SimpleRule:
+    """Plain-Python rule for headless/test use -- same attribute shape a
+    RURI_PG_filter_rule PropertyGroup instance has."""
+    __slots__ = ("field", "relation", "value", "action", "enabled")
+
+    def __init__(self, field, relation, value, action, enabled=True):
+        self.field = field
+        self.relation = relation
+        self.value = value
+        self.action = action
+        self.enabled = enabled
+
+
+def _relation_matches(relation, cell_value, rule_value):
+    """Mirrors RelationMatches/CompareValues/TryRegex."""
+    if relation in ("less_than", "more_than"):
+        try:
+            lhs, rhs = float(cell_value), float(rule_value)
+        except (TypeError, ValueError):
+            return False
+        return lhs < rhs if relation == "less_than" else lhs > rhs
+
+    text = str(cell_value).lower()
+    needle = str(rule_value).lower()
+    if relation == "is":
+        return text == needle
+    if relation == "is_not":
+        return text != needle
+    if relation == "contains":
+        return needle in text
+    if relation == "excludes":
+        return needle not in text
+    if relation == "begins_with":
+        return text.startswith(needle)
+    if relation == "ends_with":
+        return text.endswith(needle)
+    if relation in ("matches_regex", "not_matches_regex"):
+        try:
+            found = re.search(str(rule_value), str(cell_value), re.IGNORECASE) is not None
+        except re.error:
+            return False
+        return found if relation == "matches_regex" else not found
+    return False
+
+
+def _rule_matches(rule, row):
+    return _relation_matches(rule.relation, row.get(rule.field, ""), rule.value)
+
+
+def row_passes_rules(row, rules):
+    """Mirrors RowPasses: every ENABLED rule is a required constraint --
+    Include(X) requires a match, Exclude(X) requires a non-match. A row
+    passes only if it satisfies every enabled rule (no rules => show all)."""
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        matched = _rule_matches(rule, row)
+        if rule.action == "exclude":
+            if matched:
+                return False
+        else:
+            if not matched:
+                return False
+    return True
 
 
 def reset():
@@ -66,14 +161,24 @@ def _row_matches(row, query_lower):
             or query_lower in row["type_names"].lower())
 
 
-def apply_filter(query):
-    """Case-insensitive substring match across Name/Container/Source/Type,
-    mirroring the WinForms browser's quick-search semantics (RowPasses)."""
-    global VISIBLE
+def apply_filter(query, rules=()):
+    """Row shows if it matches the quick search across Name/Container/Source/
+    Type AND passes the Include/Exclude rule set (row_passes_rules) --
+    mirrors the WinForms browser's RowPasses exactly (quick search AND rules,
+    both must pass)."""
+    global VISIBLE, _active_rules
     query = (query or "").strip().lower()
-    VISIBLE = (list(range(len(ROWS))) if not query
-               else [i for i, row in enumerate(ROWS) if _row_matches(row, query)])
+    rules = tuple(rules)
+    _active_rules = rules
+    VISIBLE = [i for i, row in enumerate(ROWS)
+               if (not query or _row_matches(row, query)) and row_passes_rules(row, rules)]
     _apply_sort()
+
+
+def reapply_filter(query):
+    """Re-run apply_filter with whatever rules were last active -- for when
+    only the rule set changed, not the search text."""
+    apply_filter(query, _active_rules)
 
 
 def _apply_sort():
@@ -126,7 +231,7 @@ def schedule_filter(query, on_ready):
         global _timer_registered
         if time.monotonic() - _last_edit_time < SEARCH_DEBOUNCE_SECONDS:
             return 0.05
-        apply_filter(_pending_query)
+        reapply_filter(_pending_query)  # keeps whatever Include/Exclude rules are currently active
         on_ready()
         _timer_registered = False
         return None  # unregister this timer
