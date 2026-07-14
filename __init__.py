@@ -10,11 +10,13 @@ action.
 bl_info = {
     "name": "RuriRipperImporter",
     "author": "ShiyumeMeguri",
-    "version": (1, 0, 0),
+    "version": (2, 0, 0),
     "blender": (4, 2, 0),
-    "location": "File > Import > Unity Prefab / Unity Mesh",
+    "location": "File > Import > Unity Prefab / Unity Mesh, and 3D Viewport > N-panel > RuriRipper",
     "description": "Import Unity YAML prefabs (skeleton + LOD0 skinned meshes + "
-                   "materials + animation clips) and standalone meshes.",
+                   "materials + animation clips) and standalone meshes, either from disk "
+                   "or, via an in-process pythonnet bridge into Ruri.RipperHook, directly "
+                   "from a cabmap-resolved game install with zero intermediate files.",
     "category": "Import-Export",
 }
 
@@ -22,12 +24,14 @@ import importlib
 
 from . import (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
                armature_builder, mesh_builder, material_builder,
-               animation_builder, prefab_importer)
+               animation_builder, prefab_importer, bridge_asset_db,
+               pythonnet_bootstrap, pythonnet_bridge, cabmap_state, cabmap_panel)
 
 # Reload submodules on addon re-registration during development.
 for _mod in (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
              armature_builder, mesh_builder, material_builder,
-             animation_builder, prefab_importer):
+             animation_builder, prefab_importer, bridge_asset_db,
+             pythonnet_bootstrap, pythonnet_bridge, cabmap_state, cabmap_panel):
     importlib.reload(_mod)
 
 import bpy
@@ -94,9 +98,15 @@ def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
+    cabmap_panel.register()
+    # Non-blocking: a first-time pythonnet install can take 10-60s and must not
+    # freeze Blender's UI. The N-panel gates on pythonnet_bootstrap.is_ready()
+    # until this finishes.
+    pythonnet_bootstrap.ensure_pythonnet_async(report_fn=print)
 
 
 def unregister():
+    cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

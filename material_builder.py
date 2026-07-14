@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import bpy
+import numpy as np
 
 # Candidate property names per logical slot, in priority order.
 BASE_COLOR_NAMES = [
@@ -28,12 +29,43 @@ BASE_COLOR_FACTORS = ["_BaseColor", "_Color", "_MainColor", "_TintColor"]
 
 
 def _flatten(entries):
+    """Normalize ``m_TexEnvs``/``m_Colors`` to a plain ``{name: value}`` dict.
+
+    A real Unity Editor "Force Text" save serializes these C# Dictionary fields
+    as a list of single-key maps (``- _BaseMap: {...}``); AssetRipper's own YAML
+    writer instead emits the same data as one nested map directly. Both are
+    valid on-disk shapes for the same data model -- accept either."""
+    if isinstance(entries, dict):
+        return entries
     out = {}
     for entry in entries or []:
         if isinstance(entry, dict):
             for key, value in entry.items():
                 out[key] = value
     return out
+
+
+def _image_from_png_bytes(png, name):
+    """Decode raw PNG bytes (already produced by the C# bridge's texture
+    exporter -- AssetRipper's own TextureConverter, so no compressed/mipmap
+    formats ever reach here) straight into a Blender image via a bulk pixel
+    push, no temp file. Blender bundles Pillow, so this stays fully in-memory."""
+    from PIL import Image
+    import io
+
+    try:
+        im = Image.open(io.BytesIO(png)).convert("RGBA")
+    except Exception:
+        return None
+    width, height = im.size
+    if width <= 0 or height <= 0:
+        return None
+    arr = np.asarray(im, dtype=np.float32) / 255.0
+    arr = arr[::-1, :, :]  # PNG rows are top-first; Blender images are bottom-first.
+    image = bpy.data.images.new(name, width=width, height=height, alpha=True)
+    image.pixels.foreach_set(arr.reshape(-1))
+    image.pack()
+    return image
 
 
 def _first_texture(tex_envs, names):
@@ -73,16 +105,26 @@ class MaterialBuilder:
         return mat
 
     def _load_image(self, guid, non_color=False):
-        path = self.db.resolve_guid(guid)
-        if not path or not os.path.isfile(path):
+        key = self.db.resolve_guid(guid)
+        if not key:
             return None
-        cached = self._image_cache.get(path)
+        cached = self._image_cache.get(key)
         if cached is None:
-            try:
-                cached = bpy.data.images.load(path, check_existing=True)
-            except RuntimeError:
+            if hasattr(self.db, "png_bytes"):
+                png = self.db.png_bytes(key)
+                if png is None:
+                    return None
+                cached = _image_from_png_bytes(png, key)
+            else:
+                if not os.path.isfile(key):
+                    return None
+                try:
+                    cached = bpy.data.images.load(key, check_existing=True)
+                except RuntimeError:
+                    return None
+            if cached is None:
                 return None
-            self._image_cache[path] = cached
+            self._image_cache[key] = cached
         if non_color:
             try:
                 cached.colorspace_settings.name = "Non-Color"

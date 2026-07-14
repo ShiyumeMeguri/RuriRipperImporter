@@ -294,7 +294,11 @@ def _decode_blendshapes(shapes):
 
     result = []
     for ci, chan in enumerate(channels):
-        name = chan.get("name", f"blendshape{ci}")
+        # A purely-numeric blendshape name (e.g. "0") parses as a Unity YAML int
+        # scalar, not a string -- the channel name is always semantically a
+        # string regardless of what shape its raw text happens to have.
+        raw_name = chan.get("name")
+        name = str(raw_name) if raw_name is not None else f"blendshape{ci}"
         frame_index = chan.get("frameIndex", 0)
         frame_count = chan.get("frameCount", 0)
         chan_frames = []

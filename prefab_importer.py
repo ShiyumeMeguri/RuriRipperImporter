@@ -96,18 +96,95 @@ def _go_name(prefab, go_id):
 
 def import_prefab(context, prefab_path, options=None):
     options = _resolve_options(options)
-    report = ImportReport()
-    start = time.time()
-
     assets_dir = asset_db.find_assets_dir(prefab_path)
     db = asset_db.AssetDatabase(os.path.dirname(prefab_path), assets_dir)
     prefab = db.load_file(prefab_path)
+    arm_name = os.path.splitext(os.path.basename(prefab_path))[0]
+    clip_files = _gather_clip_files_disk(db, prefab, prefab_path, assets_dir)
+    return _import_prefab_core(context, db, prefab, arm_name, clip_files, options)
+
+
+def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
+    """Bridge-mode sibling of import_prefab: db/prefab_file are already resolved
+    from an in-memory closure (pythonnet bridge) instead of a disk path -- same
+    build body as import_prefab (via _import_prefab_core), only the front
+    matter and clip-gathering source differ. Clip gathering uses the closure
+    itself (controller-referenced clips by guid, plus every AnimationClip
+    document already present in the closure) instead of a disk folder walk,
+    since the whole dependency closure already IS the relevant scope."""
+    options = _resolve_options(options)
+    arm_name = name or _prefab_display_name(prefab_file)
+    clip_files = _gather_clip_files_from_db(db, prefab_file)
+    return _import_prefab_core(context, db, prefab_file, arm_name, clip_files, options)
+
+
+def _prefab_display_name(prefab):
+    root = prefab.first("GameObject")
+    if root is not None:
+        name = root.data.get("m_Name")
+        if name:
+            return str(name)
+    return "UnityModel"
+
+
+def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
+    """Disk-mode clip gathering: resolve _gather_clip_paths's paths into loaded UnityFiles."""
+    clip_files = []
+    for clip_path in _gather_clip_paths(db, prefab, prefab_path, assets_dir):
+        try:
+            clip_files.append(db.load_file(clip_path))
+        except OSError:
+            continue
+    return clip_files
+
+
+def _gather_clip_files_from_db(db, prefab):
+    """Bridge-mode clip gathering: controller-referenced clips (resolved by guid,
+    not by path/extension) plus every AnimationClip document already present in
+    the closure -- the bridge equivalent of the disk importer's controller-refs
+    + loose-.anim-folder-walk (there is no folder to walk; the closure already
+    is the scope)."""
+    clips = []
+    seen_ids = set()
+
+    animator = prefab.first("Animator")
+    controller_ref = animator.data.get("m_Controller") if animator is not None else None
+    if isinstance(controller_ref, dict) and controller_ref.get("guid"):
+        controller_file = db.load_guid(controller_ref["guid"])
+        if controller_file is not None:
+            guids = set()
+            for doc in controller_file.documents:
+                _collect_guids(doc.data, guids)
+            for guid in guids:
+                if guid in seen_ids:
+                    continue
+                clip_file = db.load_guid(guid)
+                if clip_file is not None and clip_file.first("AnimationClip") is not None:
+                    seen_ids.add(guid)
+                    clips.append(clip_file)
+
+    for guid in db.all_guids():
+        if guid in seen_ids:
+            continue
+        clip_file = db.load_guid(guid)
+        if clip_file is not None and clip_file.first("AnimationClip") is not None:
+            seen_ids.add(guid)
+            clips.append(clip_file)
+
+    return clips
+
+
+def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
+    """Shared build body for import_prefab / import_prefab_from_db: armature,
+    LOD0 skinned + static meshes, materials, and animation actions from an
+    already-resolved db + prefab UnityFile + pre-gathered clip UnityFiles."""
+    report = ImportReport()
+    start = time.time()
 
     # Armature from the transform hierarchy.
     arm_obj = None
     maps = None
     if options["import_skeleton"]:
-        arm_name = os.path.splitext(os.path.basename(prefab_path))[0]
         arm_obj, maps = armature_builder.build_armature(context, prefab, arm_name)
         report.armature = arm_obj
         report.bones = len(arm_obj.data.bones)
@@ -124,7 +201,6 @@ def import_prefab(context, prefab_path, options=None):
                 "file_id_to_world": {fid: _np.array(n.world, dtype=_np.float64)
                                      for fid, n in nodes.items()}}
 
-    file_id_to_bone = maps["file_id_to_bone"]
     nodes = maps["nodes"]
     go_to_node = {n.go_id: n for n in nodes.values()}
 
@@ -132,7 +208,6 @@ def import_prefab(context, prefab_path, options=None):
     discard = _lod_discard_set(prefab) if options["lod0_only"] else set()
 
     path_to_meshobjects = {}
-    seen_meshes = {}
 
     keep_shadow = options.get("import_shadow_proxies", False)
     renderers = prefab.all("SkinnedMeshRenderer")
@@ -165,16 +240,13 @@ def import_prefab(context, prefab_path, options=None):
         report.materials = len(mat_builder._cache)
         report.textures = len(mat_builder._image_cache)
 
-    # Animations: every AnimationClip referenced by the Animator controller
-    # plus every loose .anim file in the prefab's folder tree, as actions.
+    # Animations: every gathered clip (source differs disk vs. bridge mode) as actions.
     if options["import_animations"] and arm_obj is not None:
-        clip_paths = _gather_clip_paths(db, prefab)
+        retargeter = _load_retargeter(db, prefab)
+        if retargeter is not None:
+            maps["retargeter"] = retargeter
         actions = []
-        for clip_path in clip_paths:
-            try:
-                clip_file = db.load_file(clip_path)
-            except OSError:
-                continue
+        for clip_file in clip_files:
             clip_doc = clip_file.first("AnimationClip")
             if clip_doc is None:
                 continue
@@ -231,18 +303,109 @@ def clips_from_controller(db, controller_file):
     return paths
 
 
-def _gather_clip_paths(db, prefab):
-    """Clips for a prefab import: those referenced by its Animator controller."""
+def _load_retargeter(db, prefab):
+    """Build a humanoid muscle retargeter from the prefab's Animator avatar.
+
+    Humanoid clips carry the body's motion as muscle floats, not transform
+    curves, so the human bones need the avatar's Muscle Referential to play.
+    Returns None for non-humanoid rigs or when the avatar can't be resolved."""
     animator = prefab.first("Animator")
     if animator is None:
-        return []
-    controller_ref = animator.data.get("m_Controller")
-    if not (isinstance(controller_ref, dict) and controller_ref.get("guid")):
-        return []
-    controller_file = db.load_guid(controller_ref["guid"])
-    if controller_file is None:
-        return []
-    return clips_from_controller(db, controller_file)
+        return None
+    avatar_ref = animator.data.get("m_Avatar")
+    if not (isinstance(avatar_ref, dict) and avatar_ref.get("guid")):
+        return None
+    avatar_file = db.load_guid(avatar_ref["guid"])
+    if avatar_file is None:
+        return None
+    try:
+        from . import humanoid_retarget
+    except ImportError:
+        import humanoid_retarget
+    try:
+        return humanoid_retarget.HumanoidRetargeter(avatar_file)
+    except Exception as exc:
+        print(f"[RuriRipperImporter] humanoid retarget unavailable: {exc}")
+        return None
+
+
+def _gather_clip_paths(db, prefab, prefab_path, assets_dir=None):
+    """Clips for a prefab import: those referenced by its Animator controller,
+    plus every loose ``.anim`` file found by a scoped folder walk.
+
+    Humanoid muscle clips are avatar-portable and Unity often ships large clip
+    libraries (battle/dialog/interact/...) that no AnimatorController
+    references directly -- only the ones actually wired into a state machine.
+    Without this, those clips are invisible to the importer even though the
+    avatar can play every one of them. This mirrors RuriYamlDumper.cs's
+    ``LoadAllAssetsAtPath`` step (which grabs every clip embedded in a source
+    model, not just controller-referenced ones).
+
+    The walk root is tiered because the two producers this addon reads shape
+    a "character's own clips" folder completely differently:
+      * RuriYamlDumper.cs dumps a SELF-CONTAINED sibling folder
+        (``<model>_yaml/Anim/*.anim``) that can sit anywhere inside a live
+        Unity project's ``Assets/`` -- walking the prefab's OWN directory
+        finds exactly that folder's clips; walking the whole project's
+        ``Assets/`` (find_assets_dir) would sweep in every OTHER character's
+        clips too (real project layouts keep many characters under one
+        ``Assets/``, so this is not a hypothetical).
+      * An AssetRipper Unity-project export scatters a character's clips by
+        ORIGINAL addressable path (e.g. ``.../actor/girl/pelica/animations/
+        battle/*.anim``), nowhere near the prefab's own directory (e.g.
+        ``.../postmodels/characters/``) -- only the export's ``Assets/`` root
+        is guaranteed to be that one character's exclusive scope (by
+        construction of the exporting batch, which puts one character's
+        closure in its own dedicated output directory).
+    Which scope applies is decided by a plain existence probe (does the
+    prefab's own directory contain ANY ``.anim`` file, regardless of whether
+    the controller already covers it) -- not by how many NEW clips it
+    contributes after dedup, which would wrongly read "this folder holds only
+    the controller's own clip" as "this folder is empty, widen the search"."""
+    paths = []
+    seen = set()
+
+    animator = prefab.first("Animator")
+    controller_ref = animator.data.get("m_Controller") if animator is not None else None
+    if isinstance(controller_ref, dict) and controller_ref.get("guid"):
+        controller_file = db.load_guid(controller_ref["guid"])
+        if controller_file is not None:
+            for path in clips_from_controller(db, controller_file):
+                key = path.lower()
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(path)
+
+    def _has_any_clip(root):
+        """Cheap existence probe, independent of ``seen`` -- tier selection must
+        not be confused by clips this scope holds that the controller already
+        covered (a folder holding ONLY the controller's own clip is still the
+        right scope, not a signal to fall back wider)."""
+        if not root or not os.path.isdir(root):
+            return False
+        for _dirpath, _dirs, files in os.walk(root):
+            if any(name.lower().endswith(".anim") for name in files):
+                return True
+        return False
+
+    def _walk_for_clips(root):
+        found = []
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.lower().endswith(".anim"):
+                    continue
+                ap = os.path.abspath(os.path.join(dirpath, name))
+                key = ap.lower()
+                if key not in seen:
+                    seen.add(key)
+                    found.append(ap)
+        return found
+
+    own_dir = os.path.dirname(os.path.abspath(prefab_path))
+    scope = own_dir if _has_any_clip(own_dir) else assets_dir
+    if scope:
+        paths.extend(_walk_for_clips(scope))
+    return paths
 
 
 def _assign_first_action(arm_obj, action, slot=None):
@@ -465,11 +628,52 @@ def _maps_from_armature(arm_obj):
             local_blender = bone.parent.matrix_local.inverted_safe() @ bone.matrix_local
         node = _Node()
         node.path = bone_path(bone)
-        node.local = conv @ local_blender @ conv  # back to Unity space
+        node.local = conv @ local_blender @ conv  # local, back to Unity space
         nodes[bone.name] = node
         if node.path:
             path_to_bone[node.path] = bone.name
     return {"nodes": nodes, "path_to_bone": path_to_bone}
+
+
+def _find_retargeter_near(clip_path):
+    """Locate an Avatar ``.asset`` near a clip and build a muscle retargeter.
+
+    Clip-only imports (a clip applied onto an existing armature) have no prefab
+    Animator reference, so the avatar is found by name in the character's folder
+    tree.  Humanoid clips store the body as muscle floats; without this the body
+    bones get no curves and stay at the bind (A) pose.
+    """
+    try:
+        from . import humanoid_retarget
+    except ImportError:
+        import humanoid_retarget
+    db = asset_db.AssetDatabase(os.path.dirname(clip_path),
+                                asset_db.find_assets_dir(clip_path))
+    root = os.path.dirname(os.path.abspath(clip_path))
+    # Climb to the character root (a folder holding a 'models'/'model' subdir),
+    # bounded so we never scan the whole project.
+    for _ in range(5):
+        if (os.path.isdir(os.path.join(root, "models"))
+                or os.path.isdir(os.path.join(root, "model"))):
+            break
+        parent = os.path.dirname(root)
+        if parent == root:
+            break
+        root = parent
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name.endswith(".asset") and "avatar" in name.lower():
+                try:
+                    unity_file = db.load_file(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+                if unity_file.first("Avatar") is not None:
+                    try:
+                        return humanoid_retarget.HumanoidRetargeter(unity_file)
+                    except Exception as exc:
+                        print(f"[RuriRipperImporter] avatar {name} unusable: {exc}")
+                        continue
+    return None
 
 
 def _apply_clip_paths(context, clip_paths, options):
@@ -485,6 +689,12 @@ def _apply_clip_paths(context, clip_paths, options):
     report.armature = arm
     report.bones = len(arm.data.bones)
     maps = _maps_from_armature(arm)
+    # Humanoid clips carry the body as muscle floats; locate the avatar near the
+    # clips so the body retargets here too (not only in the prefab path).
+    if clip_paths:
+        retargeter = _find_retargeter_near(clip_paths[0])
+        if retargeter is not None:
+            maps["retargeter"] = retargeter
     first = None
     for clip_path in clip_paths:
         try:
