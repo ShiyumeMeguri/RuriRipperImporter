@@ -89,3 +89,14 @@ class BridgeAssetDatabase:
         (e.g. prefab_importer's loose-AnimationClip gathering, the bridge
         equivalent of the disk importer's folder walk)."""
         return self._documents.keys()
+
+    def raw_text(self, guid):
+        """Unparsed YAML text for a guid, without going through load_guid's
+        unity_yaml.parse_text (and its memoizing cache). Lets a caller peek
+        at a document (e.g. prefab_importer's cheap class/name sniff for
+        animation-clip discovery) without paying a full parse for every
+        candidate -- some AnimationClip documents in a character's closure
+        run to 100+MB, and most closure guids aren't clips at all."""
+        if not guid:
+            return None
+        return self._documents.get(guid.lower())

@@ -120,6 +120,26 @@ class RURI_PG_filter_rule(bpy.types.PropertyGroup):
                           description="Untick to keep a rule without deleting it")
 
 
+class RURI_PG_animation_clip(bpy.types.PropertyGroup):
+    """One discovered-but-not-yet-built animation clip -- see
+    prefab_importer.discover_clip_refs_from_db. `selected` drives the
+    checkbox in RURI_UL_animation_clips; nothing here has been parsed past a
+    cheap name/size peek, so ticking a box is free until Import is clicked."""
+    guid: StringProperty()
+    name: StringProperty()
+    size_bytes: IntProperty()
+    selected: BoolProperty(default=False)
+
+
+def _format_size(num_bytes):
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024.0 or unit == "GB":
+            return f"~{size:.0f}{unit}" if unit == "B" else f"~{size:.1f}{unit}"
+        size /= 1024.0
+    return f"~{size:.1f}GB"
+
+
 class RURI_PG_cabmap(bpy.types.PropertyGroup):
     game_root: StringProperty(name="Game Root", subtype="DIR_PATH",
                               description="The game's install root directory")
@@ -147,7 +167,16 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
     import_materials: BoolProperty(name="Import Materials", default=True)
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
-    import_animations: BoolProperty(name="Import Animations", default=True)
+    import_animations: BoolProperty(
+        name="Discover Animations", default=True,
+        description="List this character's animation clips in the Animations "
+                    "panel below after import. Clips are NOT built until you "
+                    "check them there and click Import -- a single clip can "
+                    "be 100+MB, so nothing is loaded automatically")
+
+    animation_character_name: StringProperty(default="")
+    available_clips: CollectionProperty(type=RURI_PG_animation_clip)
+    available_clips_active_index: IntProperty()
 
     def as_options(self):
         return {
@@ -383,16 +412,42 @@ class RURI_OT_import_selected(bpy.types.Operator):
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         options = state.as_options()
         imported = 0
+        last_report = None
         for root_guid in roots:
             prefab_file = db.load_guid(root_guid)
             if prefab_file is None:
                 continue
             report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
             imported += 1
+            last_report = report
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
+
+        _populate_animation_browser(state, last_report if imported == 1 else None)
+        if imported > 1 and last_report is not None and last_report.available_clips:
+            self.report({"WARNING"}, "Animation browser only supports one character at a time -- "
+                                     "re-import a single row to browse its clips.")
         self.report({"INFO"}, f"Imported {imported} asset(s) from {len(cabs)} selected row(s).")
         return {"FINISHED"}
+
+
+def _populate_animation_browser(state, report):
+    """Refresh the Animations sub-panel from a just-finished import's report
+    (or clear it out on multi-character imports / imports with no armature,
+    where per-character clip browsing doesn't apply)."""
+    state.available_clips.clear()
+    state.animation_character_name = ""
+    cabmap_state.clear_animation_build_state()
+    if report is None or report.armature is None or not report.available_clips:
+        return
+    state.animation_character_name = report.armature.name
+    for ref in report.available_clips:
+        item = state.available_clips.add()
+        item.guid = ref["guid"]
+        item.name = ref["name"]
+        item.size_bytes = ref["size_bytes"]
+    cabmap_state.set_animation_build_state(
+        report.db, report.armature.name, report.maps, report.path_to_meshobjects)
 
 
 class RURI_UL_cabmap(bpy.types.UIList):
@@ -406,6 +461,27 @@ class RURI_UL_cabmap(bpy.types.UIList):
         tail = rest.split(factor=0.15)
         tail.label(text=str(item.deps))
         tail.label(text=item.source)
+
+
+class RURI_UL_animation_clips(bpy.types.UIList):
+    """Checkbox-per-clip list for the Animations sub-panel. Uses Blender's
+    built-in name filter (the funnel icon) rather than a hand-rolled search --
+    a character's own clip count is small enough (tens, not the cabmap's
+    260k rows) that no debouncing/windowing is needed here."""
+    bl_idname = "RURI_UL_animation_clips"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
+        row = layout.row(align=True)
+        row.prop(item, "selected", text="")
+        row.label(text=item.name)
+        row.label(text=_format_size(item.size_bytes))
+
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname)
+        flags = bpy.types.UI_UL_list.filter_items_by_name(
+            self.filter_name, self.bitflag_filter_item, items, "name")
+        order = bpy.types.UI_UL_list.sort_items_by_name(items, "name") if self.use_filter_sort_alpha else []
+        return flags, order
 
 
 class RURI_PT_filter_popover(bpy.types.Panel):
@@ -537,14 +613,110 @@ class RURI_PT_cabmap(bpy.types.Panel):
         op.reset_scene = True
 
 
+class RURI_OT_import_selected_animations(bpy.types.Operator):
+    bl_idname = "ruri.import_selected_animations"
+    bl_label = "Import Checked Animations"
+    bl_description = "Build Blender actions only for the checked clips, onto the character imported above"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        state = context.scene.ruri_cabmap
+        return (cabmap_state.ANIMATION_BUILD_STATE is not None
+                and any(item.selected for item in state.available_clips))
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        build_state = cabmap_state.ANIMATION_BUILD_STATE
+        if build_state is None:
+            self.report({"WARNING"}, "No character loaded to attach animations to.")
+            return {"CANCELLED"}
+        arm_obj = bpy.data.objects.get(build_state["arm_name"])
+        if arm_obj is None or arm_obj.type != "ARMATURE":
+            self.report({"ERROR"}, "The armature for this character is no longer in the scene.")
+            return {"CANCELLED"}
+        guids = [item.guid for item in state.available_clips if item.selected]
+        if not guids:
+            self.report({"WARNING"}, "No animations checked.")
+            return {"CANCELLED"}
+        try:
+            built = prefab_importer.build_selected_animations(
+                build_state["db"], arm_obj, build_state["maps"],
+                build_state["path_to_meshobjects"], guids, state.as_options())
+        except Exception as exc:
+            _report_exception(self, "Animation import failed", exc)
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Built {built} animation action(s) on {arm_obj.name}.")
+        return {"FINISHED"}
+
+
+class RURI_OT_animation_select_all(bpy.types.Operator):
+    bl_idname = "ruri.animation_select_all"
+    bl_label = "Select All / None"
+    bl_description = "Check or uncheck every listed animation clip"
+    bl_options = {"REGISTER", "UNDO"}
+    select: BoolProperty(default=True)
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.scene.ruri_cabmap.available_clips) > 0
+
+    def execute(self, context):
+        for item in context.scene.ruri_cabmap.available_clips:
+            item.selected = self.select
+        return {"FINISHED"}
+
+
+class RURI_PT_animation_browser(bpy.types.Panel):
+    """Checkbox animation browser for the last-imported character -- see
+    _populate_animation_browser. Only surfaces once a character with
+    discoverable clips has actually been imported; an empty list before that
+    would just be clutter, so this sub-panel simply doesn't draw at all."""
+    bl_idname = "RURI_PT_animation_browser"
+    bl_label = "Animations"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "RuriRipper"
+    bl_parent_id = "RURI_PT_cabmap"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.scene.ruri_cabmap.available_clips) > 0
+
+    def draw(self, context):
+        layout = self.layout
+        state = context.scene.ruri_cabmap
+
+        layout.label(text=f"Clips for: {state.animation_character_name}", icon="ARMATURE_DATA")
+
+        row = layout.row(align=True)
+        op = row.operator(RURI_OT_animation_select_all.bl_idname, text="All")
+        op.select = True
+        op = row.operator(RURI_OT_animation_select_all.bl_idname, text="None")
+        op.select = False
+
+        layout.template_list(RURI_UL_animation_clips.bl_idname, "", state, "available_clips",
+                             state, "available_clips_active_index", rows=8)
+
+        selected = [item for item in state.available_clips if item.selected]
+        total = sum(item.size_bytes for item in selected)
+        summary = f"Selected: {len(selected)} clip(s), {_format_size(total)}" if selected else "Nothing checked yet."
+        layout.label(text=summary)
+
+        layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT")
+
+
 _CLASSES = (
     # PropertyGroups first, and RURI_PG_filter_rule/RURI_PG_cabmap_row specifically
     # before RURI_PG_cabmap -- Blender requires a CollectionProperty's target type
     # to already be registered.
     RURI_PG_cabmap_row,
     RURI_PG_filter_rule,
+    RURI_PG_animation_clip,
     RURI_PG_cabmap,
     RURI_UL_cabmap,
+    RURI_UL_animation_clips,
     RURI_OT_filter_add_rule,
     RURI_OT_filter_remove_rule,
     RURI_OT_filter_clear_rules,
@@ -556,6 +728,9 @@ _CLASSES = (
     RURI_OT_load_cabmap,
     RURI_OT_cabmap_sort,
     RURI_OT_import_selected,
+    RURI_OT_import_selected_animations,
+    RURI_OT_animation_select_all,
+    RURI_PT_animation_browser,
 )
 
 

@@ -135,6 +135,7 @@ def reset():
     VISIBLE = []
     BRIDGE = None
     _sort_dir = 0
+    clear_animation_build_state()
 
 
 def ensure_bridge(hook_ids):
@@ -142,6 +143,35 @@ def ensure_bridge(hook_ids):
     if BRIDGE is None:
         BRIDGE = pythonnet_bridge.RipperBridge(hook_ids)
     return BRIDGE
+
+
+# --- Animation browser build context ----------------------------------------
+# The animation browser (cabmap_panel.RURI_UL_animation_clips) only DISCOVERS
+# clip metadata at import time (prefab_importer.discover_clip_refs_from_db);
+# actually building an action is deferred until the user checks specific
+# clips and clicks "Import Checked Animations". That later build needs the
+# same db/armature/hierarchy-maps the original prefab import already
+# resolved -- none of which are bpy-serializable, so (matching this module's
+# existing BRIDGE/ROWS convention) they live here as plain Python state
+# rather than on the bpy PropertyGroup. Keyed to a single character at a
+# time: importing a different character replaces this outright.
+
+ANIMATION_BUILD_STATE = None  # dict(db=..., arm_name=..., maps=..., path_to_meshobjects=...) | None
+
+
+def set_animation_build_state(db, arm_name, maps, path_to_meshobjects):
+    global ANIMATION_BUILD_STATE
+    ANIMATION_BUILD_STATE = {
+        "db": db,
+        "arm_name": arm_name,
+        "maps": maps,
+        "path_to_meshobjects": path_to_meshobjects,
+    }
+
+
+def clear_animation_build_state():
+    global ANIMATION_BUILD_STATE
+    ANIMATION_BUILD_STATE = None
 
 
 def load_rows():

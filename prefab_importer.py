@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import numpy as np
@@ -55,6 +56,7 @@ class ImportReport:
         self.maps = None        # hierarchy/bone maps (for external clip application)
         self.db = None          # AssetDatabase (for further resolution)
         self.path_to_meshobjects = None
+        self.available_clips = []  # bridge mode only: discover_clip_refs_from_db() results
 
     def summary(self):
         return (f"armature_bones={self.bones} meshes={len(self.mesh_objects)} "
@@ -108,14 +110,19 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
     """Bridge-mode sibling of import_prefab: db/prefab_file are already resolved
     from an in-memory closure (pythonnet bridge) instead of a disk path -- same
     build body as import_prefab (via _import_prefab_core), only the front
-    matter and clip-gathering source differ. Clip gathering uses the closure
-    itself (controller-referenced clips by guid, plus every AnimationClip
-    document already present in the closure) instead of a disk folder walk,
-    since the whole dependency closure already IS the relevant scope."""
+    matter differs. Unlike the disk path, animation clips are NOT eagerly
+    built here: a character's dependency closure can hold dozens of clips at
+    ~100MB each, and building actions for all of them synchronously is what
+    used to hang Blender on import. Clips are only DISCOVERED (cheap -- see
+    discover_clip_refs_from_db) and reported on report.available_clips; the
+    caller builds actions later, only for whichever clips the user actually
+    picks in the animation browser, via build_selected_animations."""
     options = _resolve_options(options)
     arm_name = name or _prefab_display_name(prefab_file)
-    clip_files = _gather_clip_files_from_db(db, prefab_file)
-    return _import_prefab_core(context, db, prefab_file, arm_name, clip_files, options)
+    report = _import_prefab_core(context, db, prefab_file, arm_name, [], options)
+    if options["import_animations"]:
+        report.available_clips = discover_clip_refs_from_db(db, prefab_file)
+    return report
 
 
 def _prefab_display_name(prefab):
@@ -138,14 +145,54 @@ def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
     return clip_files
 
 
-def _gather_clip_files_from_db(db, prefab):
-    """Bridge-mode clip gathering: controller-referenced clips (resolved by guid,
-    not by path/extension) plus every AnimationClip document already present in
-    the closure -- the bridge equivalent of the disk importer's controller-refs
-    + loose-.anim-folder-walk (there is no folder to walk; the closure already
-    is the scope)."""
-    clips = []
+_CLASS_HEADER_RE = re.compile(r"^---\s+!u!\d+\s+&-?\d+(?:\s+stripped)?\s*$", re.MULTILINE)
+_NAME_FIELD_RE = re.compile(r"^\s*m_Name:\s*(.*?)\s*$", re.MULTILINE)
+_PEEK_CHARS = 4096  # Unity always writes the class name + m_Name within the
+                     # first few dozen lines of an object, however large the
+                     # trailing curve/blob data further down the document is.
+
+
+def _peek_class_and_name(text):
+    """Cheap classification without a full unity_yaml.parse_text: read the
+    class name off the line right after the document header, and m_Name from
+    a bounded prefix of the body. A dense AnimationClip can run to 100+MB, and
+    most guids in a closure aren't clips at all -- this keeps closure-wide
+    discovery O(clip count) instead of O(total closure bytes)."""
+    prefix = text[:_PEEK_CHARS]
+    header = _CLASS_HEADER_RE.search(prefix)
+    if header is None:
+        return None, None
+    rest = prefix[header.end():].lstrip("\r\n")
+    line_end = rest.find("\n")
+    class_line = rest if line_end == -1 else rest[:line_end]
+    class_name = class_line.split(":", 1)[0].strip() or None
+    name_match = _NAME_FIELD_RE.search(prefix)
+    name = name_match.group(1).strip() or None if name_match else None
+    return class_name, name
+
+
+def discover_clip_refs_from_db(db, prefab):
+    """Bridge-mode animation clip DISCOVERY: same guid scope as the old eager
+    gather (controller-referenced clips plus every AnimationClip document
+    present in the closure) but returns lightweight metadata (guid/name/
+    approximate size) via _peek_class_and_name instead of a full parse -- so
+    browsing what's available doesn't pay to decode every clip up front. That
+    cost is deferred to build_selected_animations, and only for whichever
+    clips the user actually checks in the animation browser."""
+    refs = []
     seen_ids = set()
+
+    def _consider(guid):
+        if guid in seen_ids:
+            return
+        text = db.raw_text(guid)
+        if text is None:
+            return
+        class_name, name = _peek_class_and_name(text)
+        if class_name != "AnimationClip":
+            return
+        seen_ids.add(guid)
+        refs.append({"guid": guid, "name": name or guid, "size_bytes": len(text)})
 
     animator = prefab.first("Animator")
     controller_ref = animator.data.get("m_Controller") if animator is not None else None
@@ -156,22 +203,39 @@ def _gather_clip_files_from_db(db, prefab):
             for doc in controller_file.documents:
                 _collect_guids(doc.data, guids)
             for guid in guids:
-                if guid in seen_ids:
-                    continue
-                clip_file = db.load_guid(guid)
-                if clip_file is not None and clip_file.first("AnimationClip") is not None:
-                    seen_ids.add(guid)
-                    clips.append(clip_file)
+                _consider(guid)
 
     for guid in db.all_guids():
-        if guid in seen_ids:
-            continue
-        clip_file = db.load_guid(guid)
-        if clip_file is not None and clip_file.first("AnimationClip") is not None:
-            seen_ids.add(guid)
-            clips.append(clip_file)
+        _consider(guid)
 
-    return clips
+    refs.sort(key=lambda r: r["name"].lower())
+    return refs
+
+
+def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options):
+    """Build Blender actions for exactly the given clip guids -- the checked
+    subset from the animation browser. This is the only place that now pays
+    the full parse + keyframe-insertion cost per clip; it's deferred until the
+    user explicitly picks a clip rather than paying it for every clip in a
+    character's closure up front."""
+    built = 0
+    first = None
+    has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
+    for guid in guids:
+        clip_file = db.load_guid(guid)
+        if clip_file is None:
+            continue
+        clip_doc = clip_file.first("AnimationClip")
+        if clip_doc is None:
+            continue
+        action, slot, _frames = animation_builder.build_action(
+            clip_doc, arm_obj, maps, path_to_meshobjects, options)
+        built += 1
+        if first is None:
+            first = (action, slot)
+    if first is not None and not has_action:
+        _assign_first_action(arm_obj, first[0], first[1])
+    return built
 
 
 def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
