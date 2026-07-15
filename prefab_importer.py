@@ -241,12 +241,34 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         if unmatched:
             warnings.append(f"{clip_doc.data.get('m_Name', guid)}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
-        if maps.get("retargeter") is None and clip_is_humanoid(clip_doc.data):
+        is_humanoid = clip_is_humanoid(clip_doc.data)
+        if maps.get("retargeter") is None and is_humanoid:
             warnings.append(f"{clip_doc.data.get('m_Name', guid)}: humanoid (muscle) clip but "
                             f"no Avatar in scope -- body motion dropped, only generic curves "
                             f"imported")
-        action, slot, _frames = animation_builder.build_action(
+        action, slot, n_frames = animation_builder.build_action(
             clip_doc, arm_obj, maps, path_to_meshobjects, options)
+
+        # EndField ships humanoid clips whose limb FK is an auto-generated
+        # approximation; the real hand/foot poses live in the clip's own
+        # animated IK target bones and the game recomputes the limbs at
+        # runtime. Rigs exposing that convention get the same correction here
+        # -- see endfield_ik.py's module doc for the ground truth. Generic
+        # clips ship real FK and are left alone.
+        retargeter = maps.get("retargeter")
+        if (options.get("endfield_ik", True) and is_humanoid and retargeter is not None):
+            try:
+                from . import endfield_ik
+            except ImportError:
+                import endfield_ik
+            if endfield_ik.detect_rig(arm_obj):
+                try:
+                    endfield_ik.apply_to_action(arm_obj, action, retargeter.bone_targets(),
+                                                0, max(0, n_frames - 1))
+                except Exception as exc:
+                    warnings.append(f"{clip_doc.data.get('m_Name', guid)}: IK correction "
+                                    f"failed ({type(exc).__name__}: {exc}) -- FK kept")
+
         built += 1
         if first is None:
             first = (action, slot)
