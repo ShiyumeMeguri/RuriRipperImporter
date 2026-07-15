@@ -53,6 +53,32 @@ from bpy.props import BoolProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 
+def _on_ripperhook_repo_change(self, context):
+    pythonnet_bridge.set_repo_root(self.ripperhook_repo)
+
+
+class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
+    """Edit > Preferences > Add-ons > RuriRipperImporter. Holds the one path that differs per
+    machine (this workspace is synced across machines that check the Ruri-RipperHook repo out
+    under different drive letters/paths) instead of it being hardcoded in pythonnet_bridge.py --
+    Blender persists this in the user's saved preferences, so it only needs setting once per
+    machine."""
+    bl_idname = __package__
+
+    ripperhook_repo: StringProperty(
+        name="Ruri-RipperHook Bin Dir",
+        subtype="DIR_PATH",
+        description="The built bin folder that directly contains Ruri.RipperHook.dll, e.g. "
+                    "<your Ruri-RipperHook checkout>/AssetRipper/Source/0Bins/AssetRipper/Debug",
+        update=_on_ripperhook_repo_change)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "ripperhook_repo")
+        layout.label(text="Point this directly at the folder containing the built Ruri.RipperHook.dll "
+                          "(e.g. .../AssetRipper/Source/0Bins/AssetRipper/Debug).", icon="INFO")
+
+
 class _ImportOptionsMixin:
     lod0_only: BoolProperty(
         name="LOD0 Only",
@@ -105,7 +131,7 @@ def _menu_asset(self, context):
                          text="Unity Asset (.prefab / .asset / .anim / .controller)")
 
 
-_CLASSES = (IMPORT_OT_unity_asset,)
+_CLASSES = (RuriRipperImporterPreferences, IMPORT_OT_unity_asset)
 
 
 def register():
@@ -114,13 +140,19 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
     scene_panel.register()
+    # Push the user's saved repo-path preference into pythonnet_bridge BEFORE the early CoreCLR
+    # claim below, since _dll_dir() (called from claim_runtime_early -> _runtime_config_path)
+    # needs it to find Ruri.RipperHook.dll at all.
+    prefs = bpy.context.preferences.addons[__package__].preferences
+    pythonnet_bridge.set_repo_root(prefs.ripperhook_repo)
     # Claim the process-wide CLR runtime (CoreCLR) as early as possible, before
     # any other addon in this profile gets a chance to trigger its own lazy
     # `import clr` (which defaults to .NET Framework on Windows and would
     # permanently lock out our net10.0 DLL for the rest of this Blender
     # session -- pythonnet allows exactly one runtime per process). Cheap and
     # synchronous (just registers a config; the actual runtime spins up lazily
-    # on first real CLR use) -- a no-op if pythonnet isn't installed yet.
+    # on first real CLR use) -- a no-op if pythonnet isn't installed yet, or if
+    # the repo path preference isn't set yet (_dll_dir() raises, caught below).
     try:
         pythonnet_bridge.claim_runtime_early()
     except Exception as exc:  # best-effort -- _ensure_runtime() retries for real on first use

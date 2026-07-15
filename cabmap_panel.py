@@ -14,6 +14,7 @@ with bridge-sourced in-memory data from a resolved cabmap selection.
 from __future__ import annotations
 
 import os
+import re
 import traceback
 
 import bpy
@@ -21,14 +22,16 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, IntProper
                         PointerProperty, StringProperty)
 
 try:
-    from . import cabmap_state, pythonnet_bootstrap, bridge_asset_db, prefab_importer
+    from . import cabmap_state, pythonnet_bootstrap, pythonnet_bridge, bridge_asset_db, prefab_importer, scene_panel
 except ImportError:  # standalone (non-package) testing
     import cabmap_state
     import pythonnet_bootstrap
+    import pythonnet_bridge
     import bridge_asset_db
     import prefab_importer
+    import scene_panel
 
-_HOOK_IDS_DEFAULT = "EndField_1.3.3"
+_HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
 
 # Static EnumProperty item lists (Blender wants a stable list, not a callable, to avoid its
@@ -84,7 +87,44 @@ def _on_filter_rule_edit(self, context):
 
 
 def _hook_ids(state):
-    return [h.strip() for h in state.hook_ids.split(",") if h.strip()]
+    return [item.id for item in state.available_hooks if item.selected]
+
+
+_FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
+
+
+def _default_cabmap_filename(hook_ids):
+    """A sensible default cabmap filename from the checked hook id(s) (e.g.
+    "EndField_1.3.3.cabmap", or "EndField_1.3.3+GirlsFrontline2_1.0.cabmap" for
+    more than one) -- used to auto-complete the Cabmap field when it's a bare
+    folder with no filename (see RURI_OT_build_cabmap)."""
+    stem = "+".join(hook_ids) if hook_ids else "output"
+    return _FILENAME_UNSAFE.sub("_", stem) + ".cabmap"
+
+
+def _auto_default_cabmap_filename(state):
+    """If state.cabmap_path is a non-empty path that (still) resolves to a bare folder, fill in a
+    default filename built from the checked hook(s) -- writes straight onto state.cabmap_path so
+    it's what's shown in the field AND what Blender's file-browser popup pre-fills/lets you edit
+    the next time the user clicks its folder icon (that browser seeds its filename box from the
+    property's CURRENT string value, so the default has to already be in the property before the
+    popup opens, not just patched in at Build time). A completely empty cabmap_path is left
+    alone here -- there's no folder yet to build a default INTO (see _on_game_root_change, which
+    seeds one first). Called from both that callback and RURI_OT_refresh_hooks (refreshes the
+    filename once the real hook selection is known)."""
+    raw = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
+    if raw and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
+        state.cabmap_path = os.path.join(raw, _default_cabmap_filename(_hook_ids(state)))
+
+
+def _resolve_build_output_path(state):
+    """Resolve state.cabmap_path into a concrete output FILE path for Build -- belt-and-suspenders
+    on top of _auto_default_cabmap_filename (which keeps the field itself defaulted as the user
+    goes) in case cabmap_path still ends up bare (e.g. typed/pasted a folder right before
+    clicking Build, with no chance for the update callback to run in between). Returns "" if
+    there's truly nothing to build a path from."""
+    _auto_default_cabmap_filename(state)
+    return bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
 
 
 def _report_exception(op, prefix, exc):
@@ -105,6 +145,15 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
     type_names: StringProperty()
     source: StringProperty()
     deps: IntProperty()
+
+
+class RURI_PG_hook_entry(bpy.types.PropertyGroup):
+    """One hook id (e.g. "EndField_1.3.3") as reported live by RipperBlenderBridge.
+    ListAvailableHooks() -- see RURI_OT_refresh_hooks. `selected` drives the checkbox in the
+    N-panel's Hooks box; multiple can be ticked at once, since Initialize() accepts more than one
+    hook id (e.g. a VFS-game hook plus an independent AR_* export-side hook)."""
+    id: StringProperty()
+    selected: BoolProperty(default=False)
 
 
 class RURI_PG_filter_rule(bpy.types.PropertyGroup):
@@ -140,14 +189,35 @@ def _format_size(num_bytes):
     return f"~{size:.1f}GB"
 
 
+def _on_game_root_change(self, context):
+    """Seed Cabmap with a default file path the first time Game Root is set, so Blender's
+    file-browser popup (opened from Cabmap's folder icon) already has a filename pre-filled --
+    that popup seeds its filename box from the property's current string, it can't be told a
+    default separately. Only fires when Cabmap is still empty -- never overwrites a path the
+    user already picked or typed."""
+    if not self.cabmap_path and self.game_root:
+        self.cabmap_path = self.game_root
+        _auto_default_cabmap_filename(self)
+
+
 class RURI_PG_cabmap(bpy.types.PropertyGroup):
     game_root: StringProperty(name="Game Root", subtype="DIR_PATH",
-                              description="The game's install root directory")
+                              description="The game's install root directory",
+                              update=_on_game_root_change)
     cabmap_path: StringProperty(name="Cabmap", subtype="FILE_PATH",
-                                description="Existing cabmap to load, or output path to build one")
-    hook_ids: StringProperty(name="Hook", default=_HOOK_IDS_DEFAULT,
-                             description="Comma-separated Ruri.RipperHook hook id(s), e.g. EndField_1.3.3")
+                                description="Existing cabmap FILE to load, or output path to build one -- "
+                                            "defaults to a filename built from the checked hook(s), editable")
+    available_hooks: CollectionProperty(type=RURI_PG_hook_entry)
+    available_hooks_active_index: IntProperty()
+    hooks_status: StringProperty(default="Click Refresh to list hooks compiled into Ruri.RipperHook.dll.")
     loaded: BoolProperty(default=False)
+    active_tab: EnumProperty(
+        name="Tab",
+        items=[
+            ("assetbundle", "VirtualAssetBundle", "Browse/search the loaded cabmap's rows and import individual assets"),
+            ("scene", "Scene", "Discover a whole map's placements and import it in one go"),
+        ],
+        default="assetbundle")
     search: StringProperty(name="Search", update=_on_search_edit,
                            description="Filter by Name / Container / Source / Type")
     status: StringProperty(default="No cabmap loaded.")
@@ -188,10 +258,13 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
         }
 
 
-class RURI_OT_build_cabmap(bpy.types.Operator):
-    bl_idname = "ruri.build_cabmap"
-    bl_label = "Build Cabmap"
-    bl_description = "Scan the game root and build a fresh cabmap (can take a long time for a full game)"
+class RURI_OT_refresh_hooks(bpy.types.Operator):
+    """Populate the Hooks checklist straight from RipperBlenderBridge.ListAvailableHooks() --
+    the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll. Ticked
+    state is preserved across a re-refresh for any id that's still present."""
+    bl_idname = "ruri.refresh_hooks"
+    bl_label = "Refresh Hooks"
+    bl_description = "List the hook ids compiled into Ruri.RipperHook.dll"
 
     @classmethod
     def poll(cls, context):
@@ -199,13 +272,54 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
+        try:
+            hook_ids = pythonnet_bridge.list_available_hooks()
+        except Exception as exc:
+            _report_exception(self, "Refresh hooks failed", exc)
+            return {"CANCELLED"}
+
+        previously_selected = {item.id for item in state.available_hooks if item.selected}
+        had_any_before = len(state.available_hooks) > 0
+        state.available_hooks.clear()
+        for hook_id in hook_ids:
+            item = state.available_hooks.add()
+            item.id = hook_id
+            item.selected = (hook_id in previously_selected
+                             or (not had_any_before and hook_id == _HOOK_IDS_DEFAULT))
+        state.hooks_status = (f"{len(hook_ids)} hook(s) available." if hook_ids
+                              else "No hooks found in Ruri.RipperHook.dll.")
+        _auto_default_cabmap_filename(state)
+        self.report({"INFO"}, state.hooks_status)
+        return {"FINISHED"}
+
+
+class RURI_OT_build_cabmap(bpy.types.Operator):
+    bl_idname = "ruri.build_cabmap"
+    bl_label = "Build Cabmap"
+    bl_description = "Scan the game root and build a fresh cabmap (can take a long time for a full game)"
+
+    @classmethod
+    def poll(cls, context):
+        return pythonnet_bootstrap.is_ready() and len(_hook_ids(context.scene.ruri_cabmap)) > 0
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
         root = bpy.path.abspath(state.game_root) if state.game_root else ""
-        out = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
         if not root or not os.path.isdir(root):
             self.report({"ERROR"}, "Pick a valid game root directory first.")
             return {"CANCELLED"}
+        if not _hook_ids(state):
+            self.report({"ERROR"}, "Check at least one hook first.")
+            return {"CANCELLED"}
+        out = _resolve_build_output_path(state)
         if not out:
             self.report({"ERROR"}, "Pick an output path for the cabmap file first.")
+            return {"CANCELLED"}
+        out_dir = os.path.dirname(out)
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as exc:
+            self.report({"ERROR"}, f"Can't create output folder '{out_dir}': {exc}")
             return {"CANCELLED"}
         try:
             bridge = cabmap_state.ensure_bridge(_hook_ids(state))
@@ -231,13 +345,16 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready()
+        return pythonnet_bootstrap.is_ready() and len(_hook_ids(context.scene.ruri_cabmap)) > 0
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
         path = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
         if not path or not os.path.isfile(path):
             self.report({"ERROR"}, "Pick a valid cabmap file first.")
+            return {"CANCELLED"}
+        if not _hook_ids(state):
+            self.report({"ERROR"}, "Check at least one hook first.")
             return {"CANCELLED"}
         try:
             bridge = cabmap_state.ensure_bridge(_hook_ids(state))
@@ -378,16 +495,6 @@ def _selected_row(state):
     return None
 
 
-def _prefab_stem(display_name):
-    """Strip a trailing '.prefab' (case-insensitively) so a browser row's
-    `name` (e.g. 'gacha_char_pelica_actor.prefab') can be compared against
-    prefab_importer._prefab_display_name's output (no extension)."""
-    stem = display_name or ""
-    if stem.lower().endswith(".prefab"):
-        stem = stem[: -len(".prefab")]
-    return stem.lower()
-
-
 class RURI_OT_import_selected(bpy.types.Operator):
     bl_idname = "ruri.import_selected"
     bl_label = "Import Selected"
@@ -412,7 +519,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, roots = cabmap_state.BRIDGE.import_cabs(cabs)
+            documents, textures, roots, seed_roots = cabmap_state.BRIDGE.import_cabs(cabs)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return {"CANCELLED"}
@@ -423,16 +530,16 @@ class RURI_OT_import_selected(bpy.types.Operator):
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         options = state.as_options()
         imported = 0
-        # A single selected row's dependency closure routinely resolves to
-        # MORE than one root .prefab (e.g. an actor prefab pulling in a
-        # separate portrait/"uimodel" variant as a second top-level asset) --
-        # and since discover_clip_refs_from_db's fallback scans the WHOLE
-        # shared closure db, every co-resolved root can end up reporting the
-        # SAME clip set, not a distinguishing one. "how many roots have
-        # clips" is therefore not a usable signal. Attribute the animation
-        # browser to whichever imported root's own prefab name matches what
-        # the user actually selected in the list.
-        selected_stem = _prefab_stem(selected_row.name)
+        # A single selected row's dependency closure routinely resolves to MORE than one root
+        # .prefab (e.g. an actor prefab pulling in a separate portrait/"uimodel" variant as a
+        # second top-level asset) -- and since discover_clip_refs_from_db's fallback scans the
+        # WHOLE shared closure db, every co-resolved root can end up reporting the SAME clip set,
+        # not a distinguishing one. Attribute the animation browser to whichever imported root IS
+        # the selected row's own asset, per seed_roots -- resolved bridge-side directly through
+        # the cabmap's own CAB/addressable-path identity (see RipperBridge.import_cabs), not by
+        # matching display names against GameObject names (two identifiers Unity gives no
+        # guarantee ever equal each other, even for a totally unambiguous single-root import).
+        primary_guid = seed_roots.get(selected_row.cab)
         primary_report = None
         for root_guid in roots:
             prefab_file = db.load_guid(root_guid)
@@ -442,7 +549,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             imported += 1
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
-            if _prefab_stem(prefab_importer._prefab_display_name(prefab_file)) == selected_stem:
+            if root_guid == primary_guid:
                 primary_report = report
 
         if primary_report is None and imported > 0:
@@ -470,6 +577,16 @@ def _populate_animation_browser(state, report):
         item.size_bytes = ref["size_bytes"]
     cabmap_state.set_animation_build_state(
         report.db, report.armature.name, report.maps, report.path_to_meshobjects)
+
+
+class RURI_UL_hooks(bpy.types.UIList):
+    """Checkbox-per-hook list -- template_list gives this a fixed, scrollable height
+    (see RURI_PT_cabmap.draw's rows=) instead of the box growing to fit every hook id
+    Ruri.RipperHook.dll reports, which gets long once more than a couple games are hooked."""
+    bl_idname = "RURI_UL_hooks"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
+        layout.prop(item, "selected", text=item.id)
 
 
 class RURI_UL_cabmap(bpy.types.UIList):
@@ -589,7 +706,15 @@ class RURI_PT_cabmap(bpy.types.Panel):
             return
 
         top = layout.column()
-        top.prop(state, "hook_ids")
+        hooks_box = top.box()
+        hooks_header = hooks_box.row(align=True)
+        hooks_header.label(text="Hooks")
+        hooks_header.operator(RURI_OT_refresh_hooks.bl_idname, text="", icon="FILE_REFRESH")
+        if not state.available_hooks:
+            hooks_box.label(text=state.hooks_status, icon="INFO")
+        else:
+            hooks_box.template_list(RURI_UL_hooks.bl_idname, "", state, "available_hooks",
+                                    state, "available_hooks_active_index", rows=6)
         top.prop(state, "game_root")
         top.prop(state, "cabmap_path")
         row = top.row(align=True)
@@ -602,40 +727,46 @@ class RURI_PT_cabmap(bpy.types.Panel):
         if not state.loaded:
             layout.label(text="Build or load a cabmap to browse/import.", icon="LOCKED")
 
-        search_row = gated.row(align=True)
-        search_row.prop(state, "search", icon="VIEWZOOM")
-        active_rules = sum(1 for r in state.filter_rules if r.enabled)
-        # Text badge (active rule count) carries the "filter active" signal instead of a second
-        # icon -- keeps this to icons actually in Blender's icon set.
-        search_row.popover(RURI_PT_filter_popover.bl_idname,
-                           text=str(active_rules) if active_rules else "", icon="FILTER")
+        tabs = gated.row(align=True)
+        tabs.prop(state, "active_tab", expand=True)
 
-        sort_col, sort_dir = cabmap_state.sort_state()
-        sort_row = gated.row(align=True)
-        for col_key, col_label in _SORT_COLUMNS:
-            arrow = ""
-            if sort_col == col_key:
-                arrow = " ▲" if sort_dir == 1 else (" ▼" if sort_dir == 2 else "")
-            op = sort_row.operator(RURI_OT_cabmap_sort.bl_idname, text=col_label + arrow)
-            op.column = col_key
+        if state.active_tab == "assetbundle":
+            search_row = gated.row(align=True)
+            search_row.prop(state, "search", icon="VIEWZOOM")
+            active_rules = sum(1 for r in state.filter_rules if r.enabled)
+            # Text badge (active rule count) carries the "filter active" signal instead of a second
+            # icon -- keeps this to icons actually in Blender's icon set.
+            search_row.popover(RURI_PT_filter_popover.bl_idname,
+                               text=str(active_rules) if active_rules else "", icon="FILTER")
 
-        gated.template_list(RURI_UL_cabmap.bl_idname, "", state, "window",
-                            state, "active_index", rows=12)
-        row = gated.row(align=True)
-        row.label(text=state.status)
-        row.menu(RURI_MT_quick_filter.bl_idname, text="", icon="COLLAPSEMENU")
+            sort_col, sort_dir = cabmap_state.sort_state()
+            sort_row = gated.row(align=True)
+            for col_key, col_label in _SORT_COLUMNS:
+                arrow = ""
+                if sort_col == col_key:
+                    arrow = " ▲" if sort_dir == 1 else (" ▼" if sort_dir == 2 else "")
+                op = sort_row.operator(RURI_OT_cabmap_sort.bl_idname, text=col_label + arrow)
+                op.column = col_key
 
-        opts = gated.box()
-        opts.prop(state, "lod0_only")
-        opts.prop(state, "import_materials")
-        opts.prop(state, "import_textures")
-        opts.prop(state, "import_skeleton")
+            gated.template_list(RURI_UL_cabmap.bl_idname, "", state, "window",
+                                state, "active_index", rows=12)
+            row = gated.row(align=True)
+            row.label(text=state.status)
+            row.menu(RURI_MT_quick_filter.bl_idname, text="", icon="COLLAPSEMENU")
 
-        actions = gated.row(align=True)
-        op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Append)")
-        op.reset_scene = False
-        op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Reset Scene)")
-        op.reset_scene = True
+            opts = gated.box()
+            opts.prop(state, "lod0_only")
+            opts.prop(state, "import_materials")
+            opts.prop(state, "import_textures")
+            opts.prop(state, "import_skeleton")
+
+            actions = gated.row(align=True)
+            op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Append)")
+            op.reset_scene = False
+            op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Reset Scene)")
+            op.reset_scene = True
+        else:
+            scene_panel.draw_scene_tab(gated, context)
 
 
 class RURI_OT_discover_animations(bpy.types.Operator):
@@ -722,7 +853,7 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             # exported at all: lazily build the character now, exactly
             # once, only because the user actually asked to attach a clip.
             try:
-                documents, textures, roots = cabmap_state.BRIDGE.import_cabs([build_state["seed_cab"]])
+                documents, textures, roots, seed_roots = cabmap_state.BRIDGE.import_cabs([build_state["seed_cab"]])
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
@@ -731,16 +862,13 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 return {"CANCELLED"}
             db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
 
-            selected_row_name = state.animation_character_name
-            selected_stem = _prefab_stem(selected_row_name)
-            prefab_file = None
-            for root_guid in roots:
-                candidate = db.load_guid(root_guid)
-                if candidate is not None and _prefab_stem(prefab_importer._prefab_display_name(candidate)) == selected_stem:
-                    prefab_file = candidate
-                    break
+            # The discovered character's own asset, resolved bridge-side directly through the
+            # cabmap's own CAB identity (see RipperBridge.import_cabs) -- not a name match.
+            primary_guid = seed_roots.get(build_state["seed_cab"])
+            prefab_file = db.load_guid(primary_guid) if primary_guid else None
             if prefab_file is None:
-                self.report({"ERROR"}, "Could not match an imported root back to the discovered character.")
+                self.report({"ERROR"}, "Could not resolve the discovered character's own asset "
+                                       "in its exported closure.")
                 return {"CANCELLED"}
 
             report = prefab_importer.import_prefab_from_db(context, db, prefab_file, build_state["options"])
@@ -816,8 +944,8 @@ class RURI_OT_animation_select_all(bpy.types.Operator):
 
 
 class RURI_PT_animation_browser(bpy.types.Panel):
-    """Checkbox animation browser -- mirrors the Scene Import panel's
-    discover-then-select-then-commit shape (RURI_PT_scene_import): always
+    """Checkbox animation browser -- mirrors the Scene tab's
+    discover-then-select-then-commit shape (scene_panel.draw_scene_tab): always
     visible once a cabmap is loaded, with its own "Discover Animations"
     button front and center, rather than being an invisible side effect of
     the generic Import buttons gated behind an easy-to-miss checkbox (the
@@ -834,7 +962,8 @@ class RURI_PT_animation_browser(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return context.scene.ruri_cabmap.loaded
+        state = context.scene.ruri_cabmap
+        return state.loaded and state.active_tab == "assetbundle"
 
     def draw(self, context):
         layout = self.layout
@@ -870,9 +999,11 @@ _CLASSES = (
     # before RURI_PG_cabmap -- Blender requires a CollectionProperty's target type
     # to already be registered.
     RURI_PG_cabmap_row,
+    RURI_PG_hook_entry,
     RURI_PG_filter_rule,
     RURI_PG_animation_clip,
     RURI_PG_cabmap,
+    RURI_UL_hooks,
     RURI_UL_cabmap,
     RURI_UL_animation_clips,
     RURI_OT_filter_add_rule,
@@ -882,6 +1013,7 @@ _CLASSES = (
     RURI_MT_quick_filter,
     RURI_PT_filter_popover,
     RURI_PT_cabmap,
+    RURI_OT_refresh_hooks,
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
     RURI_OT_cabmap_sort,

@@ -1,12 +1,13 @@
-"""N-panel UI for whole-scene import: pick a map, discover its placements
-in memory (cheap -- no dependency closure resolved yet), see a cost/fidelity
-estimate, then commit. Mirrors the animation browser's discover-then-commit
-shape (cabmap_panel.py's RURI_PT_animation_browser) and the same hard gate
-as everything else in this addon: nothing here is reachable before a cabmap
-is loaded (see RURI_PT_cabmap's `gated` column in cabmap_panel.py), since
-importing what's discovered still resolves through the same cabmap-seeded
-ResolveScopedClosure/ImportCabs path pelica already uses.
-"""
+"""UI for whole-scene import: pick a map, discover its placements in memory
+(cheap -- no dependency closure resolved yet), see a cost/fidelity estimate,
+then commit. Mirrors the animation browser's discover-then-commit shape
+(cabmap_panel.py's RURI_PT_animation_browser).
+
+draw_scene_tab() is called directly by cabmap_panel.py's RURI_PT_cabmap.draw()
+for its "Scene" tab (see RURI_PG_cabmap.active_tab) -- NOT drawn as its own
+stacked bl_parent_id sub-panel, so it shares the same hard gate (nothing here
+is reachable before a cabmap is loaded) and tab bar as the AssetBundle browser
+instead of always being visible below it regardless of which tab is active."""
 
 from __future__ import annotations
 
@@ -117,7 +118,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, roots = cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
+            documents, textures, roots, _seed_roots = cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
         except Exception as exc:
             _report_exception(self, "Scene import (bridge) failed", exc)
             return {"CANCELLED"}
@@ -145,47 +146,31 @@ def _bridge_asset_db_module():
     return bridge_asset_db
 
 
-class RURI_PT_scene_import(bpy.types.Panel):
-    """Whole-scene import sub-panel. Only meaningfully usable once a cabmap
-    is loaded (same hard gate as the rest of this addon) -- shown collapsed
-    by default since it's a less-common action than the character importer
-    above it."""
-    bl_idname = "RURI_PT_scene_import"
-    bl_label = "Scene Import"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "RuriRipper"
-    bl_parent_id = "RURI_PT_cabmap"
-    bl_options = {"DEFAULT_CLOSED"}
+def draw_scene_tab(layout, context):
+    """Draw the Scene tab's content into `layout` -- called from cabmap_panel.py's
+    RURI_PT_cabmap.draw() when RURI_PG_cabmap.active_tab == 'scene'. The caller has already
+    handled the loaded/not-loaded gate and lock message for the whole gated area (both tabs
+    share it), so this only draws the scene-import controls themselves."""
+    scene_import = context.scene.ruri_scene_import
 
-    def draw(self, context):
-        layout = self.layout
-        state = context.scene.ruri_cabmap
-        scene_import = context.scene.ruri_scene_import
+    row = layout.row(align=True)
+    row.prop(scene_import, "map_name")
+    row.operator(RURI_OT_scene_discover_maps.bl_idname, text="", icon="FILE_REFRESH")
 
-        col = layout.column()
-        col.enabled = state.loaded
-        if not state.loaded:
-            layout.label(text="Build or load a cabmap first.", icon="LOCKED")
+    layout.prop(scene_import, "lod0_only")
+    layout.operator(RURI_OT_scene_discover_placements.bl_idname, icon="VIEWZOOM")
 
-        row = col.row(align=True)
-        row.prop(scene_import, "map_name")
-        row.operator(RURI_OT_scene_discover_maps.bl_idname, text="", icon="FILE_REFRESH")
+    if scene_state.PLACEMENTS:
+        est = scene_state.estimate(scene_import.lod0_only)
+        box = layout.box()
+        box.label(text=f"Map: {scene_state.CURRENT_MAP}")
+        box.label(text=f"{est['total_placements']} placement(s), {est['distinct_assets']} distinct asset(s)")
+        box.label(text=f"{est['placeable']} placeable, {est['excluded']} excluded (no transform)")
+        box.label(text=f"Resolves to {est['resolved_cabs']} CAB(s) (re-click Discover after "
+                      f"toggling LOD0 Only to refresh this number)")
 
-        col.prop(scene_import, "lod0_only")
-        col.operator(RURI_OT_scene_discover_placements.bl_idname, icon="VIEWZOOM")
-
-        if scene_state.PLACEMENTS:
-            est = scene_state.estimate(scene_import.lod0_only)
-            box = col.box()
-            box.label(text=f"Map: {scene_state.CURRENT_MAP}")
-            box.label(text=f"{est['total_placements']} placement(s), {est['distinct_assets']} distinct asset(s)")
-            box.label(text=f"{est['placeable']} placeable, {est['excluded']} excluded (no transform)")
-            box.label(text=f"Resolves to {est['resolved_cabs']} CAB(s) (re-click Discover after "
-                          f"toggling LOD0 Only to refresh this number)")
-
-        col.prop(scene_import, "reset_scene")
-        col.operator(RURI_OT_scene_import.bl_idname, icon="IMPORT")
+    layout.prop(scene_import, "reset_scene")
+    layout.operator(RURI_OT_scene_import.bl_idname, icon="IMPORT")
 
 
 _CLASSES = (
@@ -193,7 +178,6 @@ _CLASSES = (
     RURI_OT_scene_discover_maps,
     RURI_OT_scene_discover_placements,
     RURI_OT_scene_import,
-    RURI_PT_scene_import,
 )
 
 

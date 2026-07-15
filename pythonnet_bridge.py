@@ -11,28 +11,41 @@ from __future__ import annotations
 import os
 import sys
 
-# Known build output locations (Release preferred; falls back to Debug so this
-# works against a dev build without requiring a Release rebuild first). Override
-# with the RURI_RIPPERHOOK_BIN environment variable if the repo lives elsewhere.
-_DEFAULT_DLL_DIRS = [
-    r"D:\Ruri\Git\FractalTools\Ruri-RipperHook\AssetRipper\Source\0Bins\AssetRipper\Release",
-    r"D:\Ruri\Git\FractalTools\Ruri-RipperHook\AssetRipper\Source\0Bins\AssetRipper\Debug",
-]
-
+# The addon preference (Edit > Preferences > Add-ons > RuriRipperImporter > "Ruri-RipperHook
+# Bin Dir", see RuriRipperImporterPreferences in __init__.py) points DIRECTLY at the bin dir that
+# has to contain both Ruri.RipperHook.dll and Ruri.RipperHook.CLI.runtimeconfig.json -- typically
+# "<repo>/AssetRipper/Source/0Bins/AssetRipper/Debug". No repo-root-relative derivation, no
+# Release-vs-Debug guessing: one directory, set explicitly, nothing hardcoded here. Pushed into
+# this module via set_repo_root() at register() time and whenever the preference changes.
+# RURI_RIPPERHOOK_BIN remains as an escape hatch for headless/CLI use with no bpy preferences UI.
 _runtime_set = False
 _bridge_type = None
+_repo_root_override = None  # set via set_repo_root() -- see __init__.py's AddonPreferences
+
+
+def set_repo_root(path):
+    """Called by __init__.py.register() (and the preferences panel's update callback) with the
+    user-configured bin dir. Takes priority over RURI_RIPPERHOOK_BIN."""
+    global _repo_root_override
+    _repo_root_override = (path or "").strip() or None
 
 
 def _dll_dir():
-    override = os.environ.get("RURI_RIPPERHOOK_BIN")
-    candidates = ([override] if override else []) + _DEFAULT_DLL_DIRS
-    for d in candidates:
-        if d and os.path.isfile(os.path.join(d, "Ruri.RipperHook.dll")):
-            return d
-    raise RuntimeError(
-        "Ruri.RipperHook.dll not found. Build Source/Ruri.RipperHook/Ruri.RipperHook.csproj, "
-        "or set the RURI_RIPPERHOOK_BIN environment variable to its output directory. "
-        f"Looked in: {candidates}")
+    d = _repo_root_override or os.environ.get("RURI_RIPPERHOOK_BIN")
+    if not d:
+        raise RuntimeError(
+            "No Ruri-RipperHook bin dir configured. Set it in Blender's Edit > Preferences > "
+            "Add-ons > RuriRipperImporter > \"Ruri-RipperHook Bin Dir\" (the folder containing "
+            "Ruri.RipperHook.dll, e.g. AssetRipper/Source/0Bins/AssetRipper/Debug), or set the "
+            "RURI_RIPPERHOOK_BIN environment variable.")
+    if not os.path.isfile(os.path.join(d, "Ruri.RipperHook.dll")):
+        raise RuntimeError(f"Ruri.RipperHook.dll not found in configured bin dir: {d}")
+    if not os.path.isfile(os.path.join(d, "Ruri.RipperHook.CLI.runtimeconfig.json")):
+        raise RuntimeError(
+            f"Ruri.RipperHook.CLI.runtimeconfig.json not found next to the DLL in: {d} -- "
+            "build Source/Ruri.RipperHook.CLI/Ruri.RipperHook.CLI.csproj (a Release build that "
+            "only ran the GUI/core projects has the DLL but not this file).")
+    return d
 
 
 def _runtime_config_path():
@@ -122,6 +135,57 @@ def claim_runtime_early():
         pass  # pythonnet/clr_loader not installed yet
 
 
+class _StaticTypeProxy:
+    """Wraps a `System.Type` obtained via reflection (Assembly.GetType) so `.SomeMethod(*args)`
+    still works as if it were a normal pythonnet-imported class.
+
+    Root cause (confirmed against pythonnet's actual source, not guessed): pythonnet's
+    `from Namespace import Class` only works for a type if AssemblyManager.ScanAssembly's
+    `Assembly.GetExportedTypes()` call succeeded for the WHOLE containing assembly first
+    (AssemblyManager.cs GetTypes()) -- and that call throws FileNotFoundException (silently
+    swallowed, returning zero types for the ENTIRE assembly) if ANY exported type anywhere in
+    Ruri.RipperHook.dll can't resolve one of its own dependencies, even ones having nothing to
+    do with RipperBlenderBridge. clr.AddReference() itself still succeeds (the assembly file
+    loads fine), so _ensure_runtime() falls back to Assembly.GetType(fullName) -- a single-type,
+    much narrower reflection lookup that isn't affected by that whole-assembly scan failure.
+
+    But a raw reflected System.Type crosses into Python as a plain object exposing Type's OWN
+    instance API (.Name, .GetMethod(), ...) -- NOT as the callable class it describes (that
+    special wrapping, ReflectedClrType, is pythonnet's import-hook machinery specifically,
+    confirmed in Converter.ToPython: a Type value takes the generic CLRObject.GetReference
+    path, not ReflectedClrType.GetOrCreate). So `RipperBlenderBridge.ListAvailableHooks()`
+    fails with AttributeError. This proxy makes `.SomeMethod(*args)` dispatch through
+    `GetMethod(name).Invoke(None, args)` (static: no target instance) instead, sidestepping
+    pythonnet's class-wrapping entirely -- pure .NET reflection, unaffected by any of the above.
+    """
+
+    def __init__(self, clr_type):
+        self._clr_type = clr_type
+
+    def __getattr__(self, name):
+        method = self._clr_type.GetMethod(name)
+        if method is None:
+            raise AttributeError(f"{self._clr_type.FullName} has no method '{name}'")
+
+        def call(*args):
+            import System
+            arg_array = System.Array[System.Object](list(args)) if args else None
+            try:
+                return method.Invoke(None, arg_array)
+            except Exception as exc:
+                # MethodInfo.Invoke wraps any exception the target method itself throws in a
+                # System.Reflection.TargetInvocationException -- unwrap it so callers (and
+                # _report_exception's `type(exc).__name__`) see the real underlying exception
+                # (DirectoryNotFoundException, etc.), not just "TargetInvocationException" for
+                # every possible C#-side error.
+                inner = getattr(exc, "InnerException", None)
+                if inner is not None:
+                    raise inner from exc
+                raise
+
+        return call
+
+
 def _ensure_runtime():
     """Boot CoreCLR (once per Blender process -- it cannot be re-pointed or
     unloaded once set, whether that "once" was this call or an earlier
@@ -137,9 +201,47 @@ def _ensure_runtime():
     if dll_dir not in sys.path:
         sys.path.append(dll_dir)
     import clr
-    clr.AddReference("Ruri.RipperHook")
-    from Ruri.RipperHook.Bridge import RipperBlenderBridge
-    _bridge_type = RipperBlenderBridge
+    import System
+
+    dll_path = os.path.join(dll_dir, "Ruri.RipperHook.dll")
+    clr.AddReference(dll_path)
+    assembly = next((a for a in System.AppDomain.CurrentDomain.GetAssemblies()
+                     if str(a.GetName().Name) == "Ruri.RipperHook"), None)
+    if assembly is None:
+        raise RuntimeError(
+            f"Ruri.RipperHook.dll (loaded from {dll_path}) is not among "
+            "AppDomain.CurrentDomain.GetAssemblies() after AddReference() -- the load itself failed.")
+
+    # Diagnostic only, never fatal: if Ruri.RipperHook.dll has a type somewhere that can't
+    # resolve one of its own dependencies, THIS is what silently empties AssemblyManager's
+    # namespace scan for the whole assembly (see _StaticTypeProxy's doc comment) -- surface
+    # exactly which dependency so the real fix (getting it into the bin dir) is findable,
+    # without blocking on it, since Assembly.GetType() below doesn't need this to succeed.
+    try:
+        assembly.GetExportedTypes()
+    except Exception as exc:
+        missing = getattr(exc, "FileName", None) or getattr(exc, "Message", None) or str(exc)
+        print(f"[RuriRipper] Ruri.RipperHook.dll: not every exported type resolves cleanly "
+              f"({type(exc).__name__}: {missing}) -- this is why `from Ruri.RipperHook...import` "
+              "doesn't work and the reflection fallback is needed; harmless if the fallback "
+              "below still finds RipperBlenderBridge.")
+
+    bridge_type = assembly.GetType("Ruri.RipperHook.Bridge.RipperBlenderBridge")
+    if bridge_type is None:
+        raise RuntimeError(
+            "Ruri.RipperHook.dll loaded, but has no Ruri.RipperHook.Bridge.RipperBlenderBridge type -- "
+            "rebuild Source/Ruri.RipperHook/Ruri.RipperHook.csproj against the latest source.")
+    _bridge_type = _StaticTypeProxy(bridge_type)
+
+
+def list_available_hooks():
+    """Every hook id (e.g. "EndField_1.3.3") compiled into the loaded Ruri.RipperHook.dll, straight
+    from RipperBlenderBridge.ListAvailableHooks() -- no RipperBridge session (Initialize with chosen
+    hook ids) required first, since this only boots the CLR runtime and loads the DLL, then reflects
+    over its already-loaded hook types. This is what the Hook picker in cabmap_panel.py populates its
+    checkbox list from instead of a hardcoded/free-text id."""
+    _ensure_runtime()
+    return [str(h) for h in _bridge_type.ListAvailableHooks()]
 
 
 def _string_array(strings):
@@ -287,17 +389,24 @@ class RipperBridge:
         ]
 
     def import_cabs(self, cab_names):
-        """Resolve cab_names' dependency closure, load it, export it in-memory,
-        and return (documents, textures, roots): documents/textures are plain
-        Python dicts keyed by lowercase guid (str -> str Unity-YAML text, str ->
-        bytes PNG); roots is the list of guids that are the actual importable
-        (.prefab) top-level assets."""
+        """Resolve cab_names' dependency closure, load it, export it in-memory, and return
+        (documents, textures, roots, seed_roots): documents/textures are plain Python dicts keyed
+        by lowercase guid (str -> str Unity-YAML text, str -> bytes PNG); roots is the list of
+        guids that are the actual importable (.prefab) top-level assets; seed_roots is
+        {cab_name: guid} for each requested cab_names entry that resolved to its own asset --
+        resolved bridge-side directly through the cabmap's own CAB/addressable-path identity
+        (RipperBlenderBridge.Partition/NormalizeExportPath), NOT by matching display names, so a
+        caller never needs its own name-matching heuristic to figure out which of `roots`
+        corresponds to which requested CAB (a single seed's closure routinely resolves to more
+        than one root .prefab, e.g. a co-resolved portrait/uimodel variant)."""
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
+        cab_names = list(cab_names)
         result = self._bridge.ImportCabs(self._map, _string_array(cab_names))
         # .NET IReadOnlyDictionary crosses into Python as an iterable of
         # KeyValuePair (no dict-like .items()) -- iterate and pull .Key/.Value.
         documents = {str(kvp.Key).lower(): str(kvp.Value) for kvp in result.Documents}
         textures = {str(kvp.Key).lower(): bytes(kvp.Value) for kvp in result.Textures}
         roots = [str(g).lower() for g in result.Roots]
-        return documents, textures, roots
+        seed_roots = {str(kvp.Key): str(kvp.Value).lower() for kvp in result.SeedRoots}
+        return documents, textures, roots, seed_roots
