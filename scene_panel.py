@@ -117,7 +117,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, _roots = cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
+            documents, textures, roots = cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
         except Exception as exc:
             _report_exception(self, "Scene import (bridge) failed", exc)
             return {"CANCELLED"}
@@ -126,13 +126,13 @@ class RURI_OT_scene_import(bpy.types.Operator):
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         try:
             imported, placed, unresolved = prefab_importer.import_scene_placements(
-                context, db, scene_state.placeable(scene_import.lod0_only),
+                context, db, scene_state.placeable(scene_import.lod0_only), roots,
                 context.scene.ruri_cabmap.as_options())
         except Exception as exc:
             _report_exception(self, "Scene placement build failed", exc)
             return {"CANCELLED"}
 
-        self.report({"INFO"}, f"Imported {imported} distinct mesh(es), placed {placed} object(s)"
+        self.report({"INFO"}, f"Imported {imported} distinct asset(s), placed {placed} object(s)"
                               + (f", {unresolved} unresolved" if unresolved else "") + ".")
         return {"FINISHED"}
 

@@ -95,7 +95,22 @@ def _image_from_png_bytes(png, name):
     image = bpy.data.images.new(name, width=width, height=height, alpha=True)
     image.pixels.foreach_set(arr.reshape(-1))
     image.pack()
+    _disable_alpha_interpretation(image)
     return image
+
+
+def _disable_alpha_interpretation(image):
+    """These game shaders' texture alpha channel is routinely repurposed for
+    something other than opacity (AO, emission mask, a packed PBR channel,
+    ...) -- Blender's default alpha_mode ('Straight') treats a 4th channel
+    as real transparency for viewport/render blending regardless of whether
+    the shader graph ever wires the Alpha output anywhere, which reads as
+    incorrect see-through material. 'NONE' makes Blender ignore the channel
+    entirely, matching that it was never opacity data to begin with."""
+    try:
+        image.alpha_mode = "NONE"
+    except Exception:
+        pass
 
 
 def _first_texture(tex_envs, names, generic_hints=()):
@@ -194,6 +209,7 @@ class MaterialBuilder:
                     cached = bpy.data.images.load(key, check_existing=True)
                 except RuntimeError:
                     return None
+                _disable_alpha_interpretation(cached)
             if cached is None:
                 return None
             self._image_cache[key] = cached

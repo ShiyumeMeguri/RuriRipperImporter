@@ -496,7 +496,11 @@ class RURI_UL_animation_clips(bpy.types.UIList):
         row = layout.row(align=True)
         row.prop(item, "selected", text="")
         row.label(text=item.name)
-        row.label(text=_format_size(item.size_bytes))
+        # size_bytes is 0 for a cheaply-discovered-but-not-yet-resolved clip
+        # (see RURI_OT_discover_animations -- pure cabmap metadata has no
+        # per-asset byte size); showing "0 B" would misleadingly read as an
+        # empty clip rather than "size not known yet."
+        row.label(text=_format_size(item.size_bytes) if item.size_bytes > 0 else "size unknown")
 
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
@@ -626,7 +630,6 @@ class RURI_PT_cabmap(bpy.types.Panel):
         opts.prop(state, "import_materials")
         opts.prop(state, "import_textures")
         opts.prop(state, "import_skeleton")
-        opts.prop(state, "import_animations")
 
         actions = gated.row(align=True)
         op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Append)")
@@ -635,10 +638,63 @@ class RURI_PT_cabmap(bpy.types.Panel):
         op.reset_scene = True
 
 
+class RURI_OT_discover_animations(bpy.types.Operator):
+    """Cheap animation-clip discovery for the selected row: walks the
+    ALREADY-LOADED cabmap's own dependency graph (CabMap.
+    ResolveClosureCabNames -- pure in-memory, no VFS decrypt, no AssetRipper
+    export) and filters to CABs whose TypeNames (also already loaded, per
+    CAB) include AnimationClip. No db is resolved at this point -- a clip's
+    guid is only ever needed once the user actually checks it and clicks
+    Import Checked Animations, which is also the first point anything gets
+    exported/built at all, including the character itself."""
+    bl_idname = "ruri.discover_animations"
+    bl_label = "Discover Animations"
+    bl_description = "List this row's animation clips from the cabmap's own dependency graph -- cheap, nothing exported/built yet"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        state = context.scene.ruri_cabmap
+        return (state.loaded and cabmap_state.BRIDGE is not None
+                and 0 <= state.active_index < len(state.window))
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        selected_row = _selected_row(state)
+        try:
+            closure_cabs = cabmap_state.BRIDGE.resolve_closure_cab_names([selected_row.cab])
+        except Exception as exc:
+            _report_exception(self, "Discover animations failed", exc)
+            return {"CANCELLED"}
+
+        rows_by_cab = cabmap_state.rows_by_cab()
+        clip_rows = [rows_by_cab[cab] for cab in closure_cabs
+                     if cab in rows_by_cab and "AnimationClip" in rows_by_cab[cab]["type_names"]]
+        clip_rows.sort(key=lambda r: r["name"].lower())
+
+        state.available_clips.clear()
+        state.animation_character_name = selected_row.name
+        for row in clip_rows:
+            item = state.available_clips.add()
+            # A CAB name for now, not a real Unity guid -- translated to one
+            # (via build_clip_name_index_from_db) only once the lazy build
+            # below actually resolves this closure. See RURI_PG_animation_clip.
+            item.guid = row["cab"]
+            item.name = row["name"]
+            item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
+        cabmap_state.set_animation_discovery_state(selected_row.cab, state.as_options())
+
+        if clip_rows:
+            self.report({"INFO"}, f"Found {len(clip_rows)} clip(s). Check the ones you want, then Import Checked Animations.")
+        else:
+            self.report({"INFO"}, "No animation clips found in this selection's dependency closure.")
+        return {"FINISHED"}
+
+
 class RURI_OT_import_selected_animations(bpy.types.Operator):
     bl_idname = "ruri.import_selected_animations"
     bl_label = "Import Checked Animations"
-    bl_description = "Build Blender actions only for the checked clips, onto the character imported above"
+    bl_description = "Build the character (if not already in the scene) and Blender actions for the checked clips"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -651,16 +707,86 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
         state = context.scene.ruri_cabmap
         build_state = cabmap_state.ANIMATION_BUILD_STATE
         if build_state is None:
-            self.report({"WARNING"}, "No character loaded to attach animations to.")
+            self.report({"WARNING"}, "No character discovered -- click Discover Animations first.")
             return {"CANCELLED"}
-        arm_obj = bpy.data.objects.get(build_state["arm_name"])
-        if arm_obj is None or arm_obj.type != "ARMATURE":
-            self.report({"ERROR"}, "The armature for this character is no longer in the scene.")
-            return {"CANCELLED"}
-        guids = [item.guid for item in state.available_clips if item.selected]
-        if not guids:
+
+        checked_keys = [item.guid for item in state.available_clips if item.selected]
+        if not checked_keys:
             self.report({"WARNING"}, "No animations checked.")
             return {"CANCELLED"}
+
+        arm_obj = bpy.data.objects.get(build_state["arm_name"]) if build_state["arm_name"] else None
+        if arm_obj is None or arm_obj.type != "ARMATURE":
+            # Discovery-only state (or the armature was deleted since) --
+            # THIS is the first point the closure actually gets resolved/
+            # exported at all: lazily build the character now, exactly
+            # once, only because the user actually asked to attach a clip.
+            try:
+                documents, textures, roots = cabmap_state.BRIDGE.import_cabs([build_state["seed_cab"]])
+            except Exception as exc:
+                _report_exception(self, "Import (bridge) failed", exc)
+                return {"CANCELLED"}
+            if not roots:
+                self.report({"WARNING"}, "No importable (.prefab) asset found in the resolved closure.")
+                return {"CANCELLED"}
+            db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+
+            selected_row_name = state.animation_character_name
+            selected_stem = _prefab_stem(selected_row_name)
+            prefab_file = None
+            for root_guid in roots:
+                candidate = db.load_guid(root_guid)
+                if candidate is not None and _prefab_stem(prefab_importer._prefab_display_name(candidate)) == selected_stem:
+                    prefab_file = candidate
+                    break
+            if prefab_file is None:
+                self.report({"ERROR"}, "Could not match an imported root back to the discovered character.")
+                return {"CANCELLED"}
+
+            report = prefab_importer.import_prefab_from_db(context, db, prefab_file, build_state["options"])
+            for warning in report.warnings[:5]:
+                self.report({"WARNING"}, warning)
+            if report.armature is None:
+                self.report({"ERROR"}, "This character has no skeleton to attach animations to.")
+                return {"CANCELLED"}
+            arm_obj = report.armature
+            cabmap_state.mark_animation_build_done(db, arm_obj.name, report.maps, report.path_to_meshobjects)
+            build_state = cabmap_state.ANIMATION_BUILD_STATE
+
+        # item.guid is either a REAL Unity guid already (populated by
+        # import_prefab_from_db's own discover_clip_refs_from_db side effect
+        # when a full character import happened via Import (Append)/(Reset
+        # Scene)) or a CAB name not yet translated (from the cheap
+        # RURI_OT_discover_animations pass above). Try it directly as a guid
+        # first; only fall back to a name-based join (same pattern as
+        # build_mesh_name_index_from_db et al.) if that doesn't resolve to a
+        # real AnimationClip document. clip_index is built lazily -- only
+        # paid for if at least one checked item actually needs it.
+        db = build_state["db"]
+        clip_index = None
+        guids = []
+        unresolved = []
+        for item in state.available_clips:
+            if not item.selected:
+                continue
+            direct = db.load_guid(item.guid)
+            if direct is not None and direct.first("AnimationClip") is not None:
+                guids.append(item.guid)
+                continue
+            if clip_index is None:
+                clip_index = prefab_importer.build_clip_name_index_from_db(db)
+            guid = clip_index.get(prefab_importer.expected_clip_name_from_cab_row_name(item.name))
+            if guid is None:
+                unresolved.append(item.name)
+                continue
+            guids.append(guid)
+        if unresolved:
+            self.report({"WARNING"}, f"{len(unresolved)} checked clip(s) not found in the resolved "
+                                     f"closure: {', '.join(unresolved[:3])}{'...' if len(unresolved) > 3 else ''}")
+        if not guids:
+            self.report({"ERROR"}, "None of the checked clips could be resolved.")
+            return {"CANCELLED"}
+
         try:
             built = prefab_importer.build_selected_animations(
                 build_state["db"], arm_obj, build_state["maps"],
@@ -690,25 +816,36 @@ class RURI_OT_animation_select_all(bpy.types.Operator):
 
 
 class RURI_PT_animation_browser(bpy.types.Panel):
-    """Checkbox animation browser for the last-imported character -- see
-    _populate_animation_browser. Only surfaces once a character with
-    discoverable clips has actually been imported; an empty list before that
-    would just be clutter, so this sub-panel simply doesn't draw at all."""
+    """Checkbox animation browser -- mirrors the Scene Import panel's
+    discover-then-select-then-commit shape (RURI_PT_scene_import): always
+    visible once a cabmap is loaded, with its own "Discover Animations"
+    button front and center, rather than being an invisible side effect of
+    the generic Import buttons gated behind an easy-to-miss checkbox (the
+    original shape -- poll()'d on available_clips already being non-empty,
+    only reachable by first checking "Discover Animations" above then
+    clicking Import -- was reported back as "I checked the box and nothing
+    happened," since checking a box is not a visibly-actionable step)."""
     bl_idname = "RURI_PT_animation_browser"
     bl_label = "Animations"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "RuriRipper"
     bl_parent_id = "RURI_PT_cabmap"
-    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
-        return len(context.scene.ruri_cabmap.available_clips) > 0
+        return context.scene.ruri_cabmap.loaded
 
     def draw(self, context):
         layout = self.layout
         state = context.scene.ruri_cabmap
+
+        row = layout.row(align=True)
+        row.operator(RURI_OT_discover_animations.bl_idname, icon="VIEWZOOM")
+
+        if not state.available_clips:
+            layout.label(text="Select a row above, then click Discover Animations.", icon="INFO")
+            return
 
         layout.label(text=f"Clips for: {state.animation_character_name}", icon="ARMATURE_DATA")
 
@@ -722,8 +859,7 @@ class RURI_PT_animation_browser(bpy.types.Panel):
                              state, "available_clips_active_index", rows=8)
 
         selected = [item for item in state.available_clips if item.selected]
-        total = sum(item.size_bytes for item in selected)
-        summary = f"Selected: {len(selected)} clip(s), {_format_size(total)}" if selected else "Nothing checked yet."
+        summary = f"Selected: {len(selected)} clip(s)" if selected else "Nothing checked yet."
         layout.label(text=summary)
 
         layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT")
@@ -750,6 +886,7 @@ _CLASSES = (
     RURI_OT_load_cabmap,
     RURI_OT_cabmap_sort,
     RURI_OT_import_selected,
+    RURI_OT_discover_animations,
     RURI_OT_import_selected_animations,
     RURI_OT_animation_select_all,
     RURI_PT_animation_browser,

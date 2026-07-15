@@ -701,6 +701,36 @@ def is_lod0_or_unleveled(asset_path):
     return match is None or match.group(1) == "0"
 
 
+def build_clip_name_index_from_db(db):
+    """Peek every document's class+name and index the AnimationClip-classed
+    ones by LOWERCASED name -- mirrors build_mesh_name_index_from_db/
+    build_material_name_index_from_db exactly, just filtering a different
+    class. Joins a cheaply-discovered clip CAB's own display name (see
+    cabmap_panel.RURI_OT_discover_animations -- itself just the cabmap's
+    already-loaded container-path leaf, no YAML parsed at discovery time at
+    all) to a real guid once that CAB's closure has actually been resolved
+    (the lazy build in RURI_OT_import_selected_animations)."""
+    index = {}
+    for guid in db.all_guids():
+        text = db.raw_text(guid)
+        if text is None:
+            continue
+        class_name, name = _peek_class_and_name(text)
+        if class_name == "AnimationClip" and name:
+            index[name.lower()] = guid
+    return index
+
+
+def expected_clip_name_from_cab_row_name(row_name):
+    """A clip CAB's cabmap display name (e.g. 'A_actor_pelica_gacha_ani.anim')
+    reduced to the form build_clip_name_index_from_db's keys use: strip the
+    file extension and lowercase (Unity's convention: a standalone .anim
+    asset's own AnimationClip object is named after the file, matching
+    _expected_mesh_name's identical assumption for meshes)."""
+    stem = row_name.rsplit(".", 1)[0] if "." in row_name else row_name
+    return stem.lower()
+
+
 def build_material_name_index_from_db(db):
     """Peek every document's class+name (see _peek_class_and_name) and index
     the Material-classed ones by LOWERCASED name -- mirrors
@@ -740,61 +770,186 @@ def _scene_materials_for(material_index, mat_builder, material_asset_paths):
     return materials
 
 
-def import_scene_placements(context, db, placements, options=None):
+def is_full_prefab_path(asset_path):
+    """True when a scene placement's resolved asset_path is itself a real
+    .prefab (the DynamicScene family -- Model/Effect/Tree, resolved via
+    EndfieldSceneBridge.cs's DecodeDynamicSceneChunkPlacements -- always
+    resolves to a full authored prefab, carrying its own real Renderer +
+    Materials already) rather than a raw FBX mesh sub-asset (the Streaming
+    family's '...models/s_x.fbx##subname' shape, which needs the separate
+    mesh + material-hash resolution path)."""
+    return asset_path.lower().endswith(".prefab")
+
+
+def _prefab_asset_stem(asset_path):
+    """Basename (no extension, lowercased) of a resolved .prefab asset_path,
+    e.g. '.../Prefabs/P_anm_com_satellite+1_001_01.prefab' ->
+    'p_anm_com_satellite+1_001_01' -- for matching against
+    build_prefab_name_index_from_roots' keys."""
+    leaf = asset_path.rsplit("/", 1)[-1]
+    stem = leaf.rsplit(".", 1)[0] if "." in leaf else leaf
+    return stem.lower()
+
+
+def build_prefab_name_index_from_roots(db, roots):
+    """{prefab stem (lowercased, from its own display name) -> guid}, built
+    from ImportCabs' own top-level-.prefab guid list for the resolved
+    closure. Used to resolve DynamicScene Model/Effect/Tree placements
+    (is_full_prefab_path) to a specific guid -- mirrors
+    build_mesh_name_index_from_db's name-based join, but keyed off each
+    root's own display name rather than a peeked Mesh's m_Name, since
+    `roots` is already the small, pre-filtered set of prefab-classed
+    top-level assets in the closure (no full-closure scan needed)."""
+    index = {}
+    for guid in roots:
+        prefab_file = db.load_guid(guid)
+        if prefab_file is None:
+            continue
+        name = _prefab_display_name(prefab_file)
+        if name:
+            index[name.lower()] = guid
+    return index
+
+
+def _duplicate_hierarchy(context, anchor):
+    """Deep-copies an anchor Empty and every descendant object beneath it
+    (sharing mesh/material/armature DATA -- only object-level transform and
+    parent differ), returning the new anchor. The prefab-placement
+    equivalent of the mesh-instancing pattern import_scene_placements
+    already uses for Streaming meshes -- a repeated DynamicScene prop
+    (a satellite dish, a decoration) shares one import instead of a second
+    full prefab rebuild."""
+    def _walk(obj):
+        new_obj = obj.copy()
+        if obj.data is not None:
+            new_obj.data = obj.data
+        context.collection.objects.link(new_obj)
+        for child in obj.children:
+            new_child = _walk(child)
+            new_child.parent = new_obj
+        return new_obj
+    return _walk(anchor)
+
+
+def _place_prefab_report(context, report, placement):
+    """Wraps every top-level object import_prefab_from_db produced (mesh
+    objects with no parent, plus the armature if any -- static/environmental
+    DynamicScene prefabs are not expected to have one, but this stays
+    correct either way) under a new anchor Empty, then moves that anchor to
+    the placement's resolved world transform. Only objects with no parent
+    need the placement applied -- Blender already propagates parent-to-child
+    transforms for anything nested under an armature or another mesh."""
+    top_level = []
+    if report.armature is not None and report.armature.parent is None:
+        top_level.append(report.armature)
+    for obj in report.mesh_objects:
+        if obj.parent is None and obj not in top_level:
+            top_level.append(obj)
+    if not top_level:
+        return None
+
+    anchor = bpy.data.objects.new(f"{top_level[0].name}_placement", None)
+    context.collection.objects.link(anchor)
+    for obj in top_level:
+        obj.parent = anchor
+
+    unity_matrix = coordinate.unity_trs(
+        {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
+        {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
+        {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
+    anchor.matrix_world = coordinate.convert_matrix(unity_matrix)
+    return anchor
+
+
+def import_scene_placements(context, db, placements, roots=(), options=None):
     """Import a batch of scene placements (see scene_state.py) into the
     current scene, against an already-resolved closure db covering every CAB
-    those placements need. Resolves each placement's expected mesh
-    sub-object by name (build_mesh_name_index_from_db) and imports each
-    DISTINCT mesh exactly once; every further placement of the same mesh
-    becomes a linked-data duplicate (shares the mesh datablock, only the
-    object-level transform differs) instead of a second full import -- a
-    real map can place the same prop (foliage, generic colliders, ...)
-    hundreds of times, and re-decoding identical mesh bytes that many times
-    would be exactly the kind of eagerly-repeated cost the animation browser
-    fix (see cabmap_state.py) already had to solve for a similar reason.
+    those placements need. Covers BOTH scene-data families in one pass:
 
-    When import_materials is on, each distinct mesh's material(s) are
-    resolved directly from its own placement's material_asset_paths (see
-    scene_state.resolve_cabs, which seeds those same paths into the CAB
-    closure so their CABs -- and their own texture dependencies -- come
-    along in the same import_cabs call) via build_material_name_index_from_db
-    -- no naming-convention guess.
+    - Streaming family (raw FBX mesh sub-assets, e.g.
+      '...models/s_x.fbx##subname'): resolves the expected mesh sub-object
+      by name (build_mesh_name_index_from_db), materials from the
+      placement's own material_asset_paths (build_material_name_index_from_db
+      -- FBPropertyAssetData AssetType==1, same hashLut as the mesh, no
+      naming-convention guess), and builds via import_mesh_from_db.
+    - DynamicScene family (Model/Effect/Tree, resolved to REAL .prefab
+      paths -- is_full_prefab_path): resolves the prefab by name against
+      `roots` (build_prefab_name_index_from_roots) and builds via
+      import_prefab_from_db, which already brings real Renderer + Materials
+      (no separate material-hash lookup needed for these).
+
+    Either way, imports each DISTINCT asset exactly once; every further
+    placement of the same asset becomes a linked-data duplicate (mesh path:
+    .copy() sharing mesh data; prefab path: _duplicate_hierarchy sharing the
+    whole object graph's data) instead of a second full import -- a real map
+    can place the same prop hundreds of times, and re-decoding identical
+    bytes that many times would be exactly the kind of eagerly-repeated cost
+    the animation browser fix (see cabmap_state.py) already had to solve for
+    a similar reason.
     Returns (imported_count, placed_count, unresolved_count)."""
     options = _resolve_options(options)
     name_index = build_mesh_name_index_from_db(db)
+    prefab_index = build_prefab_name_index_from_roots(db, roots)
     mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
     material_index = build_material_name_index_from_db(db) if mat_builder is not None else {}
     obj_by_guid = {}
+    anchor_by_guid = {}
     imported = 0
     placed = 0
     unresolved = 0
 
     for placement in placements:
-        expected_name = _expected_mesh_name(placement["asset_path"])
-        guid = name_index.get(expected_name)
-        if guid is None:
-            unresolved += 1
-            continue
+        asset_path = placement["asset_path"]
 
-        base_obj = obj_by_guid.get(guid)
-        if base_obj is None:
-            mesh_file = db.load_guid(guid)
-            if mesh_file is None:
+        if is_full_prefab_path(asset_path):
+            guid = prefab_index.get(_prefab_asset_stem(asset_path))
+            if guid is None:
                 unresolved += 1
                 continue
-            materials = _scene_materials_for(material_index, mat_builder, placement.get("material_asset_paths") or [])
-            report = import_mesh_from_db(context, db, mesh_file, options, materials)
-            if not report.mesh_objects:
-                unresolved += 1
+
+            base_anchor = anchor_by_guid.get(guid)
+            if base_anchor is None:
+                prefab_file = db.load_guid(guid)
+                if prefab_file is None:
+                    unresolved += 1
+                    continue
+                report = import_prefab_from_db(context, db, prefab_file, options)
+                anchor = _place_prefab_report(context, report, placement)
+                if anchor is None:
+                    unresolved += 1
+                    continue
+                anchor_by_guid[guid] = anchor
+                imported += 1
+                placed += 1
                 continue
-            base_obj = report.mesh_objects[0]
-            obj_by_guid[guid] = base_obj
-            imported += 1
-            target = base_obj
+
+            target = _duplicate_hierarchy(context, base_anchor)
         else:
-            target = base_obj.copy()
-            target.data = base_obj.data
-            context.collection.objects.link(target)
+            expected_name = _expected_mesh_name(asset_path)
+            guid = name_index.get(expected_name)
+            if guid is None:
+                unresolved += 1
+                continue
+
+            base_obj = obj_by_guid.get(guid)
+            if base_obj is None:
+                mesh_file = db.load_guid(guid)
+                if mesh_file is None:
+                    unresolved += 1
+                    continue
+                materials = _scene_materials_for(material_index, mat_builder, placement.get("material_asset_paths") or [])
+                report = import_mesh_from_db(context, db, mesh_file, options, materials)
+                if not report.mesh_objects:
+                    unresolved += 1
+                    continue
+                base_obj = report.mesh_objects[0]
+                obj_by_guid[guid] = base_obj
+                imported += 1
+                target = base_obj
+            else:
+                target = base_obj.copy()
+                target.data = base_obj.data
+                context.collection.objects.link(target)
 
         unity_matrix = coordinate.unity_trs(
             {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},

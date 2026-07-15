@@ -130,11 +130,12 @@ def row_passes_rules(row, rules):
 
 
 def reset():
-    global ROWS, VISIBLE, BRIDGE, _sort_dir
+    global ROWS, VISIBLE, BRIDGE, _sort_dir, _ROWS_BY_CAB
     ROWS = []
     VISIBLE = []
     BRIDGE = None
     _sort_dir = 0
+    _ROWS_BY_CAB = None
     clear_animation_build_state()
 
 
@@ -147,26 +148,71 @@ def ensure_bridge(hook_ids):
 
 # --- Animation browser build context ----------------------------------------
 # The animation browser (cabmap_panel.RURI_UL_animation_clips) only DISCOVERS
-# clip metadata at import time (prefab_importer.discover_clip_refs_from_db);
-# actually building an action is deferred until the user checks specific
-# clips and clicks "Import Checked Animations". That later build needs the
-# same db/armature/hierarchy-maps the original prefab import already
-# resolved -- none of which are bpy-serializable, so (matching this module's
-# existing BRIDGE/ROWS convention) they live here as plain Python state
-# rather than on the bpy PropertyGroup. Keyed to a single character at a
-# time: importing a different character replaces this outright.
+# which CABs in the selected row's dependency closure are AnimationClip-
+# classed (cabmap_panel.RURI_OT_discover_animations) -- pure in-memory cabmap
+# metadata (ResolveClosureCabNames + each CAB's already-loaded TypeNames), no
+# VFS decrypt, no AssetRipper export, no db. Actually building an action is
+# deferred until the user checks specific clips and clicks "Import Checked
+# Animations". That later build needs a real Blender armature to attach onto
+# AND a real db (guid-keyed resolved closure) to translate a checked clip's
+# CAB name into its actual guid; two paths lead there:
+#   - the character was already fully imported (Import (Append)/(Reset
+#     Scene)) -- set_animation_build_state records the REAL post-build
+#     fields immediately (db/arm_name/maps/path_to_meshobjects all present).
+#   - only "Discover Animations" (cheap, no import_cabs call at all) has run
+#     so far -- the state has no db/armature yet, just enough to resolve
+#     them lazily (seed_cab + options) the first time the user actually
+#     asks to attach a clip (mark_animation_build_done fills in the real
+#     fields once that happens). Nothing here is bpy-serializable, so
+#     (matching this module's existing BRIDGE/ROWS convention) it lives here
+#     as plain Python state rather than on the bpy PropertyGroup. Keyed to a
+#     single character at a time: discovering/importing a different one
+#     replaces this outright.
 
-ANIMATION_BUILD_STATE = None  # dict(db=..., arm_name=..., maps=..., path_to_meshobjects=...) | None
+ANIMATION_BUILD_STATE = None
+# dict(db=..., arm_name=..., maps=..., path_to_meshobjects=..., seed_cab=..., options=...) | None
 
 
 def set_animation_build_state(db, arm_name, maps, path_to_meshobjects):
+    """A character was just FULLY imported (mesh/skeleton/materials already
+    built) -- record its real post-build fields immediately."""
     global ANIMATION_BUILD_STATE
     ANIMATION_BUILD_STATE = {
         "db": db,
         "arm_name": arm_name,
         "maps": maps,
         "path_to_meshobjects": path_to_meshobjects,
+        "seed_cab": None,
+        "options": None,
     }
+
+
+def set_animation_discovery_state(seed_cab, options):
+    """Only a cheap CAB-level clip discovery has happened -- no import_cabs
+    call yet, no db, nothing built into the scene. arm_name/maps/
+    path_to_meshobjects/db stay unset until mark_animation_build_done runs
+    the lazy full import (which resolves seed_cab's closure for the first
+    time)."""
+    global ANIMATION_BUILD_STATE
+    ANIMATION_BUILD_STATE = {
+        "db": None,
+        "arm_name": None,
+        "maps": None,
+        "path_to_meshobjects": None,
+        "seed_cab": seed_cab,
+        "options": options,
+    }
+
+
+def mark_animation_build_done(db, arm_name, maps, path_to_meshobjects):
+    """Fill in the real post-build fields once the lazy full import (see
+    RURI_OT_import_selected_animations) has actually happened, so a second
+    click attaches more clips to the SAME armature instead of re-importing."""
+    if ANIMATION_BUILD_STATE is not None:
+        ANIMATION_BUILD_STATE["db"] = db
+        ANIMATION_BUILD_STATE["arm_name"] = arm_name
+        ANIMATION_BUILD_STATE["maps"] = maps
+        ANIMATION_BUILD_STATE["path_to_meshobjects"] = path_to_meshobjects
 
 
 def clear_animation_build_state():
@@ -177,11 +223,26 @@ def clear_animation_build_state():
 def load_rows():
     """Pull every row from the currently-loaded cabmap into ROWS (plain Python
     list, not bpy data) and reset the filter to show everything."""
-    global ROWS, VISIBLE
+    global ROWS, VISIBLE, _ROWS_BY_CAB
     if BRIDGE is None:
         raise RuntimeError("No bridge session -- call ensure_bridge() first.")
     ROWS = BRIDGE.enumerate_rows()
     VISIBLE = list(range(len(ROWS)))
+    _ROWS_BY_CAB = None  # rebuilt lazily on first rows_by_cab() call
+
+
+_ROWS_BY_CAB = None  # dict[str, dict] -- lazily built cab -> row index, see rows_by_cab()
+
+
+def rows_by_cab():
+    """{cab -> row dict}, built once per load_rows() and cached -- used to
+    look up TypeNames/Name for a batch of dependency-closure CAB names
+    (see resolve_closure_cab_names) without an O(closure_size * len(ROWS))
+    linear scan."""
+    global _ROWS_BY_CAB
+    if _ROWS_BY_CAB is None:
+        _ROWS_BY_CAB = {row["cab"]: row for row in ROWS}
+    return _ROWS_BY_CAB
 
 
 def _row_matches(row, query_lower):

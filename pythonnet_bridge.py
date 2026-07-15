@@ -208,6 +208,18 @@ class RipperBridge:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
         return [str(c) for c in self._bridge.ResolveCabsForPaths(self._map, _string_array(container_paths))]
 
+    def resolve_closure_cab_names(self, cab_names):
+        """Pure in-memory dependency-closure CAB-name enumeration for the
+        given seed CABs -- no VFS decrypt, no AssetRipper export, just the
+        already-loaded cabmap's own dependency graph (CabMap.
+        ResolveClosureCabNames). Pair with enumerate_rows()' own type_names
+        (already loaded per CAB) to answer "does this prefab's closure
+        include an AnimationClip" without resolving/exporting anything.
+        Requires a loaded cabmap."""
+        if self._map is None:
+            raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
+        return [str(c) for c in self._bridge.ResolveClosureCabNames(self._map, _string_array(cab_names))]
+
     def enumerate_vfs_files(self, vfs_roots, block_type_filter=None):
         """Every file recorded in every .blc manifest across vfs_roots (a
         path, or a priority-ordered list of paths -- e.g. [Persistent/VFS,
@@ -241,6 +253,15 @@ class RipperBridge:
     def enumerate_scene_maps(self, vfs_roots):
         """Every distinct map name with streaming-chunk data across vfs_roots."""
         return [str(m) for m in self._bridge.EnumerateSceneMaps(_string_array(_as_root_list(vfs_roots)))]
+
+    def diagnose_schema_drift(self, vfs_roots, map_name):
+        """Binary/vtable-level schema-drift report (list of str lines) for
+        map_name's streaming chunks -- flags any FlatBuffers table type
+        where the live game data declares more fields than the currently-
+        compiled (1.2.4-era) bindings know how to read. See
+        EndfieldSceneBridge.DiagnoseSchemaDrift's C# doc comment."""
+        return [str(line) for line in
+                self._bridge.DiagnoseSchemaDrift(_string_array(_as_root_list(vfs_roots)), map_name)]
 
     def discover_scene_placements(self, vfs_roots, map_name):
         """Every mesh-bearing entity placement for map_name's streaming chunks
