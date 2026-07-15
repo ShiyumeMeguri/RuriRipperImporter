@@ -165,7 +165,8 @@ def draw_scene_tab(layout, context):
         box = layout.box()
         box.label(text=f"Map: {scene_state.CURRENT_MAP}")
         box.label(text=f"{est['total_placements']} placement(s), {est['distinct_assets']} distinct asset(s)")
-        box.label(text=f"{est['placeable']} placeable, {est['excluded']} excluded (no transform)")
+        box.label(text=f"{est['placeable']} placeable, {est['no_transform']} excluded (no transform)"
+                      + (f", {est['lod_filtered']} non-LOD0 duplicates skipped" if est['lod_filtered'] else ""))
         box.label(text=f"Resolves to {est['resolved_cabs']} CAB(s) (re-click Discover after "
                       f"toggling LOD0 Only to refresh this number)")
 

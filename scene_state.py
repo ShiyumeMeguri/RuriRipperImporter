@@ -60,32 +60,50 @@ def discover_placements(bridge, game_root, map_name):
 def placeable(lod0_only=False):
     """Placements with a ground-truth-verified transform and a resolved
     asset path -- see RipperBlenderBridge.DiscoverScenePlacements' doc
-    comment (Ruri.RipperHook) for the two transform sources this covers.
-    Placements without one are excluded entirely, not placed at the origin
-    -- a Mono/Proxy entity with no resolvable transform isn't geometry and
-    doesn't need placing (confirmed against the actual per-map numbers: of
-    2895 real placements in base01_lv001, only 9 fall in this excluded
-    bucket). lod0_only additionally drops placements whose own mesh name
-    carries a non-zero LOD suffix (see prefab_importer.is_lod0_or_unleveled)
-    -- a real map places the full LOD1/2/3/... chain for every piece
-    alongside LOD0, which dominates placement count without adding visible
-    detail at the distance the game actually shows them."""
+    comment (Ruri.RipperHook) for the three transform sources this covers
+    (ECS blob LocalToWorld, FBPropertyBytesData pose, FBPropertyBoundsData.
+    Center -- the third tier was previously missing, which silently excluded
+    large static architecture like floors/walls/terrain that carries only a
+    bounds-center transform; see EndfieldSceneBridge.DecodeStreamingChunk-
+    Placements). Placements without any of the three are excluded entirely,
+    not placed at the origin -- a Mono/Proxy entity with no resolvable
+    transform isn't geometry and doesn't need placing. lod0_only additionally
+    keeps only the best-AVAILABLE LOD sibling per placement instance (see
+    prefab_importer.select_best_lod) instead of blindly dropping every
+    non-zero-LOD-suffixed entity -- a piece whose ONLY shipped variant is,
+    say, _lod2 (no _lod0 sibling exists at all for that instance) used to be
+    dropped entirely by the old per-entity suffix filter, silently deleting
+    real, visible-in-game geometry (confirmed: this is exactly what dropped
+    base01_lv002's building-shell/floor piece -- its only siblings were
+    _lod2 and a collision-only _col1, no _lod0 at all)."""
     rows = [p for p in PLACEMENTS if p["has_transform"] and p["asset_path"]]
     if lod0_only:
-        rows = [p for p in rows if prefab_importer.is_lod0_or_unleveled(p["asset_path"])]
+        rows = prefab_importer.select_best_lod(rows)
     return rows
 
 
 def estimate(lod0_only=False):
-    """Cheap summary for the pre-import confirm step: distinct assets,
-    total placements, how many are placeable vs. excluded, and (once
-    resolve_cabs() has run) how many CABs those resolve to."""
+    """Cheap summary for the pre-import confirm step: distinct assets, total
+    placements, how many are placeable vs. excluded -- split into the two
+    genuinely different exclusion reasons (previously conflated into one
+    misleading "excluded (no transform)" UI label): a placement with no
+    resolvable transform/asset_path at all (no_transform) vs. one that DOES
+    have both but got dropped by the LOD0-only filter as a non-zero-LOD
+    duplicate of a piece already covered by its LOD0 (lod_filtered). On a
+    real map lod_filtered is normally the much larger bucket -- most pieces
+    ship their whole LOD1/2/3/... chain alongside LOD0 -- so reporting both
+    under "no transform" reads as far more data loss than is actually
+    happening. And (once resolve_cabs() has run) how many CABs those
+    resolve to."""
+    with_transform = [p for p in PLACEMENTS if p["has_transform"] and p["asset_path"]]
     placeable_rows = placeable(lod0_only)
     distinct = {p["asset_path"] for p in placeable_rows}
     return {
         "total_placements": len(PLACEMENTS),
         "placeable": len(placeable_rows),
         "excluded": len(PLACEMENTS) - len(placeable_rows),
+        "no_transform": len(PLACEMENTS) - len(with_transform),
+        "lod_filtered": len(with_transform) - len(placeable_rows) if lod0_only else 0,
         "distinct_assets": len(distinct),
         "resolved_cabs": len(RESOLVED_CABS),
     }

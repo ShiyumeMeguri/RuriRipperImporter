@@ -686,19 +686,57 @@ def _expected_mesh_name(asset_path):
 
 
 _LOD_SUFFIX_RE = re.compile(r"_lod(\d+)$", re.IGNORECASE)
+_VARIANT_SUFFIX_RE = re.compile(r"_(?:lod\d+|col\d+_[a-z]+\d*)$", re.IGNORECASE)
+_COL_SUFFIX_RE = re.compile(r"_col\d+_", re.IGNORECASE)
 
 
-def is_lod0_or_unleveled(asset_path):
-    """True unless a scene placement's own mesh sub-object name carries an
-    explicit non-zero LOD suffix (e.g. '..._lod1', '..._lod2'). Used by
-    scene_state.placeable(lod0_only=True) to drop the lower-detail LOD chain
-    variants a real map places for every piece -- these dominate a full
-    scene's placement count without adding visible detail at the distance the
-    game actually shows them. Assets with no _lodN suffix at all (single-LOD
-    props, collision/shadow proxies) are left alone -- they aren't part of a
-    LOD chain to begin with."""
-    match = _LOD_SUFFIX_RE.search(_expected_mesh_name(asset_path))
-    return match is None or match.group(1) == "0"
+def _lod_rank(asset_path):
+    """Lower is more preferred: lod0=0, lod1=1, ..., unsuffixed/unleveled=-1
+    (as good as lod0 -- a single-LOD piece), collision meshes (_colN_xxx) last
+    (rank 1000) since they routinely ship with zero render geometry (see
+    import_scene_placements' mesh-decode note) -- tried only when nothing
+    else in the group exists at all."""
+    name = _expected_mesh_name(asset_path)
+    match = _LOD_SUFFIX_RE.search(name)
+    if match:
+        return int(match.group(1))
+    if _COL_SUFFIX_RE.search(name):
+        return 1000
+    return -1
+
+
+def _lod_group_key(asset_path, px, py, pz):
+    """(rounded position, base stem with its LOD/collision suffix stripped) --
+    identifies the parallel sibling entities a real map places for the SAME
+    instance at different detail levels: confirmed against base01_lv002 that
+    a numbered-LOD and/or col1-collision sibling sits at the EXACT SAME
+    position as its lod0 render counterpart, as separate ECS entities (see
+    EndfieldSceneBridge.DecodeStreamingChunkPlacements). Position is rounded
+    to collapse float noise between siblings placed identically. Used to pick
+    the best AVAILABLE variant per instance (select_best_lod) instead of a
+    blind per-entity suffix filter, which wrongly drops an entire instance
+    whenever its only shipped variant happens to be a non-zero LOD (e.g. a
+    piece with only _lod2 + _col1 siblings and no _lod0 at all -- confirmed
+    this is what silently dropped base01_lv002's building-shell/floor piece
+    even though the game genuinely ships visible geometry for it, just not
+    at LOD0)."""
+    stem = _VARIANT_SUFFIX_RE.sub("", _expected_mesh_name(asset_path))
+    return (round(px, 2), round(py, 2), round(pz, 2), stem)
+
+
+def select_best_lod(rows):
+    """Group placements into per-instance LOD-sibling sets (_lod_group_key)
+    and keep only the best-ranked (_lod_rank) member of each group. Replaces
+    a blind "keep unless explicitly non-zero-LOD" filter, which assumes a
+    LOD0 sibling always exists -- when it doesn't (only _lod1/_lod2/_col1
+    variants were ever placed for that instance), the old filter dropped the
+    instance entirely instead of falling back to whatever detail level the
+    game actually shipped."""
+    groups = {}
+    for row in rows:
+        key = _lod_group_key(row["asset_path"], row["px"], row["py"], row["pz"])
+        groups.setdefault(key, []).append(row)
+    return [min(members, key=lambda r: _lod_rank(r["asset_path"])) for members in groups.values()]
 
 
 def build_clip_name_index_from_db(db):
