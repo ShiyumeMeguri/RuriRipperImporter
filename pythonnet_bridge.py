@@ -169,7 +169,24 @@ class _StaticTypeProxy:
 
         def call(*args):
             import System
-            arg_array = System.Array[System.Object](list(args)) if args else None
+
+            def coerce(value):
+                # Boxing straight into Object[] keeps Python scalars as PyInt/
+                # PyFloat wrappers, which MethodInfo.Invoke then can't bind to an
+                # Int32/Double parameter ("Object of type 'Python.Runtime.PyInt'
+                # cannot be converted...") -- pythonnet only runs its numeric
+                # conversion when the TARGET type is known, and Object gives it
+                # nothing to aim at. Convert scalars explicitly. bool first:
+                # it's an int subclass in Python.
+                if isinstance(value, bool):
+                    return System.Boolean(value)
+                if isinstance(value, int):
+                    return System.Int32(value)
+                if isinstance(value, float):
+                    return System.Double(value)
+                return value
+
+            arg_array = System.Array[System.Object]([coerce(a) for a in args]) if args else None
             try:
                 return method.Invoke(None, arg_array)
             except Exception as exc:
@@ -421,17 +438,20 @@ class RipperBridge:
                         for kvp in result.ClipGuidsByCab}
         return documents, textures, roots, seed_roots, clips_by_cab
 
-    def find_associated_avatar_cab(self, clip_cab_name):
-        """Nearest Avatar-bearing CAB for a clip-hosting CAB, via the cabmap's own dependency
-        graph: reverse BFS to the clip's dependents (the AnimatorController, then the character
-        prefabs), then each dependent's forward closure, nearest first -- see
-        RipperBlenderBridge.FindAssociatedAvatarCab. Returns a cab name or None. Co-seed the
-        result into import_cabs alongside the clip CAB and AssetRipper itself restores the
-        clips' hashed curve paths to real "Root/Bip001/..." strings (verified against the real
-        game: a clip CAB alone has no dependencies and its curve paths export as
-        "path_0x<CRC32>_<suffix>" placeholders; with the rig-FBX CAB in scope every path comes
-        out as the same full string a whole-character export produces)."""
+    def find_associated_avatar_cabs(self, clip_cab_name):
+        """Every Avatar-bearing CAB in a clip-hosting CAB's dependency neighborhood, nearest
+        first, via the cabmap's own dependency graph: reverse BFS to the clip's dependents (the
+        AnimatorController, then the character prefabs), then each dependent's forward closure
+        -- see RipperBlenderBridge.FindAssociatedAvatarCabs. Returns a (possibly empty) list.
+        Co-seed ALL of them into import_cabs alongside the clip CAB: (a) AssetRipper itself then
+        restores the clips' hashed curve paths to real "Root/Bip001/..." strings (verified
+        against the real game: a clip CAB alone has no dependencies and its curve paths export
+        as "path_0x<CRC32>_<suffix>" placeholders), and (b) prefab_importer.find_retargeter_in_db
+        picks the first Avatar that actually builds a working muscle retargeter -- the
+        neighborhood routinely contains stub Avatars (7KB, empty m_TOS, zeroed skeleton ids)
+        alongside the real one (verified: pelica's battle rig surfaces the stub BEFORE the real
+        334KB avatar), and which is which is only knowable from the exported content."""
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
-        cab = self._bridge.FindAssociatedAvatarCab(self._map, clip_cab_name)
-        return str(cab) if cab is not None else None
+        cabs = self._bridge.FindAssociatedAvatarCabs(self._map, clip_cab_name, 4)
+        return [str(c) for c in cabs]

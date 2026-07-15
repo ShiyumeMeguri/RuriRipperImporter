@@ -36,6 +36,14 @@ _DEFAULT_BONE_LENGTH = 0.03
 # prefab_importer.maps_from_stamped_armature.
 UNITY_RIG_PROP = "ruri_unity_rig"
 
+# Custom-property key under which the character import stamps the WORKING
+# humanoid Avatar's raw YAML (zlib+base64) onto the armature object -- the
+# muscle referential travels with the skeleton, because a clip's own
+# dependency neighborhood does not reliably contain the character rig at all
+# (battle controllers are attached by game code, not bundle dependencies).
+# See prefab_importer._stamp_avatar_on_armature / retargeter_from_stamped_armature.
+AVATAR_YAML_PROP = "ruri_avatar_yaml"
+
 
 def _bone_length(node):
     """Cosmetic length: distance to the nearest child, else a small default."""

@@ -452,10 +452,27 @@ class HumanoidRetargeter:
     """Reconstructs human-bone local rotations from a clip's muscle curves using
     one avatar's Muscle Referential."""
 
-    def __init__(self, avatar_file):
+    def __init__(self, avatar_file, fallback_tos=None):
+        """fallback_tos: optional {CRC32 path hash: transform path} used when the
+        avatar's own m_TOS is empty. EndField (and likely other stripped release
+        builds) ships runtime avatars with m_TOS emptied AND no HumanDescription
+        -- both bone-name sources gone, so every _add_bone silently failed and
+        bone_targets() came back empty (humanoid clips imported as motionless
+        bodies). The skeleton's m_ID entries are the SAME hash space as
+        AnimationClip curve-path hashes: CRC32 of the transform path (verified
+        empirically, crc32(b"Root") == the exported 0xB6C65665 placeholder), so a
+        caller that knows the TARGET armature's bone paths can hand the exact
+        equivalent table here -- hash the paths the skeleton actually has, and
+        m_ID lookups resolve just as an intact m_TOS would."""
         avatar_doc = avatar_file.first("Avatar")
         if avatar_doc is None:
             raise ValueError("file has no Avatar object")
+        # Which document this referential came from (UnityFile.path carries the
+        # guid in bridge mode, a disk path in disk mode) -- lets an importer
+        # stamp the avatar's raw text onto the armature it builds (see
+        # prefab_importer._stamp_avatar_on_armature) so later standalone clip
+        # imports can rebuild this exact retargeter from the armature alone.
+        self.source_key = getattr(avatar_file, "path", None)
         data = avatar_doc.data
         constant = _unwrap(data["m_Avatar"])
         human = _unwrap(constant["m_Human"])
@@ -466,6 +483,8 @@ class HumanoidRetargeter:
         human_bone_index = _int_array(human["m_HumanBoneIndex"])
         self._human_to_bone = _find_bone_name_map(data)
         self._tos = _parse_tos(data)
+        if not self._tos and fallback_tos:
+            self._tos = {int(k) & 0xFFFFFFFF: str(v) for k, v in fallback_tos.items()}
 
         # Root-motion (Hips) reconstruction inputs: the avatar's own per-bone
         # mass table, its rest-computed root orientation reference, and the

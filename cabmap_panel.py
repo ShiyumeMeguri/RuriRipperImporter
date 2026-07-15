@@ -552,6 +552,25 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         return {"CANCELLED"}
     maps = maps_or_error
 
+    # Humanoid support: without a muscle retargeter, a humanoid clip (body
+    # motion = muscle float curves, not transform curves) imports as an
+    # almost-motionless action. Sources, in order: any USABLE Avatar in this
+    # closure (co-seeded rig-FBX CABs; stubs are auto-skipped by content
+    # probing), else the avatar YAML stamped onto the target armature at
+    # character-import time -- battle clips' own dependency neighborhood
+    # contains NO character rig at all (their controller is attached by game
+    # code, not bundle dependencies; verified: its only Avatar is a weapon
+    # stub), so the referential travels with the skeleton instead.
+    # build_action self-gates: generic clips are untouched by the
+    # retargeter's presence.
+    if maps.get("retargeter") is None:
+        retargeter = (prefab_importer.find_retargeter_in_db(db, maps["path_to_bone"])
+                      or prefab_importer.retargeter_from_stamped_armature(
+                          arm_obj, maps["path_to_bone"]))
+        if retargeter is not None:
+            maps = dict(maps)
+            maps["retargeter"] = retargeter
+
     # Compatibility gate: at least one transform curve must resolve to a bone
     # of the chosen armature (string path or CRC32-of-path match). A clip for
     # a completely different rig fails loudly instead of importing a no-op.
@@ -619,9 +638,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 return {"CANCELLED"}
             seeds = [selected_row.cab]
             try:
-                avatar_cab = cabmap_state.BRIDGE.find_associated_avatar_cab(selected_row.cab)
-                if avatar_cab:
-                    seeds.append(avatar_cab)
+                seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(selected_row.cab))
                 documents, textures, roots, seed_roots, clips_by_cab = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
@@ -990,11 +1007,10 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             try:
                 if seed_is_clip_only:
                     # A bare clip CAB's closure carries no rig; co-seed the
-                    # associated rig-FBX CAB so AssetRipper restores the
-                    # clips' hashed curve paths to real strings.
-                    avatar_cab = cabmap_state.BRIDGE.find_associated_avatar_cab(seed_cab)
-                    if avatar_cab:
-                        seeds.append(avatar_cab)
+                    # associated rig-FBX CAB(s) so AssetRipper restores the
+                    # clips' hashed curve paths to real strings and the real
+                    # Avatar (not a stub) is in scope for humanoid retargeting.
+                    seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab))
                 documents, textures, roots, seed_roots, clips_by_cab = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:

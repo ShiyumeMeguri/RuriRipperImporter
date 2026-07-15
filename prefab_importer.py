@@ -241,6 +241,10 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         if unmatched:
             warnings.append(f"{clip_doc.data.get('m_Name', guid)}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
+        if maps.get("retargeter") is None and clip_is_humanoid(clip_doc.data):
+            warnings.append(f"{clip_doc.data.get('m_Name', guid)}: humanoid (muscle) clip but "
+                            f"no Avatar in scope -- body motion dropped, only generic curves "
+                            f"imported")
         action, slot, _frames = animation_builder.build_action(
             clip_doc, arm_obj, maps, path_to_meshobjects, options)
         built += 1
@@ -319,9 +323,18 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
 
     # Animations: every gathered clip (source differs disk vs. bridge mode) as actions.
     if options["import_animations"] and arm_obj is not None:
-        retargeter = _load_retargeter(db, prefab)
+        # The Animator's own m_Avatar reference first (semantically THE avatar),
+        # but fall back to scanning the closure: a UI-variant prefab's Animator
+        # can point at a stub/generic Avatar (empty m_TOS, no muscle referential)
+        # while the rig's REAL humanoid Avatar sits right next to it in the same
+        # closure -- confirmed against the real game (pelica uimodel).
+        retargeter = _load_retargeter(db, prefab, maps.get("path_to_bone"))
+        if retargeter is None:
+            retargeter = find_retargeter_in_db(db, maps.get("path_to_bone"))
         if retargeter is not None:
             maps["retargeter"] = retargeter
+            # The referential travels with the skeleton -- see the helper's doc.
+            _stamp_avatar_on_armature(arm_obj, db, retargeter)
         actions = []
         for clip_file in clip_files:
             clip_doc = clip_file.first("AnimationClip")
@@ -380,19 +393,63 @@ def clips_from_controller(db, controller_file):
     return paths
 
 
-def _load_retargeter(db, prefab):
+def _load_retargeter(db, prefab, path_to_bone=None):
     """Build a humanoid muscle retargeter from the prefab's Animator avatar.
 
     Humanoid clips carry the body's motion as muscle floats, not transform
     curves, so the human bones need the avatar's Muscle Referential to play.
-    Returns None for non-humanoid rigs or when the avatar can't be resolved."""
+    Returns None for non-humanoid rigs or when the avatar can't be resolved.
+    path_to_bone (the armature's own Unity paths) feeds the CRC32 fallback
+    TOS -- see _fallback_tos_from_paths."""
     animator = prefab.first("Animator")
     if animator is None:
         return None
     avatar_ref = animator.data.get("m_Avatar")
     if not (isinstance(avatar_ref, dict) and avatar_ref.get("guid")):
         return None
-    avatar_file = db.load_guid(avatar_ref["guid"])
+    return _retargeter_from_avatar_file(db.load_guid(avatar_ref["guid"]), path_to_bone)
+
+
+def find_retargeter_in_db(db, path_to_bone=None):
+    """Standalone-clip sibling of _load_retargeter: there is no prefab/Animator
+    to follow an m_Avatar reference from, but the standalone flow co-seeds the
+    clip's associated rig-FBX CAB into the same closure (see
+    RipperBridge.find_associated_avatar_cab) precisely so the Avatar asset IS
+    in the exported db -- find it by class peek and build the retargeter from
+    it directly. First Avatar document wins (a co-seeded closure carries
+    exactly the one rig's avatar). Returns None when the closure has no
+    Avatar (the standalone import then still builds whatever generic
+    transform curves the clip carries, and build_selected_animations warns
+    when the clip is actually humanoid). path_to_bone: the TARGET armature's
+    Unity paths, required for stripped avatars -- see _fallback_tos_from_paths."""
+    for guid in db.all_guids():
+        text = db.raw_text(guid)
+        if text is None:
+            continue
+        class_name, _name = _peek_class_and_name(text)
+        if class_name != "Avatar":
+            continue
+        retargeter = _retargeter_from_avatar_file(db.load_guid(guid), path_to_bone)
+        if retargeter is not None:
+            return retargeter
+    return None
+
+
+def _fallback_tos_from_paths(path_to_bone):
+    """{CRC32 hash: transform path} built from the armature's OWN bone paths --
+    the replacement for a stripped avatar's empty m_TOS. The avatar skeleton's
+    m_ID entries are CRC32 of each node's transform path (the same hash space
+    as animation curve-path hashes, verified empirically against the real
+    game), so hashing the target skeleton's paths reproduces exactly the
+    lookups an intact m_TOS would satisfy: as long as there IS a skeleton, the
+    hash mapping is recoverable from it."""
+    if not path_to_bone:
+        return None
+    import zlib
+    return {zlib.crc32(p.encode("utf-8")) & 0xFFFFFFFF: p for p in path_to_bone}
+
+
+def _retargeter_from_avatar_file(avatar_file, path_to_bone=None):
     if avatar_file is None:
         return None
     try:
@@ -400,10 +457,87 @@ def _load_retargeter(db, prefab):
     except ImportError:
         import humanoid_retarget
     try:
-        return humanoid_retarget.HumanoidRetargeter(avatar_file)
+        retargeter = humanoid_retarget.HumanoidRetargeter(
+            avatar_file, fallback_tos=_fallback_tos_from_paths(path_to_bone))
     except Exception as exc:
         print(f"[RuriRipperImporter] humanoid retarget unavailable: {exc}")
         return None
+    if not retargeter.bone_targets():
+        # An avatar whose bone names resolved through NEITHER HumanDescription
+        # nor TOS (stripped avatar and no usable fallback) drives nothing --
+        # surface that instead of handing back a silent no-op.
+        print("[RuriRipperImporter] humanoid retarget unavailable: avatar maps no bones "
+              "(stripped m_TOS and no matching armature paths)")
+        return None
+    return retargeter
+
+
+def _stamp_avatar_on_armature(arm_obj, db, retargeter):
+    """Persist the WORKING avatar's raw YAML onto the armature (zlib+base64
+    custom property) so a standalone clip import can rebuild the exact same
+    muscle retargeter from the armature alone. This matters because a clip's
+    own dependency neighborhood does NOT reliably contain the character's
+    rig: confirmed against the real game, pelica's battle clips reach only
+    their battle AnimatorController (no prefab depends on IT through bundle
+    dependencies -- it's attached by game code), whose closure's only Avatar
+    is a 7KB weapon stub. The armature the user selects IS the character,
+    so the referential travels with it."""
+    try:
+        from . import armature_builder
+    except ImportError:
+        import armature_builder
+    source_key = getattr(retargeter, "source_key", None)
+    if not source_key:
+        return
+    text = db.raw_text(source_key)
+    if not text:
+        return
+    import base64
+    import zlib
+    arm_obj[armature_builder.AVATAR_YAML_PROP] = base64.b64encode(
+        zlib.compress(text.encode("utf-8"), 6)).decode("ascii")
+
+
+def retargeter_from_stamped_armature(arm_obj, path_to_bone=None):
+    """Rebuild the humanoid muscle retargeter from the avatar YAML stamped on
+    an armature at character-import time (see _stamp_avatar_on_armature) --
+    the fallback for standalone clip imports whose own closure carries no
+    usable Avatar. Returns None when the armature has no stamp (pre-feature
+    import, or a character whose avatar never resolved)."""
+    try:
+        from . import armature_builder, unity_yaml
+    except ImportError:
+        import armature_builder
+        import unity_yaml
+    raw = arm_obj.get(armature_builder.AVATAR_YAML_PROP)
+    if not raw:
+        return None
+    import base64
+    import zlib
+    try:
+        text = zlib.decompress(base64.b64decode(raw)).decode("utf-8")
+    except Exception:
+        return None
+    avatar_file = unity_yaml.UnityFile("stamped_avatar", unity_yaml.parse_text(text, "stamped_avatar"))
+    return _retargeter_from_avatar_file(avatar_file, path_to_bone)
+
+
+def clip_is_humanoid(clip_data):
+    """Whether a parsed AnimationClip drives a humanoid rig: humanoid body
+    motion ships as muscle/root float curves (attribute names like
+    "Spine Front-Back" / "RootT.x"), not transform curves -- the exact
+    predicate _bake_muscles gates on, exposed for callers that need to KNOW
+    (e.g. to warn that a humanoid clip was imported without an Avatar in
+    scope, which would silently drop the entire body's motion)."""
+    try:
+        from . import humanoid_retarget
+    except ImportError:
+        import humanoid_retarget
+    for entry in clip_data.get("m_FloatCurves") or []:
+        attribute = entry.get("attribute") or ""
+        if humanoid_retarget.is_muscle(attribute) or humanoid_retarget.is_root(attribute):
+            return True
+    return False
 
 
 def _gather_clip_paths(db, prefab, prefab_path, assets_dir=None):
