@@ -13,6 +13,8 @@ Returns maps the rest of the importer relies on:
 
 from __future__ import annotations
 
+import json
+
 try:
     from . import coordinate, hierarchy
 except ImportError:
@@ -25,6 +27,14 @@ import bpy
 from mathutils import Vector
 
 _DEFAULT_BONE_LENGTH = 0.03
+
+# Custom-property key under which build_armature stamps the Unity rig identity
+# (transform path -> bone name + Unity-space local rest TRS) onto the armature
+# OBJECT. Persisted in the .blend, so a standalone animation import in a LATER
+# session can rebuild exactly the maps build_action needs from the armature the
+# user has selected -- no live import-session state required. See
+# prefab_importer.maps_from_stamped_armature.
+UNITY_RIG_PROP = "ruri_unity_rig"
 
 
 def _bone_length(node):
@@ -89,6 +99,21 @@ def build_armature(context, unity_file, name="UnityArmature"):
 
     file_id_to_world = {fid: np.array(node.world, dtype=np.float64)
                         for fid, node in nodes.items()}
+
+    # Stamp the Unity rig identity onto the armature object (persists in the
+    # .blend): per pathed node, its final bone name and Unity-space LOCAL rest
+    # matrix (16 floats, row-major -- exactly the node.local that build_action's
+    # rest-pose math consumes). This is what lets "import an animation onto the
+    # armature the user has selected" work standalone, in any later session,
+    # without the character's import-time maps being alive; see
+    # prefab_importer.maps_from_stamped_armature.
+    stamped = {}
+    for node in nodes.values():
+        bone_name = file_id_to_bone.get(node.file_id)
+        if bone_name and node.path:
+            local = [v for row in node.local for v in row]
+            stamped[node.path] = {"bone": bone_name, "local": local}
+    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": stamped}, separators=(",", ":"))
 
     return arm_obj, {
         "nodes": nodes,

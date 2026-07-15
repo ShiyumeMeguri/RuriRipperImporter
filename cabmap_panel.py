@@ -495,6 +495,99 @@ def _selected_row(state):
     return None
 
 
+def _is_clip_only_row(row):
+    """A browser row that hosts AnimationClips and no importable GameObject
+    hierarchy -- selecting it and clicking Import means "import these clips",
+    not "import a prefab" (a clip CAB's closure contains no .prefab at all;
+    confirmed against the real game, its dependency count is literally 0)."""
+    return "AnimationClip" in row.type_names and "GameObject" not in row.type_names
+
+
+def _resolve_target_armature(context):
+    """The armature a standalone clip import should drive, plus its rebuilt
+    maps: the user's ACTIVE armature first (their explicit choice), else the
+    scene's only armature (unambiguous). maps come from the Unity rig identity
+    stamped on the armature at import time (any session), falling back to the
+    live import-session state when the stamp predates the feature. Returns
+    (arm_obj, maps) or (None, error_message)."""
+    candidates = []
+    active = context.active_object
+    if active is not None and active.type == "ARMATURE":
+        candidates.append(active)
+    else:
+        scene_arms = [o for o in context.scene.objects if o.type == "ARMATURE"]
+        if len(scene_arms) == 1:
+            candidates.append(scene_arms[0])
+        elif not scene_arms:
+            return None, ("No armature in the scene -- import the character first, or "
+                          "select the skeleton the animation should drive.")
+        else:
+            return None, ("Multiple armatures in the scene -- select the one the "
+                          "animation should drive, then retry.")
+
+    arm_obj = candidates[0]
+    maps = prefab_importer.maps_from_stamped_armature(arm_obj)
+    if maps is None:
+        build_state = cabmap_state.ANIMATION_BUILD_STATE
+        if (build_state is not None and build_state.get("arm_name") == arm_obj.name
+                and build_state.get("maps") is not None):
+            maps = build_state["maps"]
+    if maps is None:
+        return None, (f"Armature '{arm_obj.name}' carries no Unity rig identity (imported "
+                      f"before this feature, or by another tool) -- re-import the character "
+                      f"once, then animations attach to it standalone from then on.")
+    return arm_obj, maps
+
+
+def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
+    """Shared tail of both standalone clip flows (a clip-only row through
+    Import (Append)/(Reset Scene), and Import Checked Animations discovered
+    off a clip-only row): resolve the target armature from the user's
+    selection, verify the clips actually fit that skeleton (path/CRC32 match
+    against the armature's own bone paths), then build actions. Returns the
+    operator result set."""
+    arm_obj, maps_or_error = _resolve_target_armature(context)
+    if arm_obj is None:
+        op.report({"ERROR"}, maps_or_error)
+        return {"CANCELLED"}
+    maps = maps_or_error
+
+    # Compatibility gate: at least one transform curve must resolve to a bone
+    # of the chosen armature (string path or CRC32-of-path match). A clip for
+    # a completely different rig fails loudly instead of importing a no-op.
+    path_to_bone = maps["path_to_bone"]
+    any_ratio = 0.0
+    checked_any = False
+    for guid in clip_guids:
+        clip_file = db.load_guid(guid)
+        clip_doc = clip_file.first("AnimationClip") if clip_file is not None else None
+        if clip_doc is None:
+            continue
+        ratio, total = prefab_importer.clip_path_match_ratio(clip_doc.data, path_to_bone)
+        if total:
+            checked_any = True
+            any_ratio = max(any_ratio, ratio)
+    if checked_any and any_ratio == 0.0:
+        op.report({"ERROR"}, f"None of the clip's curve paths match armature "
+                             f"'{arm_obj.name}' (wrong character?) -- select the right "
+                             f"skeleton and retry.")
+        return {"CANCELLED"}
+    if checked_any and any_ratio < 0.5:
+        op.report({"WARNING"}, f"Only {any_ratio:.0%} of curve paths match armature "
+                               f"'{arm_obj.name}' -- importing anyway.")
+
+    try:
+        built, warnings = prefab_importer.build_selected_animations(
+            db, arm_obj, maps, None, clip_guids, state.as_options())
+    except Exception as exc:
+        _report_exception(op, "Animation import failed", exc)
+        return {"CANCELLED"}
+    for warning in warnings[:5]:
+        op.report({"WARNING"}, warning)
+    op.report({"INFO"}, f"Built {built} animation action(s) on {arm_obj.name}.")
+    return {"FINISHED"}
+
+
 class RURI_OT_import_selected(bpy.types.Operator):
     bl_idname = "ruri.import_selected"
     bl_label = "Import Selected"
@@ -509,17 +602,48 @@ class RURI_OT_import_selected(bpy.types.Operator):
     def execute(self, context):
         state = context.scene.ruri_cabmap
         selected_row = _selected_row(state)
-        cabs = [selected_row.cab] if selected_row is not None else []
-        if not cabs:
+        if selected_row is None:
             self.report({"WARNING"}, "No row selected.")
             return {"CANCELLED"}
 
+        # A clip-only row is an ANIMATION import, not a prefab import: its closure
+        # contains no .prefab at all (the old flow's "No importable (.prefab) asset
+        # found" dead end). Resolve it onto the user's selected skeleton instead --
+        # co-seeding the rig-FBX CAB (found through the cabmap's own dependency
+        # graph, nearest Animator dependent's forward closure) so AssetRipper
+        # restores the clips' hashed curve paths to real strings during export.
+        if _is_clip_only_row(selected_row):
+            if self.reset_scene:
+                self.report({"ERROR"}, "An animation needs an existing skeleton -- use "
+                                       "Import (Append) so the armature survives.")
+                return {"CANCELLED"}
+            seeds = [selected_row.cab]
+            try:
+                avatar_cab = cabmap_state.BRIDGE.find_associated_avatar_cab(selected_row.cab)
+                if avatar_cab:
+                    seeds.append(avatar_cab)
+                documents, textures, roots, seed_roots, clips_by_cab = \
+                    cabmap_state.BRIDGE.import_cabs(seeds)
+            except Exception as exc:
+                _report_exception(self, "Import (bridge) failed", exc)
+                return {"CANCELLED"}
+            clip_guids = clips_by_cab.get(selected_row.cab.lower(), [])
+            if not clip_guids:
+                self.report({"ERROR"}, "The resolved closure exported no AnimationClip for "
+                                       "this row -- see console.")
+                return {"CANCELLED"}
+            db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+            return _import_clips_standalone(self, context, state, selected_row.cab,
+                                            clip_guids, db)
+
+        cabs = [selected_row.cab]
         if self.reset_scene:
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, roots, seed_roots = cabmap_state.BRIDGE.import_cabs(cabs)
+            documents, textures, roots, seed_roots, _clips_by_cab = \
+                cabmap_state.BRIDGE.import_cabs(cabs)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return {"CANCELLED"}
@@ -807,9 +931,11 @@ class RURI_OT_discover_animations(bpy.types.Operator):
         state.animation_character_name = selected_row.name
         for row in clip_rows:
             item = state.available_clips.add()
-            # A CAB name for now, not a real Unity guid -- translated to one
-            # (via build_clip_name_index_from_db) only once the lazy build
-            # below actually resolves this closure. See RURI_PG_animation_clip.
+            # A CAB name for now, not a real Unity guid -- translated to real
+            # clip guid(s) through the export's own clips_by_cab capture once
+            # the lazy build below actually resolves this closure (a clip
+            # CAB's fbx display name and its clips' m_Names genuinely differ,
+            # and one CAB can host several clips -- identity, never names).
             item.guid = row["cab"]
             item.name = row["name"]
             item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
@@ -850,21 +976,51 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
         if arm_obj is None or arm_obj.type != "ARMATURE":
             # Discovery-only state (or the armature was deleted since) --
             # THIS is the first point the closure actually gets resolved/
-            # exported at all: lazily build the character now, exactly
-            # once, only because the user actually asked to attach a clip.
+            # exported at all. checked_keys are still CAB names here (the
+            # cheap discovery lists CAB rows); clips_by_cab from the export
+            # translates them to real clip guids through the cabmap's own
+            # identity -- a clip CAB's fbx display name and its clips'
+            # m_Names genuinely differ, so there is nothing to join by name.
+            seed_cab = build_state["seed_cab"]
+            seeds = [seed_cab]
+            seed_row = cabmap_state.rows_by_cab().get(seed_cab)
+            seed_is_clip_only = (seed_row is not None
+                                 and "AnimationClip" in seed_row["type_names"]
+                                 and "GameObject" not in seed_row["type_names"])
             try:
-                documents, textures, roots, seed_roots = cabmap_state.BRIDGE.import_cabs([build_state["seed_cab"]])
+                if seed_is_clip_only:
+                    # A bare clip CAB's closure carries no rig; co-seed the
+                    # associated rig-FBX CAB so AssetRipper restores the
+                    # clips' hashed curve paths to real strings.
+                    avatar_cab = cabmap_state.BRIDGE.find_associated_avatar_cab(seed_cab)
+                    if avatar_cab:
+                        seeds.append(avatar_cab)
+                documents, textures, roots, seed_roots, clips_by_cab = \
+                    cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
-            if not roots:
-                self.report({"WARNING"}, "No importable (.prefab) asset found in the resolved closure.")
-                return {"CANCELLED"}
             db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
 
-            # The discovered character's own asset, resolved bridge-side directly through the
-            # cabmap's own CAB identity (see RipperBridge.import_cabs) -- not a name match.
-            primary_guid = seed_roots.get(build_state["seed_cab"])
+            selected_guids = []
+            for cab in checked_keys:
+                for guid in clips_by_cab.get(cab.lower(), []):
+                    if guid not in selected_guids:
+                        selected_guids.append(guid)
+
+            if not roots:
+                # Animation-only closure (the discovered row was itself a clip
+                # CAB): attach onto the user's selected skeleton instead of
+                # requiring a character build.
+                if not selected_guids:
+                    self.report({"ERROR"}, "The checked row(s) exported no AnimationClip -- see console.")
+                    return {"CANCELLED"}
+                return _import_clips_standalone(self, context, state, seed_cab, selected_guids, db)
+
+            # Character closure: build the character once. Its own asset is
+            # resolved bridge-side through the cabmap's CAB identity
+            # (seed_roots) -- not a name match.
+            primary_guid = seed_roots.get(seed_cab)
             prefab_file = db.load_guid(primary_guid) if primary_guid else None
             if prefab_file is None:
                 self.report({"ERROR"}, "Could not resolve the discovered character's own asset "
@@ -881,47 +1037,55 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             cabmap_state.mark_animation_build_done(db, arm_obj.name, report.maps, report.path_to_meshobjects)
             build_state = cabmap_state.ANIMATION_BUILD_STATE
 
-        # item.guid is either a REAL Unity guid already (populated by
-        # import_prefab_from_db's own discover_clip_refs_from_db side effect
-        # when a full character import happened via Import (Append)/(Reset
-        # Scene)) or a CAB name not yet translated (from the cheap
-        # RURI_OT_discover_animations pass above). Try it directly as a guid
-        # first; only fall back to a name-based join (same pattern as
-        # build_mesh_name_index_from_db et al.) if that doesn't resolve to a
-        # real AnimationClip document. clip_index is built lazily -- only
-        # paid for if at least one checked item actually needs it.
-        db = build_state["db"]
-        clip_index = None
-        guids = []
-        unresolved = []
-        for item in state.available_clips:
-            if not item.selected:
-                continue
-            direct = db.load_guid(item.guid)
-            if direct is not None and direct.first("AnimationClip") is not None:
-                guids.append(item.guid)
-                continue
-            if clip_index is None:
-                clip_index = prefab_importer.build_clip_name_index_from_db(db)
-            guid = clip_index.get(prefab_importer.expected_clip_name_from_cab_row_name(item.name))
-            if guid is None:
-                unresolved.append(item.name)
-                continue
-            guids.append(guid)
-        if unresolved:
-            self.report({"WARNING"}, f"{len(unresolved)} checked clip(s) not found in the resolved "
-                                     f"closure: {', '.join(unresolved[:3])}{'...' if len(unresolved) > 3 else ''}")
-        if not guids:
-            self.report({"ERROR"}, "None of the checked clips could be resolved.")
-            return {"CANCELLED"}
+            # Upgrade the browser from CAB rows to the REAL clips (guid-keyed,
+            # names + sizes now knowable), carrying the user's checked state
+            # across through clips_by_cab -- this is deliberate and visible,
+            # not a side effect: from here on the list shows exactly what can
+            # be built, and a second Import needs no lazy build at all.
+            refs = prefab_importer.discover_clip_refs_from_db(db, prefab_file)
+            state.available_clips.clear()
+            state.animation_character_name = arm_obj.name
+            for ref in refs:
+                item = state.available_clips.add()
+                item.guid = ref["guid"]
+                item.name = ref["name"]
+                item.size_bytes = ref["size_bytes"]
+                item.selected = ref["guid"] in selected_guids
+            if not selected_guids:
+                self.report({"WARNING"}, "The checked row(s) mapped to no exported clip -- "
+                                         "pick from the refreshed list and import again.")
+                return {"CANCELLED"}
+            guids = selected_guids
+        else:
+            # The armature (and a real guid-keyed browser) already exist --
+            # every checked item.guid IS a clip guid; just validate.
+            db = build_state["db"]
+            guids = []
+            unresolved = []
+            for item in state.available_clips:
+                if not item.selected:
+                    continue
+                direct = db.load_guid(item.guid)
+                if direct is not None and direct.first("AnimationClip") is not None:
+                    guids.append(item.guid)
+                else:
+                    unresolved.append(item.name)
+            if unresolved:
+                self.report({"WARNING"}, f"{len(unresolved)} checked clip(s) not found in the resolved "
+                                         f"closure: {', '.join(unresolved[:3])}{'...' if len(unresolved) > 3 else ''}")
+            if not guids:
+                self.report({"ERROR"}, "None of the checked clips could be resolved.")
+                return {"CANCELLED"}
 
         try:
-            built = prefab_importer.build_selected_animations(
+            built, build_warnings = prefab_importer.build_selected_animations(
                 build_state["db"], arm_obj, build_state["maps"],
                 build_state["path_to_meshobjects"], guids, state.as_options())
         except Exception as exc:
             _report_exception(self, "Animation import failed", exc)
             return {"CANCELLED"}
+        for warning in build_warnings[:5]:
+            self.report({"WARNING"}, warning)
         self.report({"INFO"}, f"Built {built} animation action(s) on {arm_obj.name}.")
         return {"FINISHED"}
 

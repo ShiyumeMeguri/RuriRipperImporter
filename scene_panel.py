@@ -118,7 +118,8 @@ class RURI_OT_scene_import(bpy.types.Operator):
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, roots, _seed_roots = cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
+            documents, textures, roots, _seed_roots, _clips_by_cab = \
+                cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
         except Exception as exc:
             _report_exception(self, "Scene import (bridge) failed", exc)
             return {"CANCELLED"}

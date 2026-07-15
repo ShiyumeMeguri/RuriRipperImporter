@@ -140,6 +140,11 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
     scene_panel.register()
+    # Repairs "action assigned but no slot picked" states after any UI-driven
+    # action assignment -- see animation_builder's slotted-action notes (the
+    # imported data plays only through its slot, and most UI surfaces outside
+    # the Action editor don't auto-pick one).
+    animation_builder.register_slot_autofix()
     # Push the user's saved repo-path preference into pythonnet_bridge BEFORE the early CoreCLR
     # claim below, since _dll_dir() (called from claim_runtime_early -> _runtime_config_path)
     # needs it to find Ruri.RipperHook.dll at all.
@@ -164,6 +169,7 @@ def register():
 
 
 def unregister():
+    animation_builder.unregister_slot_autofix()
     scene_panel.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)

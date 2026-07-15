@@ -154,6 +154,13 @@ def _apply_blendshapes(obj, decoded):
         for fi, frame in enumerate(frames):
             suffix = "" if len(frames) == 1 else f"_{fi}"
             key = obj.shape_key_add(name=shape["name"] + suffix, from_mix=False)
+            # Object.shape_key_add() defaults a new key's `.value` to 1.0 (confirmed against the
+            # actual Blender API, not assumed) -- meaning every blendshape this loop creates
+            # applies at full strength simultaneously unless explicitly zeroed, which is what
+            # made every imported character's mesh look distorted: Unity's SkinnedMeshRenderer
+            # starts every blend shape weight at 0 unless a clip specifically drives it, so the
+            # correct rest pose here is every non-Basis key OFF, exactly matching that default.
+            key.value = 0.0
             co = base_co.copy()
             for index, delta_v, _delta_n in frame["deltas"]:
                 # Convert the Unity-space delta into Blender space (swap Y/Z).

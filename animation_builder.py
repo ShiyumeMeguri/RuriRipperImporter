@@ -363,7 +363,20 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
 
 def _prepare_channels(action, slot_name, id_type):
     """Return (fcurves_collection, slot) for the new slotted Action API,
-    falling back to legacy ``action.fcurves`` on older Blender."""
+    falling back to legacy ``action.fcurves`` on older Blender.
+
+    The slot is deliberately named after the CLIP (slot_name = the clip's
+    m_Name), NOT uniformly after the armature. Do not "improve" this to a
+    shared name: Blender 5.1.2 has an empirically-pinned segfault (reproduced
+    5/5 headless, same crash address every time) when an ARMATURE object has
+    an action + explicitly-set slot assigned and two actions exist whose slots
+    share one identifier -- the very next ``animation_data.action`` write
+    (assign, switch, or even ``= None``) dies in the identifier-matched
+    auto-pick path. Unique per-clip identifiers keep that branch unreachable.
+    The cost of uniqueness -- Blender auto-picks no slot when the user assigns
+    one of these actions by hand -- is repaired by the msgbus watcher below
+    (_on_animdata_action_changed), which explicitly assigns the action's own
+    single slot instead of relying on identifier matching."""
     if hasattr(action, "layers"):
         try:
             slot = action.slots.new(id_type=id_type, name=slot_name[:63])
@@ -374,6 +387,80 @@ def _prepare_channels(action, slot_name, id_type):
         channelbag = strip.channelbag(slot, ensure=True)
         return channelbag.fcurves, slot
     return action.fcurves, None
+
+
+# ── slotted-action assignment repair ─────────────────────────────────────────
+#
+# Blender 4.4+ slotted actions: assigning ``animation_data.action`` alone plays
+# NOTHING -- the evaluated channels live under a slot, and ``action_slot`` must
+# also be set. The Action editor's own assignment picks a slot; most other UI
+# surfaces (and plain Python assignment) do not, verified headless on 5.1.2:
+# a fresh object assigning a single-slot action auto-picks None, every time.
+# That is exactly the reported "assigned the action directly onto the armature
+# and it does not play, but the Action editor works" behavior -- the imported
+# data is fine, the slot linkage is just absent.
+#
+# This msgbus watcher closes the gap: whenever any AnimData.action changes via
+# the UI, any object left with an action but NO slot gets the action's single
+# OBJECT slot assigned explicitly. Explicit assignment of a UNIQUE-identifier
+# slot is the one shape the 5.1.2 crash matrix proved safe (it is also what
+# the importer itself has always done for the first imported clip).
+
+_MSGBUS_OWNER = object()
+
+
+def _repair_unassigned_action_slots():
+    for obj in bpy.data.objects:
+        adt = obj.animation_data
+        if adt is None or adt.action is None or adt.action_slot is not None:
+            continue
+        action = adt.action
+        if not hasattr(action, "slots"):
+            continue
+        object_slots = [s for s in action.slots if getattr(s, "target_id_type", "") == "OBJECT"]
+        if len(object_slots) == 1:
+            try:
+                adt.action_slot = object_slots[0]
+            except Exception:
+                pass  # restricted context / unexpected state -- leave it to the user
+
+
+def _on_animdata_action_changed():
+    try:
+        _repair_unassigned_action_slots()
+    except Exception:
+        pass  # never let a notify callback throw into Blender's message bus
+
+
+def _subscribe_msgbus():
+    bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+    bpy.msgbus.subscribe_rna(
+        key=(bpy.types.AnimData, "action"),
+        owner=_MSGBUS_OWNER,
+        args=(),
+        notify=_on_animdata_action_changed,
+    )
+
+
+import bpy.app.handlers  # noqa: E402  (handlers submodule, used by the persistent hook below)
+
+
+@bpy.app.handlers.persistent
+def _resubscribe_on_load(_dummy=None):
+    # msgbus subscriptions do not survive loading a .blend -- re-arm after every load.
+    _subscribe_msgbus()
+
+
+def register_slot_autofix():
+    _subscribe_msgbus()
+    if _resubscribe_on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_resubscribe_on_load)
+
+
+def unregister_slot_autofix():
+    bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+    if _resubscribe_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_resubscribe_on_load)
 
 
 def _write_bone_fcurves(fcurves, bone_name, frames, locs, quats, scales):

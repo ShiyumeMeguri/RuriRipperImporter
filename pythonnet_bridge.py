@@ -390,15 +390,23 @@ class RipperBridge:
 
     def import_cabs(self, cab_names):
         """Resolve cab_names' dependency closure, load it, export it in-memory, and return
-        (documents, textures, roots, seed_roots): documents/textures are plain Python dicts keyed
-        by lowercase guid (str -> str Unity-YAML text, str -> bytes PNG); roots is the list of
-        guids that are the actual importable (.prefab) top-level assets; seed_roots is
-        {cab_name: guid} for each requested cab_names entry that resolved to its own asset --
-        resolved bridge-side directly through the cabmap's own CAB/addressable-path identity
-        (RipperBlenderBridge.Partition/NormalizeExportPath), NOT by matching display names, so a
-        caller never needs its own name-matching heuristic to figure out which of `roots`
-        corresponds to which requested CAB (a single seed's closure routinely resolves to more
-        than one root .prefab, e.g. a co-resolved portrait/uimodel variant)."""
+        (documents, textures, roots, seed_roots, clips_by_cab): documents/textures are plain
+        Python dicts keyed by lowercase guid (str -> str Unity-YAML text, str -> bytes PNG);
+        roots is the list of guids that are the actual importable (.prefab) top-level assets;
+        seed_roots is {cab_name: guid} for each requested cab_names entry that resolved to its
+        own asset -- resolved bridge-side directly through the cabmap's own CAB/addressable-path
+        identity (RipperBlenderBridge.Partition/NormalizeExportPath), NOT by matching display
+        names, so a caller never needs its own name-matching heuristic to figure out which of
+        `roots` corresponds to which requested CAB (a single seed's closure routinely resolves
+        to more than one root .prefab, e.g. a co-resolved portrait/uimodel variant).
+
+        clips_by_cab is {lowercased cab_name: [clip guid, ...]} for EVERY AnimationClip the
+        export wrote, captured asset-side during the export itself (see RipperBlenderBridge.
+        ClipCaptureExporter) -- the clip counterpart of seed_roots: a clip CAB's addressable
+        path is its host FBX ("...a_x_01.fbx") while the exported .anim is named after the
+        clip's own m_Name ("...A_x_ACL.anim"), one CAB can host several clips, and the two
+        stems genuinely differ -- so this map is the ONLY correct way to translate a clip-CAB
+        browser row into its real clip documents; never join display names to m_Names."""
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
         cab_names = list(cab_names)
@@ -409,4 +417,21 @@ class RipperBridge:
         textures = {str(kvp.Key).lower(): bytes(kvp.Value) for kvp in result.Textures}
         roots = [str(g).lower() for g in result.Roots]
         seed_roots = {str(kvp.Key): str(kvp.Value).lower() for kvp in result.SeedRoots}
-        return documents, textures, roots, seed_roots
+        clips_by_cab = {str(kvp.Key).lower(): [str(g).lower() for g in kvp.Value]
+                        for kvp in result.ClipGuidsByCab}
+        return documents, textures, roots, seed_roots, clips_by_cab
+
+    def find_associated_avatar_cab(self, clip_cab_name):
+        """Nearest Avatar-bearing CAB for a clip-hosting CAB, via the cabmap's own dependency
+        graph: reverse BFS to the clip's dependents (the AnimatorController, then the character
+        prefabs), then each dependent's forward closure, nearest first -- see
+        RipperBlenderBridge.FindAssociatedAvatarCab. Returns a cab name or None. Co-seed the
+        result into import_cabs alongside the clip CAB and AssetRipper itself restores the
+        clips' hashed curve paths to real "Root/Bip001/..." strings (verified against the real
+        game: a clip CAB alone has no dependencies and its curve paths export as
+        "path_0x<CRC32>_<suffix>" placeholders; with the rig-FBX CAB in scope every path comes
+        out as the same full string a whole-character export produces)."""
+        if self._map is None:
+            raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
+        cab = self._bridge.FindAssociatedAvatarCab(self._map, clip_cab_name)
+        return str(cab) if cab is not None else None

@@ -217,10 +217,19 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     subset from the animation browser. This is the only place that now pays
     the full parse + keyframe-insertion cost per clip; it's deferred until the
     user explicitly picks a clip rather than paying it for every clip in a
-    character's closure up front."""
+    character's closure up front.
+
+    Before building, every clip gets repair_hashed_clip_paths against the
+    target armature: clips exported without their rig in scope carry
+    "path_0x<CRC32>_" placeholder paths, and the armature's own bone paths
+    are the hash preimages -- so a standalone-imported clip binds to the
+    user's selected skeleton exactly when the hashes match. Returns
+    (built, warnings)."""
     built = 0
     first = None
+    warnings = []
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
+    path_to_bone = maps.get("path_to_bone") or {}
     for guid in guids:
         clip_file = db.load_guid(guid)
         if clip_file is None:
@@ -228,6 +237,10 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         clip_doc = clip_file.first("AnimationClip")
         if clip_doc is None:
             continue
+        repaired, unmatched = repair_hashed_clip_paths(clip_doc.data, path_to_bone)
+        if unmatched:
+            warnings.append(f"{clip_doc.data.get('m_Name', guid)}: {unmatched} hashed curve "
+                            f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
         action, slot, _frames = animation_builder.build_action(
             clip_doc, arm_obj, maps, path_to_meshobjects, options)
         built += 1
@@ -235,7 +248,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
             first = (action, slot)
     if first is not None and not has_action:
         _assign_first_action(arm_obj, first[0], first[1])
-    return built
+    return built, warnings
 
 
 def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
@@ -739,34 +752,133 @@ def select_best_lod(rows):
     return [min(members, key=lambda r: _lod_rank(r["asset_path"])) for members in groups.values()]
 
 
-def build_clip_name_index_from_db(db):
-    """Peek every document's class+name and index the AnimationClip-classed
-    ones by LOWERCASED name -- mirrors build_mesh_name_index_from_db/
-    build_material_name_index_from_db exactly, just filtering a different
-    class. Joins a cheaply-discovered clip CAB's own display name (see
-    cabmap_panel.RURI_OT_discover_animations -- itself just the cabmap's
-    already-loaded container-path leaf, no YAML parsed at discovery time at
-    all) to a real guid once that CAB's closure has actually been resolved
-    (the lazy build in RURI_OT_import_selected_animations)."""
-    index = {}
-    for guid in db.all_guids():
-        text = db.raw_text(guid)
-        if text is None:
+class _StampedNode:
+    """Minimal stand-in for hierarchy.Node carrying exactly the two fields
+    animation_builder.build_action reads off maps["nodes"] values: the Unity
+    transform path and the Unity-space LOCAL rest matrix. Rebuilt from the
+    rig identity build_armature stamps onto every armature it creates
+    (armature_builder.UNITY_RIG_PROP) -- see maps_from_stamped_armature."""
+    __slots__ = ("path", "local")
+
+    def __init__(self, path, local):
+        self.path = path
+        self.local = local
+
+
+def maps_from_stamped_armature(arm_obj):
+    """Rebuild the maps dict build_action needs (nodes with .path/.local +
+    path_to_bone) from the Unity rig identity stamped onto an armature at
+    import time (armature_builder.build_armature, persisted in the .blend as
+    a custom property) -- what lets a standalone animation import target ANY
+    armature this addon ever built, in any session, without the character
+    import's live state. Returns None for armatures with no stamp (imported
+    by something else, or by a build older than the stamping)."""
+    import json as _json
+    from mathutils import Matrix
+
+    try:
+        from . import armature_builder
+    except ImportError:
+        import armature_builder
+
+    raw = arm_obj.get(armature_builder.UNITY_RIG_PROP)
+    if not raw:
+        return None
+    try:
+        stamped = _json.loads(raw)["paths"]
+    except (ValueError, KeyError, TypeError):
+        return None
+
+    nodes = {}
+    path_to_bone = {}
+    live_bones = {b.name for b in arm_obj.data.bones}
+    for index, (path, entry) in enumerate(stamped.items()):
+        bone = entry.get("bone")
+        flat = entry.get("local")
+        if not bone or bone not in live_bones or not flat or len(flat) != 16:
             continue
-        class_name, name = _peek_class_and_name(text)
-        if class_name == "AnimationClip" and name:
-            index[name.lower()] = guid
-    return index
+        local = Matrix((flat[0:4], flat[4:8], flat[8:12], flat[12:16]))
+        nodes[index] = _StampedNode(path, local)
+        path_to_bone[path] = bone
+    if not path_to_bone:
+        return None
+    return {
+        "nodes": nodes,
+        "roots": [],
+        "file_id_to_bone": {},
+        "path_to_bone": path_to_bone,
+        "file_id_to_world": {},
+    }
 
 
-def expected_clip_name_from_cab_row_name(row_name):
-    """A clip CAB's cabmap display name (e.g. 'A_actor_pelica_gacha_ani.anim')
-    reduced to the form build_clip_name_index_from_db's keys use: strip the
-    file extension and lowercase (Unity's convention: a standalone .anim
-    asset's own AnimationClip object is named after the file, matching
-    _expected_mesh_name's identical assumption for meshes)."""
-    stem = row_name.rsplit(".", 1)[0] if "." in row_name else row_name
-    return stem.lower()
+# AssetRipper's placeholder for an animation curve path it could not restore to
+# a transform-path string (the rig wasn't in the export scope): the raw Unity
+# binding hash -- CRC32 of the UTF-8 path string, verified empirically against
+# the real game (crc32(b"Root") == 0xB6C65665 == the exported "path_0xB6C65665_
+# WvpMuNH" placeholder, exact match across every probe) -- hex-encoded with a
+# random uniquifying suffix.
+_HASHED_PATH_RE = re.compile(r"^path_0x([0-9A-Fa-f]{1,8})_")
+
+_CURVE_LIST_FIELDS = ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves",
+                      "m_EulerCurves", "m_FloatCurves")
+
+
+def repair_hashed_clip_paths(clip_data, path_to_bone):
+    """Rewrite AssetRipper's "path_0x<CRC32>_<suffix>" placeholder curve paths
+    in a parsed AnimationClip's data to real transform-path strings, by
+    matching the hash against CRC32 of the target armature's OWN bone paths --
+    the user-facing contract: if the selected skeleton's paths hash to what
+    the clip animates, the clip drives that skeleton, no other identity
+    needed. Returns (repaired, unmatched) counts; a clip whose paths were
+    already restored bridge-side (avatar co-seeded into the export, the
+    primary path) comes back (0, 0) untouched."""
+    import zlib
+
+    crc_to_path = {zlib.crc32(p.encode("utf-8")) & 0xFFFFFFFF: p for p in path_to_bone}
+    repaired = 0
+    unmatched = 0
+    for field in _CURVE_LIST_FIELDS:
+        for entry in clip_data.get(field) or []:
+            # "path:" with no value parses to an EXISTING key holding None (root-level
+            # curves) -- `or ""` covers both missing and null, .get default only the former.
+            path = entry.get("path") or ""
+            match = _HASHED_PATH_RE.match(path)
+            if not match:
+                continue
+            real = crc_to_path.get(int(match.group(1), 16))
+            if real is None:
+                unmatched += 1
+                continue
+            entry["path"] = real
+            repaired += 1
+    return repaired, unmatched
+
+
+def clip_path_match_ratio(clip_data, path_to_bone):
+    """Fraction of the clip's transform-curve paths that resolve to a bone of
+    the target armature -- the compatibility check for importing a clip onto
+    the user's selected skeleton. Hashed placeholder paths count as matched
+    only if their CRC32 maps to a bone path (same table repair_hashed_clip_
+    paths uses). Returns (ratio, total); (0.0, 0) for a clip with no
+    transform curves at all (e.g. pure blendshape clips)."""
+    import zlib
+
+    crc_to_path = {zlib.crc32(p.encode("utf-8")) & 0xFFFFFFFF: p for p in path_to_bone}
+    total = 0
+    matched = 0
+    for field in ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves", "m_EulerCurves"):
+        for entry in clip_data.get(field) or []:
+            path = entry.get("path") or ""  # "path:" null-valued for root-level curves
+            if not path:
+                continue
+            total += 1
+            hash_match = _HASHED_PATH_RE.match(path)
+            if hash_match:
+                if int(hash_match.group(1), 16) in crc_to_path:
+                    matched += 1
+            elif path in path_to_bone:
+                matched += 1
+    return (matched / total if total else 0.0), total
 
 
 def build_material_name_index_from_db(db):
