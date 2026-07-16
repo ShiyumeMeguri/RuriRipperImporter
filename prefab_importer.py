@@ -362,6 +362,19 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
             clip_doc = clip_file.first("AnimationClip")
             if clip_doc is None:
                 continue
+            if retargeter is None and clip_is_humanoid(clip_doc.data):
+                # Without the Avatar's muscle referential a humanoid clip's body
+                # motion is mathematically unrecoverable -- the action comes out
+                # empty-looking. Say so loudly instead of importing silence: the
+                # fix is on the SOURCE side (the dump/prefab must carry the
+                # Animator + Avatar; e.g. an FBX imported with avatarSetup=
+                # CopyFromOther exposes NO Animator on its prefab, so RuriYaml-
+                # Dumper finds no Avatar to extract -- reimport the FBX with
+                # CreateFromThisModel, or dump the model that owns the Avatar).
+                report.warnings.append(
+                    f"{clip_doc.data.get('m_Name', 'clip')}: humanoid (muscle) clip but no "
+                    f"Avatar in the prefab/closure -- body motion dropped. Re-dump with the "
+                    f"Animator+Avatar included.")
             action, slot, _frames = animation_builder.build_action(
                 clip_doc, arm_obj, maps, path_to_meshobjects, options)
             actions.append((action, slot))

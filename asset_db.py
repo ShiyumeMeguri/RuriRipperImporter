@@ -113,6 +113,21 @@ class AssetDatabase:
             return self.load_file(path)
         return None
 
+    def raw_text(self, guid):
+        """Unparsed YAML text for a guid -- disk-mode twin of
+        BridgeAssetDatabase.raw_text (same contract: None on a miss), so
+        callers that stash/peek raw documents (e.g. prefab_importer's
+        _stamp_avatar_on_armature persisting the working Avatar onto the
+        armature) work identically in both modes."""
+        path = self.resolve_guid(guid)
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+        except OSError:
+            return None
+
     def resolve_ref(self, ref):
         """Resolve a {fileID, guid} reference to (UnityDocument, path) or (None, None)."""
         if not isinstance(ref, dict):

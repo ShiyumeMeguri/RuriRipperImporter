@@ -474,6 +474,21 @@ def _write_bone_fcurves(fcurves, bone_name, frames, locs, quats, scales):
     """``bone_name=None`` writes directly to the object's own transform
     (no ``pose.bones[...]`` prefix) -- used to bake extracted root motion
     onto the armature object itself rather than any of its pose bones."""
+    # q and -q encode the same rotation, and every upstream source canonicalizes
+    # its hemisphere PER FRAME (ACL's drop-w reconstruction is w>=0 by
+    # construction; the generic path's matrix decompose() picks a hemisphere),
+    # so any rotation crossing 180deg lands antipodal between consecutive keys.
+    # Each key's POSE is still exact, but componentwise fcurve interpolation
+    # between an antipodal pair sweeps through a degenerate quaternion -- the
+    # reported one-frame whole-bone twitch (Bip001 on battle_skill_ult, plus
+    # every IK/Footsteps helper doing full turns). Align each key with its
+    # predecessor: XOR-accumulated signs of raw consecutive dots give every
+    # key's final hemisphere in one vector pass.
+    if len(quats) > 1:
+        flips = np.cumsum(np.einsum("ij,ij->i", quats[1:], quats[:-1]) < 0.0) % 2
+        if flips.any():
+            quats = quats.copy()
+            quats[1:][flips == 1] *= -1.0
     prefix = f'pose.bones["{_escape(bone_name)}"].' if bone_name is not None else ""
     channels = [
         (prefix + "location", 3, locs),
