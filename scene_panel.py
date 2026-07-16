@@ -40,9 +40,54 @@ def _report_exception(op, prefix, exc):
     op.report({"ERROR"}, f"{prefix}: {type(exc).__name__}: {exc} (full traceback in console)")
 
 
+def _refresh_placements(context):
+    """Discover the CURRENTLY-SELECTED map's placements and resolve them to CABs
+    -- the one shared body behind every trigger (picking a map, toggling LOD0
+    Only, the manual refresh button, and the staleness guard in Import).
+    Cheap by design: FlatBuffers chunk decode + in-memory cabmap resolution,
+    no AssetRipper export. Returns an error string, or None on success."""
+    cab_state = context.scene.ruri_cabmap
+    scene_import = context.scene.ruri_scene_import
+    if cabmap_state.BRIDGE is None or not cab_state.loaded or not scene_import.map_name:
+        return "No cabmap loaded / no map selected."
+    try:
+        scene_state.discover_placements(cabmap_state.BRIDGE, cab_state.game_root, scene_import.map_name)
+        scene_state.resolve_cabs(cabmap_state.BRIDGE, scene_import.lod0_only)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return f"{type(exc).__name__}: {exc} (full traceback in console)"
+    return None
+
+
+def _on_map_change(self, context):
+    """Selecting a map IS the intent to look at that map -- refresh its
+    placements immediately instead of silently keeping the previous map's
+    discovery around until a separate button press (importing map A after
+    selecting map B was the reported footgun)."""
+    if cabmap_state.BRIDGE is None or not context.scene.ruri_cabmap.loaded:
+        return  # enum restored before a session exists (e.g. .blend load) -- nothing to refresh
+    error = _refresh_placements(context)
+    if error:
+        print(f"[RuriRipper] scene refresh on map change failed: {error}")
+
+
+def _on_lod0_change(self, context):
+    """LOD0 Only affects which placements resolve to CABs -- recompute the
+    resolution (placements themselves are unaffected) so the estimate and the
+    Import button never show a stale count."""
+    if cabmap_state.BRIDGE is None or not scene_state.PLACEMENTS:
+        return
+    try:
+        scene_state.resolve_cabs(cabmap_state.BRIDGE, self.lod0_only)
+    except Exception as exc:
+        print(f"[RuriRipper] LOD0 re-resolve failed: {type(exc).__name__}: {exc}")
+
+
 class RURI_PG_scene_import(bpy.types.PropertyGroup):
-    map_name: EnumProperty(name="Map", items=_map_items)
-    lod0_only: BoolProperty(name="LOD0 Only", default=True,
+    map_name: EnumProperty(name="Map", items=_map_items, update=_on_map_change,
+                           description="Selecting a map discovers its placements immediately")
+    lod0_only: BoolProperty(name="LOD0 Only", default=True, update=_on_lod0_change,
                             description="Skip placements of non-zero LOD variants (_lod1, _lod2, ...); "
                                         "affects both the discovery estimate and the import")
     reset_scene: BoolProperty(name="Reset Scene", default=True,
@@ -70,14 +115,24 @@ class RURI_OT_scene_discover_maps(bpy.types.Operator):
             self.report({"WARNING"}, "No maps found under this game root's VFS.")
             return {"CANCELLED"}
         context.scene.ruri_scene_import.map_name = maps[0]
+        # Assigning an EnumProperty its CURRENT value does not fire the update
+        # callback -- refresh explicitly so the first map's placements are
+        # ready either way.
+        error = _refresh_placements(context)
+        if error:
+            self.report({"WARNING"}, f"Maps listed, but placement discovery failed: {error}")
         self.report({"INFO"}, f"Found {len(maps)} map(s).")
         return {"FINISHED"}
 
 
 class RURI_OT_scene_discover_placements(bpy.types.Operator):
+    """Manual re-run of the shared refresh -- discovery now happens
+    automatically the moment a map is selected (see _on_map_change), so this
+    button only exists to force a re-read (e.g. after swapping game files on
+    disk)."""
     bl_idname = "ruri.scene_discover_placements"
-    bl_label = "Discover Placements"
-    bl_description = "Discover the selected map's placements and resolve them to CABs (no import yet)"
+    bl_label = "Refresh Placements"
+    bl_description = "Re-discover the selected map's placements (happens automatically on map selection)"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -86,13 +141,10 @@ class RURI_OT_scene_discover_placements(bpy.types.Operator):
                 and context.scene.ruri_scene_import.map_name)
 
     def execute(self, context):
-        cab_state = context.scene.ruri_cabmap
         scene_import = context.scene.ruri_scene_import
-        try:
-            scene_state.discover_placements(cabmap_state.BRIDGE, cab_state.game_root, scene_import.map_name)
-            scene_state.resolve_cabs(cabmap_state.BRIDGE, scene_import.lod0_only)
-        except Exception as exc:
-            _report_exception(self, "Discover placements failed", exc)
+        error = _refresh_placements(context)
+        if error:
+            self.report({"ERROR"}, f"Discover placements failed: {error}")
             return {"CANCELLED"}
         est = scene_state.estimate(scene_import.lod0_only)
         self.report({"INFO"}, f"{est['placeable']} placeable, {est['distinct_assets']} distinct "
@@ -113,6 +165,14 @@ class RURI_OT_scene_import(bpy.types.Operator):
 
     def execute(self, context):
         scene_import = context.scene.ruri_scene_import
+        # Staleness guard: whatever path led here, NEVER import a different map
+        # than the one currently selected -- refresh in place if they disagree
+        # (importing the previously-discovered map was the reported footgun).
+        if scene_state.CURRENT_MAP != scene_import.map_name or not scene_state.RESOLVED_CABS:
+            error = _refresh_placements(context)
+            if error:
+                self.report({"ERROR"}, f"Placement refresh for '{scene_import.map_name}' failed: {error}")
+                return {"CANCELLED"}
         if scene_import.reset_scene:
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
@@ -168,8 +228,7 @@ def draw_scene_tab(layout, context):
         box.label(text=f"{est['total_placements']} placement(s), {est['distinct_assets']} distinct asset(s)")
         box.label(text=f"{est['placeable']} placeable, {est['no_transform']} excluded (no transform)"
                       + (f", {est['lod_filtered']} non-LOD0 duplicates skipped" if est['lod_filtered'] else ""))
-        box.label(text=f"Resolves to {est['resolved_cabs']} CAB(s) (re-click Discover after "
-                      f"toggling LOD0 Only to refresh this number)")
+        box.label(text=f"Resolves to {est['resolved_cabs']} CAB(s)")
 
     layout.prop(scene_import, "reset_scene")
     layout.operator(RURI_OT_scene_import.bl_idname, icon="IMPORT")
