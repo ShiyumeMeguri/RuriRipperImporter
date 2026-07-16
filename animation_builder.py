@@ -407,29 +407,49 @@ def _prepare_channels(action, slot_name, id_type):
 # and it does not play, but the Action editor works" behavior -- the imported
 # data is fine, the slot linkage is just absent.
 #
-# This msgbus watcher closes the gap: whenever any AnimData.action changes via
-# the UI, any object left with an action but NO slot gets the action's single
-# OBJECT slot assigned explicitly. Explicit assignment of a UNIQUE-identifier
-# slot is the one shape the 5.1.2 crash matrix proved safe (it is also what
-# the importer itself has always done for the first imported clip).
+# Two repair layers close the gap, both explicitly assigning the action's own
+# single suitable slot -- explicit assignment of a UNIQUE-identifier slot is
+# the one shape the 5.1.2 crash matrix proved safe (it is also what the
+# importer itself has always done for the first imported clip):
+#
+#   1. a msgbus watcher on (AnimData, "action") -- cheap, but msgbus only
+#      notifies for changes made THROUGH THE UI. A plain Python assignment
+#      (``obj.animation_data.action = act`` from any script, driver, or tool)
+#      never publishes, and even some UI surfaces proved unreliable in
+#      practice -- exactly the reported "I still have to pick the slot in the
+#      Action editor every time I switch clips";
+#   2. a depsgraph_update_post handler -- the reliable net. EVERY assignment
+#      path (UI dropdown, Python, other addons) causes a depsgraph update, so
+#      an action-without-slot is healed by the very next update tick and the
+#      clip just plays. The scan is a couple of attribute reads per object
+#      (micro-seconds at real scene sizes) and self-quiesces: once every slot
+#      is assigned it writes nothing, so it cannot ping-pong the depsgraph.
 
 _MSGBUS_OWNER = object()
 
 
 def _repair_unassigned_action_slots():
+    """Assign the action's single suitable slot anywhere an action was
+    assigned without one -- armature/object actions and shape-key actions
+    both (the two AnimData owners this importer creates)."""
     for obj in bpy.data.objects:
-        adt = obj.animation_data
-        if adt is None or adt.action is None or adt.action_slot is not None:
-            continue
-        action = adt.action
-        if not hasattr(action, "slots"):
-            continue
-        object_slots = [s for s in action.slots if getattr(s, "target_id_type", "") == "OBJECT"]
-        if len(object_slots) == 1:
-            try:
-                adt.action_slot = object_slots[0]
-            except Exception:
-                pass  # restricted context / unexpected state -- leave it to the user
+        _repair_adt(obj.animation_data, "OBJECT")
+    for shape_keys in bpy.data.shape_keys:
+        _repair_adt(shape_keys.animation_data, "KEY")
+
+
+def _repair_adt(adt, target_id_type):
+    if adt is None or adt.action is None or adt.action_slot is not None:
+        return
+    action = adt.action
+    if not hasattr(action, "slots"):
+        return
+    suitable = [s for s in action.slots if getattr(s, "target_id_type", "") == target_id_type]
+    if len(suitable) == 1:
+        try:
+            adt.action_slot = suitable[0]
+        except Exception:
+            pass  # restricted context / unexpected state -- leave it to the user
 
 
 def _on_animdata_action_changed():
@@ -449,7 +469,7 @@ def _subscribe_msgbus():
     )
 
 
-import bpy.app.handlers  # noqa: E402  (handlers submodule, used by the persistent hook below)
+import bpy.app.handlers  # noqa: E402  (handlers submodule, used by the persistent hooks below)
 
 
 @bpy.app.handlers.persistent
@@ -458,16 +478,28 @@ def _resubscribe_on_load(_dummy=None):
     _subscribe_msgbus()
 
 
+@bpy.app.handlers.persistent
+def _repair_on_depsgraph(_scene=None, _depsgraph=None):
+    try:
+        _repair_unassigned_action_slots()
+    except Exception:
+        pass  # a handler must never throw into the depsgraph
+
+
 def register_slot_autofix():
     _subscribe_msgbus()
     if _resubscribe_on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_resubscribe_on_load)
+    if _repair_on_depsgraph not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_repair_on_depsgraph)
 
 
 def unregister_slot_autofix():
     bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
     if _resubscribe_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_resubscribe_on_load)
+    if _repair_on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_repair_on_depsgraph)
 
 
 def _write_bone_fcurves(fcurves, bone_name, frames, locs, quats, scales):
