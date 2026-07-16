@@ -70,21 +70,21 @@ _SHOULDER_ASSIST_MAX_RAD = math.radians(35.0)
 
 # Per-frame IK weight from target-vs-FK-end distance: full IK at/below
 # _IK_FULL_DIST, pure muscle FK at/above _IK_OFF_DIST, linear in between.
-# This is the runtime model the DATA actually supports (measured across six
-# real clips): a hard on/off per chain is wrong in both directions --
-#   * the support foot tracks its target within 3-5cm for 90-100% of a
-#     locomotion clip (IK locks it to the ground) while the SWING foot's
-#     target sits 0.2-0.5m away (IK released, FK plays);
-#   * the hand targets never track the FK hands in ANY sampled clip (median
-#     0.42-0.72m, 0% of frames within 10cm -- battle and locomotion alike),
-#     so hands resolve to pure muscle FK unless a clip genuinely parks the
-#     target on the hand;
+# Re-measured after the fork muscle-attribute remap fixed the FK arms (the
+# original 8/20cm band was calibrated against BROKEN arm muscle data):
+#   * authored PINS sit at d ~ 0: support feet track their targets within
+#     4-22mm across every locomotion clip, and sprint_stepon's hand-plant
+#     frames put the hand target 1-8mm from the (now correct) FK hand;
+#   * loose followers must NOT engage: on locomotion the hand targets hover
+#     10-17cm from the FK hands (tracking, not pinning) and the old band
+#     dragged the now-correct arms up to 17.5deg toward them; battle hand
+#     targets sit 0.4-0.8m away (weapon-space anchors, never wrist pins);
 #   * where the target IS near the FK end, IK~=FK and the blend is harmless
 #     by construction.
-# Solving every frame at full weight was what dragged runners' arms toward
-# parked targets (the reported contortion).
-_IK_FULL_DIST = 0.08
-_IK_OFF_DIST = 0.20
+# 2cm/5cm separates the two populations with a wide margin on every sampled
+# clip: pins are <=2.2cm, followers >=7cm.
+_IK_FULL_DIST = 0.02
+_IK_OFF_DIST = 0.05
 
 _REQUIRED_TARGETS = ("IK_Foot_L_001", "IK_Foot_R_001", "IK_Hand_L_001", "IK_Hand_R_001")
 
