@@ -984,18 +984,57 @@ _CURVE_LIST_FIELDS = ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves",
                       "m_EulerCurves", "m_FloatCurves")
 
 
-def repair_hashed_clip_paths(clip_data, path_to_bone):
-    """Rewrite AssetRipper's "path_0x<CRC32>_<suffix>" placeholder curve paths
-    in a parsed AnimationClip's data to real transform-path strings, by
-    matching the hash against CRC32 of the target armature's OWN bone paths --
-    the user-facing contract: if the selected skeleton's paths hash to what
-    the clip animates, the clip drives that skeleton, no other identity
-    needed. Returns (repaired, unmatched) counts; a clip whose paths were
-    already restored bridge-side (avatar co-seeded into the export, the
-    primary path) comes back (0, 0) untouched."""
+def build_suffix_crc_table(path_to_bone):
+    """{CRC32 -> full stamped path} over EVERY level-suffix of every bone path
+    of the target armature. Unity's animation binding hashes are CRC32 of the
+    path RELATIVE to the Animator's own node, while the armature stamps paths
+    from the prefab ROOT -- and different model variants nest the rig at
+    different depths (confirmed against the real game: a uimodel's clip paths
+    start "Root/Bip001/..." while a postmodel armature stamps
+    "chr_0013_aglina_postmodel/.../Root/Bip001/..."), so whole-path CRC never
+    matches across variants. Enumerating each path's suffixes ("a/b/c", "b/c",
+    "c") makes the join prefix-agnostic: the clip's Animator-relative path IS
+    one of the suffixes when the bone genuinely exists under the selected
+    skeleton. Suffix-CRC collisions keep the LONGEST suffix (deepest anchor
+    wins -- a leaf-only match can be ambiguous, a long chain can't). This is
+    path-structure identity, not display-name guessing: the same segments
+    Unity itself hashed, just re-anchored."""
     import zlib
 
-    crc_to_path = {zlib.crc32(p.encode("utf-8")) & 0xFFFFFFFF: p for p in path_to_bone}
+    table = {}
+    for path in path_to_bone:
+        parts = path.split("/")
+        for i in range(len(parts)):
+            suffix = "/".join(parts[i:])
+            crc = zlib.crc32(suffix.encode("utf-8")) & 0xFFFFFFFF
+            prev = table.get(crc)
+            if prev is None or len(suffix) > prev[0]:
+                table[crc] = (len(suffix), path)
+    return {crc: path for crc, (_length, path) in table.items()}
+
+
+def _entry_crc(path):
+    """The binding CRC32 a curve entry's path stands for: hashed placeholders
+    ("path_0x<hex>_junk") carry it literally; restored string paths hash to
+    it (crc32 of the UTF-8 path) -- one join key for both forms."""
+    import zlib
+
+    hash_match = _HASHED_PATH_RE.match(path)
+    if hash_match:
+        return int(hash_match.group(1), 16)
+    return zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
+
+
+def repair_hashed_clip_paths(clip_data, path_to_bone):
+    """Rewrite a parsed AnimationClip's curve paths to the target armature's
+    OWN stamped full paths, joining through the suffix-CRC table (see
+    build_suffix_crc_table): hashed placeholders resolve by their literal
+    CRC32, and already-restored string paths that don't literally appear in
+    path_to_bone (rig nested at a different depth in this model variant)
+    resolve by hashing -- both land on the exact path build_action's
+    path_to_bone lookup needs. Returns (repaired, unmatched) counts; paths
+    already matching the armature verbatim are left untouched."""
+    table = build_suffix_crc_table(path_to_bone)
     repaired = 0
     unmatched = 0
     for field in _CURVE_LIST_FIELDS:
@@ -1003,10 +1042,9 @@ def repair_hashed_clip_paths(clip_data, path_to_bone):
             # "path:" with no value parses to an EXISTING key holding None (root-level
             # curves) -- `or ""` covers both missing and null, .get default only the former.
             path = entry.get("path") or ""
-            match = _HASHED_PATH_RE.match(path)
-            if not match:
+            if not path or path in path_to_bone:
                 continue
-            real = crc_to_path.get(int(match.group(1), 16))
+            real = table.get(_entry_crc(path))
             if real is None:
                 unmatched += 1
                 continue
@@ -1018,13 +1056,12 @@ def repair_hashed_clip_paths(clip_data, path_to_bone):
 def clip_path_match_ratio(clip_data, path_to_bone):
     """Fraction of the clip's transform-curve paths that resolve to a bone of
     the target armature -- the compatibility check for importing a clip onto
-    the user's selected skeleton. Hashed placeholder paths count as matched
-    only if their CRC32 maps to a bone path (same table repair_hashed_clip_
-    paths uses). Returns (ratio, total); (0.0, 0) for a clip with no
+    the user's selected skeleton. Uses the same suffix-CRC join as
+    repair_hashed_clip_paths (hashed and string paths alike), so a clip whose
+    Animator-relative paths anchor anywhere inside the armature's hierarchy
+    counts as matching. Returns (ratio, total); (0.0, 0) for a clip with no
     transform curves at all (e.g. pure blendshape clips)."""
-    import zlib
-
-    crc_to_path = {zlib.crc32(p.encode("utf-8")) & 0xFFFFFFFF: p for p in path_to_bone}
+    table = build_suffix_crc_table(path_to_bone)
     total = 0
     matched = 0
     for field in ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves", "m_EulerCurves"):
@@ -1033,11 +1070,7 @@ def clip_path_match_ratio(clip_data, path_to_bone):
             if not path:
                 continue
             total += 1
-            hash_match = _HASHED_PATH_RE.match(path)
-            if hash_match:
-                if int(hash_match.group(1), 16) in crc_to_path:
-                    matched += 1
-            elif path in path_to_bone:
+            if path in path_to_bone or _entry_crc(path) in table:
                 matched += 1
     return (matched / total if total else 0.0), total
 

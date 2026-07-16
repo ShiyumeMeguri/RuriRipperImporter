@@ -499,8 +499,65 @@ def _is_clip_only_row(row):
     """A browser row that hosts AnimationClips and no importable GameObject
     hierarchy -- selecting it and clicking Import means "import these clips",
     not "import a prefab" (a clip CAB's closure contains no .prefab at all;
-    confirmed against the real game, its dependency count is literally 0)."""
+    confirmed against the real game, its dependency count is literally 0).
+    Covers both a bundled clip CAB and a non-bundled per-asset AnimationClip
+    row (see prefab_importer/ReadFullMetadataRows -- "<file>::<pathID>")."""
     return "AnimationClip" in row.type_names and "GameObject" not in row.type_names
+
+
+def _import_single_asset(op, context, state, db, textures, guid, class_name, name):
+    """Import exactly one non-hierarchy asset resolved from a per-asset browser
+    row (a non-bundled file's Mesh/Material/Texture2D, keyed "<file>::<pathID>")
+    -- the asset-level granularity a plain player build browses at. Clips and
+    GameObject hierarchies never reach here (dispatched earlier)."""
+    if class_name == "Mesh":
+        mesh_file = db.load_guid(guid)
+        if mesh_file is None:
+            op.report({"ERROR"}, "Resolved mesh document failed to parse -- see console.")
+            return {"CANCELLED"}
+        report = prefab_importer.import_mesh_from_db(context, db, mesh_file, state.as_options())
+        for warning in report.warnings[:5]:
+            op.report({"WARNING"}, warning)
+        if not report.mesh_objects:
+            op.report({"ERROR"}, "Mesh decoded empty -- see console.")
+            return {"CANCELLED"}
+        op.report({"INFO"}, f"Imported mesh '{name}'.")
+        return {"FINISHED"}
+
+    if class_name == "Material":
+        try:
+            from . import material_builder
+        except ImportError:
+            import material_builder
+        builder = material_builder.MaterialBuilder(db, prefab_importer._resolve_options(state.as_options()))
+        mat = builder.build_from_ref({"guid": guid})
+        if mat is None:
+            op.report({"ERROR"}, "Material failed to build -- see console.")
+            return {"CANCELLED"}
+        op.report({"INFO"}, f"Imported material '{mat.name}' (browse it in the material list).")
+        return {"FINISHED"}
+
+    if class_name is None and guid in textures:
+        # Texture rows resolve to PNG bytes, not a YAML document.
+        import tempfile
+        png = textures[guid]
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        try:
+            tmp.write(png)
+            tmp.close()
+            image = bpy.data.images.load(tmp.name)
+            image.name = name
+            image.pack()
+            image.filepath = ""
+        finally:
+            os.unlink(tmp.name)
+        op.report({"INFO"}, f"Imported texture '{name}' (packed into this .blend, see the image list).")
+        return {"FINISHED"}
+
+    op.report({"ERROR"}, f"Row resolved to a {class_name or 'non-document'} asset -- no importer "
+                         f"for this type yet (meshes, materials, textures, clips, and GameObject "
+                         f"hierarchies are supported).")
+    return {"CANCELLED"}
 
 
 def _resolve_target_armature(context):
@@ -664,9 +721,6 @@ class RURI_OT_import_selected(bpy.types.Operator):
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return {"CANCELLED"}
-        if not roots:
-            self.report({"WARNING"}, "No importable (.prefab/.unity) asset found in the resolved closure.")
-            return {"CANCELLED"}
 
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         options = state.as_options()
@@ -681,13 +735,35 @@ class RURI_OT_import_selected(bpy.types.Operator):
         # matching display names against GameObject names (two identifiers Unity gives no
         # guarantee ever equal each other, even for a totally unambiguous single-root import).
         primary_guid = seed_roots.get(selected_row.cab)
+        is_asset_row = "::" in selected_row.cab  # per-asset virtual row of a non-bundled file
 
-        # A non-bundled level file resolves to ITS OWN scene root: import exactly that scene.
-        # Without this, selecting level0 would also drag in every shared .prefab the whole
-        # dependency closure exports (a plain build's sharedassets host dozens of unrelated
-        # GameObject hierarchies) -- the scene already instantiates everything it actually uses.
+        # A per-asset row that resolved to a NON-hierarchy asset (Mesh/Material/Texture2D)
+        # imports exactly that one asset -- the whole point of asset-level rows. This MUST
+        # dispatch before the roots check below: a lone mesh/texture closure legitimately
+        # exports zero .prefab/.unity roots.
+        if is_asset_row and primary_guid is not None:
+            text = db.raw_text(primary_guid)
+            class_name = prefab_importer._peek_class_and_name(text)[0] if text else None
+            if class_name != "GameObject":
+                return _import_single_asset(self, context, state, db, textures,
+                                            primary_guid, class_name, selected_row.name)
+        if is_asset_row and primary_guid is None:
+            self.report({"ERROR"}, "This asset didn't export as its own file (engine built-in, or "
+                                   "embedded in a scene/host hierarchy) -- import its host file row "
+                                   "instead.")
+            return {"CANCELLED"}
+
+        if not roots:
+            self.report({"WARNING"}, "No importable (.prefab/.unity) asset found in the resolved closure.")
+            return {"CANCELLED"}
+
+        # A non-bundled level file resolves to ITS OWN scene root, and a per-asset GameObject row
+        # to its own prefab: import exactly that root. Without this, selecting level0 would also
+        # drag in every shared .prefab the whole dependency closure exports (a plain build's
+        # sharedassets host dozens of unrelated GameObject hierarchies) -- the scene already
+        # instantiates everything it actually uses.
         import_roots = roots
-        if primary_guid is not None and primary_guid in scene_roots:
+        if primary_guid is not None and (primary_guid in scene_roots or is_asset_row):
             import_roots = [primary_guid]
 
         primary_report = None
