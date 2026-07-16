@@ -401,7 +401,22 @@ def _parse_tos(data):
 
 def _muscle_angle(muscle, sgn, limit_min, limit_max):
     """Map a normalized muscle [-1,1] to a radian angle via the per-axis limit
-    and sign: -1 -> min, 0 -> 0, +1 -> max."""
+    and sign: -1 -> min, 0 -> 0, +1 -> max.
+
+    Values are CLAMPED to [-1, 1] first, matching Unity's own runtime muscle
+    application (angles never exceed the avatar's configured limits). Baked
+    clips DO store values beyond that range -- measured against the real game:
+    a battle clip carries "Right Hand Down-Up" up to +2.996, which unclamped
+    reconstructs a 120-175deg wrist fold (the reported broken-wrist pose)
+    while the raw-data audit cleared the ACL decode itself (all 272 rotation
+    curves unit-norm, no track misalignment). Those out-of-range values are
+    the encoder's best-effort FK approximation of an IK-driven pose; the
+    runtime clamps them exactly like this and lets IK take over the end
+    effector."""
+    if muscle > 1.0:
+        muscle = 1.0
+    elif muscle < -1.0:
+        muscle = -1.0
     scale = limit_max if muscle >= 0.0 else -limit_min
     return sgn * muscle * scale
 

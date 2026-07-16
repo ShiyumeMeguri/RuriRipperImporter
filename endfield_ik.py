@@ -68,6 +68,24 @@ _CHAINS = (
 # folding the chest.
 _SHOULDER_ASSIST_MAX_RAD = math.radians(35.0)
 
+# Per-frame IK weight from target-vs-FK-end distance: full IK at/below
+# _IK_FULL_DIST, pure muscle FK at/above _IK_OFF_DIST, linear in between.
+# This is the runtime model the DATA actually supports (measured across six
+# real clips): a hard on/off per chain is wrong in both directions --
+#   * the support foot tracks its target within 3-5cm for 90-100% of a
+#     locomotion clip (IK locks it to the ground) while the SWING foot's
+#     target sits 0.2-0.5m away (IK released, FK plays);
+#   * the hand targets never track the FK hands in ANY sampled clip (median
+#     0.42-0.72m, 0% of frames within 10cm -- battle and locomotion alike),
+#     so hands resolve to pure muscle FK unless a clip genuinely parks the
+#     target on the hand;
+#   * where the target IS near the FK end, IK~=FK and the blend is harmless
+#     by construction.
+# Solving every frame at full weight was what dragged runners' arms toward
+# parked targets (the reported contortion).
+_IK_FULL_DIST = 0.08
+_IK_OFF_DIST = 0.20
+
 _REQUIRED_TARGETS = ("IK_Foot_L_001", "IK_Foot_R_001", "IK_Hand_L_001", "IK_Hand_R_001")
 
 _BONE_PATH_RE = re.compile(r'pose\.bones\["(.+?)"\]\.(\w+)')
@@ -104,8 +122,29 @@ class _FcurveSampler:
         scale = Vector((read("scale", 0, 1.0), read("scale", 1, 1.0), read("scale", 2, 1.0)))
         return Matrix.LocRotScale(loc, quat.normalized(), scale)
 
+    def basis_quat(self, bone_name, frame):
+        """Just the FK rotation basis off the curves (for w=0 passthrough)."""
+        def read(index, default):
+            fc = self._by_key.get((bone_name, "rotation_quaternion", index))
+            return fc.evaluate(frame) if fc is not None else default
+        quat = Quaternion((read(0, 1.0), read(1, 0.0), read(2, 0.0), read(3, 0.0)))
+        if quat.magnitude < 1e-8:
+            return Quaternion((1.0, 0.0, 0.0, 0.0))
+        return quat.normalized()
+
     def quat_fcurves(self, bone_name):
         return [self._by_key.get((bone_name, "rotation_quaternion", i)) for i in range(4)]
+
+    def bone_animated(self, bone_name):
+        """Whether this action carries ANY fcurve for the bone. For the IK
+        target bones this is the per-clip IK enable switch: locomotion clips
+        (walk_loop, sprint...) ship NO curves for the IK bones at all -- their
+        targets sit parked at rest, and solving toward a parked target is what
+        contorted the arms of every non-combat animation. Clips that DO drive
+        their targets (battle, run_stop, dialog_walk) get the solve. Verified
+        across the real game's clips; the IK_Root-as-master-switch hypothesis
+        was tested and disproved (constant in battle clips too)."""
+        return any(key[0] == bone_name for key in self._by_key)
 
 
 def _ancestors_first(arm_obj, names):
@@ -207,6 +246,10 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
         if not (upper and lower and end and upper in bones and lower in bones and end in bones
                 and target_name in bones and (hint_name is None or hint_name in bones)):
             continue
+        if not sampler.bone_animated(target_name):
+            # This clip does not drive this IK target -- IK is OFF for this
+            # chain at runtime; the muscle FK is the pose (see bone_animated).
+            continue
         if shoulder is not None and shoulder not in bones:
             shoulder = None
         chains.append((upper, lower, end, target_name, hint_name, shoulder))
@@ -297,19 +340,54 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
             reach = l1 + l2
             target = pose[target_name]
             target_pos = target.translation
-            new_rot = {}
+            chain_bones = ((shoulder,) if shoulder else ()) + (upper, lower, end)
 
+            # Per-frame IK weight from how closely the target tracks the FK
+            # end THIS frame (see _IK_FULL_DIST block comment).
+            d_fk = (target_pos - pose[end].translation).length
+            w = (_IK_OFF_DIST - d_fk) / (_IK_OFF_DIST - _IK_FULL_DIST)
+            w = 0.0 if w < 0.0 else (1.0 if w > 1.0 else w)
+
+            base_pose = None
             if shoulder is not None:
-                # Clavicle assist (arms). Baseline = the skeleton's OWN rest
-                # (basis identity): the muscle shoulder data is auto-generated
+                # Clavicle baseline = the skeleton's OWN rest (basis identity),
+                # at ANY weight: the muscle shoulder data is auto-generated
                 # filler holding a constant 24deg shrug (see _CHAINS doc), so
-                # it is discarded outright. From that baseline the clavicle
-                # swings toward the target only as far as needed for the arm
-                # to reach -- the recruitment the runtime provably performs
-                # (targets outrange the bare arm in the real data).
+                # it is discarded outright.
                 sh_parent = parent_of[shoulder]
                 base_pose = (pose[sh_parent] @ rest_rel[shoulder]) if sh_parent is not None \
                     else rest_rel[shoulder]
+
+            if w <= 1e-4:
+                # Pure muscle FK for the limb. The clavicle still sits at its
+                # rest baseline, so the UPPER bone's basis is re-derived to
+                # keep the arm's muscle WORLD pose unchanged under the new
+                # parent -- the correction is absorbed in the clavicle/upper
+                # seam instead of swinging the whole arm by the shrug delta.
+                for n in chain_bones:
+                    if n == shoulder:
+                        bq = Quaternion((1.0, 0.0, 0.0, 0.0))
+                    elif shoulder is not None and n == upper:
+                        bq = (rest_rel[upper].to_quaternion().inverted()
+                              @ base_pose.to_quaternion().inverted()
+                              @ pose[upper].to_quaternion())
+                        bq.normalize()
+                    else:
+                        bq = sampler.basis_quat(n, frame)
+                    col = out[n]
+                    col[0][fi] = bq.w
+                    col[1][fi] = bq.x
+                    col[2][fi] = bq.y
+                    col[3][fi] = bq.z
+                continue
+
+            new_rot = {}
+
+            if shoulder is not None:
+                # Clavicle assist (arms): from the rest baseline the clavicle
+                # swings toward the target only as far as needed for the arm
+                # to reach -- the recruitment the runtime provably performs
+                # (targets outrange the bare arm in the real data).
                 c_head = base_pose.translation
                 s0 = (base_pose @ rest_rel[upper]).translation
 
@@ -370,9 +448,22 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
             new_rot[lower] = r_lower
             new_rot[end] = r_end
 
-            # World rotation -> pose basis, chaining through the NEW parent rotations.
-            write_order = ((shoulder,) if shoulder else ()) + (upper, lower, end)
-            for n in write_order:
+            # Blend the solved world rotations toward the FK pose by the
+            # frame's weight, then convert to pose basis chaining through the
+            # SAME blended parent rotations (self-consistent hierarchy). The
+            # clavicle's low-weight reference is its rest BASELINE (never the
+            # muscle shrug); the limb's is the muscle world pose -- matching
+            # exactly what the w=0 passthrough writes, so the blend converges
+            # continuously into it.
+            if w < 1.0:
+                for n in chain_bones:
+                    if n == shoulder:
+                        fk_ref = base_pose.to_quaternion()
+                    else:
+                        fk_ref = pose[n].to_quaternion()
+                    new_rot[n] = fk_ref.slerp(new_rot[n], w)
+
+            for n in chain_bones:
                 parent = parent_of[n]
                 if parent in new_rot:
                     parent_rot = new_rot[parent]

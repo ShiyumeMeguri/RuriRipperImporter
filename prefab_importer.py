@@ -444,6 +444,11 @@ def find_retargeter_in_db(db, path_to_bone=None):
     transform curves the clip carries, and build_selected_animations warns
     when the clip is actually humanoid). path_to_bone: the TARGET armature's
     Unity paths, required for stripped avatars -- see _fallback_tos_from_paths."""
+    if not hasattr(db, "all_guids"):
+        # Disk-mode AssetDatabase has no guid-keyed closure to scan; the
+        # Animator's own m_Avatar reference (_load_retargeter) is the only
+        # avatar source there.
+        return None
     for guid in db.all_guids():
         text = db.raw_text(guid)
         if text is None:

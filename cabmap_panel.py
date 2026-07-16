@@ -298,18 +298,20 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
     bl_label = "Build Cabmap"
     bl_description = "Scan the game root and build a fresh cabmap (can take a long time for a full game)"
 
+    # Zero checked hooks is a VALID configuration, not a missing prerequisite: a plain
+    # un-bundled/un-encrypted Unity player build (level0/sharedassetsN.assets/resources.assets)
+    # needs no game hook at all -- the generic scan handles it, with readable names harvested
+    # straight from the assets' own m_Name fields (GameBundleHook.HarvestAssetNames). Hooks are
+    # only for games with custom encryption/VFS/typetree drift.
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready() and len(_hook_ids(context.scene.ruri_cabmap)) > 0
+        return pythonnet_bootstrap.is_ready()
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
         root = bpy.path.abspath(state.game_root) if state.game_root else ""
         if not root or not os.path.isdir(root):
             self.report({"ERROR"}, "Pick a valid game root directory first.")
-            return {"CANCELLED"}
-        if not _hook_ids(state):
-            self.report({"ERROR"}, "Check at least one hook first.")
             return {"CANCELLED"}
         out = _resolve_build_output_path(state)
         if not out:
@@ -343,18 +345,16 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
     bl_label = "Load Cabmap"
     bl_description = "Load an existing cabmap file -- required before browsing/importing anything"
 
+    # Zero checked hooks is valid -- see RURI_OT_build_cabmap.poll.
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready() and len(_hook_ids(context.scene.ruri_cabmap)) > 0
+        return pythonnet_bootstrap.is_ready()
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
         path = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
         if not path or not os.path.isfile(path):
             self.report({"ERROR"}, "Pick a valid cabmap file first.")
-            return {"CANCELLED"}
-        if not _hook_ids(state):
-            self.report({"ERROR"}, "Check at least one hook first.")
             return {"CANCELLED"}
         try:
             bridge = cabmap_state.ensure_bridge(_hook_ids(state))
@@ -639,7 +639,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             seeds = [selected_row.cab]
             try:
                 seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(selected_row.cab))
-                documents, textures, roots, seed_roots, clips_by_cab = \
+                documents, textures, roots, seed_roots, clips_by_cab, _scene_roots = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
@@ -659,13 +659,13 @@ class RURI_OT_import_selected(bpy.types.Operator):
             bpy.ops.object.delete(use_global=False)
 
         try:
-            documents, textures, roots, seed_roots, _clips_by_cab = \
+            documents, textures, roots, seed_roots, _clips_by_cab, scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(cabs)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return {"CANCELLED"}
         if not roots:
-            self.report({"WARNING"}, "No importable (.prefab) asset found in the resolved closure.")
+            self.report({"WARNING"}, "No importable (.prefab/.unity) asset found in the resolved closure.")
             return {"CANCELLED"}
 
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
@@ -681,8 +681,17 @@ class RURI_OT_import_selected(bpy.types.Operator):
         # matching display names against GameObject names (two identifiers Unity gives no
         # guarantee ever equal each other, even for a totally unambiguous single-root import).
         primary_guid = seed_roots.get(selected_row.cab)
+
+        # A non-bundled level file resolves to ITS OWN scene root: import exactly that scene.
+        # Without this, selecting level0 would also drag in every shared .prefab the whole
+        # dependency closure exports (a plain build's sharedassets host dozens of unrelated
+        # GameObject hierarchies) -- the scene already instantiates everything it actually uses.
+        import_roots = roots
+        if primary_guid is not None and primary_guid in scene_roots:
+            import_roots = [primary_guid]
+
         primary_report = None
-        for root_guid in roots:
+        for root_guid in import_roots:
             prefab_file = db.load_guid(root_guid)
             if prefab_file is None:
                 continue
@@ -1011,7 +1020,7 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                     # clips' hashed curve paths to real strings and the real
                     # Avatar (not a stub) is in scope for humanoid retargeting.
                     seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab))
-                documents, textures, roots, seed_roots, clips_by_cab = \
+                documents, textures, roots, seed_roots, clips_by_cab, _scene_roots = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
