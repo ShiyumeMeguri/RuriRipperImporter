@@ -41,13 +41,32 @@ import re
 
 from mathutils import Matrix, Quaternion, Vector
 
-# (human upper, human lower, human end, target bone, hint bone or None)
+# (human upper, human lower, human end, target bone, hint bone or None,
+#  human shoulder or None)
+#
+# The shoulder entry drives the clavicle-assist pass (arms only). Ground
+# truth for why it exists: the battle clip's IK_Hand targets reach up to
+# 0.593m from the shoulder while the arm is only 0.448m long -- yet the
+# targets are exact runtime animation, so in-game the hand DOES land on them,
+# which is only possible if the runtime recruits the clavicle. And the muscle
+# data's shoulder channels are the same auto-generated filler as the limb FK:
+# they hold the clavicle at a constant 24.0deg away from the skeleton's own
+# rest (measured: muscle-zero == the avatar's internal reference pose, which
+# sits exactly 24.0deg off the prefab rest on both clavicles -- the reported
+# permanent shrug). So the runtime model is: clavicle at BIND pose, swung
+# toward the target only when the target outranges the arm.
 _CHAINS = (
-    ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "IK_Foot_L_001", "IK_Knee_L_001"),
-    ("RightUpperLeg", "RightLowerLeg", "RightFoot", "IK_Foot_R_001", "IK_Knee_R_001"),
-    ("LeftUpperArm", "LeftLowerArm", "LeftHand", "IK_Hand_L_001", None),
-    ("RightUpperArm", "RightLowerArm", "RightHand", "IK_Hand_R_001", None),
+    ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "IK_Foot_L_001", "IK_Knee_L_001", None),
+    ("RightUpperLeg", "RightLowerLeg", "RightFoot", "IK_Foot_R_001", "IK_Knee_R_001", None),
+    ("LeftUpperArm", "LeftLowerArm", "LeftHand", "IK_Hand_L_001", None, "LeftShoulder"),
+    ("RightUpperArm", "RightLowerArm", "RightHand", "IK_Hand_R_001", None, "RightShoulder"),
 )
+
+# Maximum clavicle-assist swing. The largest shortfall observed in real data
+# (0.593 vs 0.448m) needs ~0.15m of shoulder travel; with a ~0.17m clavicle
+# that is safely inside this cap, and capping keeps a pathological target from
+# folding the chest.
+_SHOULDER_ASSIST_MAX_RAD = math.radians(35.0)
 
 _REQUIRED_TARGETS = ("IK_Foot_L_001", "IK_Foot_R_001", "IK_Hand_L_001", "IK_Hand_R_001")
 
@@ -106,21 +125,66 @@ def _ancestors_first(arm_obj, names):
     return sorted(needed, key=depth)
 
 
-def _solve_mid_position(a, target_pos, pole_pos, l1, l2):
+# FK elbow offsets under this many meters off the shoulder->target axis are
+# treated as "no usable bend plane". Ground truth: in the battle clip the
+# auto-generated FK arm goes fully straight for whole stretches (elbow 1.5mm
+# off-axis for 10+ frames) -- any per-frame perpendicular extracted there is
+# numeric noise, and the arbitrary-orthogonal fallback the first version used
+# let the bend plane spin freely, flipping the whole arm (and every sleeve/
+# deco bone riding on it) to the character's back.
+_POLE_DEGENERATE = 0.02
+
+
+def _solve_mid_position(a, target_pos, pole_dir_hint, l1, l2):
     """Analytic two-bone mid-joint placement: on the a->target axis at the
-    law-of-cosines split, pushed toward the pole's plane."""
+    law-of-cosines split, pushed toward the (already continuity-filtered)
+    pole direction's plane."""
     to_target = target_pos - a
     dist = max(min(to_target.length, l1 + l2 - 1e-5), abs(l1 - l2) + 1e-5)
     axis = to_target.normalized() if to_target.length > 1e-8 else Vector((0.0, 0.0, 1.0))
     d1 = (l1 * l1 + dist * dist - l2 * l2) / (2.0 * dist)
     h_sq = l1 * l1 - d1 * d1
     h = math.sqrt(h_sq) if h_sq > 0.0 else 0.0
-    pole_vec = pole_pos - a
-    pole_dir = pole_vec - axis * pole_vec.dot(axis)
-    if pole_dir.length < 1e-6:
-        # Pole degenerate (on the axis): keep whatever perpendicular exists.
+    pole_dir = pole_dir_hint - axis * pole_dir_hint.dot(axis)
+    if pole_dir.length < 1e-8:
         pole_dir = axis.orthogonal()
     return a + axis * d1 + pole_dir.normalized() * h
+
+
+class _PoleTracker:
+    """Temporally-coherent bend-plane direction for a chain.
+
+    Per frame the raw pole comes from a hint bone (legs) or the FK mid joint
+    (arms -- the rig ships no elbow hint). Raw FK poles are NOT trustworthy
+    frame-to-frame: the auto-generated FK arm collapses onto the
+    shoulder->target axis (degenerate, no plane at all) and can hop to the
+    opposite side between frames (a >90deg plane jump in one frame is FK
+    noise, not intent). This tracker keeps the last GOOD direction and reuses
+    it through degenerate stretches, and refuses side-hops by keeping the
+    previous side when the new direction points >90deg away."""
+
+    def __init__(self):
+        self._last = None
+
+    def resolve(self, a, target_pos, raw_pole_pos, fallback_dir):
+        to_target = target_pos - a
+        axis = to_target.normalized() if to_target.length > 1e-8 else Vector((0.0, 0.0, 1.0))
+        raw = raw_pole_pos - a
+        perp = raw - axis * raw.dot(axis)
+
+        direction = None
+        if perp.length >= _POLE_DEGENERATE:
+            direction = perp.normalized()
+            if self._last is not None and direction.dot(self._last) < 0.0:
+                direction = self._last
+        elif self._last is not None:
+            direction = self._last
+        else:
+            fb = fallback_dir - axis * fallback_dir.dot(axis)
+            direction = fb.normalized() if fb.length > 1e-6 else axis.orthogonal()
+
+        self._last = direction
+        return direction
 
 
 def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
@@ -135,14 +199,17 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
     bones = arm_obj.data.bones
 
     chains = []
-    for h_upper, h_lower, h_end, target_name, hint_name in _CHAINS:
+    for h_upper, h_lower, h_end, target_name, hint_name, h_shoulder in _CHAINS:
         upper = bone_targets.get(h_upper)
         lower = bone_targets.get(h_lower)
         end = bone_targets.get(h_end)
+        shoulder = bone_targets.get(h_shoulder) if h_shoulder is not None else None
         if not (upper and lower and end and upper in bones and lower in bones and end in bones
                 and target_name in bones and (hint_name is None or hint_name in bones)):
             continue
-        chains.append((upper, lower, end, target_name, hint_name))
+        if shoulder is not None and shoulder not in bones:
+            shoulder = None
+        chains.append((upper, lower, end, target_name, hint_name, shoulder))
     if not chains:
         return []
 
@@ -161,7 +228,7 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
     # verified rest-coincident -- but carried anyway so a variant rig with a
     # deliberate offset still lands on its own convention).
     end_offsets = {}
-    for upper, lower, end, target_name, _hint in chains:
+    for upper, lower, end, target_name, _hint, _sh in chains:
         end_offsets[end] = (rest[target_name].to_quaternion().inverted()
                             @ rest[end].to_quaternion())
 
@@ -169,9 +236,52 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
     n_frames = len(frames)
     # Output: bone -> (4, n_frames) quaternion basis values.
     out = {}
-    for upper, lower, end, _t, _h in chains:
-        for n in (upper, lower, end):
+    for upper, lower, end, _t, _h, shoulder in chains:
+        for n in (upper, lower, end) + ((shoulder,) if shoulder else ()):
             out[n] = [[0.0] * n_frames for _ in range(4)]
+
+    # One bend-plane tracker per chain, carried ACROSS frames -- see _PoleTracker.
+    trackers = {chain: _PoleTracker() for chain in chains}
+    # Fallback bend side when even frame 0 is degenerate: elbows/knees hang
+    # downward in armature space, a neutral side that matches a combat idle.
+    down = Vector((0.0, 0.0, -1.0))
+
+    # Per-chain constants. Division of trust, per measurement:
+    #   * the auto-generated FK's ROTATIONS are garbage (single-frame 180deg
+    #     spins) and are never consulted;
+    #   * the FK's elbow POSITION side, however, is the animation's real
+    #     intent -- and it degrades exactly when it stops mattering (a
+    #     near-straight arm has h ~= 0, so the bend side is cosmetic there),
+    #     so it serves as the arm bend-plane hint through _PoleTracker's
+    #     continuity filter. Legs use their real animated IK_Knee hints.
+    #   * segment lengths come from rest (bones are rigid);
+    #   * segment ROTATIONS are back-derived from the end target through the
+    #     chain's REST relative rotations (wrist keeps its rest relationship
+    #     to the forearm, elbow to the upper arm), each aim-corrected onto the
+    #     solved joint positions. Twist therefore follows the hand/foot --
+    #     anatomically how pronation works -- instead of being pinned to the
+    #     bend plane (which let the wrist wind up ~180deg against the forearm)
+    #     or extracted from FK (which re-imported the spins). At rest inputs
+    #     the whole construction reproduces rest exactly.
+    consts = {}
+    for chain in chains:
+        upper, lower, end, target_name, hint_name, shoulder = chain
+        rest_a = rest[upper].translation
+        rest_k = rest[lower].translation
+        rest_t = rest[end].translation
+        rot_u = rest[upper].to_quaternion()
+        rot_l = rest[lower].to_quaternion()
+        rot_e = rest[end].to_quaternion()
+        consts[chain] = {
+            "l1": (rest_k - rest_a).length,
+            "l2": (rest_t - rest_k).length,
+            # Bone-vector directions in each bone's LOCAL frame (for aim correction).
+            "aim_local_u": rot_u.inverted() @ (rest_k - rest_a).normalized(),
+            "aim_local_l": rot_l.inverted() @ (rest_t - rest_k).normalized(),
+            # Rest relative rotations for the back-derivation.
+            "rel_end_inv": (rot_l.inverted() @ rot_e).inverted(),
+            "rel_lower_inv": (rot_u.inverted() @ rot_l).inverted(),
+        }
 
     for fi, frame in enumerate(frames):
         pose = {}
@@ -180,32 +290,89 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
             parent = parent_of[n]
             pose[n] = (pose[parent] @ local) if parent is not None else local
 
-        for upper, lower, end, target_name, hint_name in chains:
-            p_upper, p_lower, p_end = pose[upper], pose[lower], pose[end]
-            a = p_upper.translation
-            k_fk = p_lower.translation
-            t_fk = p_end.translation
+        for chain in chains:
+            upper, lower, end, target_name, hint_name, shoulder = chain
+            c = consts[chain]
+            l1, l2 = c["l1"], c["l2"]
+            reach = l1 + l2
             target = pose[target_name]
             target_pos = target.translation
-            l1 = (k_fk - a).length
-            l2 = (t_fk - k_fk).length
-            pole_pos = pose[hint_name].translation if hint_name is not None else k_fk
+            new_rot = {}
 
-            k_new = _solve_mid_position(a, target_pos, pole_pos, l1, l2)
+            if shoulder is not None:
+                # Clavicle assist (arms). Baseline = the skeleton's OWN rest
+                # (basis identity): the muscle shoulder data is auto-generated
+                # filler holding a constant 24deg shrug (see _CHAINS doc), so
+                # it is discarded outright. From that baseline the clavicle
+                # swings toward the target only as far as needed for the arm
+                # to reach -- the recruitment the runtime provably performs
+                # (targets outrange the bare arm in the real data).
+                sh_parent = parent_of[shoulder]
+                base_pose = (pose[sh_parent] @ rest_rel[shoulder]) if sh_parent is not None \
+                    else rest_rel[shoulder]
+                c_head = base_pose.translation
+                s0 = (base_pose @ rest_rel[upper]).translation
 
-            # Minimal-arc deltas preserve the FK twist along each segment. The
-            # deltas rotate each segment rigidly about its own head, so with
-            # rest offsets and basis translations untouched the joints land
-            # exactly on the solved positions -- only ROTATION basis changes.
-            delta_u = (k_fk - a).rotation_difference(k_new - a)
-            r_upper = delta_u @ p_upper.to_quaternion()
-            delta_l = (delta_u @ (t_fk - k_fk)).rotation_difference(target_pos - k_new)
-            r_lower = delta_l @ delta_u @ p_lower.to_quaternion()
+                swing = Quaternion((1.0, 0.0, 0.0, 0.0))
+                if (target_pos - s0).length > reach * 0.999:
+                    arm_dir = s0 - c_head
+                    tgt_dir = target_pos - c_head
+                    axis = arm_dir.cross(tgt_dir)
+                    if axis.length > 1e-8 and arm_dir.length > 1e-8:
+                        axis.normalize()
+                        # Bisect the swing angle that brings the shoulder just
+                        # within reach of the target (monotonic toward the
+                        # target), capped at _SHOULDER_ASSIST_MAX_RAD.
+                        lo, hi = 0.0, _SHOULDER_ASSIST_MAX_RAD
+                        for _ in range(24):
+                            mid = 0.5 * (lo + hi)
+                            s_mid = c_head + Quaternion(axis, mid) @ arm_dir
+                            if (target_pos - s_mid).length > reach * 0.999:
+                                lo = mid
+                            else:
+                                hi = mid
+                        swing = Quaternion(axis, hi)
+
+                new_rot[shoulder] = swing @ base_pose.to_quaternion()
+                a = c_head + swing @ (s0 - c_head)
+            else:
+                a = pose[upper].translation
+
+            if hint_name is not None:
+                raw_pole = pose[hint_name].translation
+            else:
+                # FK elbow position: the side it sits on is the animation's
+                # intent (see the consts block comment); the tracker bridges
+                # its degenerate straight-arm stretches, exactly where the
+                # side stops mattering.
+                raw_pole = pose[lower].translation
+
+            pole_dir = trackers[chain].resolve(a, target_pos, raw_pole, down)
+            k_new = _solve_mid_position(a, target_pos, pole_dir, l1, l2)
+
+            # Back-derived world rotations (see the consts block comment):
+            # end = target; lower = end at its REST wrist relationship,
+            # aim-corrected onto k_new->target; upper = lower at its REST
+            # elbow relationship, aim-corrected onto a->k_new. The aim
+            # corrections also guarantee the joints land exactly on the
+            # solved positions regardless of twist.
             r_end = target.to_quaternion() @ end_offsets[end]
 
+            candidate_l = r_end @ c["rel_end_inv"]
+            aim_now = candidate_l @ c["aim_local_l"]
+            r_lower = aim_now.rotation_difference(target_pos - k_new) @ candidate_l
+
+            candidate_u = r_lower @ c["rel_lower_inv"]
+            aim_now = candidate_u @ c["aim_local_u"]
+            r_upper = aim_now.rotation_difference(k_new - a) @ candidate_u
+
+            new_rot[upper] = r_upper
+            new_rot[lower] = r_lower
+            new_rot[end] = r_end
+
             # World rotation -> pose basis, chaining through the NEW parent rotations.
-            new_rot = {upper: r_upper, lower: r_lower, end: r_end}
-            for n in (upper, lower, end):
+            write_order = ((shoulder,) if shoulder else ()) + (upper, lower, end)
+            for n in write_order:
                 parent = parent_of[n]
                 if parent in new_rot:
                     parent_rot = new_rot[parent]
@@ -247,4 +414,5 @@ def apply_to_action(arm_obj, action, bone_targets, frame_start, frame_end):
                         kp.handle_right[1] = cols[ci][fi]
             fc.update()
 
-    return [f"{upper}->{end} via {target_name}" for upper, lower, end, target_name, _h in chains]
+    return [f"{(shoulder + '+') if shoulder else ''}{upper}->{end} via {target_name}"
+            for upper, lower, end, target_name, _h, shoulder in chains]

@@ -813,53 +813,75 @@ class HumanoidRetargeter:
         tz = muscle_lookup("RootT.z")
         if tx is None and ty is None and tz is None:
             return None
-        # RootT/RootQ are the avatar's mass-center/orientation reference, not
-        # the hips' own transform (see module docstring).  MotionT is the
-        # ground-projected root motion; subtracting it here (as before)
-        # removes that same rigid drift from the mass-center target.
-        mx = muscle_lookup("MotionT.x") or 0.0
-        my = muscle_lookup("MotionT.y") or 0.0
-        mz = muscle_lookup("MotionT.z") or 0.0
-        full_x = (tx or 0.0) - mx
-        full_y = (ty or 0.0) - my
-        full_z = (tz or 0.0) - mz
-        root_x = full_x if keep_position_xz else 0.0
-        root_y = full_y if keep_position_y else 0.0
-        root_z = full_z if keep_position_xz else 0.0
-        root_t_simple = Vector((root_x, root_y, root_z))
-        motion_t = Vector((full_x - root_x, full_y - root_y, full_z - root_z))
+        full_t = Vector((tx or 0.0, ty or 0.0, tz or 0.0))
 
         qw = muscle_lookup("RootQ.w")
         full_q = (Quaternion() if qw is None else
                  Quaternion((qw, muscle_lookup("RootQ.x") or 0.0,
                              muscle_lookup("RootQ.y") or 0.0,
                              muscle_lookup("RootQ.z") or 0.0)).normalized())
-        if keep_orientation:
+
+        has_motion_curves = (muscle_lookup("MotionT.x") is not None
+                             or muscle_lookup("MotionT.z") is not None
+                             or muscle_lookup("MotionQ.w") is not None)
+        if has_motion_curves:
+            # Trajectory-authored clip: MotionT/MotionQ ARE the character
+            # root's motion (the trajectory the runtime applies to the
+            # GameObject), and RootT/RootQ are the ABSOLUTE body reference
+            # (they include the displacement -- verified against the real
+            # game: a 0.94m dash clip carries MotionT.z 0->-0.9378 with
+            # RootT.z tracking the same span, and MotionQ stays identity for
+            # the whole swing-heavy clip, i.e. turning belongs to the BODY,
+            # not the trajectory). So the split is exact and settings-free:
+            # object gets Motion, hips get the trajectory-relative remainder,
+            # and their scene composition (motion outer, hips inner)
+            # reconstructs the absolute Root curves bit-for-bit. The
+            # m_KeepOriginalPosition*/Orientation flags only parameterize the
+            # runtime's applyRootMotion deltas and loop blending -- consuming
+            # them HERE is what previously (a) annihilated the displacement
+            # (extracted motion was RootT-MotionT's bounded sway instead of
+            # MotionT) and (b) shook the character (yaw carved out of RootQ
+            # per frame and recomposed against independently-interpolated
+            # curves -- while the data says the trajectory never turns).
+            motion_t = Vector((muscle_lookup("MotionT.x") or 0.0,
+                               muscle_lookup("MotionT.y") or 0.0,
+                               muscle_lookup("MotionT.z") or 0.0))
+            mqw = muscle_lookup("MotionQ.w")
+            motion_q = (Quaternion() if mqw is None else
+                        Quaternion((mqw, muscle_lookup("MotionQ.x") or 0.0,
+                                    muscle_lookup("MotionQ.y") or 0.0,
+                                    muscle_lookup("MotionQ.z") or 0.0)).normalized())
+            root_t_simple = full_t - motion_t
+            root_q = (motion_q.inverted() @ full_q).normalized()
+        elif keep_position_xz and keep_position_y and keep_orientation:
+            root_t_simple = full_t
             root_q = full_q
             motion_q = Quaternion()
+            motion_t = Vector((0.0, 0.0, 0.0))
         else:
-            # Extract only the yaw (Y-axis) twist component, matching Unity's
-            # own Y-up convention for "orientation" -- drop it, keep any
-            # residual swing (lean/tilt) the same way the muscle formula's
-            # swing-twist decomposition already works elsewhere in this file.
-            #
-            # Composition order matters here: in the baked scene, the root
-            # object's rotation is the OUTER transform and the hips' local
-            # rotation is INNER (world = motion_q @ r_hips, standard
-            # parent-then-child composition), so recovering full_q from that
-            # product needs root_q = motion_q^-1 @ full_q -- NOT
-            # full_q @ motion_q^-1, which solves a decomposition for the
-            # opposite (hips-outer) composition order and silently produces a
-            # wrong residual rotation whenever full_q and twist_y don't
-            # commute (i.e. whenever there is also swing/lean, exactly the
-            # walking-with-natural-gait-lean case) -- this showed up
-            # visually as feet not meeting the ground even though the
-            # isolated hips-vs-Unity-ground-truth check (which never
-            # recomposes with an object rotation) still measured a small
-            # average error.
-            twist_y = Quaternion((full_q.w, 0.0, full_q.y, 0.0)).normalized()
-            root_q = (twist_y.inverted() @ full_q).normalized()
-            motion_q = twist_y
+            # Motion-less clip (older authoring): the walking progress is
+            # baked straight into RootT/RootQ and the keep-flags say which
+            # components the runtime would extract as root motion. Approximate
+            # that extraction (validated against live Unity on a real
+            # walk-cycle clip -- see git history for the error numbers).
+            root_x = full_t.x if keep_position_xz else 0.0
+            root_y = full_t.y if keep_position_y else 0.0
+            root_z = full_t.z if keep_position_xz else 0.0
+            root_t_simple = Vector((root_x, root_y, root_z))
+            motion_t = full_t - root_t_simple
+            if keep_orientation:
+                root_q = full_q
+                motion_q = Quaternion()
+            else:
+                # Extract only the yaw (Y-axis) twist component, matching
+                # Unity's own Y-up convention for "orientation". Composition
+                # order: the root object's rotation is the OUTER transform
+                # (world = motion_q @ r_hips), so the residual must be
+                # root_q = motion_q^-1 @ full_q -- the other order solves the
+                # opposite composition and breaks whenever there is lean.
+                twist_y = Quaternion((full_q.w, 0.0, full_q.y, 0.0)).normalized()
+                root_q = (twist_y.inverted() @ full_q).normalized()
+                motion_q = twist_y
         # root_t_simple is expressed in the same (unrotated) frame as full_t;
         # since the object's rotation (motion_q) sits between it and the
         # hips in the scene composition, the hips' own position must be

@@ -324,7 +324,12 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
                     motion_t, motion_q = motion
                     motion_locs[fi] = (motion_t.x, motion_t.y, motion_t.z)
                     motion_quats[fi] = (motion_q.w, motion_q.x, motion_q.y, motion_q.z)
-                    has_motion = True
+                    # Data-driven: write object motion iff any frame actually
+                    # carries some (trajectory clips always do; the settings
+                    # flags no longer decide -- see body_transform).
+                    if (motion_t.length_squared > 1e-10
+                            or abs(motion_q.w) < 0.99999995):
+                        has_motion = True
             else:
                 # The muscle gives this bone's FULL absolute local rotation for the
                 # frame directly (preQ @ swingTwist @ inv(postQ), then TwistSolve's
@@ -346,8 +351,10 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
     # armature object's own transform, in Unity world/root space -- there is
     # no "rest" to subtract here (the object's own rest is identity), so each
     # frame is a straight coordinate.convert_matrix of the extracted TRS.
-    extracting = not (keep_position_xz and keep_position_y and keep_orientation)
-    if has_motion and extracting:
+    # has_motion is now set per-frame off the ACTUAL extracted values (see the
+    # hips branch above) -- a trajectory clip writes its object track whatever
+    # the keep-flags say, and a genuinely motion-free clip writes none.
+    if has_motion:
         obj_locs = np.empty((n_frames, 3), dtype=np.float32)
         obj_quats = np.empty((n_frames, 4), dtype=np.float32)
         obj_scales = np.ones((n_frames, 3), dtype=np.float32)
