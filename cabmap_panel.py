@@ -47,6 +47,7 @@ _ACTION_ITEMS = [
 
 def _rebuild_window(state):
     total, window = cabmap_state.display_window()
+    selected = cabmap_state.SELECTED_CABS
     state.window.clear()
     for idx, row in window:
         item = state.window.add()
@@ -57,10 +58,19 @@ def _rebuild_window(state):
         item.type_names = row["type_names"]
         item.source = row["source"]
         item.deps = row["deps"]
+        item.selected = row["cab"] in selected
     shown = len(window)
     cap_note = (f" (capped at {cabmap_state.DISPLAY_CAP} -- narrow your search to see the rest)"
                 if total > shown else "")
     state.status = f"Showing {shown} / {total} matching virtual files{cap_note}."
+
+
+def _sync_window_selection(state):
+    """Refresh only the per-row selection flags of the already-materialized
+    window -- selection changes must not pay the full window rebuild."""
+    selected = cabmap_state.SELECTED_CABS
+    for item in state.window:
+        item.selected = item.cab in selected
 
 
 def _redraw_all(context):
@@ -137,7 +147,11 @@ def _report_exception(op, prefix, exc):
 
 
 class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
-    """One windowed/displayed row -- a small proxy, never the full 260k-row set."""
+    """One windowed/displayed row -- a small proxy, never the full 260k-row set.
+    `selected` is a pure display MIRROR of cabmap_state.SELECTED_CABS (the
+    authoritative selection, which survives the window being rebuilt on every
+    filter/sort edit) -- all mutation goes through RURI_OT_cabmap_click /
+    RURI_OT_cabmap_select_all, never by writing this flag directly."""
     row_index: IntProperty()
     cab: StringProperty()
     name: StringProperty()
@@ -145,6 +159,7 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
     type_names: StringProperty()
     source: StringProperty()
     deps: IntProperty()
+    selected: BoolProperty(default=False)
 
 
 class RURI_PG_hook_entry(bpy.types.PropertyGroup):
@@ -384,6 +399,128 @@ class RURI_OT_cabmap_sort(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_cabmap_click(bpy.types.Operator):
+    """Row click with file-browser selection semantics -- the whole row is
+    drawn as (flat) operator buttons precisely so this invoke() sees the
+    click's modifier keys, which template_list's own active-index handling
+    never exposes."""
+    bl_idname = "ruri.cabmap_click"
+    bl_label = "Select Row"
+    bl_description = ("Select this row.\n"
+                      "• Click: select only this row\n"
+                      "• Ctrl+Click: toggle this row\n"
+                      "• Shift+Click: select the range from the last clicked row\n"
+                      "• Ctrl+Shift+Click: add that range to the selection")
+    bl_options = {"INTERNAL"}
+    index: IntProperty()
+
+    def invoke(self, context, event):
+        state = context.scene.ruri_cabmap
+        if not (0 <= self.index < len(state.window)):
+            return {"CANCELLED"}
+        item = state.window[self.index]
+        selection = cabmap_state.SELECTED_CABS
+        rows_index = item.row_index
+
+        if event.shift:
+            # Range anchor->clicked over the CURRENT filtered+sorted order
+            # (what the user is looking at). Both endpoints are clickable so
+            # both sit inside the display window; an anchor that has since
+            # been filtered away degrades to a single-row range.
+            visible = cabmap_state.VISIBLE
+            anchor = cabmap_state.SELECT_ANCHOR
+            try:
+                clicked_pos = visible.index(rows_index)
+            except ValueError:
+                return {"CANCELLED"}
+            try:
+                anchor_pos = visible.index(anchor) if anchor is not None else clicked_pos
+            except ValueError:
+                anchor_pos = clicked_pos
+            lo, hi = sorted((anchor_pos, clicked_pos))
+            range_cabs = {cabmap_state.ROWS[i]["cab"] for i in visible[lo:hi + 1]}
+            if not event.ctrl:
+                selection.clear()
+            selection.update(range_cabs)
+            # Anchor deliberately stays put: successive Shift+Clicks re-pivot
+            # around the same anchor, the standard file-browser behaviour.
+        elif event.ctrl:
+            if item.cab in selection:
+                selection.discard(item.cab)
+            else:
+                selection.add(item.cab)
+            cabmap_state.SELECT_ANCHOR = rows_index
+        else:
+            selection.clear()
+            selection.add(item.cab)
+            cabmap_state.SELECT_ANCHOR = rows_index
+
+        state.active_index = self.index
+        _sync_window_selection(state)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_cabmap_select_all(bpy.types.Operator):
+    """Select All / None / Invert over the FILTERED row set (everything the
+    current search+rules match, not just the capped display window) -- bound
+    to Ctrl+A / Alt+A / Ctrl+I while the cursor is over the RuriRipper
+    sidebar, and mirrored as the All/None/Invert buttons under the list."""
+    bl_idname = "ruri.cabmap_select_all"
+    bl_label = "Select All Rows"
+    bl_options = {"INTERNAL"}
+    mode: EnumProperty(items=[
+        ("ALL", "All", "Select every row matching the current filter"),
+        ("NONE", "None", "Clear the selection"),
+        ("INVERT", "Invert", "Invert the selection within the current filter"),
+    ])
+
+    @classmethod
+    def description(cls, context, properties):
+        return {
+            "ALL": "Select every row matching the current filter (Ctrl+A over the panel)",
+            "NONE": "Clear the selection entirely (Alt+A over the panel)",
+            "INVERT": "Invert the selection within the current filter (Ctrl+I over the panel)",
+        }[properties.mode]
+
+    @classmethod
+    def poll(cls, context):
+        # Reached from two directions: the buttons under the list (always in
+        # the right panel already) and the addon keymap, which fires for a
+        # keypress over ANY UI region anywhere -- the area/region/category
+        # checks scope the shortcut to the RuriRipper sidebar specifically.
+        scene = getattr(context, "scene", None)
+        state = getattr(scene, "ruri_cabmap", None)
+        if state is None or not state.loaded or state.active_tab != "assetbundle":
+            return False
+        if not cabmap_state.VISIBLE:
+            return False
+        area = getattr(context, "area", None)
+        region = getattr(context, "region", None)
+        if area is None or area.type != "VIEW_3D" or region is None or region.type != "UI":
+            return False
+        category = getattr(region, "active_panel_category", None)
+        return category in (None, "RuriRipper")
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        selection = cabmap_state.SELECTED_CABS
+        visible_cabs = [cabmap_state.ROWS[i]["cab"] for i in cabmap_state.VISIBLE]
+        if self.mode == "ALL":
+            selection.update(visible_cabs)
+        elif self.mode == "NONE":
+            cabmap_state.clear_selection()
+        else:
+            for cab in visible_cabs:
+                if cab in selection:
+                    selection.discard(cab)
+                else:
+                    selection.add(cab)
+        _sync_window_selection(state)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
 class RURI_OT_filter_add_rule(bpy.types.Operator):
     """Add the rule currently assembled in the builder row (Field/Relation/
     Value/Action) -- the Process Monitor dialog's "Add" button."""
@@ -495,14 +632,30 @@ def _selected_row(state):
     return None
 
 
-def _is_clip_only_row(row):
-    """A browser row that hosts AnimationClips and no importable GameObject
-    hierarchy -- selecting it and clicking Import means "import these clips",
-    not "import a prefab" (a clip CAB's closure contains no .prefab at all;
-    confirmed against the real game, its dependency count is literally 0).
-    Covers both a bundled clip CAB and a non-bundled per-asset AnimationClip
-    row (see prefab_importer/ReadFullMetadataRows -- "<file>::<pathID>")."""
-    return "AnimationClip" in row.type_names and "GameObject" not in row.type_names
+def _row_is_clip_only(row):
+    """A browser row (dict form) that hosts AnimationClips and no importable
+    GameObject hierarchy -- selecting it and clicking Import means "import
+    these clips", not "import a prefab" (a clip CAB's closure contains no
+    .prefab at all; confirmed against the real game, its dependency count is
+    literally 0). Covers both a bundled clip CAB and a non-bundled per-asset
+    AnimationClip row (see prefab_importer/ReadFullMetadataRows --
+    "<file>::<pathID>")."""
+    return "AnimationClip" in row["type_names"] and "GameObject" not in row["type_names"]
+
+
+def _selected_target_rows(state):
+    """The row batch an import/discover operates on: the multi-selection in
+    master ROWS order, falling back to the active (highlighted) row so the
+    original click-then-import muscle memory keeps working when nothing is
+    explicitly multi-selected."""
+    rows = cabmap_state.selected_row_dicts()
+    if rows:
+        return rows
+    item = _selected_row(state)
+    if item is None:
+        return []
+    row = cabmap_state.rows_by_cab().get(item.cab)
+    return [row] if row is not None else []
 
 
 def _import_single_asset(op, context, state, db, textures, guid, class_name, name):
@@ -665,9 +818,13 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
 
 
 class RURI_OT_import_selected(bpy.types.Operator):
+    """Batch import over the multi-selection: every selected clip-only row and
+    every selected hierarchy/asset row each share ONE bridge closure resolve
+    (a union closure loads shared dependencies once instead of per row), then
+    each row keeps its own per-type dispatch semantics."""
     bl_idname = "ruri.import_selected"
     bl_label = "Import Selected"
-    bl_description = "Resolve the selected row's dependency closure in memory and import it into the scene"
+    bl_description = "Resolve every selected row's dependency closure in memory and import them into the scene"
     bl_options = {"REGISTER", "UNDO"}
     reset_scene: BoolProperty(default=False)
 
@@ -677,97 +834,127 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
-        selected_row = _selected_row(state)
-        if selected_row is None:
-            self.report({"WARNING"}, "No row selected.")
+        target_rows = _selected_target_rows(state)
+        if not target_rows:
+            self.report({"WARNING"}, "No rows selected.")
             return {"CANCELLED"}
 
-        # A clip-only row is an ANIMATION import, not a prefab import: its closure
-        # contains no .prefab at all (the old flow's "No importable (.prefab) asset
-        # found" dead end). Resolve it onto the user's selected skeleton instead --
-        # co-seeding the rig-FBX CAB (found through the cabmap's own dependency
-        # graph, nearest Animator dependent's forward closure) so AssetRipper
-        # restores the clips' hashed curve paths to real strings during export.
-        if _is_clip_only_row(selected_row):
-            if self.reset_scene:
+        clip_rows = [row for row in target_rows if _row_is_clip_only(row)]
+        other_rows = [row for row in target_rows if not _row_is_clip_only(row)]
+
+        if self.reset_scene:
+            if not other_rows:
                 self.report({"ERROR"}, "An animation needs an existing skeleton -- use "
                                        "Import (Append) so the armature survives.")
                 return {"CANCELLED"}
-            seeds = [selected_row.cab]
-            try:
-                seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(selected_row.cab))
-                documents, textures, roots, seed_roots, clips_by_cab, _scene_roots = \
-                    cabmap_state.BRIDGE.import_cabs(seeds)
-            except Exception as exc:
-                _report_exception(self, "Import (bridge) failed", exc)
-                return {"CANCELLED"}
-            clip_guids = clips_by_cab.get(selected_row.cab.lower(), [])
-            if not clip_guids:
-                self.report({"ERROR"}, "The resolved closure exported no AnimationClip for "
-                                       "this row -- see console.")
-                return {"CANCELLED"}
-            db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
-            return _import_clips_standalone(self, context, state, selected_row.cab,
-                                            clip_guids, db)
-
-        cabs = [selected_row.cab]
-        if self.reset_scene:
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
 
+        imported = 0
+        if other_rows:
+            # Hierarchy/asset rows first: a co-selected character import may
+            # create the very armature the clip rows then attach onto.
+            _ok, imported = self._import_hierarchy_rows(
+                context, state, other_rows, populate_browser=(len(target_rows) == 1))
+
+        clips_ok = True
+        if clip_rows:
+            clips_ok = self._import_clip_rows(context, state, clip_rows)
+
+        if other_rows:
+            self.report({"INFO"}, f"Imported {imported} asset root(s) from "
+                                  f"{len(other_rows)} selected row(s).")
+        # Partial success still finishes (each failure already reported its
+        # own ERROR/WARNING); only a batch that produced nothing cancels.
+        if imported == 0 and not (clip_rows and clips_ok):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+    def _import_hierarchy_rows(self, context, state, rows, populate_browser):
+        """One shared closure resolve for every non-clip row, then per-row
+        dispatch. Returns (all_ok, imported_count)."""
+        cabs = [row["cab"] for row in rows]
         try:
             documents, textures, roots, seed_roots, _clips_by_cab, scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(cabs)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
-            return {"CANCELLED"}
+            return False, 0
 
         db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
         options = state.as_options()
+        ok = True
         imported = 0
-        # A single selected row's dependency closure routinely resolves to MORE than one root
-        # .prefab (e.g. an actor prefab pulling in a separate portrait/"uimodel" variant as a
-        # second top-level asset) -- and since discover_clip_refs_from_db's fallback scans the
-        # WHOLE shared closure db, every co-resolved root can end up reporting the SAME clip set,
-        # not a distinguishing one. Attribute the animation browser to whichever imported root IS
-        # the selected row's own asset, per seed_roots -- resolved bridge-side directly through
-        # the cabmap's own CAB/addressable-path identity (see RipperBridge.import_cabs), not by
-        # matching display names against GameObject names (two identifiers Unity gives no
-        # guarantee ever equal each other, even for a totally unambiguous single-root import).
-        primary_guid = seed_roots.get(selected_row.cab)
-        is_asset_row = "::" in selected_row.cab  # per-asset virtual row of a non-bundled file
 
-        # A per-asset row that resolved to a NON-hierarchy asset (Mesh/Material/Texture2D)
-        # imports exactly that one asset -- the whole point of asset-level rows. This MUST
-        # dispatch before the roots check below: a lone mesh/texture closure legitimately
-        # exports zero .prefab/.unity roots.
-        if is_asset_row and primary_guid is not None:
-            text = db.raw_text(primary_guid)
-            class_name = prefab_importer._peek_class_and_name(text)[0] if text else None
-            if class_name != "GameObject":
-                return _import_single_asset(self, context, state, db, textures,
-                                            primary_guid, class_name, selected_row.name)
-        if is_asset_row and primary_guid is None:
-            self.report({"ERROR"}, "This asset didn't export as its own file (engine built-in, or "
-                                   "embedded in a scene/host hierarchy) -- import its host file row "
-                                   "instead.")
-            return {"CANCELLED"}
+        # Per-asset rows that resolved to a NON-hierarchy asset (Mesh/Material/
+        # Texture2D) import exactly that one asset -- dispatched before any
+        # roots logic, since a lone mesh/texture closure legitimately exports
+        # zero .prefab/.unity roots.
+        hierarchy_targets = []  # (row, primary_guid or None)
+        for row in rows:
+            cab = row["cab"]
+            primary_guid = seed_roots.get(cab)
+            if "::" in cab:  # per-asset virtual row of a non-bundled file
+                if primary_guid is None:
+                    self.report({"ERROR"}, f"'{row['name']}' didn't export as its own file (engine "
+                                           f"built-in, or embedded in a scene/host hierarchy) -- "
+                                           f"import its host file row instead.")
+                    ok = False
+                    continue
+                text = db.raw_text(primary_guid)
+                class_name = prefab_importer._peek_class_and_name(text)[0] if text else None
+                if class_name != "GameObject":
+                    if _import_single_asset(self, context, state, db, textures,
+                                            primary_guid, class_name, row["name"]) == {"FINISHED"}:
+                        imported += 1
+                    else:
+                        ok = False
+                    continue
+            hierarchy_targets.append((row, primary_guid))
 
-        if not roots:
+        if not hierarchy_targets:
+            if populate_browser:
+                _populate_animation_browser(state, None)
+            return ok, imported
+
+        # Root selection, generalizing the single-row semantics row by row:
+        # a scene row and a per-asset GameObject row import exactly their OWN
+        # root (a level's closure drags in every shared .prefab the whole
+        # dependency graph exports -- the scene already instantiates what it
+        # uses); a plain bundled row imports every root its closure exports
+        # (an actor prefab routinely pulls a portrait "uimodel" variant as a
+        # second top-level asset). If any plain bundled row is in the batch,
+        # the union closure's full root set imports (deduped) -- the same
+        # outcome as importing those rows one at a time.
+        restricted_roots = []
+        unrestricted = False
+        for row, primary_guid in hierarchy_targets:
+            if primary_guid is not None and (primary_guid in scene_roots or "::" in row["cab"]):
+                restricted_roots.append(primary_guid)
+            else:
+                unrestricted = True
+        import_roots = list(roots) if unrestricted else restricted_roots
+        if unrestricted and any(guid in scene_roots for guid in restricted_roots):
+            self.report({"WARNING"}, "Mixing a scene row with bundled prefab rows imports the "
+                                     "bundled rows' full root set -- import scenes on their own "
+                                     "for a minimal result.")
+        if not import_roots:
             self.report({"WARNING"}, "No importable (.prefab/.unity) asset found in the resolved closure.")
-            return {"CANCELLED"}
+            if populate_browser:
+                _populate_animation_browser(state, None)
+            return False, imported
 
-        # A non-bundled level file resolves to ITS OWN scene root, and a per-asset GameObject row
-        # to its own prefab: import exactly that root. Without this, selecting level0 would also
-        # drag in every shared .prefab the whole dependency closure exports (a plain build's
-        # sharedassets host dozens of unrelated GameObject hierarchies) -- the scene already
-        # instantiates everything it actually uses.
-        import_roots = roots
-        if primary_guid is not None and (primary_guid in scene_roots or is_asset_row):
-            import_roots = [primary_guid]
-
+        # The animation browser only applies to a SINGLE selected character --
+        # attribute it through seed_roots (the cabmap's own CAB identity, never
+        # a display-name match; see RipperBridge.import_cabs).
+        primary_of_single = (hierarchy_targets[0][1]
+                             if populate_browser and len(hierarchy_targets) == 1 else None)
         primary_report = None
+        seen_roots = set()
         for root_guid in import_roots:
+            if root_guid in seen_roots:
+                continue
+            seen_roots.add(root_guid)
             prefab_file = db.load_guid(root_guid)
             if prefab_file is None:
                 continue
@@ -775,15 +962,57 @@ class RURI_OT_import_selected(bpy.types.Operator):
             imported += 1
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
-            if root_guid == primary_guid:
+            if root_guid == primary_of_single:
                 primary_report = report
 
-        if primary_report is None and imported > 0:
+        if populate_browser and imported and primary_report is None:
             self.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
                                      "animation browser not populated.")
-        _populate_animation_browser(state, primary_report)
-        self.report({"INFO"}, f"Imported {imported} asset(s) from {len(cabs)} selected row(s).")
-        return {"FINISHED"}
+        _populate_animation_browser(state, primary_report if populate_browser else None)
+        return ok, imported
+
+    def _import_clip_rows(self, context, state, clip_rows):
+        """One shared closure resolve for every selected clip-only row (each
+        co-seeding its associated rig-FBX CAB so AssetRipper restores hashed
+        curve paths and a real Avatar is in scope), then a single standalone
+        build of the union clip set onto the target armature. Returns
+        success."""
+        seeds = []
+        try:
+            for row in clip_rows:
+                if row["cab"] not in seeds:
+                    seeds.append(row["cab"])
+            for row in clip_rows:
+                for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
+                    if avatar_cab not in seeds:
+                        seeds.append(avatar_cab)
+            documents, textures, _roots, _seed_roots, clips_by_cab, _scene_roots = \
+                cabmap_state.BRIDGE.import_cabs(seeds)
+        except Exception as exc:
+            _report_exception(self, "Import (bridge) failed", exc)
+            return False
+
+        clip_guids = []
+        missing = []
+        for row in clip_rows:
+            row_guids = clips_by_cab.get(row["cab"].lower(), [])
+            if not row_guids:
+                missing.append(row["name"])
+            for guid in row_guids:
+                if guid not in clip_guids:
+                    clip_guids.append(guid)
+        if missing:
+            self.report({"WARNING"}, f"{len(missing)} selected row(s) exported no AnimationClip: "
+                                     f"{', '.join(missing[:3])}{'...' if len(missing) > 3 else ''}")
+        if not clip_guids:
+            self.report({"ERROR"}, "The resolved closure exported no AnimationClip for the "
+                                   "selected row(s) -- see console.")
+            return False
+
+        db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+        result = _import_clips_standalone(self, context, state, clip_rows[0]["cab"],
+                                          clip_guids, db)
+        return result == {"FINISHED"}
 
 
 def _populate_animation_browser(state, report):
@@ -816,16 +1045,29 @@ class RURI_UL_hooks(bpy.types.UIList):
 
 
 class RURI_UL_cabmap(bpy.types.UIList):
+    """Every column of every row is the SAME click operator (full-row click
+    target) so selection works like a file browser: plain/Ctrl/Shift clicks
+    all land in RURI_OT_cabmap_click.invoke with their modifiers intact.
+    NONE_OR_STATUS emboss keeps unselected rows flat like labels while
+    depress=True renders selected rows as a solid highlight bar."""
     bl_idname = "RURI_UL_cabmap"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        split = layout.split(factor=0.34)
-        split.label(text=item.name or item.cab)
-        rest = split.split(factor=0.32)
-        rest.label(text=item.type_names)
-        tail = rest.split(factor=0.15)
-        tail.label(text=str(item.deps))
-        tail.label(text=item.source)
+        selected = item.selected
+        row = layout.row(align=True)
+        row.emboss = "NONE_OR_STATUS"
+
+        def cell(parent, text):
+            op = parent.operator(RURI_OT_cabmap_click.bl_idname, text=text, depress=selected)
+            op.index = index
+
+        split = row.split(factor=0.34, align=True)
+        cell(split, item.name or item.cab)
+        rest = split.split(factor=0.32, align=True)
+        cell(rest, item.type_names)
+        tail = rest.split(factor=0.15, align=True)
+        cell(tail, str(item.deps))
+        cell(tail, item.source)
 
 
 class RURI_UL_animation_clips(bpy.types.UIList):
@@ -976,6 +1218,21 @@ class RURI_PT_cabmap(bpy.types.Panel):
 
             gated.template_list(RURI_UL_cabmap.bl_idname, "", state, "window",
                                 state, "active_index", rows=12)
+
+            selected_count = len(cabmap_state.SELECTED_CABS)
+            select_bar = gated.row(align=True)
+            op = select_bar.operator(RURI_OT_cabmap_select_all.bl_idname, text="All")
+            op.mode = "ALL"
+            op = select_bar.operator(RURI_OT_cabmap_select_all.bl_idname, text="None")
+            op.mode = "NONE"
+            op = select_bar.operator(RURI_OT_cabmap_select_all.bl_idname, text="Invert")
+            op.mode = "INVERT"
+            select_bar.separator()
+            # Selection count when there is one; the click cheat-sheet otherwise
+            # (the full semantics live in each row's tooltip).
+            select_bar.label(text=(f"{selected_count} selected" if selected_count
+                                   else "Ctrl / Shift · Ctrl+A"))
+
             row = gated.row(align=True)
             row.label(text=state.status)
             row.menu(RURI_MT_quick_filter.bl_idname, text="", icon="COLLAPSEMENU")
@@ -986,10 +1243,11 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
 
+            batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)
-            op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Append)")
+            op = actions.operator(RURI_OT_import_selected.bl_idname, text=f"Import{batch} (Append)")
             op.reset_scene = False
-            op = actions.operator(RURI_OT_import_selected.bl_idname, text="Import (Reset Scene)")
+            op = actions.operator(RURI_OT_import_selected.bl_idname, text=f"Import{batch} (Reset Scene)")
             op.reset_scene = True
         else:
             scene_panel.draw_scene_tab(gated, context)
@@ -1006,20 +1264,25 @@ class RURI_OT_discover_animations(bpy.types.Operator):
     exported/built at all, including the character itself."""
     bl_idname = "ruri.discover_animations"
     bl_label = "Discover Animations"
-    bl_description = "List this row's animation clips from the cabmap's own dependency graph -- cheap, nothing exported/built yet"
+    bl_description = "List the selected row(s)' animation clips from the cabmap's own dependency graph -- cheap, nothing exported/built yet"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
         state = context.scene.ruri_cabmap
         return (state.loaded and cabmap_state.BRIDGE is not None
-                and 0 <= state.active_index < len(state.window))
+                and (cabmap_state.SELECTED_CABS
+                     or 0 <= state.active_index < len(state.window)))
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
-        selected_row = _selected_row(state)
+        target_rows = _selected_target_rows(state)
+        if not target_rows:
+            self.report({"WARNING"}, "No rows selected.")
+            return {"CANCELLED"}
+        seed_cabs = [row["cab"] for row in target_rows]
         try:
-            closure_cabs = cabmap_state.BRIDGE.resolve_closure_cab_names([selected_row.cab])
+            closure_cabs = cabmap_state.BRIDGE.resolve_closure_cab_names(seed_cabs)
         except Exception as exc:
             _report_exception(self, "Discover animations failed", exc)
             return {"CANCELLED"}
@@ -1030,7 +1293,8 @@ class RURI_OT_discover_animations(bpy.types.Operator):
         clip_rows.sort(key=lambda r: r["name"].lower())
 
         state.available_clips.clear()
-        state.animation_character_name = selected_row.name
+        state.animation_character_name = (target_rows[0]["name"] if len(target_rows) == 1
+                                          else f"{len(target_rows)} selected rows")
         for row in clip_rows:
             item = state.available_clips.add()
             # A CAB name for now, not a real Unity guid -- translated to real
@@ -1041,7 +1305,7 @@ class RURI_OT_discover_animations(bpy.types.Operator):
             item.guid = row["cab"]
             item.name = row["name"]
             item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
-        cabmap_state.set_animation_discovery_state(selected_row.cab, state.as_options())
+        cabmap_state.set_animation_discovery_state(seed_cabs, state.as_options())
 
         if clip_rows:
             self.report({"INFO"}, f"Found {len(clip_rows)} clip(s). Check the ones you want, then Import Checked Animations.")
@@ -1083,19 +1347,22 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             # translates them to real clip guids through the cabmap's own
             # identity -- a clip CAB's fbx display name and its clips'
             # m_Names genuinely differ, so there is nothing to join by name.
-            seed_cab = build_state["seed_cab"]
-            seeds = [seed_cab]
-            seed_row = cabmap_state.rows_by_cab().get(seed_cab)
-            seed_is_clip_only = (seed_row is not None
-                                 and "AnimationClip" in seed_row["type_names"]
-                                 and "GameObject" not in seed_row["type_names"])
+            seed_cabs = list(build_state["seed_cabs"] or [])
+            seeds = list(seed_cabs)
+            rows_by_cab = cabmap_state.rows_by_cab()
             try:
-                if seed_is_clip_only:
-                    # A bare clip CAB's closure carries no rig; co-seed the
-                    # associated rig-FBX CAB(s) so AssetRipper restores the
-                    # clips' hashed curve paths to real strings and the real
-                    # Avatar (not a stub) is in scope for humanoid retargeting.
-                    seeds.extend(cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab))
+                for seed_cab in seed_cabs:
+                    seed_row = rows_by_cab.get(seed_cab)
+                    if (seed_row is not None
+                            and "AnimationClip" in seed_row["type_names"]
+                            and "GameObject" not in seed_row["type_names"]):
+                        # A bare clip CAB's closure carries no rig; co-seed the
+                        # associated rig-FBX CAB(s) so AssetRipper restores the
+                        # clips' hashed curve paths to real strings and the real
+                        # Avatar (not a stub) is in scope for humanoid retargeting.
+                        for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab):
+                            if avatar_cab not in seeds:
+                                seeds.append(avatar_cab)
                 documents, textures, roots, seed_roots, clips_by_cab, _scene_roots = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
@@ -1110,18 +1377,22 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                         selected_guids.append(guid)
 
             if not roots:
-                # Animation-only closure (the discovered row was itself a clip
-                # CAB): attach onto the user's selected skeleton instead of
+                # Animation-only closure (the discovered row(s) were clip
+                # CABs): attach onto the user's selected skeleton instead of
                 # requiring a character build.
                 if not selected_guids:
                     self.report({"ERROR"}, "The checked row(s) exported no AnimationClip -- see console.")
                     return {"CANCELLED"}
-                return _import_clips_standalone(self, context, state, seed_cab, selected_guids, db)
+                return _import_clips_standalone(self, context, state,
+                                                seed_cabs[0] if seed_cabs else None,
+                                                selected_guids, db)
 
             # Character closure: build the character once. Its own asset is
             # resolved bridge-side through the cabmap's CAB identity
-            # (seed_roots) -- not a name match.
-            primary_guid = seed_roots.get(seed_cab)
+            # (seed_roots) -- not a name match. With a multi-row discovery the
+            # FIRST seed that resolved to its own root asset is the character.
+            primary_guid = next((seed_roots.get(cab) for cab in seed_cabs
+                                 if seed_roots.get(cab)), None)
             prefab_file = db.load_guid(primary_guid) if primary_guid else None
             if prefab_file is None:
                 self.report({"ERROR"}, "Could not resolve the discovered character's own asset "
@@ -1271,6 +1542,8 @@ _CLASSES = (
     RURI_UL_hooks,
     RURI_UL_cabmap,
     RURI_UL_animation_clips,
+    RURI_OT_cabmap_click,
+    RURI_OT_cabmap_select_all,
     RURI_OT_filter_add_rule,
     RURI_OT_filter_remove_rule,
     RURI_OT_filter_clear_rules,
@@ -1289,14 +1562,45 @@ _CLASSES = (
     RURI_PT_animation_browser,
 )
 
+_addon_keymaps = []
+
+
+def _register_keymaps():
+    """Ctrl+A / Alt+A / Ctrl+I select-all/none/invert while hovering the
+    RuriRipper sidebar. Registered in the "User Interface" keymap (the one
+    active over any UI region); RURI_OT_cabmap_select_all.poll narrows it to
+    the 3D View sidebar with the RuriRipper category actually in front, so
+    the shortcuts never fire anywhere else."""
+    window_manager = bpy.context.window_manager
+    keyconfig = getattr(window_manager, "keyconfigs", None)
+    addon_keyconfig = keyconfig.addon if keyconfig else None
+    if addon_keyconfig is None:  # headless/background -- nothing to bind
+        return
+    keymap = addon_keyconfig.keymaps.new(name="User Interface", space_type="EMPTY")
+    for key, use_ctrl, use_alt, mode in (("A", True, False, "ALL"),
+                                         ("A", False, True, "NONE"),
+                                         ("I", True, False, "INVERT")):
+        item = keymap.keymap_items.new(RURI_OT_cabmap_select_all.bl_idname, key, "PRESS",
+                                       ctrl=use_ctrl, alt=use_alt)
+        item.properties.mode = mode
+        _addon_keymaps.append((keymap, item))
+
+
+def _unregister_keymaps():
+    for keymap, item in _addon_keymaps:
+        keymap.keymap_items.remove(item)
+    _addon_keymaps.clear()
+
 
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_cabmap = PointerProperty(type=RURI_PG_cabmap)
+    _register_keymaps()
 
 
 def unregister():
+    _unregister_keymaps()
     del bpy.types.Scene.ruri_cabmap
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

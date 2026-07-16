@@ -28,6 +28,29 @@ ROWS = []       # list[dict] -- the full cabmap, set by load_rows()
 VISIBLE = []    # list[int] -- indices into ROWS after the current filter+sort
 BRIDGE = None   # pythonnet_bridge.RipperBridge | None -- the active session
 
+# Multi-selection lives HERE (plain Python), not on the windowed
+# CollectionProperty: the window is torn down and rebuilt on every filter/
+# sort/search change, so any per-item bpy state would be wiped by the very
+# next keystroke. Keyed by cab (the row identity), which also means a
+# selection survives re-sorting and stays attached to the same assets when
+# the visible window scrolls/narrows.
+SELECTED_CABS = set()   # cab keys of every selected row
+SELECT_ANCHOR = None    # ROWS index of the last plainly-clicked row (Shift range anchor)
+
+
+def clear_selection():
+    global SELECT_ANCHOR
+    SELECTED_CABS.clear()
+    SELECT_ANCHOR = None
+
+
+def selected_row_dicts():
+    """Selected rows in master ROWS order -- the deterministic order batch
+    imports run in (not click order, which nobody can reproduce)."""
+    if not SELECTED_CABS:
+        return []
+    return [row for row in ROWS if row["cab"] in SELECTED_CABS]
+
 _pending_query = None
 _last_edit_time = 0.0
 _timer_registered = False
@@ -136,6 +159,7 @@ def reset():
     BRIDGE = None
     _sort_dir = 0
     _ROWS_BY_CAB = None
+    clear_selection()
     clear_animation_build_state()
 
 
@@ -170,7 +194,7 @@ def ensure_bridge(hook_ids):
 #     replaces this outright.
 
 ANIMATION_BUILD_STATE = None
-# dict(db=..., arm_name=..., maps=..., path_to_meshobjects=..., seed_cab=..., options=...) | None
+# dict(db=..., arm_name=..., maps=..., path_to_meshobjects=..., seed_cabs=[...], options=...) | None
 
 
 def set_animation_build_state(db, arm_name, maps, path_to_meshobjects):
@@ -182,24 +206,26 @@ def set_animation_build_state(db, arm_name, maps, path_to_meshobjects):
         "arm_name": arm_name,
         "maps": maps,
         "path_to_meshobjects": path_to_meshobjects,
-        "seed_cab": None,
+        "seed_cabs": [],
         "options": None,
     }
 
 
-def set_animation_discovery_state(seed_cab, options):
+def set_animation_discovery_state(seed_cabs, options):
     """Only a cheap CAB-level clip discovery has happened -- no import_cabs
     call yet, no db, nothing built into the scene. arm_name/maps/
     path_to_meshobjects/db stay unset until mark_animation_build_done runs
-    the lazy full import (which resolves seed_cab's closure for the first
-    time)."""
+    the lazy full import (which resolves the seed closure for the first
+    time). seed_cabs is a LIST -- discovery runs over the whole multi-
+    selection, and the lazy build must co-seed every one of them or clips
+    discovered from the extra rows would never resolve in clips_by_cab."""
     global ANIMATION_BUILD_STATE
     ANIMATION_BUILD_STATE = {
         "db": None,
         "arm_name": None,
         "maps": None,
         "path_to_meshobjects": None,
-        "seed_cab": seed_cab,
+        "seed_cabs": list(seed_cabs),
         "options": options,
     }
 
@@ -229,6 +255,7 @@ def load_rows():
     ROWS = BRIDGE.enumerate_rows()
     VISIBLE = list(range(len(ROWS)))
     _ROWS_BY_CAB = None  # rebuilt lazily on first rows_by_cab() call
+    clear_selection()    # cab keys from a previous map mean nothing in this one
 
 
 _ROWS_BY_CAB = None  # dict[str, dict] -- lazily built cab -> row index, see rows_by_cab()
