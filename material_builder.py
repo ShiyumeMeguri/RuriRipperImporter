@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 
 import bpy
-import numpy as np
 
 # Candidate property names per logical slot, in priority order.
 BASE_COLOR_NAMES = [
@@ -83,25 +82,31 @@ def _flatten(entries):
 
 
 def _image_from_png_bytes(png, name):
-    """Decode raw PNG bytes (already produced by the C# bridge's texture
+    """Load raw PNG bytes (already produced by the C# bridge's texture
     exporter -- AssetRipper's own TextureConverter, so no compressed/mipmap
-    formats ever reach here) straight into a Blender image via a bulk pixel
-    push, no temp file. Blender bundles Pillow, so this stays fully in-memory."""
-    from PIL import Image
-    import io
+    formats ever reach here) into a Blender image through a temp file and
+    Blender's OWN native image loader -- the same path disk-mode texture
+    loading already used (bpy.data.images.load), NOT Pillow. Measured on the
+    real Pelica texture set (66 textures): the previous PIL-decode + numpy +
+    foreach_set push cost 5.3s wall (dominated by Pillow's own import, itself
+    slowed by a known CPython enum-module regression); the native loader does
+    the same 66 textures in 0.16s -- pixel-identical (0.0 max delta), since
+    it's the exact decoder Blender uses for every other image in the file."""
+    import tempfile
 
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     try:
-        im = Image.open(io.BytesIO(png)).convert("RGBA")
-    except Exception:
-        return None
-    width, height = im.size
-    if width <= 0 or height <= 0:
-        return None
-    arr = np.asarray(im, dtype=np.float32) / 255.0
-    arr = arr[::-1, :, :]  # PNG rows are top-first; Blender images are bottom-first.
-    image = bpy.data.images.new(name, width=width, height=height, alpha=True)
-    image.pixels.foreach_set(arr.reshape(-1))
-    image.pack()
+        tmp.write(png)
+        tmp.close()
+        try:
+            image = bpy.data.images.load(tmp.name)
+        except RuntimeError:
+            return None
+        image.name = name
+        image.pack()
+        image.filepath = ""  # drop the temp path now that pixels are packed into the .blend
+    finally:
+        os.unlink(tmp.name)
     _disable_alpha_interpretation(image)
     return image
 
