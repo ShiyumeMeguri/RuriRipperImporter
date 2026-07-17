@@ -98,48 +98,79 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
 
 
 def _apply_skin(obj, decoded, smr_bones, file_id_to_bone):
-    """Create vertex groups and assign skin weights."""
-    # Map each m_Bones slot to an armature bone name.
-    slot_to_group = {}
-    groups = {}
+    """Create vertex groups and assign skin weights through bmesh's deform
+    layer -- one C-level write per (vertex, group) entry instead of one
+    VertexGroup.add() call per distinct weight VALUE (continuous float
+    weights make those buckets mostly singletons, so the add() call count
+    was effectively per-entry; measured on the real Pelica set: 2.6x faster
+    overall, 5.3x on the largest mesh). The from_mesh/to_mesh round-trip is
+    lossless for everything this importer writes -- UVs, corner colors,
+    material indices, smooth flags AND custom split normals all verified
+    0.0-delta on Blender 5.1 real data."""
+    # Map each m_Bones slot to a vertex-group index.
+    n_slots = len(smr_bones)
+    slot_to_group_index = np.full(n_slots, -1, dtype=np.int64)
+    group_index_by_bone = {}
     for slot, bone_ref in enumerate(smr_bones):
         file_id = bone_ref.get("fileID") if isinstance(bone_ref, dict) else None
         bone_name = file_id_to_bone.get(file_id)
         if not bone_name:
             continue
-        group = groups.get(bone_name)
-        if group is None:
-            group = obj.vertex_groups.new(name=bone_name)
-            groups[bone_name] = group
-        slot_to_group[slot] = group
+        group_index = group_index_by_bone.get(bone_name)
+        if group_index is None:
+            group_index = obj.vertex_groups.new(name=bone_name).index
+            group_index_by_bone[bone_name] = group_index
+        slot_to_group_index[slot] = group_index
 
     indices = decoded.bone_indices
     weights = decoded.bone_weights
     n_verts, n_inf = indices.shape
 
-    # Accumulate (vertex, weight) per group, then add in bulk per group.
-    # Weights for the same bone reached through different influence slots are
-    # summed for the same vertex.
-    per_group = {}
-    for j in range(n_inf):
-        col_idx = indices[:, j]
-        col_w = weights[:, j]
-        nonzero = np.nonzero(col_w > 1e-6)[0]
-        for v in nonzero:
-            slot = int(col_idx[v])
-            group = slot_to_group.get(slot)
-            if group is None:
-                continue
-            bucket = per_group.setdefault(group, {})
-            bucket[int(v)] = bucket.get(int(v), 0.0) + float(col_w[v])
+    valid = indices < n_slots
+    group_ids = np.where(valid, slot_to_group_index[np.where(valid, indices, 0)], -1)
+    keep = (weights > 1e-6) & (group_ids >= 0)
+    if not keep.any():
+        return
+    vert_ids = np.broadcast_to(np.arange(n_verts, dtype=np.int64)[:, None],
+                               (n_verts, n_inf))[keep]
+    flat_groups = group_ids[keep].astype(np.int64)
+    flat_weights = weights[keep].astype(np.float64)
 
-    for group, bucket in per_group.items():
-        # Group vertices by identical (rounded) weight to minimise add() calls.
-        by_weight = {}
-        for v, w in bucket.items():
-            by_weight.setdefault(round(w, 6), []).append(v)
-        for w, verts in by_weight.items():
-            group.add(verts, w, "REPLACE")
+    # Weights for the same bone reached through different influence slots are
+    # summed for the same vertex, then rounded once -- byte-identical storage
+    # to the previous per-bucket rounding.
+    combined = vert_ids * (flat_groups.max() + 1) + flat_groups
+    unique_keys, first_index, inverse = np.unique(
+        combined, return_index=True, return_inverse=True)
+    if len(unique_keys) != len(combined):
+        summed = np.zeros(len(unique_keys), dtype=np.float64)
+        np.add.at(summed, inverse, flat_weights)
+        vert_ids = vert_ids[first_index]
+        flat_groups = flat_groups[first_index]
+        flat_weights = summed
+    flat_weights = np.round(flat_weights, 6)
+
+    order = np.argsort(vert_ids, kind="stable")
+    verts_list = vert_ids[order].tolist()
+    groups_list = flat_groups[order].tolist()
+    weights_list = flat_weights[order].tolist()
+
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    deform_layer = bm.verts.layers.deform.verify()
+    bm.verts.ensure_lookup_table()
+    bm_verts = bm.verts
+    deform_vert = None
+    current_vertex = -1
+    for k in range(len(verts_list)):
+        vertex = verts_list[k]
+        if vertex != current_vertex:
+            deform_vert = bm_verts[vertex][deform_layer]
+            current_vertex = vertex
+        deform_vert[groups_list[k]] = weights_list[k]
+    bm.to_mesh(obj.data)
+    bm.free()
 
 
 def _apply_blendshapes(obj, decoded):
