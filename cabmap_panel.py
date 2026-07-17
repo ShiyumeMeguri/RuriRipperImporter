@@ -260,13 +260,13 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
                     "be 100+MB, so nothing is loaded automatically")
     endfield_ik: BoolProperty(
         name="EndField IK (constraints)", default=False,
-        description="On rigs exposing EndField's IK_* target bones, add live "
-                    "IK/Copy-Rotation constraints (plus four hidden RuriIK.* "
-                    "effector helper bones) whose per-frame influence snaps "
-                    "authored contact pins (feet on ground, planted hands). "
-                    "The FK curves themselves are never modified. Off (the "
-                    "default) imports fully raw: no extra bones, no "
-                    "constraints, just the clip's own curves")
+        description="On rigs exposing EndField's IK_* target bones, set up a "
+                    "posing-aid rig: live IK/Copy-Rotation constraints (plus "
+                    "four hidden RuriIK.* effector helper bones) targeting "
+                    "the clip's animated IK bones, ALL at influence 0 -- "
+                    "playback stays bit-identical raw FK until you raise a "
+                    "constraint's influence yourself. Off (the default) adds "
+                    "nothing at all")
 
     animation_character_name: StringProperty(default="")
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)

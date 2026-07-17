@@ -400,23 +400,30 @@ def _parse_tos(data):
 # --- muscle math ------------------------------------------------------------
 
 def _muscle_angle(muscle, sgn, limit_min, limit_max):
-    """Map a normalized muscle [-1,1] to a radian angle via the per-axis limit
-    and sign: -1 -> min, 0 -> 0, +1 -> max.
+    """Map a normalized muscle to a radian angle via the per-axis limit and
+    sign: -1 -> min, 0 -> 0, +1 -> max, values beyond +-1 extrapolating
+    linearly past the limit.
 
-    Values are CLAMPED to [-1, 1] first, matching Unity's own runtime muscle
-    application (angles never exceed the avatar's configured limits). Baked
-    clips DO store values beyond that range -- measured against the real game:
-    a battle clip carries "Right Hand Down-Up" up to +2.996, which unclamped
-    reconstructs a 120-175deg wrist fold (the reported broken-wrist pose)
-    while the raw-data audit cleared the ACL decode itself (all 272 rotation
-    curves unit-norm, no track misalignment). Those out-of-range values are
-    the encoder's best-effort FK approximation of an IK-driven pose; the
-    runtime clamps them exactly like this and lets IK take over the end
-    effector."""
-    if muscle > 1.0:
-        muscle = 1.0
-    elif muscle < -1.0:
-        muscle = -1.0
+    Deliberately NOT clamped to [-1, 1]. Baked EndField clips store
+    beyond-range values as a matter of course (e.g. "Right Shoulder Down-Up"
+    living at -1.73..-1.33 for a whole battle clip), and those values must
+    play back verbatim, measured two ways:
+
+      * a [-1,1] clamp VISIBLY BREAKS smooth animation: the encoder's inverse
+        muscle solve distributes an arm pose across the redundant
+        shoulder+arm DoFs with complementary per-frame wobble (measured on
+        battle_attack_04 f208-226: "Right Shoulder Down-Up" and "Right Arm
+        Down-Up" jitter in lockstep with OPPOSITE signs) that cancels exactly
+        on forward composition -- the game plays it smooth. Flattening the
+        beyond-range shoulder at -1 deletes its half of the cancellation and
+        the arm's half surfaces as a 2-4deg/frame sawtooth on the whole limb
+        (the reported ForeTwist jitter);
+      * an earlier "clamp like the Unity runtime" rationale was calibrated
+        against PRE-remap data whose arm-region curves were misassigned
+        entirely (the "+2.996 wrist" that motivated it was not wrist data);
+        this fork's clips are authored against ITS avatar limits, and the
+        avatar supplying limit_min/limit_max here is the fork's own asset --
+        muscle * limit reproduces the authored angle exactly."""
     scale = limit_max if muscle >= 0.0 else -limit_min
     return sgn * muscle * scale
 

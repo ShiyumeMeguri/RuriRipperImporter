@@ -298,13 +298,11 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
             clip, arm_obj, maps, path_to_meshobjects, options)
 
         # EndField's rig carries animated IK target bones (the game's runtime
-        # IK interface): authored contact pins -- feet on ground, hands planted
-        # on obstacles -- live there at millimeter precision while the muscle
-        # chain accumulates quantization error. Rigs exposing that convention
-        # get live Blender IK constraints whose per-frame influence is baked
-        # from the pin distance (the FK curves stay pure authored data) -- see
-        # Game/endfield_ik.py's module doc for the ground truth. Generic clips
-        # ship real FK and are left alone.
+        # IK interface); with the decode fully faithful they are a redundant
+        # encoding of the same pose the FK already plays. When asked for, rigs
+        # exposing that convention get a POSING-AID constraint setup targeting
+        # those bones -- all influences 0, playback stays bit-identical raw
+        # FK -- see Game/endfield_ik.py's module doc for the ground truth.
         retargeter = maps.get("retargeter")
         if (options.get("endfield_ik", False) and is_humanoid and retargeter is not None):
             try:
