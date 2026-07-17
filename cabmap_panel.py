@@ -258,6 +258,15 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
                     "panel below after import. Clips are NOT built until you "
                     "check them there and click Import -- a single clip can "
                     "be 100+MB, so nothing is loaded automatically")
+    endfield_ik: BoolProperty(
+        name="EndField IK (constraints)", default=False,
+        description="On rigs exposing EndField's IK_* target bones, add live "
+                    "IK/Copy-Rotation constraints (plus four hidden RuriIK.* "
+                    "effector helper bones) whose per-frame influence snaps "
+                    "authored contact pins (feet on ground, planted hands). "
+                    "The FK curves themselves are never modified. Off (the "
+                    "default) imports fully raw: no extra bones, no "
+                    "constraints, just the clip's own curves")
 
     animation_character_name: StringProperty(default="")
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)
@@ -270,6 +279,7 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
+            "endfield_ik": self.endfield_ik,
         }
 
 
@@ -1249,6 +1259,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_materials")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
+            opts.prop(state, "endfield_ik")
 
             batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)
@@ -1535,6 +1546,7 @@ class RURI_PT_animation_browser(bpy.types.Panel):
         summary = f"Selected: {len(selected)} clip(s)" if selected else "Nothing checked yet."
         layout.label(text=summary)
 
+        layout.prop(state, "endfield_ik")
         layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT")
 
 

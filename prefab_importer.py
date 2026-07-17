@@ -297,18 +297,20 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         action, slot, n_frames = animation_builder.build_action(
             clip, arm_obj, maps, path_to_meshobjects, options)
 
-        # EndField ships humanoid clips whose limb FK is an auto-generated
-        # approximation; the real hand/foot poses live in the clip's own
-        # animated IK target bones and the game recomputes the limbs at
-        # runtime. Rigs exposing that convention get the same correction here
-        # -- see endfield_ik.py's module doc for the ground truth. Generic
-        # clips ship real FK and are left alone.
+        # EndField's rig carries animated IK target bones (the game's runtime
+        # IK interface): authored contact pins -- feet on ground, hands planted
+        # on obstacles -- live there at millimeter precision while the muscle
+        # chain accumulates quantization error. Rigs exposing that convention
+        # get live Blender IK constraints whose per-frame influence is baked
+        # from the pin distance (the FK curves stay pure authored data) -- see
+        # Game/endfield_ik.py's module doc for the ground truth. Generic clips
+        # ship real FK and are left alone.
         retargeter = maps.get("retargeter")
-        if (options.get("endfield_ik", True) and is_humanoid and retargeter is not None):
+        if (options.get("endfield_ik", False) and is_humanoid and retargeter is not None):
             try:
-                from . import endfield_ik
+                from .Game import endfield_ik
             except ImportError:
-                import endfield_ik
+                from Game import endfield_ik
             if endfield_ik.detect_rig(arm_obj):
                 try:
                     endfield_ik.apply_to_action(arm_obj, action, retargeter.bone_targets(),
