@@ -287,6 +287,9 @@ class RipperBridge:
         self._bridge = _bridge_type
         self._bridge.Initialize(_string_array(hook_ids))
         self._map = None
+        # {clip guid -> (meta_json, payload_bytes)} from the LAST import_cabs
+        # call -- the zero-parse curve fast path (see ClipCurveBlob.cs).
+        self.clip_curves_by_guid = {}
 
     @property
     def has_map(self):
@@ -439,6 +442,19 @@ class RipperBridge:
         # Scene (.unity) roots -- a non-bundled build's level files export their whole
         # GameObject hierarchy as a scene, not a prefab; these guids are ALSO in roots.
         scene_roots = {str(g).lower() for g in result.SceneRoots}
+        # Per-clip curve blobs (JSON index + float32 payload, see ClipCurveBlob.cs):
+        # the same curves the YAML documents carry, handed over as raw numbers so
+        # clip building never re-parses them out of 80+MB of text. Exposed as an
+        # attribute (not another tuple slot) so every existing 6-tuple unpacker
+        # keeps working; replaced wholesale on each import_cabs call. bytes() on a
+        # .NET byte[] is a straight memcpy.
+        self.clip_curves_by_guid = {}
+        meta_by_guid = {str(kvp.Key).lower(): str(kvp.Value) for kvp in result.ClipCurveMeta}
+        for kvp in result.ClipCurveData:
+            guid = str(kvp.Key).lower()
+            meta = meta_by_guid.get(guid)
+            if meta:
+                self.clip_curves_by_guid[guid] = (meta, bytes(kvp.Value))
         return documents, textures, roots, seed_roots, clips_by_cab, scene_roots
 
     def find_associated_avatar_cabs(self, clip_cab_name):

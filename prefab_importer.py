@@ -9,11 +9,12 @@ import time
 import numpy as np
 
 try:
-    from . import (armature_builder, asset_db, coordinate, animation_builder,
+    from . import (armature_builder, asset_db, clip_curves, coordinate, animation_builder,
                    material_builder, mesh_builder, mesh_decoder)
 except ImportError:
     import armature_builder
     import asset_db
+    import clip_curves
     import coordinate
     import animation_builder
     import material_builder
@@ -103,7 +104,28 @@ def import_prefab(context, prefab_path, options=None):
     prefab = db.load_file(prefab_path)
     arm_name = os.path.splitext(os.path.basename(prefab_path))[0]
     clip_files = _gather_clip_files_disk(db, prefab, prefab_path, assets_dir)
-    return _import_prefab_core(context, db, prefab, arm_name, clip_files, options)
+    report = _import_prefab_core(context, db, prefab, arm_name, clip_files, options)
+    fbx_hint = _fbx_instance_hint(prefab)
+    if fbx_hint:
+        report.warnings.insert(0, fbx_hint)
+    return report
+
+
+def _fbx_instance_hint(prefab):
+    """An actionable diagnosis for the classic dead-end: a prefab that only
+    REFERENCES a binary .fbx (a thin PrefabInstance wrapper) carries no YAML
+    geometry at all, so the import comes out empty-looking with no explanation.
+    Detect the shape and say exactly what to do about it."""
+    has_instance = prefab.first("PrefabInstance") is not None
+    has_geometry = (prefab.first("SkinnedMeshRenderer") is not None
+                    or prefab.first("MeshFilter") is not None)
+    if has_instance and not has_geometry:
+        return ("This prefab only references a binary .fbx (a thin PrefabInstance "
+                "wrapper) -- it carries no YAML geometry to import. Run Unity's "
+                "'Ruri > Dump Model to YAML (for Blender)' (unity_editor/"
+                "RuriYamlDumper.cs) on the model and import the generated "
+                "<model>_yaml/<model>.prefab instead.")
+    return None
 
 
 def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
@@ -134,10 +156,29 @@ def _prefab_display_name(prefab):
     return "UnityModel"
 
 
+def _load_clip_fast(clip_path):
+    """Disk clip fast path: regex+numpy extraction straight off the raw text
+    (clip_curves.ClipCurves.from_yaml_text -- validated bitwise-identical to
+    the full parser on real 82MB clips at ~3x the speed, more against a cold
+    cache). Returns None when the text isn't a clip or has a structural
+    surprise -- the caller falls back to the full YAML parser."""
+    try:
+        with open(clip_path, "r", encoding="utf-8", errors="ignore") as handle:
+            text = handle.read()
+        return clip_curves.ClipCurves.from_yaml_text(text)
+    except (OSError, ValueError):
+        return None
+
+
 def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
-    """Disk-mode clip gathering: resolve _gather_clip_paths's paths into loaded UnityFiles."""
+    """Disk-mode clip gathering: resolve _gather_clip_paths's paths into
+    ClipCurves (fast path) or loaded UnityFiles (fallback)."""
     clip_files = []
     for clip_path in _gather_clip_paths(db, prefab, prefab_path, assets_dir):
+        clip = _load_clip_fast(clip_path)
+        if clip is not None:
+            clip_files.append(clip)
+            continue
         try:
             clip_files.append(db.load_file(clip_path))
         except OSError:
@@ -231,23 +272,30 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
     path_to_bone = maps.get("path_to_bone") or {}
     for guid in guids:
-        clip_file = db.load_guid(guid)
-        if clip_file is None:
-            continue
-        clip_doc = clip_file.first("AnimationClip")
-        if clip_doc is None:
-            continue
-        repaired, unmatched = repair_hashed_clip_paths(clip_doc.data, path_to_bone)
+        # Bridge fast path first: the exporter already handed this clip's
+        # curves across as raw float32 arrays (see clip_curves.ClipCurves.
+        # from_blob) -- no YAML parse at all. Falls back to the document.
+        clip = db.clip_curves(guid) if hasattr(db, "clip_curves") else None
+        if clip is None:
+            clip_file = db.load_guid(guid)
+            if clip_file is None:
+                continue
+            clip_doc = clip_file.first("AnimationClip")
+            if clip_doc is None:
+                continue
+            clip = clip_curves.ClipCurves.from_document(clip_doc.data)
+        clip_name = clip.name or guid
+        repaired, unmatched = repair_hashed_clip_paths(clip, path_to_bone)
         if unmatched:
-            warnings.append(f"{clip_doc.data.get('m_Name', guid)}: {unmatched} hashed curve "
+            warnings.append(f"{clip_name}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
-        is_humanoid = clip_is_humanoid(clip_doc.data)
+        is_humanoid = clip_is_humanoid(clip)
         if maps.get("retargeter") is None and is_humanoid:
-            warnings.append(f"{clip_doc.data.get('m_Name', guid)}: humanoid (muscle) clip but "
+            warnings.append(f"{clip_name}: humanoid (muscle) clip but "
                             f"no Avatar in scope -- body motion dropped, only generic curves "
                             f"imported")
         action, slot, n_frames = animation_builder.build_action(
-            clip_doc, arm_obj, maps, path_to_meshobjects, options)
+            clip, arm_obj, maps, path_to_meshobjects, options)
 
         # EndField ships humanoid clips whose limb FK is an auto-generated
         # approximation; the real hand/foot poses live in the clip's own
@@ -266,7 +314,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
                     endfield_ik.apply_to_action(arm_obj, action, retargeter.bone_targets(),
                                                 0, max(0, n_frames - 1))
                 except Exception as exc:
-                    warnings.append(f"{clip_doc.data.get('m_Name', guid)}: IK correction "
+                    warnings.append(f"{clip_name}: IK correction "
                                     f"failed ({type(exc).__name__}: {exc}) -- FK kept")
 
         built += 1
@@ -359,10 +407,18 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
             _stamp_avatar_on_armature(arm_obj, db, retargeter)
         actions = []
         for clip_file in clip_files:
-            clip_doc = clip_file.first("AnimationClip")
-            if clip_doc is None:
-                continue
-            if retargeter is None and clip_is_humanoid(clip_doc.data):
+            if isinstance(clip_file, clip_curves.ClipCurves):
+                clip = clip_file
+                humanoid_probe = clip
+                clip_name = clip.name
+            else:
+                clip_doc = clip_file.first("AnimationClip")
+                if clip_doc is None:
+                    continue
+                clip = clip_doc
+                humanoid_probe = clip_doc.data
+                clip_name = clip_doc.data.get("m_Name", "clip")
+            if retargeter is None and clip_is_humanoid(humanoid_probe):
                 # Without the Avatar's muscle referential a humanoid clip's body
                 # motion is mathematically unrecoverable -- the action comes out
                 # empty-looking. Say so loudly instead of importing silence: the
@@ -372,11 +428,11 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
                 # Dumper finds no Avatar to extract -- reimport the FBX with
                 # CreateFromThisModel, or dump the model that owns the Avatar).
                 report.warnings.append(
-                    f"{clip_doc.data.get('m_Name', 'clip')}: humanoid (muscle) clip but no "
+                    f"{clip_name}: humanoid (muscle) clip but no "
                     f"Avatar in the prefab/closure -- body motion dropped. Re-dump with the "
                     f"Animator+Avatar included.")
             action, slot, _frames = animation_builder.build_action(
-                clip_doc, arm_obj, maps, path_to_meshobjects, options)
+                clip, arm_obj, maps, path_to_meshobjects, options)
             actions.append((action, slot))
         report.actions = len(actions)
         if actions:
@@ -573,6 +629,9 @@ def clip_is_humanoid(clip_data):
         from . import humanoid_retarget
     except ImportError:
         import humanoid_retarget
+    if isinstance(clip_data, clip_curves.ClipCurves):
+        return any(humanoid_retarget.is_muscle(ch.attribute) or humanoid_retarget.is_root(ch.attribute)
+                   for ch in clip_data.floats)
     for entry in clip_data.get("m_FloatCurves") or []:
         attribute = entry.get("attribute") or ""
         if humanoid_retarget.is_muscle(attribute) or humanoid_retarget.is_root(attribute):
@@ -1050,6 +1109,19 @@ def repair_hashed_clip_paths(clip_data, path_to_bone):
     table = build_suffix_crc_table(path_to_bone)
     repaired = 0
     unmatched = 0
+    if isinstance(clip_data, clip_curves.ClipCurves):
+        for channels in clip_data.all_channel_lists():
+            for channel in channels:
+                path = channel.path or ""
+                if not path or path in path_to_bone:
+                    continue
+                real = table.get(_entry_crc(path))
+                if real is None:
+                    unmatched += 1
+                    continue
+                channel.path = real
+                repaired += 1
+        return repaired, unmatched
     for field in _CURVE_LIST_FIELDS:
         for entry in clip_data.get(field) or []:
             # "path:" with no value parses to an EXISTING key holding None (root-level
@@ -1077,6 +1149,16 @@ def clip_path_match_ratio(clip_data, path_to_bone):
     table = build_suffix_crc_table(path_to_bone)
     total = 0
     matched = 0
+    if isinstance(clip_data, clip_curves.ClipCurves):
+        for channels in clip_data.transform_channel_lists():
+            for channel in channels:
+                path = channel.path or ""
+                if not path:
+                    continue
+                total += 1
+                if path in path_to_bone or _entry_crc(path) in table:
+                    matched += 1
+        return (matched / total if total else 0.0), total
     for field in ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves", "m_EulerCurves"):
         for entry in clip_data.get(field) or []:
             path = entry.get("path") or ""  # "path:" null-valued for root-level curves
@@ -1460,16 +1542,19 @@ def _apply_clip_paths(context, clip_paths, options):
             maps["retargeter"] = retargeter
     first = None
     for clip_path in clip_paths:
-        try:
-            clip_file = asset_db.AssetDatabase(os.path.dirname(clip_path),
-                                               asset_db.find_assets_dir(clip_path)).load_file(clip_path)
-        except OSError:
-            continue
-        clip_doc = clip_file.first("AnimationClip")
-        if clip_doc is None:
-            continue
+        clip = _load_clip_fast(clip_path)
+        if clip is None:
+            try:
+                clip_file = asset_db.AssetDatabase(os.path.dirname(clip_path),
+                                                   asset_db.find_assets_dir(clip_path)).load_file(clip_path)
+            except OSError:
+                continue
+            clip_doc = clip_file.first("AnimationClip")
+            if clip_doc is None:
+                continue
+            clip = clip_doc
         action, slot, _frames = animation_builder.build_action(
-            clip_doc, arm, maps, None, _resolve_options(options))
+            clip, arm, maps, None, _resolve_options(options))
         report.actions += 1
         if first is None:
             first = (action, slot)

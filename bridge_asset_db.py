@@ -12,8 +12,9 @@ against either database.
 from __future__ import annotations
 
 try:
-    from . import unity_yaml
+    from . import clip_curves as clip_curves_module, unity_yaml
 except ImportError:  # standalone (non-package) testing
+    import clip_curves as clip_curves_module
     import unity_yaml
 
 
@@ -22,13 +23,35 @@ class BridgeAssetDatabase:
     bridge. Each guid is parsed at most once and memoized, same caching
     behaviour as the disk AssetDatabase's file cache."""
 
-    def __init__(self, documents, textures, bridge=None):
+    def __init__(self, documents, textures, bridge=None, clip_curve_blobs=None):
         # documents: dict[guid_lower] -> Unity YAML text (str)
         # textures: dict[guid_lower] -> raw PNG bytes
+        # clip_curve_blobs: dict[guid_lower] -> (meta_json, payload_bytes) --
+        #   the bridge's zero-parse AnimationClip curve payloads (see
+        #   RipperBridge.clip_curves_by_guid / ClipCurveBlob.cs)
         self._documents = documents
         self._textures = textures
         self._bridge = bridge  # optional: fetch_guid() fallback on a closure miss
         self._file_cache = {}  # guid -> UnityFile
+        self._clip_curve_blobs = clip_curve_blobs or {}
+        self._clip_curve_cache = {}  # guid -> ClipCurves
+
+    def clip_curves(self, guid):
+        """The zero-parse ClipCurves for an AnimationClip guid, or None when
+        this closure carries no blob for it (older bridge, blob build failure,
+        or simply not a clip) -- callers fall back to load_guid + YAML."""
+        if not guid:
+            return None
+        guid = guid.lower()
+        cached = self._clip_curve_cache.get(guid)
+        if cached is not None:
+            return cached
+        blob = self._clip_curve_blobs.get(guid)
+        if blob is None:
+            return None
+        clip = clip_curves_module.ClipCurves.from_blob(blob[0], blob[1])
+        self._clip_curve_cache[guid] = clip
+        return clip
 
     def load_guid(self, guid):
         if not guid:

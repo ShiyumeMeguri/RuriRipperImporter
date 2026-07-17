@@ -70,6 +70,27 @@ def _format_size(fmt):
     return entry[1] if entry else 4
 
 
+def _unpack_normal_10_10_10(words):
+    """Both common R10G10B10A2 normal decodes of a (n,) uint32 word array --
+    [SNorm 10-bit, UNorm-remapped 10-bit] -- each as (n,3) float32. The caller
+    keeps whichever passes the unit-length trust gate, so a wrong guess can
+    never leak garbage normals into the mesh (it just falls back, exactly the
+    pre-existing behaviour for undecodable fields)."""
+    x_bits = (words & 0x3FF).astype(np.int32)
+    y_bits = ((words >> 10) & 0x3FF).astype(np.int32)
+    z_bits = ((words >> 20) & 0x3FF).astype(np.int32)
+
+    def snorm(bits):
+        signed = np.where(bits >= 512, bits - 1024, bits).astype(np.float32)
+        return np.maximum(signed / 511.0, -1.0)
+
+    def unorm(bits):
+        return bits.astype(np.float32) / 1023.0 * 2.0 - 1.0
+
+    return [np.stack([snorm(x_bits), snorm(y_bits), snorm(z_bits)], axis=1),
+            np.stack([unorm(x_bits), unorm(y_bits), unorm(z_bits)], axis=1)]
+
+
 class SubMesh:
     __slots__ = ("first_index", "index_count", "topology", "base_vertex",
                  "first_vertex", "vertex_count")
@@ -177,12 +198,23 @@ def decode_mesh(doc):
         nrm_ch = ch(NORMAL)
         if nrm_ch and _real_dimension(nrm_ch.get("dimension")):
             decoded = _decode_channel(blob, stream_offsets, stream_strides, nrm_ch, count)
+            candidates = []
             if decoded is not None and decoded.shape[1] >= 3:
-                cand = decoded[:, :3].astype(np.float32)
+                candidates.append(decoded[:, :3].astype(np.float32))
+            # Flag-packed channel ("format: 0, dimension: 49" style): the field
+            # is ONE 32-bit word carrying an R10G10B10A2 normal -- try both
+            # common bit interpretations; the unit-length gate below picks
+            # whichever (if either) is real.
+            if decoded is not None and decoded.shape[1] == 1 and (nrm_ch.get("dimension") or 0) > 15:
+                packed_words = decoded.view(np.uint32).reshape(-1) if decoded.dtype == np.float32 \
+                    else decoded.astype(np.uint32).reshape(-1)
+                candidates.extend(_unpack_normal_10_10_10(packed_words))
+            for cand in candidates:
                 lengths = np.linalg.norm(cand, axis=1)
                 # Trust stored normals only if they are predominantly unit length.
                 if np.mean(np.abs(lengths - 1.0) < 0.15) > 0.9:
                     mesh.normals = cand / np.clip(lengths[:, None], 1e-6, None)
+                    break
 
         tan_ch = ch(TANGENT)
         if tan_ch and _real_dimension(tan_ch.get("dimension")) >= 3:

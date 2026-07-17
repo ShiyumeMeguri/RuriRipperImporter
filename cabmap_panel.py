@@ -788,11 +788,16 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
     any_ratio = 0.0
     checked_any = False
     for guid in clip_guids:
-        clip_file = db.load_guid(guid)
-        clip_doc = clip_file.first("AnimationClip") if clip_file is not None else None
-        if clip_doc is None:
-            continue
-        ratio, total = prefab_importer.clip_path_match_ratio(clip_doc.data, path_to_bone)
+        # Zero-parse blob first (see clip_curves.ClipCurves.from_blob); YAML
+        # document only when this closure carries no blob for the guid.
+        clip = db.clip_curves(guid) if hasattr(db, "clip_curves") else None
+        if clip is None:
+            clip_file = db.load_guid(guid)
+            clip_doc = clip_file.first("AnimationClip") if clip_file is not None else None
+            if clip_doc is None:
+                continue
+            clip = clip_doc.data
+        ratio, total = prefab_importer.clip_path_match_ratio(clip, path_to_bone)
         if total:
             checked_any = True
             any_ratio = max(any_ratio, ratio)
@@ -881,7 +886,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
             _report_exception(self, "Import (bridge) failed", exc)
             return False, 0
 
-        db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+        db = bridge_asset_db.BridgeAssetDatabase(
+            documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         options = state.as_options()
         ok = True
         imported = 0
@@ -1009,7 +1015,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
                                    "selected row(s) -- see console.")
             return False
 
-        db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+        db = bridge_asset_db.BridgeAssetDatabase(
+            documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         result = _import_clips_standalone(self, context, state, clip_rows[0]["cab"],
                                           clip_guids, db)
         return result == {"FINISHED"}
@@ -1368,7 +1375,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
-            db = bridge_asset_db.BridgeAssetDatabase(documents, textures)
+            db = bridge_asset_db.BridgeAssetDatabase(
+                documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
 
             selected_guids = []
             for cab in checked_keys:

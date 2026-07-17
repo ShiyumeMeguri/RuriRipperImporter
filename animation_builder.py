@@ -17,8 +17,9 @@ from __future__ import annotations
 import numpy as np
 
 try:
-    from . import coordinate, humanoid_retarget
+    from . import clip_curves, coordinate, humanoid_retarget
 except ImportError:
+    import clip_curves
     import coordinate
     import humanoid_retarget
 
@@ -110,8 +111,171 @@ def _max_time(*curve_dicts):
     return m
 
 
+# ── vectorized pose math ──────────────────────────────────────────────────────
+#
+# The per-frame mathutils compose/decompose (Matrix.Translation @ quat @ scale,
+# conjugate, .decompose()) was the bake loop's second bottleneck after curve
+# evaluation: n_frames x n_paths python-object round-trips. These helpers do
+# the identical math for a whole channel at once on (n, ...) arrays.
+
+def _quats_to_matrices(quats_wxyz):
+    """(n,4) wxyz unit quaternions -> (n,3,3) rotation matrices."""
+    w = quats_wxyz[:, 0]
+    x = quats_wxyz[:, 1]
+    y = quats_wxyz[:, 2]
+    z = quats_wxyz[:, 3]
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    m = np.empty((len(w), 3, 3), dtype=np.float64)
+    m[:, 0, 0] = 1.0 - 2.0 * (yy + zz)
+    m[:, 0, 1] = 2.0 * (xy - wz)
+    m[:, 0, 2] = 2.0 * (xz + wy)
+    m[:, 1, 0] = 2.0 * (xy + wz)
+    m[:, 1, 1] = 1.0 - 2.0 * (xx + zz)
+    m[:, 1, 2] = 2.0 * (yz - wx)
+    m[:, 2, 0] = 2.0 * (xz - wy)
+    m[:, 2, 1] = 2.0 * (yz + wx)
+    m[:, 2, 2] = 1.0 - 2.0 * (xx + yy)
+    return m
+
+
+def _matrices_to_quats(matrices):
+    """(n,3,3) normalized rotation matrices -> (n,4) wxyz quaternions.
+
+    A faithful vectorization of Blender's own mat3_normalized_to_quat_fast
+    (math_rotation.cc, Mike Day's branch selection + w>=0 sign fixups) --
+    NOT a generic Shepperd: for genuinely orthonormal input every method
+    agrees, but the bake conjugates through rest matrices whose non-uniform
+    scale leaves SHEAR in the 3x3, and there the branch structure decides the
+    answer. Matching mathutils' branches keeps the vectorized bake
+    bit-for-branch equivalent to the per-frame decompose() it replaced.
+    Blender's mat[a][b] is column-major: mat[a][b] == matrices[:, b, a]."""
+    r = matrices
+    quats = np.zeros((len(r), 4), dtype=np.float64)
+
+    branch_x = (r[:, 2, 2] < 0.0) & (r[:, 0, 0] > r[:, 1, 1])
+    branch_y = (r[:, 2, 2] < 0.0) & ~branch_x
+    branch_z = (r[:, 2, 2] >= 0.0) & (r[:, 0, 0] < -r[:, 1, 1])
+    branch_w = (r[:, 2, 2] >= 0.0) & ~branch_z
+
+    mask = branch_x
+    if mask.any():
+        m = r[mask]
+        trace = 1.0 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2]
+        s = 2.0 * np.sqrt(np.maximum(trace, 0.0))
+        s = np.where(m[:, 2, 1] < m[:, 1, 2], -s, s)  # mat[1][2] < mat[2][1]
+        quats[mask, 1] = 0.25 * s
+        inv = 1.0 / np.where(s == 0.0, 1.0, s)
+        quats[mask, 0] = (m[:, 2, 1] - m[:, 1, 2]) * inv
+        quats[mask, 2] = (m[:, 1, 0] + m[:, 0, 1]) * inv
+        quats[mask, 3] = (m[:, 0, 2] + m[:, 2, 0]) * inv
+        degenerate = ((trace == 1.0) & (quats[mask, 0] == 0.0)
+                      & (quats[mask, 2] == 0.0) & (quats[mask, 3] == 0.0))
+        if degenerate.any():
+            rows = np.flatnonzero(mask)[degenerate]
+            quats[rows, 1] = 1.0
+
+    mask = branch_y
+    if mask.any():
+        m = r[mask]
+        trace = 1.0 - m[:, 0, 0] + m[:, 1, 1] - m[:, 2, 2]
+        s = 2.0 * np.sqrt(np.maximum(trace, 0.0))
+        s = np.where(m[:, 0, 2] < m[:, 2, 0], -s, s)  # mat[2][0] < mat[0][2]
+        quats[mask, 2] = 0.25 * s
+        inv = 1.0 / np.where(s == 0.0, 1.0, s)
+        quats[mask, 0] = (m[:, 0, 2] - m[:, 2, 0]) * inv
+        quats[mask, 1] = (m[:, 1, 0] + m[:, 0, 1]) * inv
+        quats[mask, 3] = (m[:, 2, 1] + m[:, 1, 2]) * inv
+        degenerate = ((trace == 1.0) & (quats[mask, 0] == 0.0)
+                      & (quats[mask, 1] == 0.0) & (quats[mask, 3] == 0.0))
+        if degenerate.any():
+            rows = np.flatnonzero(mask)[degenerate]
+            quats[rows, 2] = 1.0
+
+    mask = branch_z
+    if mask.any():
+        m = r[mask]
+        trace = 1.0 - m[:, 0, 0] - m[:, 1, 1] + m[:, 2, 2]
+        s = 2.0 * np.sqrt(np.maximum(trace, 0.0))
+        s = np.where(m[:, 1, 0] < m[:, 0, 1], -s, s)  # mat[0][1] < mat[1][0]
+        quats[mask, 3] = 0.25 * s
+        inv = 1.0 / np.where(s == 0.0, 1.0, s)
+        quats[mask, 0] = (m[:, 1, 0] - m[:, 0, 1]) * inv
+        quats[mask, 1] = (m[:, 0, 2] + m[:, 2, 0]) * inv
+        quats[mask, 2] = (m[:, 2, 1] + m[:, 1, 2]) * inv
+        degenerate = ((trace == 1.0) & (quats[mask, 0] == 0.0)
+                      & (quats[mask, 1] == 0.0) & (quats[mask, 2] == 0.0))
+        if degenerate.any():
+            rows = np.flatnonzero(mask)[degenerate]
+            quats[rows, 3] = 1.0
+
+    mask = branch_w
+    if mask.any():
+        m = r[mask]
+        trace = 1.0 + m[:, 0, 0] + m[:, 1, 1] + m[:, 2, 2]
+        s = 2.0 * np.sqrt(np.maximum(trace, 0.0))
+        quats[mask, 0] = 0.25 * s
+        inv = 1.0 / np.where(s == 0.0, 1.0, s)
+        quats[mask, 1] = (m[:, 2, 1] - m[:, 1, 2]) * inv
+        quats[mask, 2] = (m[:, 0, 2] - m[:, 2, 0]) * inv
+        quats[mask, 3] = (m[:, 1, 0] - m[:, 0, 1]) * inv
+        degenerate = ((trace == 1.0) & (quats[mask, 1] == 0.0)
+                      & (quats[mask, 2] == 0.0) & (quats[mask, 3] == 0.0))
+        if degenerate.any():
+            rows = np.flatnonzero(mask)[degenerate]
+            quats[rows, 0] = 1.0
+
+    # decompose() hands the branch result through normalize_qt.
+    norms = np.linalg.norm(quats, axis=1)
+    norms[norms < 1e-20] = 1.0
+    return quats / norms[:, None]
+
+
+def _conjugated_pose_arrays(locs, quats_wxyz, scales, l_rest_inv, conv):
+    """The whole-channel form of the per-frame bake identity
+
+        basis(f) = conv @ (l_rest_inv @ (T(loc) R(quat) S(scale))) @ conv
+        loc/quat/scale(f) = basis(f).decompose()
+
+    on (n,3)/(n,4)/(n,3) arrays at once. Decompose parity with mathutils:
+    translation from the 4th column, scale from the 3x3 column lengths (X
+    negated when the determinant is negative, Blender's own convention),
+    rotation from the scale-normalized columns."""
+    n = len(locs)
+    rotation = _quats_to_matrices(quats_wxyz)
+    m = np.zeros((n, 4, 4), dtype=np.float64)
+    # T @ R @ S: the 3x3 block is R with column j scaled by scale_j.
+    m[:, :3, :3] = rotation * scales[:, None, :]
+    m[:, :3, 3] = locs
+    m[:, 3, 3] = 1.0
+
+    left = np.asarray(conv @ l_rest_inv, dtype=np.float64)
+    right = np.asarray(conv, dtype=np.float64)
+    basis = left[None] @ m @ right[None]
+
+    out_locs = basis[:, :3, 3]
+    linear = basis[:, :3, :3]
+    out_scales = np.linalg.norm(linear, axis=1)  # column lengths
+    safe = np.where(out_scales < 1e-12, 1.0, out_scales)
+    normalized = linear / safe[:, None, :]
+    # mat3_to_rot_size parity: a negative determinant negates the WHOLE
+    # normalized rotation and ALL THREE sizes (Blender's convention), not
+    # just one axis.
+    negative = np.linalg.det(normalized) < 0.0
+    if negative.any():
+        normalized[negative] = -normalized[negative]
+        out_scales[negative] = -out_scales[negative]
+    out_quats = _matrices_to_quats(normalized)
+    return (out_locs.astype(np.float32),
+            out_quats.astype(np.float32),
+            out_scales.astype(np.float32))
+
+
 def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options=None):
-    """Create a Blender action from a parsed AnimationClip document."""
+    """Create a Blender action from a clip -- either an already-built
+    clip_curves.ClipCurves (the bridge's zero-parse blob path) or a parsed
+    AnimationClip YAML document (converted here)."""
     options = options or {}
     # Pose bones default to QUATERNION already; the armature OBJECT itself
     # defaults to XYZ Euler, so object-level rotation_quaternion f-curves
@@ -119,9 +283,12 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     # without this -- Blender only evaluates the channel matching the
     # current rotation_mode.
     armature_obj.rotation_mode = 'QUATERNION'
-    data = clip_doc.data
-    name = data.get("m_Name", "Clip")
-    sample_rate = data.get("m_SampleRate", 60.0) or 60.0
+    if isinstance(clip_doc, clip_curves.ClipCurves):
+        clip = clip_doc
+    else:
+        clip = clip_curves.ClipCurves.from_document(clip_doc.data)
+    name = clip.name
+    sample_rate = clip.sample_rate or 60.0
     nodes = maps["nodes"]
     path_to_bone = maps["path_to_bone"]
     # Build a path -> node lookup for rest transforms.
@@ -134,25 +301,13 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
             if _bone_name:
                 name_to_node[_bone_name] = _n
 
-    # Collect curves keyed by transform path.
-    rot = {}     # path -> {x,y,z,w: curve}
-    pos = {}     # path -> {x,y,z: curve}
-    scale = {}   # path -> {x,y,z: curve}
-    euler = {}   # path -> {x,y,z: curve}
-    for entry in data.get("m_RotationCurves") or []:
-        rot[entry.get("path", "")] = _read_vector_curve(entry, ("x", "y", "z", "w"))
-    for entry in data.get("m_PositionCurves") or []:
-        pos[entry.get("path", "")] = _read_vector_curve(entry, ("x", "y", "z"))
-    for entry in data.get("m_ScaleCurves") or []:
-        scale[entry.get("path", "")] = _read_vector_curve(entry, ("x", "y", "z"))
-    for entry in data.get("m_EulerCurves") or []:
-        euler[entry.get("path", "")] = _read_vector_curve(entry, ("x", "y", "z"))
+    # Curves keyed by transform path (one Channel per path per kind).
+    rot = {channel.path: channel for channel in clip.rotations}
+    pos = {channel.path: channel for channel in clip.positions}
+    scale = {channel.path: channel for channel in clip.scales}
+    euler = {channel.path: channel for channel in clip.eulers}
 
-    duration = _max_time(rot, pos, scale, euler)
-    for entry in data.get("m_FloatCurves") or []:
-        c = _read_vector_curve(entry, ("v",))
-        if len(c["v"].times):
-            duration = max(duration, float(c["v"].times[-1]))
+    duration = clip.max_time()
     n_frames = max(1, int(round(duration * sample_rate)) + 1)
     times = np.arange(n_frames, dtype=np.float64) / sample_rate
 
@@ -175,14 +330,13 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     retargeter = maps.get("retargeter")
     muscle_bone_names = set(retargeter.bone_targets().values()) if retargeter is not None else set()
 
+    frames = times * sample_rate
     for path in animated_paths:
         bone_name = path_to_bone.get(path)
         node = path_to_node.get(path)
         if not bone_name or node is None or bone_name in muscle_bone_names:
             continue
-        rest_loc = node.local.translation.copy()
         rest_quat = node.local.to_quaternion()
-        rest_scale = node.local.to_scale()
         l_rest_inv = node.local.inverted_safe()
 
         rc = rot.get(path)
@@ -190,58 +344,55 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
         sc = scale.get(path)
         ec = euler.get(path)
 
-        locs = np.empty((n_frames, 3), dtype=np.float32)
-        quats = np.empty((n_frames, 4), dtype=np.float32)
-        scales = np.empty((n_frames, 3), dtype=np.float32)
+        if pc is not None:
+            locs = pc.sample(times)
+        else:
+            rest_loc = node.local.translation
+            locs = np.tile((rest_loc.x, rest_loc.y, rest_loc.z), (n_frames, 1))
 
-        for fi, t in enumerate(times):
-            if pc:
-                tr = (pc["x"].evaluate(t), pc["y"].evaluate(t), pc["z"].evaluate(t))
-            else:
-                tr = (rest_loc.x, rest_loc.y, rest_loc.z)
-            if rc:
-                q = Quaternion((rc["w"].evaluate(t), rc["x"].evaluate(t),
-                                rc["y"].evaluate(t), rc["z"].evaluate(t)))
-                if q.magnitude < 1e-8:
-                    q = rest_quat.copy()
-                else:
-                    q.normalize()
-            elif ec:
-                from mathutils import Euler
-                e = Euler((np.radians(ec["x"].evaluate(t)),
-                           np.radians(ec["y"].evaluate(t)),
-                           np.radians(ec["z"].evaluate(t))), "XYZ")
-                q = e.to_quaternion()
-            else:
-                q = rest_quat
-            if sc:
-                sv = (sc["x"].evaluate(t), sc["y"].evaluate(t), sc["z"].evaluate(t))
-            else:
-                sv = (rest_scale.x, rest_scale.y, rest_scale.z)
+        if rc is not None:
+            xyzw = rc.sample(times)
+            quats = xyzw[:, (3, 0, 1, 2)]
+            norms = np.linalg.norm(quats, axis=1)
+            tiny = norms < 1e-8
+            quats = quats / np.where(tiny, 1.0, norms)[:, None]
+            if tiny.any():
+                quats[tiny] = (rest_quat.w, rest_quat.x, rest_quat.y, rest_quat.z)
+        elif ec is not None:
+            # Rare path (generic scene assets): defer to mathutils per frame
+            # for exact XYZ euler-order parity rather than re-deriving it.
+            from mathutils import Euler
+            degrees = ec.sample(times)
+            quats = np.empty((n_frames, 4), dtype=np.float64)
+            for fi in range(n_frames):
+                q = Euler(np.radians(degrees[fi]), "XYZ").to_quaternion()
+                quats[fi] = (q.w, q.x, q.y, q.z)
+        else:
+            quats = np.tile((rest_quat.w, rest_quat.x, rest_quat.y, rest_quat.z),
+                            (n_frames, 1))
 
-            l_anim = (Matrix.Translation(tr)
-                      @ q.to_matrix().to_4x4()
-                      @ Matrix.Diagonal((sv[0], sv[1], sv[2], 1.0)))
-            basis = conv @ (l_rest_inv @ l_anim) @ conv
-            bloc, bquat, bscale = basis.decompose()
-            locs[fi] = (bloc.x, bloc.y, bloc.z)
-            quats[fi] = (bquat.w, bquat.x, bquat.y, bquat.z)
-            scales[fi] = (bscale.x, bscale.y, bscale.z)
+        if sc is not None:
+            scales = sc.sample(times)
+        else:
+            rest_scale = node.local.to_scale()
+            scales = np.tile((rest_scale.x, rest_scale.y, rest_scale.z), (n_frames, 1))
 
-        _write_bone_fcurves(bone_fcurves, bone_name, times * sample_rate,
-                            locs, quats, scales)
+        out_locs, out_quats, out_scales = _conjugated_pose_arrays(
+            locs, quats, scales, l_rest_inv, conv)
+        _write_bone_fcurves(bone_fcurves, bone_name, frames,
+                            out_locs, out_quats, out_scales)
 
     if retargeter is not None:
-        _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv,
+        _bake_muscles(retargeter, clip, name_to_node, bone_fcurves, conv,
                       times, n_frames, sample_rate)
 
     if path_to_meshobjects:
-        _apply_float_curves(action, data, path_to_meshobjects, sample_rate, times)
+        _apply_float_curves(action, clip, path_to_meshobjects, sample_rate, times)
 
     return action, slot, n_frames
 
 
-def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
+def _bake_muscles(retargeter, clip, name_to_node, bone_fcurves, conv, times,
                   n_frames, sample_rate):
     """Reconstruct and bake every human bone's rotation from the clip's muscle
     curves -- the body's only motion in a humanoid clip.
@@ -250,25 +401,26 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
     rotation delta, applied to its rest local matrix and conjugated into the
     pose-bone basis exactly as an animated transform path is.
     """
-    curves = {}
-    for entry in data.get("m_FloatCurves") or []:
-        attribute = entry.get("attribute", "")
+    sampled = {}
+    for channel in clip.floats:
+        attribute = channel.attribute
         if humanoid_retarget.is_muscle(attribute) or humanoid_retarget.is_root(attribute):
-            curves[attribute] = _read_vector_curve(entry, ("v",))["v"]
-    if not curves:
+            sampled[attribute] = channel.sample(times)[:, 0]
+    if not sampled:
         return
     # Whichever Root axes the clip doesn't "keep original" for are extracted
     # as root motion belonging to the character's root, not the hips -- see
     # humanoid_retarget.py's body_transform() docstring.
-    clip_settings = data.get("m_AnimationClipSettings") or {}
-    keep_position_xz = bool(clip_settings.get("m_KeepOriginalPositionXZ", True))
-    keep_position_y = bool(clip_settings.get("m_KeepOriginalPositionY", True))
-    keep_orientation = bool(clip_settings.get("m_KeepOriginalOrientation", True))
-    # Evaluate every channel at every frame once; reused across all driven bones.
-    values = [dict() for _ in range(n_frames)]
-    for attribute, curve in curves.items():
-        for fi in range(n_frames):
-            values[fi][attribute] = curve.evaluate(times[fi])
+    keep_position_xz = clip.keep_position_xz
+    keep_position_y = clip.keep_position_y
+    keep_orientation = clip.keep_orientation
+    # Every channel is sampled at every frame in ONE vectorized pass above;
+    # the per-frame dicts below are just cheap views for the muscle solver's
+    # lookup interface, reused across all driven bones.
+    attributes = list(sampled)
+    columns = [sampled[a] for a in attributes]
+    values = [{attributes[ci]: columns[ci][fi] for ci in range(len(attributes))}
+              for fi in range(n_frames)]
 
     frames = times * sample_rate
     hips_bone = retargeter.hips_bone()
@@ -292,59 +444,57 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
         node = name_to_node.get(bone_name)
         if node is None:
             continue
-        rest_loc = node.local.translation.copy()
+        rest_loc = node.local.translation
         rest_quat = node.local.to_quaternion()
         rest_scale = node.local.to_scale()
-        scale_mat = Matrix.Diagonal((rest_scale.x, rest_scale.y, rest_scale.z, 1.0))
         l_rest_inv = node.local.inverted_safe()
         is_hips = bone_name == hips_bone
 
-        locs = np.empty((n_frames, 3), dtype=np.float32)
-        quats = np.empty((n_frames, 4), dtype=np.float32)
-        scales = np.empty((n_frames, 3), dtype=np.float32)
-        for fi in range(n_frames):
-            lookup = values[fi].get
-            if is_hips:
-                # body_transform() reconstructs the hips' FULL absolute local
-                # transform directly (see humanoid_retarget.py's root-motion
-                # section: RootT/RootQ are the avatar's mass-center/orientation
-                # reference, not the hips' own transform, so this composes a
-                # provisional FK against them rather than reading RootT/RootQ
-                # as a hips-local delta).  Used directly, like the muscle
-                # branch below -- not composed with rest_quat.
-                body = retargeter.body_transform(lookup, keep_position_xz=keep_position_xz,
+        in_locs = np.tile((rest_loc.x, rest_loc.y, rest_loc.z), (n_frames, 1))
+        in_quats = np.tile((rest_quat.w, rest_quat.x, rest_quat.y, rest_quat.z),
+                           (n_frames, 1))
+        in_scales = np.tile((rest_scale.x, rest_scale.y, rest_scale.z), (n_frames, 1))
+        if is_hips:
+            # body_transform() reconstructs the hips' FULL absolute local
+            # transform directly (see humanoid_retarget.py's root-motion
+            # section: RootT/RootQ are the avatar's mass-center/orientation
+            # reference, not the hips' own transform, so this composes a
+            # provisional FK against them rather than reading RootT/RootQ
+            # as a hips-local delta).  Used directly, like the muscle
+            # branch below -- not composed with rest_quat. A None result
+            # leaves this frame at rest (= node.local, which IS the rest TRS).
+            for fi in range(n_frames):
+                body = retargeter.body_transform(values[fi].get,
+                                                 keep_position_xz=keep_position_xz,
                                                  keep_position_y=keep_position_y,
                                                  keep_orientation=keep_orientation)
                 if body is None:
-                    l_anim = node.local
-                else:
-                    position, rotation, motion = body
-                    l_anim = (Matrix.Translation(position)
-                              @ rotation.to_matrix().to_4x4() @ scale_mat)
-                    motion_t, motion_q = motion
-                    motion_locs[fi] = (motion_t.x, motion_t.y, motion_t.z)
-                    motion_quats[fi] = (motion_q.w, motion_q.x, motion_q.y, motion_q.z)
-                    # Data-driven: write object motion iff any frame actually
-                    # carries some (trajectory clips always do; the settings
-                    # flags no longer decide -- see body_transform).
-                    if (motion_t.length_squared > 1e-10
-                            or abs(motion_q.w) < 0.99999995):
-                        has_motion = True
-            else:
-                # The muscle gives this bone's FULL absolute local rotation for the
-                # frame directly (preQ @ swingTwist @ inv(postQ), then TwistSolve's
-                # parent<->child redistribution) -- not a delta, and not composed
-                # with rest_quat (see humanoid_retarget.py's module docstring
-                # RETRACTION for why an earlier revision's rest_quat
-                # division/recomposition here was a no-op that happened to still work).
-                anim_quat = body_quats_by_frame[fi].get(human_name, rest_quat)
-                l_anim = (Matrix.Translation(rest_loc)
-                          @ anim_quat.to_matrix().to_4x4() @ scale_mat)
-            basis = conv @ (l_rest_inv @ l_anim) @ conv
-            bloc, bquat, bscale = basis.decompose()
-            locs[fi] = (bloc.x, bloc.y, bloc.z)
-            quats[fi] = (bquat.w, bquat.x, bquat.y, bquat.z)
-            scales[fi] = (bscale.x, bscale.y, bscale.z)
+                    continue
+                position, rotation, motion = body
+                in_locs[fi] = (position.x, position.y, position.z)
+                in_quats[fi] = (rotation.w, rotation.x, rotation.y, rotation.z)
+                motion_t, motion_q = motion
+                motion_locs[fi] = (motion_t.x, motion_t.y, motion_t.z)
+                motion_quats[fi] = (motion_q.w, motion_q.x, motion_q.y, motion_q.z)
+                # Data-driven: write object motion iff any frame actually
+                # carries some (trajectory clips always do; the settings
+                # flags no longer decide -- see body_transform).
+                if (motion_t.length_squared > 1e-10
+                        or abs(motion_q.w) < 0.99999995):
+                    has_motion = True
+        else:
+            # The muscle gives this bone's FULL absolute local rotation for the
+            # frame directly (preQ @ swingTwist @ inv(postQ), then TwistSolve's
+            # parent<->child redistribution) -- not a delta, and not composed
+            # with rest_quat (see humanoid_retarget.py's module docstring
+            # RETRACTION for why an earlier revision's rest_quat
+            # division/recomposition here was a no-op that happened to still work).
+            for fi in range(n_frames):
+                anim_quat = body_quats_by_frame[fi].get(human_name)
+                if anim_quat is not None:
+                    in_quats[fi] = (anim_quat.w, anim_quat.x, anim_quat.y, anim_quat.z)
+        locs, quats, scales = _conjugated_pose_arrays(
+            in_locs, in_quats, in_scales, l_rest_inv, conv)
         _write_bone_fcurves(bone_fcurves, bone_name, frames, locs, quats, scales)
 
     # Bake whatever body_transform() extracted as root motion onto the
@@ -355,17 +505,13 @@ def _bake_muscles(retargeter, data, name_to_node, bone_fcurves, conv, times,
     # hips branch above) -- a trajectory clip writes its object track whatever
     # the keep-flags say, and a genuinely motion-free clip writes none.
     if has_motion:
-        obj_locs = np.empty((n_frames, 3), dtype=np.float32)
-        obj_quats = np.empty((n_frames, 4), dtype=np.float32)
-        obj_scales = np.ones((n_frames, 3), dtype=np.float32)
-        for fi in range(n_frames):
-            motion_q = Quaternion(motion_quats[fi])
-            motion_matrix = Matrix.Translation(tuple(motion_locs[fi])) @ motion_q.to_matrix().to_4x4()
-            basis = conv @ motion_matrix @ conv
-            bloc, bquat, _ = basis.decompose()
-            obj_locs[fi] = (bloc.x, bloc.y, bloc.z)
-            obj_quats[fi] = (bquat.w, bquat.x, bquat.y, bquat.z)
-        _write_bone_fcurves(bone_fcurves, None, frames, obj_locs, obj_quats, obj_scales)
+        # Same conjugation as every bone channel, with an identity "rest": the
+        # object's own rest IS identity, so left = conv @ I.
+        obj_locs, obj_quats, _decomposed_scales = _conjugated_pose_arrays(
+            motion_locs.astype(np.float64), motion_quats.astype(np.float64),
+            np.ones((n_frames, 3), dtype=np.float64), Matrix.Identity(4), conv)
+        _write_bone_fcurves(bone_fcurves, None, frames, obj_locs, obj_quats,
+                            np.ones((n_frames, 3), dtype=np.float32))
 
 
 def _prepare_channels(action, slot_name, id_type):
@@ -541,16 +687,16 @@ def _write_bone_fcurves(fcurves, bone_name, frames, locs, quats, scales):
             fcurve.update()
 
 
-def _apply_float_curves(action, data, path_to_meshobjects, sample_rate, times):
+def _apply_float_curves(action, clip, path_to_meshobjects, sample_rate, times):
     n = len(times)
-    for entry in data.get("m_FloatCurves") or []:
-        attribute = entry.get("attribute", "")
-        path = entry.get("path", "")
+    for channel in clip.floats:
+        attribute = channel.attribute
+        path = channel.path
         if not attribute.startswith("blendShape."):
             continue
         shape_name = attribute[len("blendShape."):]
         objs = path_to_meshobjects.get(path) or []
-        curve = _read_vector_curve(entry, ("v",))["v"]
+        sampled_values = channel.sample(times)[:, 0]
         for obj in objs:
             mesh = obj.data
             if not mesh.shape_keys or shape_name not in mesh.shape_keys.key_blocks:
@@ -574,7 +720,7 @@ def _apply_float_curves(action, data, path_to_meshobjects, sample_rate, times):
                 fcurve.keyframe_points.add(n)
                 co = np.empty(n * 2, dtype=np.float64)
                 co[0::2] = times * sample_rate
-                co[1::2] = [curve.evaluate(t) / 100.0 for t in times]
+                co[1::2] = sampled_values / 100.0
                 fcurve.keyframe_points.foreach_set("co", co)
                 fcurve.update()
             except Exception:
@@ -599,13 +745,27 @@ def import_clips_from_controller(context, controller_file, asset_db, armature_ob
 
     actions = []
     for guid in guids:
-        clip_file = asset_db.load_guid(guid)
-        if not clip_file:
-            continue
-        clip_doc = clip_file.first("AnimationClip")
-        if clip_doc is None:
-            continue
-        action, slot, _ = build_action(clip_doc, armature_obj, maps,
+        # Disk fast path: read the .anim's raw text and regex-extract the
+        # curves (see clip_curves.from_yaml_text) -- the guid resolves to a
+        # real file path in disk mode; bridge-mode databases resolve to the
+        # guid itself, which open() can't hit, so they fall through.
+        clip = None
+        clip_path = asset_db.resolve_guid(guid)
+        if clip_path and isinstance(clip_path, str) and clip_path.lower().endswith(".anim"):
+            try:
+                with open(clip_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    clip = clip_curves.ClipCurves.from_yaml_text(handle.read())
+            except (OSError, ValueError):
+                clip = None
+        if clip is None:
+            clip_file = asset_db.load_guid(guid)
+            if not clip_file:
+                continue
+            clip_doc = clip_file.first("AnimationClip")
+            if clip_doc is None:
+                continue
+            clip = clip_doc
+        action, slot, _ = build_action(clip, armature_obj, maps,
                                        path_to_meshobjects, options)
         actions.append((action, slot))
     return actions
