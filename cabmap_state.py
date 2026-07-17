@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 import time
 
+import numpy as np
+
 try:
     from . import pythonnet_bridge
 except ImportError:  # standalone (non-package) testing
@@ -49,7 +51,9 @@ def selected_row_dicts():
     imports run in (not click order, which nobody can reproduce)."""
     if not SELECTED_CABS:
         return []
-    return [row for row in ROWS if row["cab"] in SELECTED_CABS]
+    index_of = ROWS.cab_to_index()
+    ids = sorted(index_of[cab] for cab in SELECTED_CABS if cab in index_of)
+    return [ROWS[i] for i in ids]
 
 _pending_query = None
 _last_edit_time = 0.0
@@ -247,12 +251,14 @@ def clear_animation_build_state():
 
 
 def load_rows():
-    """Pull every row from the currently-loaded cabmap into ROWS (plain Python
-    list, not bpy data) and reset the filter to show everything."""
+    """Pull every row from the currently-loaded cabmap into ROWS and reset the
+    filter to show everything. ROWS is a columnar row_table.RowTable --
+    indexing/iteration yield dict-compatible row views, so per-row consumers
+    are unchanged while the hot paths (search/sort/window) run columnar."""
     global ROWS, VISIBLE, _ROWS_BY_CAB
     if BRIDGE is None:
         raise RuntimeError("No bridge session -- call ensure_bridge() first.")
-    ROWS = BRIDGE.enumerate_rows()
+    ROWS = BRIDGE.enumerate_table()
     VISIBLE = list(range(len(ROWS)))
     _ROWS_BY_CAB = None  # rebuilt lazily on first rows_by_cab() call
     clear_selection()    # cab keys from a previous map mean nothing in this one
@@ -261,35 +267,57 @@ def load_rows():
 _ROWS_BY_CAB = None  # dict[str, dict] -- lazily built cab -> row index, see rows_by_cab()
 
 
+class _RowsByCab:
+    """cab -> row-view mapping over a columnar RowTable: the cab->index dict
+    is the table's own lazy index; row views materialize per lookup only."""
+
+    __slots__ = ("_table",)
+
+    def __init__(self, table):
+        self._table = table
+
+    def get(self, cab, default=None):
+        index = self._table.cab_to_index().get(cab)
+        return self._table[index] if index is not None else default
+
+    def __getitem__(self, cab):
+        return self._table[self._table.cab_to_index()[cab]]
+
+    def __contains__(self, cab):
+        return cab in self._table.cab_to_index()
+
+
 def rows_by_cab():
-    """{cab -> row dict}, built once per load_rows() and cached -- used to
-    look up TypeNames/Name for a batch of dependency-closure CAB names
+    """cab -> row-view mapping, built once per load_rows() and cached -- used
+    to look up TypeNames/Name for a batch of dependency-closure CAB names
     (see resolve_closure_cab_names) without an O(closure_size * len(ROWS))
     linear scan."""
     global _ROWS_BY_CAB
     if _ROWS_BY_CAB is None:
-        _ROWS_BY_CAB = {row["cab"]: row for row in ROWS}
+        _ROWS_BY_CAB = _RowsByCab(ROWS)
     return _ROWS_BY_CAB
-
-
-def _row_matches(row, query_lower):
-    return (query_lower in row["name"].lower()
-            or query_lower in row["container"].lower()
-            or query_lower in row["source"].lower()
-            or query_lower in row["type_names"].lower())
 
 
 def apply_filter(query, rules=()):
     """Row shows if it matches the quick search across Name/Container/Source/
     Type AND passes the Include/Exclude rule set (row_passes_rules) --
     mirrors the WinForms browser's RowPasses exactly (quick search AND rules,
-    both must pass)."""
+    both must pass).
+
+    The quick search runs vectorized over the RowTable's column blobs; the
+    rule engine, when rules exist, evaluates per-row over the already-
+    search-narrowed candidates only."""
     global VISIBLE, _active_rules
     query = (query or "").strip().lower()
     rules = tuple(rules)
     _active_rules = rules
-    VISIBLE = [i for i, row in enumerate(ROWS)
-               if (not query or _row_matches(row, query)) and row_passes_rules(row, rules)]
+    enabled_rules = [r for r in rules if r.enabled]
+    candidates = np.flatnonzero(ROWS.search_mask(query))
+    if enabled_rules:
+        VISIBLE = [int(i) for i in candidates
+                   if row_passes_rules(ROWS[int(i)], enabled_rules)]
+    else:
+        VISIBLE = candidates.tolist()
     _apply_sort()
 
 
@@ -304,8 +332,10 @@ def _apply_sort():
     if _sort_dir == 0:
         VISIBLE.sort()  # back to load order
         return
-    key = _sort_column
-    VISIBLE.sort(key=lambda i: ROWS[i].get(key, ""), reverse=(_sort_dir == 2))
+    # Columnar: one cached key-materialization pass per column instead of
+    # deriving display strings inside every comparison.
+    values = ROWS.sort_values(_sort_column)
+    VISIBLE.sort(key=values.__getitem__, reverse=(_sort_dir == 2))
 
 
 def cycle_sort(column):

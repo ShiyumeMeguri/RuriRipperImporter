@@ -304,49 +304,17 @@ class RipperBridge:
         enumerate_rows()/import_cabs()."""
         self._map = self._bridge.LoadCabMap(cab_map_path)
 
-    def enumerate_rows(self):
-        """Every CAB in the loaded map, as plain dicts (Name/Container/TypeNames/
-        Source/DependencyCount) -- the N-panel browser's backing data.
-
-        Uses the packed columnar transfer (EnumerateRowsPacked: five NUL-joined
-        strings + one int32 buffer, ONE interop crossing) -- the per-DTO
-        enumeration costs ~1.4M reflected property accesses at 237k rows,
-        measured at 1.5s of a 2.3s cabmap load; the packed path splits at C
-        speed on both sides. Falls back to the DTO path against an older
-        bridge DLL."""
+    def enumerate_table(self):
+        """The row set as a columnar row_table.RowTable -- raw blob/offset
+        buffers in ONE interop crossing, nothing materialized per row (the
+        load-path optimum; see row_table.py)."""
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
-        packed_fn = getattr(self._bridge, "EnumerateRowsPacked", None)
-        if packed_fn is None:
-            return [
-                {
-                    "cab": row.Cab,
-                    "name": row.Name,
-                    "container": row.Container,
-                    "type_names": row.TypeNames,
-                    "source": row.Source,
-                    "deps": int(row.DependencyCount),
-                }
-                for row in self._bridge.EnumerateRows(self._map)
-            ]
-        import numpy as np
-
-        packed = packed_fn(self._map)
-        count = int(packed.Count)
-        if count == 0:
-            return []
-        cabs = str(packed.Cabs).split("\0")
-        names = str(packed.Names).split("\0")
-        containers = str(packed.Containers).split("\0")
-        type_names = str(packed.TypeNames).split("\0")
-        sources = str(packed.Sources).split("\0")
-        deps = np.frombuffer(bytes(packed.DependencyCounts), dtype="<i4").tolist()
-        return [
-            {"cab": cab, "name": name, "container": container,
-             "type_names": types, "source": source, "deps": dep}
-            for cab, name, container, types, source, dep
-            in zip(cabs, names, containers, type_names, sources, deps)
-        ]
+        try:
+            from . import row_table
+        except ImportError:
+            import row_table
+        return row_table.RowTable.from_packed(self._bridge.EnumerateTablePacked(self._map))
 
     def resolve_cabs_for_paths(self, container_paths):
         """Resolve addressable container paths (e.g. discover_scene_placements'
