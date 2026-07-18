@@ -286,7 +286,26 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
 class RURI_OT_refresh_hooks(bpy.types.Operator):
     """Populate the Hooks checklist straight from RipperBlenderBridge.ListAvailableHooks() --
     the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll. Ticked
-    state is preserved across a re-refresh for any id that's still present."""
+    state is preserved across a re-refresh for any id that's still present.
+
+    Root-cause fix (2026-07-18): the default-hook auto-tick used to be gated on
+    `not had_any_before` -- "this is the very first refresh this Blender session has ever run" --
+    a ONE-SHOT gate, not "is the default hook newly available". A session that ran Refresh even
+    once before Ruri.RipperHook.dll exposed AlsoCoversVersions alias ids (so _HOOK_IDS_DEFAULT,
+    "EndField_1.3.3", was never in the list to begin with) permanently poisoned that gate: on every
+    later refresh (even after rebuilding the DLL / Blender's Reload Scripts, since this
+    CollectionProperty lives on the Scene and survives a script reload) the list now correctly
+    contains "EndField_1.3.3", but it silently comes back unchecked forever -- nothing ever
+    selects it, and nothing tells the user they have to tick it by hand. Symptom: cabmap tab looks
+    fine, but Scene tab's "Discover Maps" keeps throwing "No VFS game hook active" no matter how
+    many times Build/Load Cabmap is retried, because the checked-hooks set feeding
+    cabmap_state.ensure_bridge() is (and was always going to stay) empty.
+    Fix: auto-tick per-id -- the default id gets selected whenever it's newly appearing (wasn't in
+    the PREVIOUS listing) and the user hasn't already deliberately selected something else this
+    session (previously_selected is empty) -- covers both "brand new session" (old behavior) and
+    "the default just became available for the first time" (the bug above), without ever
+    overriding an explicit user choice.
+    """
     bl_idname = "ruri.refresh_hooks"
     bl_label = "Refresh Hooks"
     bl_description = "List the hook ids compiled into Ruri.RipperHook.dll"
@@ -304,13 +323,15 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
             return {"CANCELLED"}
 
         previously_selected = {item.id for item in state.available_hooks if item.selected}
-        had_any_before = len(state.available_hooks) > 0
+        previously_listed = {item.id for item in state.available_hooks}
         state.available_hooks.clear()
         for hook_id in hook_ids:
             item = state.available_hooks.add()
             item.id = hook_id
             item.selected = (hook_id in previously_selected
-                             or (not had_any_before and hook_id == _HOOK_IDS_DEFAULT))
+                             or (hook_id == _HOOK_IDS_DEFAULT
+                                 and hook_id not in previously_listed
+                                 and not previously_selected))
         state.hooks_status = (f"{len(hook_ids)} hook(s) available." if hook_ids
                               else "No hooks found in Ruri.RipperHook.dll.")
         _auto_default_cabmap_filename(state)

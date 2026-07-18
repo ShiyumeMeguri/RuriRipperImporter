@@ -286,10 +286,28 @@ class RipperBridge:
         _ensure_runtime()
         self._bridge = _bridge_type
         self._bridge.Initialize(_string_array(hook_ids))
+        self._hook_ids = tuple(hook_ids)
         self._map = None
         # {clip guid -> (meta_json, payload_bytes)} from the LAST import_cabs
         # call -- the zero-parse curve fast path (see ClipCurveBlob.cs).
         self.clip_curves_by_guid = {}
+
+    @property
+    def hook_ids(self):
+        """The hook id set this session was last (re)Initialize()d with -- see reinitialize()."""
+        return self._hook_ids
+
+    def reinitialize(self, hook_ids):
+        """Re-apply a (possibly different) hook selection onto this SAME session, preserving
+        self._map/clip_curves_by_guid -- unlike constructing a fresh RipperBridge, this does not
+        drop an already-loaded cabmap. Safe/idempotent on the C# side (RipperBlenderBridge.
+        Initialize -> RuriHook.ApplyHooks diffs the desired hook id set against the currently
+        active one and only enables/disables the delta -- see its doc comment "safe to call more
+        than once per process"), so this is cheap even when hook_ids is unchanged. Callers should
+        still skip the call when hook_ids == self.hook_ids to avoid the log spam ApplyHooks prints
+        per hook transition."""
+        self._bridge.Initialize(_string_array(hook_ids))
+        self._hook_ids = tuple(hook_ids)
 
     @property
     def has_map(self):

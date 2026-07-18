@@ -168,9 +168,30 @@ def reset():
 
 
 def ensure_bridge(hook_ids):
+    """Get (or lazily create) the session's one active bridge, with its hook selection kept in
+    sync with hook_ids on every call -- NOT just on first construction.
+
+    Root-cause fix (2026-07-18): this used to construct RipperBridge(hook_ids) once and return
+    the SAME instance forever after, ignoring hook_ids on every later call. A cabmap "Build"/
+    "Load" done with zero (or a since-corrected) hook selection -- e.g. before a hook the user
+    wants was even listable, or before they'd ticked its checkbox -- permanently poisoned BRIDGE
+    with no VFS game hook wired up. Re-ticking the checkbox and rebuilding/reloading the cabmap
+    never fixed it: this function kept handing back the same broken session, and downstream
+    scene-tab operators (RURI_OT_scene_discover_maps et al.) read cabmap_state.BRIDGE directly
+    rather than calling ensure_bridge themselves, so they inherited the poisoning with no path to
+    recover short of restarting Blender. Symptom: "Discover maps failed: InvalidOperationException:
+    No VFS game hook active" even with the right hook checked.
+    Fix: re-apply the current hook_ids via RipperBridge.reinitialize() whenever they differ from
+    what the existing session was last (re)Initialize()d with -- see reinitialize()'s doc comment
+    for why this is safe (RuriHook.ApplyHooks is a diff against the currently active hook set, so
+    re-Initialize only enables/disables the delta) and preserves the already-loaded cabmap/db
+    instead of dropping it the way constructing a fresh RipperBridge would."""
     global BRIDGE
+    hook_ids = tuple(hook_ids)
     if BRIDGE is None:
         BRIDGE = pythonnet_bridge.RipperBridge(hook_ids)
+    elif BRIDGE.hook_ids != hook_ids:
+        BRIDGE.reinitialize(hook_ids)
     return BRIDGE
 
 
