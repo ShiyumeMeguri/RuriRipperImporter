@@ -1,8 +1,13 @@
-"""N-panel UI: cabmap gate, browsable/filterable/sortable row list, and
-import-with-dependencies actions. Mirrors the WinForms 'Virtual Asset List'
-browser's feature set (columns, search, tri-state sort, load/import actions)
-adapted to Blender's bpy UI toolkit -- right-click context-menu actions become
-buttons, since UIList has no native per-row context menu.
+"""N-panel UI: cabmap gate, a folder-tree browser over each row's virtual
+container path (see cabmap_state's "Virtual folder tree" section) with a
+global quick-search/rule-filter fallback, and import-with-dependencies
+actions. Mirrors the WinForms 'Virtual Asset List' browser's flat feature set
+(columns, search, tri-state sort, load/import actions) adapted to Blender's
+bpy UI toolkit -- right-click context-menu actions become buttons, since
+UIList has no native per-row context menu -- plus folder navigation the
+WinForms browser never had: browsing starts at the virtual root instead of
+dumping every row flat, and typing a search or adding a filter rule falls
+back to that original flat, global result list.
 
 Hard gate (no single-file import path exists in this panel at all): every
 widget below the cabmap picker lives in a sub-layout with
@@ -45,24 +50,61 @@ _ACTION_ITEMS = [
 ]
 
 
+def _add_file_item(state, selected_cabs, idx, name_override=None):
+    row = cabmap_state.ROWS[idx]
+    item = state.window.add()
+    item.is_folder = False
+    item.row_index = idx
+    item.cab = row["cab"]
+    item.name = row["name"] if name_override is None else name_override
+    item.container = row["container"]
+    item.type_names = row["type_names"]
+    item.source = row["source"]
+    item.deps = row["deps"]
+    item.selected = row["cab"] in selected_cabs
+    return item
+
+
 def _rebuild_window(state):
-    total, window = cabmap_state.display_window()
-    selected = cabmap_state.SELECTED_CABS
+    """Materialize state.window for whichever view is active. Search/rule
+    results (has_active_query) stay the flat list this always was; otherwise
+    this is the folder browser: CURRENT_SUBFOLDERS first (folders always
+    sort before files, like a real file browser), then CURRENT_DIR's own
+    files -- both share ONE DISPLAY_CAP budget so state.window never grows
+    past the size the original flat-only list was already tuned for."""
     state.window.clear()
-    for idx, row in window:
+    selected = cabmap_state.SELECTED_CABS
+
+    if cabmap_state.has_active_query(state.search, state.filter_rules):
+        total, window = cabmap_state.display_window()
+        for idx, _row in window:
+            _add_file_item(state, selected, idx)
+        shown = len(window)
+        cap_note = (f" (capped at {cabmap_state.DISPLAY_CAP} -- narrow your search to see the rest)"
+                    if total > shown else "")
+        state.status = f"Showing {shown} / {total} matching virtual files{cap_note}."
+        return
+
+    folders = cabmap_state.CURRENT_SUBFOLDERS
+    budget = cabmap_state.DISPLAY_CAP
+    shown_folders = folders[:budget]
+    for folder_name, file_count in shown_folders:
         item = state.window.add()
-        item.row_index = idx
-        item.cab = row["cab"]
-        item.name = row["name"]
-        item.container = row["container"]
-        item.type_names = row["type_names"]
-        item.source = row["source"]
-        item.deps = row["deps"]
-        item.selected = row["cab"] in selected
-    shown = len(window)
-    cap_note = (f" (capped at {cabmap_state.DISPLAY_CAP} -- narrow your search to see the rest)"
-                if total > shown else "")
-    state.status = f"Showing {shown} / {total} matching virtual files{cap_note}."
+        item.is_folder = True
+        item.folder_name = folder_name
+        item.file_count = file_count
+
+    files = cabmap_state.VISIBLE
+    shown_files = files[:max(0, budget - len(shown_folders))]
+    for idx in shown_files:
+        _add_file_item(state, selected, idx, name_override=cabmap_state.leaf_name_in_current_dir(idx))
+
+    total_items = len(folders) + len(files)
+    shown_items = len(shown_folders) + len(shown_files)
+    cap_note = (f" (showing the first {budget} of {total_items} items -- open a subfolder to narrow down)"
+                if total_items > shown_items else "")
+    path_label = "/" + "/".join(cabmap_state.CURRENT_DIR)
+    state.status = f"{path_label}  --  {len(folders)} folder(s), {len(files)} file(s){cap_note}"
 
 
 def _sync_window_selection(state):
@@ -80,10 +122,12 @@ def _redraw_all(context):
 
 
 def _reapply_and_refresh(context):
-    """Re-run the filter (quick search AND every Include/Exclude rule) and
-    rebuild the displayed window -- call after ANY rule or search change."""
+    """Re-run whichever view is active -- the flat quick-search+Include/
+    Exclude-rule results, or the folder listing for CURRENT_DIR -- and
+    rebuild the displayed window. Call after ANY rule or search change, or a
+    fresh Build/Load."""
     state = context.scene.ruri_cabmap
-    cabmap_state.apply_filter(state.search, state.filter_rules)
+    cabmap_state.refresh_visible(state.search, state.filter_rules)
     _rebuild_window(state)
     _redraw_all(context)
 
@@ -151,7 +195,16 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
     `selected` is a pure display MIRROR of cabmap_state.SELECTED_CABS (the
     authoritative selection, which survives the window being rebuilt on every
     filter/sort edit) -- all mutation goes through RURI_OT_cabmap_click /
-    RURI_OT_cabmap_select_all, never by writing this flag directly."""
+    RURI_OT_cabmap_select_all, never by writing this flag directly.
+
+    Does double duty as a virtual FOLDER entry too (is_folder=True):
+    RURI_UL_cabmap.draw_item branches on it, so the folder browser and the
+    flat search/rule results share one CollectionProperty, one UIList, and
+    one template_list -- only folder_name/file_count are meaningful on a
+    folder row, only the fields below are meaningful on a file row."""
+    is_folder: BoolProperty(default=False)
+    folder_name: StringProperty()
+    file_count: IntProperty()  # recursive file count under a folder row; unused on a file row
     row_index: IntProperty()
     cab: StringProperty()
     name: StringProperty()
@@ -430,6 +483,52 @@ class RURI_OT_cabmap_sort(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_cabmap_enter_dir(bpy.types.Operator):
+    """Click on a folder row (RURI_UL_cabmap.draw_item) -- descends one level
+    under CURRENT_DIR. Selection is deliberately left untouched: it's keyed
+    by cab (see cabmap_state.SELECTED_CABS), not by which folder you're
+    looking at, so multi-selecting files across several folder visits and
+    then batch-importing them all at once keeps working."""
+    bl_idname = "ruri.cabmap_enter_dir"
+    bl_label = "Open Folder"
+    bl_description = "Browse into this virtual folder"
+    bl_options = {"INTERNAL"}
+    folder_name: StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        cabmap_state.browse_dir(cabmap_state.CURRENT_DIR + (self.folder_name,))
+        _rebuild_window(state)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_cabmap_goto_dir(bpy.types.Operator):
+    """Breadcrumb click -- jump straight to one ancestor level of CURRENT_DIR
+    (depth=0 is the virtual root) instead of stepping out one folder at a
+    time."""
+    bl_idname = "ruri.cabmap_goto_dir"
+    bl_label = "Go to Folder"
+    bl_description = "Jump to this level of the virtual path"
+    bl_options = {"INTERNAL"}
+    depth: IntProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        cabmap_state.browse_dir(cabmap_state.CURRENT_DIR[:self.depth])
+        _rebuild_window(state)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
 class RURI_OT_cabmap_click(bpy.types.Operator):
     """Row click with file-browser selection semantics -- the whole row is
     drawn as (flat) operator buttons precisely so this invoke() sees the
@@ -638,10 +737,10 @@ class RURI_MT_quick_filter(bpy.types.Menu):
     def draw(self, context):
         layout = self.layout
         state = context.scene.ruri_cabmap
-        if not (0 <= state.active_index < len(state.window)):
+        row = _selected_row(state)
+        if row is None:
             layout.label(text="No row selected", icon="INFO")
             return
-        row = state.window[state.active_index]
         for action_id, action_label, _desc in _ACTION_ITEMS:
             layout.label(text=action_label + ":")
             for field_id, field_label, _fdesc in _FIELD_ITEMS:
@@ -659,7 +758,9 @@ class RURI_MT_quick_filter(bpy.types.Menu):
 
 def _selected_row(state):
     if 0 <= state.active_index < len(state.window):
-        return state.window[state.active_index]
+        item = state.window[state.active_index]
+        if not item.is_folder:
+            return item
     return None
 
 
@@ -1083,17 +1184,27 @@ class RURI_UL_hooks(bpy.types.UIList):
 
 
 class RURI_UL_cabmap(bpy.types.UIList):
-    """Every column of every row is the SAME click operator (full-row click
-    target) so selection works like a file browser: plain/Ctrl/Shift clicks
-    all land in RURI_OT_cabmap_click.invoke with their modifiers intact.
-    NONE_OR_STATUS emboss keeps unselected rows flat like labels while
-    depress=True renders selected rows as a solid highlight bar."""
+    """A FOLDER row (item.is_folder, only ever present in the browse view --
+    see _rebuild_window) is one full-width button that navigates instead of
+    selecting. Every column of a FILE row is the SAME click operator
+    (full-row click target) so selection works like a file browser:
+    plain/Ctrl/Shift clicks all land in RURI_OT_cabmap_click.invoke with
+    their modifiers intact. NONE_OR_STATUS emboss keeps unselected rows flat
+    like labels while depress=True renders selected file rows as a solid
+    highlight bar."""
     bl_idname = "RURI_UL_cabmap"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        selected = item.selected
         row = layout.row(align=True)
         row.emboss = "NONE_OR_STATUS"
+
+        if item.is_folder:
+            op = row.operator(RURI_OT_cabmap_enter_dir.bl_idname,
+                              text=f"{item.folder_name}/  ({item.file_count})", icon="FILE_FOLDER")
+            op.folder_name = item.folder_name
+            return
+
+        selected = item.selected
 
         def cell(parent, text):
             op = parent.operator(RURI_OT_cabmap_click.bl_idname, text=text, depress=selected)
@@ -1244,6 +1355,17 @@ class RURI_PT_cabmap(bpy.types.Panel):
             # icon -- keeps this to icons actually in Blender's icon set.
             search_row.popover(RURI_PT_filter_popover.bl_idname,
                                text=str(active_rules) if active_rules else "", icon="FILTER")
+
+            if not cabmap_state.has_active_query(state.search, state.filter_rules):
+                # Breadcrumb address bar -- only meaningful in the folder browser; a search/rule
+                # result is a flat global match set, not scoped to CURRENT_DIR (see apply_filter).
+                crumbs = gated.row(align=True)
+                op = crumbs.operator(RURI_OT_cabmap_goto_dir.bl_idname, text="", icon="HOME")
+                op.depth = 0
+                for depth, segment in enumerate(cabmap_state.CURRENT_DIR, start=1):
+                    crumbs.label(text="/")
+                    op = crumbs.operator(RURI_OT_cabmap_goto_dir.bl_idname, text=segment)
+                    op.depth = depth
 
             sort_col, sort_dir = cabmap_state.sort_state()
             sort_row = gated.row(align=True)
@@ -1584,6 +1706,8 @@ _CLASSES = (
     RURI_UL_cabmap,
     RURI_UL_animation_clips,
     RURI_OT_cabmap_click,
+    RURI_OT_cabmap_enter_dir,
+    RURI_OT_cabmap_goto_dir,
     RURI_OT_cabmap_select_all,
     RURI_OT_filter_add_rule,
     RURI_OT_filter_remove_rule,

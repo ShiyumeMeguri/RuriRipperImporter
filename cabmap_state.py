@@ -1,5 +1,6 @@
 """Plain-Python (non-bpy) backing store for the cabmap browser: the full row
-list, the pythonnet bridge session, and search/sort/debounce bookkeeping.
+list, the pythonnet bridge session, the virtual-folder-tree navigation state,
+and search/sort/debounce bookkeeping.
 
 Deliberately NOT a bpy CollectionProperty. At real-world cabmap scale (~260k
 rows for Endfield 1.3.3, confirmed against the real game) a CollectionProperty
@@ -29,6 +30,12 @@ SEARCH_DEBOUNCE_SECONDS = 0.25
 ROWS = []       # list[dict] -- the full cabmap, set by load_rows()
 VISIBLE = []    # list[int] -- indices into ROWS after the current filter+sort
 BRIDGE = None   # pythonnet_bridge.RipperBridge | None -- the active session
+
+# Folder-browser navigation (see "Virtual folder tree" below). Plain Python for the
+# same reason VISIBLE/SELECTED_CABS are: rebuilt/mutated far too often for bpy
+# property overhead, and nothing here needs to survive a file save.
+CURRENT_DIR = ()          # tuple[str, ...] -- () is the virtual root; segments of the browsed folder
+CURRENT_SUBFOLDERS = []   # list[(name, recursive_file_count)] -- CURRENT_DIR's child folders, alpha-sorted
 
 # Multi-selection lives HERE (plain Python), not on the windowed
 # CollectionProperty: the window is torn down and rebuilt on every filter/
@@ -158,11 +165,15 @@ def row_passes_rules(row, rules):
 
 def reset():
     global ROWS, VISIBLE, BRIDGE, _sort_dir, _ROWS_BY_CAB
+    global CURRENT_DIR, CURRENT_SUBFOLDERS, _ROOT
     ROWS = []
     VISIBLE = []
     BRIDGE = None
     _sort_dir = 0
     _ROWS_BY_CAB = None
+    CURRENT_DIR = ()
+    CURRENT_SUBFOLDERS = []
+    _ROOT = _Node()
     clear_selection()
     clear_animation_build_state()
 
@@ -273,16 +284,17 @@ def clear_animation_build_state():
 
 def load_rows():
     """Pull every row from the currently-loaded cabmap into ROWS and reset the
-    filter to show everything. ROWS is a columnar row_table.RowTable --
-    indexing/iteration yield dict-compatible row views, so per-row consumers
-    are unchanged while the hot paths (search/sort/window) run columnar."""
-    global ROWS, VISIBLE, _ROWS_BY_CAB
+    browser to the virtual root folder. ROWS is a columnar row_table.RowTable
+    -- indexing/iteration yield dict-compatible row views, so per-row
+    consumers are unchanged while the hot paths (search/sort/window) run
+    columnar."""
+    global ROWS, _ROWS_BY_CAB
     if BRIDGE is None:
         raise RuntimeError("No bridge session -- call ensure_bridge() first.")
     ROWS = BRIDGE.enumerate_table()
-    VISIBLE = list(range(len(ROWS)))
     _ROWS_BY_CAB = None  # rebuilt lazily on first rows_by_cab() call
     clear_selection()    # cab keys from a previous map mean nothing in this one
+    _build_tree()        # also resets CURRENT_DIR/VISIBLE/CURRENT_SUBFOLDERS to the root listing
 
 
 _ROWS_BY_CAB = None  # dict[str, dict] -- lazily built cab -> row index, see rows_by_cab()
@@ -319,6 +331,155 @@ def rows_by_cab():
     return _ROWS_BY_CAB
 
 
+# --- Virtual folder tree ------------------------------------------------------
+# The browser's default view: a real file-browser-style drill-down over each
+# row's container path(s) (Unity's own AssetBundle.Container addressable keys,
+# see CabMap.Entry.ContainerPaths -- already lowercase/"/"-separated, exactly a
+# virtual filesystem path) instead of dumping all ~260k rows flat. Built once
+# per load_rows() in O(total path segments); browse_dir() then reads it in
+# O(children of that folder), so opening a folder never rescans ROWS the way
+# an ad-hoc per-click scan would.
+
+_NO_PATH_BUCKET = "(no virtual path)"  # synthetic root folder for the rare row with zero container paths
+
+
+class _Node:
+    """One folder-tree node, keyed into by its parent's `children` dict under
+    its own path segment -- that segment IS the node's leaf name, so nothing
+    here stores its own name. A node with `children` is browsable as a
+    folder; a node with `files` means at least one row's container path ends
+    exactly here (both can be true at once: some other row's path continues
+    past this one -- rare, but shown as both a folder and a file rather than
+    picking one)."""
+
+    __slots__ = ("children", "files", "file_count")
+
+    def __init__(self):
+        self.children = {}   # str segment -> _Node
+        self.files = []      # list[int] -- ROWS indices whose container path ends exactly here
+        self.file_count = 0  # recursive count of files at or below this node
+
+
+_ROOT = _Node()
+
+
+def _add_leaf(segments, row_index):
+    node = _ROOT
+    for seg in segments:
+        child = node.children.get(seg)
+        if child is None:
+            child = _Node()
+            node.children[seg] = child
+        node = child
+        node.file_count += 1
+    node.files.append(row_index)
+
+
+def _build_tree():
+    """Rebuild the folder tree from ROWS and reset browsing to the root. A row
+    exported under more than one container path (rare) appears as its own
+    leaf under EVERY one of its paths -- the same asset reachable from more
+    than one virtual name, same as the real game would resolve it. A row that
+    lands nowhere (zero container paths, or every one of them is blank/all-
+    separators) falls back to a child of _NO_PATH_BUCKET keyed by its own cab
+    id, so it stays reachable (as a FOLDER you can open, not a same-named
+    leaf sitting directly on the bucket node -- a childless node reads as a
+    file, not a folder, see _Node) instead of silently vanishing.
+
+    Local-bound methods + a plain list instead of a genexpr/tuple() (segments
+    is only ever iterated here, never used as a dict key) -- ~45% faster at
+    real cabmap scale (260k rows, confirmed by measurement), worth it since
+    this runs synchronously inside the Build/Load operator."""
+    global _ROOT
+    _ROOT = _Node()
+    path_count_of = ROWS.container_path_count
+    path_of = ROWS.container_path
+    cab_of = ROWS.cab
+    for index in range(len(ROWS)):
+        placed = False
+        for p in range(path_count_of(index)):
+            segments = [s for s in path_of(index, p).split("/") if s]
+            if segments:
+                _add_leaf(segments, index)
+                placed = True
+        if not placed:
+            _add_leaf((_NO_PATH_BUCKET, cab_of(index)), index)
+    browse_dir(())
+
+
+def _node_at(path):
+    node = _ROOT
+    for seg in path:
+        node = node.children.get(seg)
+        if node is None:
+            return None
+    return node
+
+
+def browse_dir(path):
+    """Point the browser at a virtual folder (a tuple of path segments, ()
+    for root) and recompute VISIBLE/CURRENT_SUBFOLDERS for exactly that
+    folder's own children -- O(children), never O(len(ROWS)). An unreachable
+    path (e.g. CURRENT_DIR from a since-replaced cabmap) falls back to root
+    rather than showing a dead end."""
+    global CURRENT_DIR, VISIBLE, CURRENT_SUBFOLDERS
+    node = _node_at(path)
+    if node is None:
+        path, node = (), _ROOT
+    CURRENT_DIR = tuple(path)
+    subfolders = []
+    files = []
+    for name, child in node.children.items():
+        if child.children:  # has descendants beyond itself -> browsable folder
+            subfolders.append((name, child.file_count))
+        if child.files:     # a row's container path ends exactly here -> also a file entry
+            files.extend(child.files)
+    subfolders.sort(key=lambda pair: pair[0].lower())
+    CURRENT_SUBFOLDERS = subfolders
+    VISIBLE = files
+    _apply_sort()
+
+
+def has_active_query(query, rules):
+    """True when the flat global-search view should replace the folder
+    browser -- non-blank quick-search text, or any ENABLED Include/Exclude
+    rule (a disabled rule is inert, same as apply_filter treats it)."""
+    if (query or "").strip():
+        return True
+    return any(r.enabled for r in rules)
+
+
+def refresh_visible(query, rules):
+    """The single dispatch point between the two views: flat global search/
+    rule results (apply_filter) or the folder listing for CURRENT_DIR
+    (browse_dir). Always refreshes _active_rules -- even when the folder-tree
+    branch runs and skips apply_filter entirely -- so a later debounced
+    search (reapply_filter, which only has the cached rules to go on) never
+    fires against a stale or since-removed rule set."""
+    global _active_rules
+    _active_rules = tuple(rules)
+    if has_active_query(query, rules):
+        apply_filter(query, rules)
+    else:
+        browse_dir(CURRENT_DIR)
+
+
+def leaf_name_in_current_dir(index):
+    """The display name for ROWS[index] AS BROWSED under CURRENT_DIR
+    specifically. Matters only for the rare row with more than one container
+    path: its default name (RowTable.name(), always path[0]'s leaf) can
+    belong to a completely different folder than the one it's actually being
+    shown in here. Falls back to that default if, somehow, none of the row's
+    paths match (shouldn't happen for anything browse_dir actually placed in
+    VISIBLE)."""
+    depth = len(CURRENT_DIR)
+    for p in range(ROWS.container_path_count(index)):
+        segments = tuple(s for s in ROWS.container_path(index, p).split("/") if s)
+        if len(segments) == depth + 1 and segments[:depth] == CURRENT_DIR:
+            return segments[-1]
+    return ROWS.name(index)
+
+
 def apply_filter(query, rules=()):
     """Row shows if it matches the quick search across Name/Container/Source/
     Type AND passes the Include/Exclude rule set (row_passes_rules) --
@@ -327,11 +488,14 @@ def apply_filter(query, rules=()):
 
     The quick search runs vectorized over the RowTable's column blobs; the
     rule engine, when rules exist, evaluates per-row over the already-
-    search-narrowed candidates only."""
-    global VISIBLE, _active_rules
+    search-narrowed candidates only. Always a FLAT result set over the whole
+    cabmap, never scoped to CURRENT_DIR -- see refresh_visible for how this
+    and the folder browser (browse_dir) dispatch between each other."""
+    global VISIBLE, _active_rules, CURRENT_SUBFOLDERS
     query = (query or "").strip().lower()
     rules = tuple(rules)
     _active_rules = rules
+    CURRENT_SUBFOLDERS = []
     enabled_rules = [r for r in rules if r.enabled]
     candidates = np.flatnonzero(ROWS.search_mask(query))
     if enabled_rules:
@@ -343,9 +507,12 @@ def apply_filter(query, rules=()):
 
 
 def reapply_filter(query):
-    """Re-run apply_filter with whatever rules were last active -- for when
-    only the rule set changed, not the search text."""
-    apply_filter(query, _active_rules)
+    """Re-run refresh_visible with whatever rules were last active -- for
+    when only the debounced search text changed, not the rule set (see
+    schedule_filter). Routes through refresh_visible, not apply_filter
+    directly, so an empty query clearing back to no-rules-either correctly
+    lands back in the folder browser instead of a stale flat view."""
+    refresh_visible(query, _active_rules)
 
 
 def _apply_sort():
