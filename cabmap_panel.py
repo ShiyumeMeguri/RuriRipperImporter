@@ -23,8 +23,8 @@ import re
 import traceback
 
 import bpy
-from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, IntProperty,
-                        PointerProperty, StringProperty)
+from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
+                        IntProperty, PointerProperty, StringProperty)
 
 try:
     from . import cabmap_state, pythonnet_bootstrap, pythonnet_bridge, bridge_asset_db, prefab_importer, scene_panel
@@ -292,6 +292,31 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
     window: CollectionProperty(type=RURI_PG_cabmap_row)
     active_index: IntProperty()
 
+    # Row column widths (RURI_UL_cabmap.draw_item), freely draggable like any
+    # Blender slider -- template_list has no native drag-resizable column
+    # headers the way the WinForms reference's ListView does (MainForm.
+    # AssetList.cs: Columns.Add("Name", 240)/("Container", 320)/("Type", 150)/
+    # ("Source", 200)/("Deps", 50)), so this is the Blender-native substitute.
+    # Each factor is relative to the space LEFT after the previous column
+    # (UILayout.split() semantics, nested) -- defaults are that same
+    # reference's pixel widths converted through the same nesting so the
+    # on-screen proportions start out identical: Name 240/960, Container
+    # 320/960 of what's left after Name, Type 150/960 of what's left after
+    # both, Deps 50/960 of what's left after all three -- Source (no slider;
+    # the row's last cell) fills whatever remains, always exactly 200/960.
+    col_name_factor: FloatProperty(
+        name="Name", default=0.25, min=0.05, max=0.95, subtype="FACTOR",
+        description="Width of the Name column")
+    col_container_factor: FloatProperty(
+        name="Path", default=0.4444, min=0.05, max=0.95, subtype="FACTOR",
+        description="Width of the Path (virtual container path) column")
+    col_type_factor: FloatProperty(
+        name="Type", default=0.375, min=0.05, max=0.95, subtype="FACTOR",
+        description="Width of the Type column")
+    col_deps_factor: FloatProperty(
+        name="Deps", default=0.2, min=0.05, max=0.95, subtype="FACTOR",
+        description="Width of the Deps column -- Source fills whatever's left")
+
     filter_rules: CollectionProperty(type=RURI_PG_filter_rule)
     filter_rules_active_index: IntProperty()
     # The rule currently being assembled in the "new rule" builder row (Process
@@ -543,6 +568,33 @@ class RURI_OT_cabmap_click(bpy.types.Operator):
                       "• Ctrl+Shift+Click: add that range to the selection")
     bl_options = {"INTERNAL"}
     index: IntProperty()
+
+    @classmethod
+    def description(cls, context, properties):
+        """Per-row hover tooltip -- Blender's native hover-and-dwell popup (its
+        delay is the user's own Preferences > Interface > Tooltips setting, no
+        timer needed here), the same dynamic-description mechanism
+        RURI_OT_cabmap_select_all already uses for its per-mode text. Mirrors
+        the WinForms reference's selection info panel (MainForm.AssetList.cs's
+        virtualListView_SelectedIndexChanged: "CAB: ...\\nSource: ...\\n
+        Dependencies: ...\\n\\n<container paths>") so the row's full virtual
+        path(s) are readable even when its column is too narrow to show them
+        (or item.name is abbreviated to "leaf (+N)" for a multi-path row --
+        see RowTable.name)."""
+        scene = getattr(context, "scene", None)
+        state = getattr(scene, "ruri_cabmap", None) if scene is not None else None
+        if state is None or not (0 <= properties.index < len(state.window)):
+            return cls.bl_description
+        item = state.window[properties.index]
+        if item.is_folder:
+            return cls.bl_description
+        paths = (item.container or item.cab).replace("  |  ", "\n")
+        return (f"{item.name or item.cab}\n"
+                f"CAB: {item.cab}\n"
+                f"Source: {item.source}\n"
+                f"Dependencies: {item.deps}\n"
+                f"\n{paths}\n"
+                f"\n{cls.bl_description}")
 
     def invoke(self, context, event):
         state = context.scene.ruri_cabmap
@@ -1210,11 +1262,18 @@ class RURI_UL_cabmap(bpy.types.UIList):
             op = parent.operator(RURI_OT_cabmap_click.bl_idname, text=text, depress=selected)
             op.index = index
 
-        split = row.split(factor=0.34, align=True)
+        # Column boundaries come from data's col_*_factor sliders (freely
+        # draggable, see RURI_PT_column_widths_popover) instead of hardcoded
+        # splits -- each factor is relative to the space LEFT after the
+        # previous column (UILayout.split() semantics), not a fraction of the
+        # whole row; Source (last cell) always just fills what remains.
+        split = row.split(factor=data.col_name_factor, align=True)
         cell(split, item.name or item.cab)
-        rest = split.split(factor=0.32, align=True)
-        cell(rest, item.type_names)
-        tail = rest.split(factor=0.15, align=True)
+        rest = split.split(factor=data.col_container_factor, align=True)
+        cell(rest, item.container or item.cab)
+        rest2 = rest.split(factor=data.col_type_factor, align=True)
+        cell(rest2, item.type_names)
+        tail = rest2.split(factor=data.col_deps_factor, align=True)
         cell(tail, str(item.deps))
         cell(tail, item.source)
 
@@ -1302,6 +1361,33 @@ class RURI_PT_filter_popover(bpy.types.Panel):
             layout.operator(RURI_OT_filter_clear_rules.bl_idname, icon="TRASH")
 
 
+class RURI_PT_column_widths_popover(bpy.types.Panel):
+    """Column-width sliders for the virtual file list below -- Blender's
+    template_list draws each row through hand-rolled split() columns (see
+    RURI_UL_cabmap.draw_item), not a native ListView with drag-resizable
+    column headers the way the WinForms reference has (MainForm.AssetList.cs's
+    virtualListView.Columns.Add(...) widths, which ARE mouse-draggable there).
+    This popover is the Blender-native equivalent: every split factor lives on
+    the scene as a plain FloatProperty, so each row below is a normal
+    click-and-drag Blender slider (and, like any Blender number field, can
+    also be typed into directly, or right-click > Reset to Default Value)."""
+    bl_idname = "RURI_PT_column_widths_popover"
+    bl_label = "Column Widths"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_ui_units_x = 12
+
+    def draw(self, context):
+        layout = self.layout
+        state = context.scene.ruri_cabmap
+        col = layout.column(align=True)
+        col.prop(state, "col_name_factor", text="Name", slider=True)
+        col.prop(state, "col_container_factor", text="Path", slider=True)
+        col.prop(state, "col_type_factor", text="Type", slider=True)
+        col.prop(state, "col_deps_factor", text="Deps", slider=True)
+        layout.label(text="Source fills whatever's left.", icon="INFO")
+
+
 class RURI_PT_cabmap(bpy.types.Panel):
     bl_idname = "RURI_PT_cabmap"
     bl_label = "RuriRipper"
@@ -1375,6 +1461,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
                     arrow = " ▲" if sort_dir == 1 else (" ▼" if sort_dir == 2 else "")
                 op = sort_row.operator(RURI_OT_cabmap_sort.bl_idname, text=col_label + arrow)
                 op.column = col_key
+            sort_row.popover(RURI_PT_column_widths_popover.bl_idname, text="", icon="ARROW_LEFTRIGHT")
 
             gated.template_list(RURI_UL_cabmap.bl_idname, "", state, "window",
                                 state, "active_index", rows=12)
@@ -1715,6 +1802,7 @@ _CLASSES = (
     RURI_OT_filter_quick_add,
     RURI_MT_quick_filter,
     RURI_PT_filter_popover,
+    RURI_PT_column_widths_popover,
     RURI_PT_cabmap,
     RURI_OT_refresh_hooks,
     RURI_OT_build_cabmap,
