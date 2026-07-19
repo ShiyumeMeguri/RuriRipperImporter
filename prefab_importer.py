@@ -894,6 +894,38 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
     return report
 
 
+def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
+    """Bridge-mode standalone Avatar import: a Blender armature built straight
+    from the avatar's OWN embedded skeleton (armature_builder.
+    build_armature_from_avatar), independent of any accompanying rig
+    FBX/prefab -- unlike every other Avatar consumer in this module
+    (_load_retargeter, find_retargeter_in_db, retargeter_from_stamped_armature),
+    which only ever build a muscle RETARGETER to drive an already-imported
+    character, never a skeleton object of its own.
+
+    Also stamps the avatar YAML onto the resulting armature via the SAME
+    _stamp_avatar_on_armature a full character import already uses, so a
+    later standalone AnimationClip import can retarget straight onto it."""
+    options = _resolve_options(options)
+    report = ImportReport()
+    start = time.time()
+    avatar_doc = avatar_file.first("Avatar")
+    if avatar_doc is None:
+        report.warnings.append("No Avatar object in file")
+        return report
+    resolved_name = name or str(avatar_doc.data.get("m_Name") or "Avatar")
+    try:
+        arm_obj, retargeter = armature_builder.build_armature_from_avatar(context, avatar_file, resolved_name)
+    except Exception as exc:
+        report.warnings.append(f"Avatar skeleton parse failed: {type(exc).__name__}: {exc}")
+        return report
+    _stamp_avatar_on_armature(arm_obj, db, retargeter)
+    report.armature = arm_obj
+    report.bones = len(arm_obj.data.bones)
+    report.seconds = time.time() - start
+    return report
+
+
 def build_mesh_name_index_from_db(db):
     """Peek every document's class+name (see _peek_class_and_name -- cheap,
     no full parse) and index the Mesh-classed ones by LOWERCASED name. CabMap

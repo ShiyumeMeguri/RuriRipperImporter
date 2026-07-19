@@ -718,6 +718,31 @@ class HumanoidRetargeter:
         axes = self._axes.get("Hips")
         return axes.bone_name if axes is not None else None
 
+    def skeleton_nodes(self):
+        """The avatar's own embedded skeleton, independent of any human/muscle
+        mapping (populated for Generic avatars too, whose _axes stays empty --
+        m_Human.m_Skeleton is the full raw node tree, m_HumanBoneIndex is just
+        which of those nodes double as the 25 human bones). One entry per raw
+        skeleton node, in the SAME order/index space m_ParentId indexes into:
+        ``(bone_name, parent_index, rest_local_translation, rest_local_rotation)``.
+        ``bone_name`` resolves through the avatar's own m_TOS (m_ID hash ->
+        path leaf), same source _add_bone uses, falling back to ``bone_{i}``
+        for any node the hash table doesn't cover."""
+        result = []
+        for index in range(len(self._nodes)):
+            parent = self._node_parent[index] if index < len(self._node_parent) else -1
+            name = None
+            if index < len(self._skel_ids):
+                path = self._tos.get(self._skel_ids[index])
+                if path:
+                    name = path.rsplit("/", 1)[-1]
+            if not name:
+                name = f"bone_{index}"
+            t = self._node_rest_t[index] if index < len(self._node_rest_t) else Vector((0.0, 0.0, 0.0))
+            q = self._node_rest_q[index] if index < len(self._node_rest_q) else Quaternion()
+            result.append((name, parent, t, q))
+        return result
+
     def _provisional_fk(self, muscle_lookup):
         """Every body bone's world position+rotation for this frame, treating
         Hips as sitting at the origin with identity rotation (see the module

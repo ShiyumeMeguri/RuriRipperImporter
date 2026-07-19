@@ -355,6 +355,22 @@ class RipperBridge:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
         return [str(c) for c in self._bridge.ResolveClosureCabNames(self._map, _string_array(cab_names))]
 
+    def find_direct_dependents(self, cab_names):
+        """Reverse dependency lookup: every CAB that DIRECTLY depends on
+        (references) any of the given seed CABs -- the mirror of
+        resolve_closure_cab_names' forward walk (CabMap.FindDirectDependents,
+        pure in-memory graph lookup via the cabmap's reverse-adjacency index,
+        no VFS decrypt/export). Useful when an asset's real usage context
+        isn't reachable from its own forward dependencies -- e.g. a Mesh-only
+        FBX sub-asset carries no Material of its own; the Prefab whose
+        Renderer pairs that mesh with a material is a direct dependent.
+        Direct (one-hop) only; feed the results into import_cabs next to
+        pull in each dependent's own forward closure. Requires a loaded
+        cabmap."""
+        if self._map is None:
+            raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() first.")
+        return [str(c) for c in self._bridge.FindDirectDependents(self._map, _string_array(cab_names))]
+
     def enumerate_vfs_files(self, vfs_roots, block_type_filter=None):
         """Every file recorded in every .blc manifest across vfs_roots (a
         path, or a priority-ordered list of paths -- e.g. [Persistent/VFS,

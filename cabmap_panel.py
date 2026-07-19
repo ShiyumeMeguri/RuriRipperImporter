@@ -901,9 +901,10 @@ def _selected_target_rows(state):
 
 
 def _import_single_asset(op, context, state, db, textures, guid, class_name, name):
-    """Import exactly one non-hierarchy asset resolved from a per-asset browser
-    row (a non-bundled file's Mesh/Material/Texture2D, keyed "<file>::<pathID>")
-    -- the asset-level granularity a plain player build browses at. Clips and
+    """Import exactly one non-hierarchy asset by class: a per-asset browser
+    row (a non-bundled file's Mesh/Material/Texture2D/Avatar/TextAsset, keyed
+    "<file>::<pathID>") or one loose asset found inside a bundled CAB with no
+    .prefab/.unity root at all (see _import_loose_closure_assets). Clips and
     GameObject hierarchies never reach here (dispatched earlier)."""
     if class_name == "Mesh":
         mesh_file = db.load_guid(guid)
@@ -949,10 +950,64 @@ def _import_single_asset(op, context, state, db, textures, guid, class_name, nam
         op.report({"INFO"}, f"Imported texture '{name}' (packed into this .blend, see the image list).")
         return {"FINISHED"}
 
+    if class_name == "Avatar":
+        avatar_file = db.load_guid(guid)
+        if avatar_file is None:
+            op.report({"ERROR"}, "Resolved avatar document failed to parse -- see console.")
+            return {"CANCELLED"}
+        report = prefab_importer.import_avatar_from_db(context, db, avatar_file, state.as_options(), name)
+        for warning in report.warnings[:5]:
+            op.report({"WARNING"}, warning)
+        if report.armature is None:
+            op.report({"ERROR"}, "Avatar skeleton decoded empty -- see console.")
+            return {"CANCELLED"}
+        op.report({"INFO"}, f"Imported avatar skeleton '{name}' ({report.bones} bones).")
+        return {"FINISHED"}
+
+    if class_name == "TextAsset":
+        text_file = db.load_guid(guid)
+        doc = text_file.first("TextAsset") if text_file is not None else None
+        if doc is None:
+            op.report({"ERROR"}, "Resolved text asset failed to parse -- see console.")
+            return {"CANCELLED"}
+        text_block = bpy.data.texts.new(name)
+        text_block.write(str(doc.data.get("m_Script") or ""))
+        op.report({"INFO"}, f"Imported text asset '{name}' (see the Text Editor).")
+        return {"FINISHED"}
+
     op.report({"ERROR"}, f"Row resolved to a {class_name or 'non-document'} asset -- no importer "
-                         f"for this type yet (meshes, materials, textures, clips, and GameObject "
-                         f"hierarchies are supported).")
+                         f"for this type yet (meshes, materials, textures, avatars, text assets, "
+                         f"clips, and GameObject hierarchies are supported).")
     return {"CANCELLED"}
+
+
+_LOOSE_ASSET_CLASSES = ("Mesh", "Material", "Avatar", "TextAsset")
+
+
+def _import_loose_closure_assets(op, context, state, db, textures):
+    """Fallback for a resolved closure with no .prefab/.unity root at all -- a
+    bundled CAB of loose Mesh/Material/Avatar/TextAsset data with no
+    GameObject (e.g. a shared "materials" sub-bundle: selecting it used to
+    silently import nothing, since the root-selection logic in
+    _import_hierarchy_rows only ever looks for .prefab/.unity roots). Walks
+    every guid in the resolved closure, classifies it with the same cheap
+    peek prefab_importer.discover_clip_refs_from_db uses, and imports
+    everything _import_single_asset knows how to build -- the same "import
+    everything reachable in the closure" philosophy _import_hierarchy_rows
+    already applies to prefab roots (see its own comment on a bundled row
+    pulling in more than just its own root). Returns the count imported."""
+    imported = 0
+    for guid in db.all_guids():
+        text = db.raw_text(guid)
+        if not text:
+            continue
+        class_name, name = prefab_importer._peek_class_and_name(text)
+        if class_name not in _LOOSE_ASSET_CLASSES:
+            continue
+        if _import_single_asset(op, context, state, db, textures, guid,
+                                class_name, name or guid) == {"FINISHED"}:
+            imported += 1
+    return imported
 
 
 def _resolve_target_armature(context):
@@ -1062,6 +1117,57 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         op.report({"WARNING"}, warning)
     op.report({"INFO"}, f"Built {built} animation action(s) on {arm_obj.name}.")
     return {"FINISHED"}
+
+
+class RURI_OT_cabmap_import_with_dependents(bpy.types.Operator):
+    """Import the selected row(s) TOGETHER WITH whatever directly depends on
+    them, in ONE click -- not a discovery list to hand-pick from. Fixes the
+    case where a bundled row imports empty/incomplete on its own: a Mesh-only
+    FBX sub-asset carries no Material of its own, but the Prefab whose
+    Renderer component actually pairs that mesh with a material is a direct
+    DEPENDENT, invisible to a plain forward import (see
+    cabmap_state.BRIDGE.find_direct_dependents / RipperBlenderBridge.
+    FindDirectDependents for the reverse lookup itself).
+
+    Implementation: expands the multi-selection (cabmap_state.SELECTED_CABS)
+    with the reverse-lookup hits, then delegates straight to
+    RURI_OT_import_selected via bpy.ops -- every existing per-row/type
+    dispatch (prefab roots, loose Mesh/Material/Avatar/TextAsset) runs
+    completely unchanged, just over a bigger CAB set."""
+    bl_idname = "ruri.cabmap_import_with_dependents"
+    bl_label = "Import (With Dependents)"
+    bl_description = ("Find every CAB that directly depends on the selected row(s) -- e.g. the "
+                      "Prefab/Material that actually uses a mesh-only CAB -- and import "
+                      "everything together in one step")
+    bl_options = {"REGISTER", "UNDO"}
+    reset_scene: BoolProperty(default=False)
+
+    @classmethod
+    def poll(cls, context):
+        state = context.scene.ruri_cabmap
+        return (state.loaded and cabmap_state.BRIDGE is not None
+                and (cabmap_state.SELECTED_CABS
+                     or 0 <= state.active_index < len(state.window)))
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        target_rows = _selected_target_rows(state)
+        if not target_rows:
+            self.report({"WARNING"}, "No rows selected.")
+            return {"CANCELLED"}
+        seed_cabs = [row["cab"] for row in target_rows]
+        try:
+            dependent_cabs = cabmap_state.BRIDGE.find_direct_dependents(seed_cabs)
+        except Exception as exc:
+            _report_exception(self, "Find dependents failed", exc)
+            return {"CANCELLED"}
+
+        added = [cab for cab in dependent_cabs if cab not in cabmap_state.SELECTED_CABS]
+        cabmap_state.SELECTED_CABS.update(added)
+        _sync_window_selection(state)
+        if added:
+            self.report({"INFO"}, f"Importing with {len(added)} direct dependent(s) added to the selection.")
+        return bpy.ops.ruri.import_selected(reset_scene=self.reset_scene)
 
 
 class RURI_OT_import_selected(bpy.types.Operator):
@@ -1187,10 +1293,16 @@ class RURI_OT_import_selected(bpy.types.Operator):
                                      "bundled rows' full root set -- import scenes on their own "
                                      "for a minimal result.")
         if not import_roots:
-            self.report({"WARNING"}, "No importable (.prefab/.unity) asset found in the resolved closure.")
+            # No GameObject-rooted .prefab/.unity anywhere in the closure -- a
+            # bundled CAB of loose Mesh/Material/Avatar/TextAsset data (see
+            # _import_loose_closure_assets) rather than a dead end.
+            loose_imported = _import_loose_closure_assets(self, context, state, db, textures)
+            if loose_imported == 0:
+                self.report({"WARNING"}, "No importable (.prefab/.unity) asset, and no loose "
+                                         "Mesh/Material/Avatar/TextAsset, found in the resolved closure.")
             if populate_browser:
                 _populate_animation_browser(state, None)
-            return False, imported
+            return loose_imported > 0, imported + loose_imported
 
         # The animation browser only applies to a SINGLE selected character --
         # attribute it through seed_roots (the cabmap's own CAB identity, never
@@ -1558,6 +1670,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op.reset_scene = False
             op = actions.operator(RURI_OT_import_selected.bl_idname, text=f"Import{batch} (Reset Scene)")
             op.reset_scene = True
+            op = gated.operator(RURI_OT_cabmap_import_with_dependents.bl_idname,
+                               text=f"Import{batch} (With Dependents)", icon="LOOP_BACK")
+            op.reset_scene = False
         else:
             scene_panel.draw_scene_tab(gated, context)
 
@@ -1870,6 +1985,7 @@ _CLASSES = (
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
     RURI_OT_cabmap_sort,
+    RURI_OT_cabmap_import_with_dependents,
     RURI_OT_import_selected,
     RURI_OT_discover_animations,
     RURI_OT_import_selected_animations,

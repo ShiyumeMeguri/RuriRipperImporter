@@ -625,9 +625,17 @@ def schedule_filter(query, on_ready):
         global _timer_registered
         if time.monotonic() - _last_edit_time < SEARCH_DEBOUNCE_SECONDS:
             return 0.05
-        reapply_filter(_pending_query)  # keeps whatever Include/Exclude rules are currently active
-        on_ready()
-        _timer_registered = False
+        try:
+            reapply_filter(_pending_query)  # keeps whatever Include/Exclude rules are currently active
+            on_ready()
+        finally:
+            # MUST run even if reapply_filter/on_ready raises -- this flag is the
+            # only thing schedule_filter checks before registering a new timer
+            # (see its own "if _timer_registered: return" above); leaving it
+            # True after an exception would silently disable search for the
+            # rest of the session (every later keystroke's schedule_filter call
+            # would just update _pending_query and return, registering nothing).
+            _timer_registered = False
         return None  # unregister this timer
 
     bpy.app.timers.register(_tick, first_interval=0.05)
