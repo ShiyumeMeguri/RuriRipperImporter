@@ -554,6 +554,64 @@ class RURI_OT_cabmap_goto_dir(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_cabmap_goto_row_folder(bpy.types.Operator):
+    """One-click 'reveal in folder' -- jumps the folder browser straight to
+    the virtual folder this row's container path lives under, the way a
+    normal file explorer's "Open file location" does. UIList has no per-row
+    right-click context menu (see this module's docstring and
+    RURI_MT_quick_filter, which hits the same wall for its own quick-filter
+    actions), so this is a small icon button on the row instead -- one click,
+    no menu, actually faster than a right-click would have been.
+
+    A row can carry more than one container path (rare, but see
+    cabmap_state.best_path_index_for_jump's docstring for a confirmed report
+    of the bug that skipping this caused): which one to jump to is resolved
+    against the search text BEFORE it gets cleared below, since that's the
+    only signal that says which of the row's paths is actually the one the
+    user was looking at.
+
+    Drops out of search/rule-filtered view on jump: has_active_query gates
+    the folder browser off whenever a search or an enabled rule is active
+    (see refresh_visible), so landing on the right CURRENT_DIR wouldn't
+    actually be visible otherwise. Rules are only disabled, not deleted --
+    the user's filter setup survives, just switched off (re-enable it from
+    the funnel popover) -- same as unticking a rule's own checkbox there."""
+    bl_idname = "ruri.cabmap_goto_row_folder"
+    bl_label = "Go to Containing Folder"
+    bl_description = "Jump the folder browser to this file's virtual folder"
+    bl_options = {"INTERNAL"}
+    index: IntProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        if not (0 <= self.index < len(state.window)):
+            return {"CANCELLED"}
+        item = state.window[self.index]
+        if item.is_folder:
+            return {"CANCELLED"}
+
+        target_cab = item.cab
+        path_index = cabmap_state.best_path_index_for_jump(item.row_index, state.search)
+        folder = cabmap_state.folder_of(item.row_index, path_index)
+        state.search = ""
+        for rule in state.filter_rules:
+            rule.enabled = False
+        cabmap_state.browse_dir(folder)
+        _rebuild_window(state)
+
+        for position, row_item in enumerate(state.window):
+            if not row_item.is_folder and row_item.cab == target_cab:
+                state.active_index = position
+                break
+
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
 class RURI_OT_cabmap_click(bpy.types.Operator):
     """Row click with file-browser selection semantics -- the whole row is
     drawn as (flat) operator buttons precisely so this invoke() sees the
@@ -1275,7 +1333,10 @@ class RURI_UL_cabmap(bpy.types.UIList):
         cell(rest2, item.type_names)
         tail = rest2.split(factor=data.col_deps_factor, align=True)
         cell(tail, str(item.deps))
-        cell(tail, item.source)
+        source_and_goto = tail.split(factor=0.88, align=True)
+        cell(source_and_goto, item.source)
+        goto = source_and_goto.operator(RURI_OT_cabmap_goto_row_folder.bl_idname, text="", icon="FILE_FOLDER")
+        goto.index = index
 
 
 class RURI_UL_animation_clips(bpy.types.UIList):
@@ -1795,6 +1856,7 @@ _CLASSES = (
     RURI_OT_cabmap_click,
     RURI_OT_cabmap_enter_dir,
     RURI_OT_cabmap_goto_dir,
+    RURI_OT_cabmap_goto_row_folder,
     RURI_OT_cabmap_select_all,
     RURI_OT_filter_add_rule,
     RURI_OT_filter_remove_rule,

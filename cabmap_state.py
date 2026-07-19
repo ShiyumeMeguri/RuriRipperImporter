@@ -407,6 +407,64 @@ def _build_tree():
     browse_dir(())
 
 
+def folder_of(row_index, path_index=0):
+    """The folder-tree path (tuple of segments, NOT including the row's own
+    leaf name) that ROWS[row_index]'s path_index'th container path lives
+    under -- mirrors _build_tree's own placement logic exactly (including its
+    zero-container-paths fallback into a _NO_PATH_BUCKET folder keyed by cab),
+    so "jump to this row's folder" always lands exactly where browse_dir
+    would already show it. path_index is clamped, not validated -- callers
+    that don't care which of a multi-path row's folders they land in (the
+    common case) can just pass the default 0."""
+    path_count = ROWS.container_path_count(row_index)
+    if path_count == 0:
+        return (_NO_PATH_BUCKET,)
+    path = ROWS.container_path(row_index, min(max(path_index, 0), path_count - 1))
+    segments = [s for s in path.split("/") if s]
+    return tuple(segments[:-1])
+
+
+def best_path_index_for_jump(row_index, query):
+    """Which of ROWS[row_index]'s container paths folder_of() should target
+    when a row has more than one (rare) -- picks whichever path is actually
+    relevant to how the row is CURRENTLY being shown, instead of blindly
+    defaulting to path 0. RowTable.name()'s own "always path[0]'s leaf"
+    default is exactly what a multi-path row's OTHER paths can silently
+    disagree with -- the same trap leaf_name_in_current_dir already
+    documents and works around for the folder-browse view; a flat
+    search-result row needs the equivalent fix, or jumping from a match that
+    only exists on path 1+ lands in path 0's unrelated folder instead (e.g.
+    an animation-CAB path when the row actually matched on a dynamicassets
+    path -- confirmed report).
+
+    - Folder-browse view (query blank -- no active search text): the path
+      whose folder segments equal CURRENT_DIR, i.e. the SAME identity the
+      row is already being displayed under (browse_dir already put you
+      there, so this normally resolves back to a no-op).
+    - Flat search-result view (query non-blank): the first path containing
+      the search text -- the one the row actually matched on.
+    - Falls back to path 0 when neither applies (e.g. the row matched via a
+      different field -- Type/Source -- or purely through an Include/Exclude
+      rule with no plain search text typed)."""
+    path_count = ROWS.container_path_count(row_index)
+    if path_count <= 1:
+        return 0
+
+    needle = (query or "").strip().lower()
+    if not needle:
+        depth = len(CURRENT_DIR)
+        for p in range(path_count):
+            segments = tuple(s for s in ROWS.container_path(row_index, p).split("/") if s)
+            if len(segments) == depth + 1 and segments[:depth] == CURRENT_DIR:
+                return p
+        return 0
+
+    for p in range(path_count):
+        if needle in ROWS.container_path(row_index, p).lower():
+            return p
+    return 0
+
+
 def _node_at(path):
     node = _ROOT
     for seg in path:
