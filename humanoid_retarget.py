@@ -816,13 +816,26 @@ class HumanoidRetargeter:
         """Port of mecanim::human::HumanComputeOrientation: the body's
         orientation frame from the shoulder-center/hip-center world
         positions.  Matches Unity's own rest-pose computation of this same
-        formula to 0.00002 degrees (validated against m_RootX.q)."""
+        formula to 0.00002 degrees (validated against m_RootX.q).
+
+        The raw right vector is NOT orthogonal to up away from rest (a
+        twisted pose points the arm-diff+leg-diff sum well off the torso
+        plane), and quaternion extraction is only defined for orthonormal
+        matrices: feeding the unorthogonalized frame to to_quaternion()
+        made its trace-branch selection discontinuous -- measured on
+        battle_skill_ult's spin, one frame (153->154) jumped the body frame
+        5.75deg while every muscle input and the shoulder/hip centers moved
+        smoothly, kicking the hips 4.9deg about world X. Rebuilding right
+        from up x forward closes the frame orthonormally; at rest the
+        vectors are orthogonal anyway, so the validated rest agreement is
+        untouched."""
         shoulder_center = (fk["RightUpperArm"][0] + fk["LeftUpperArm"][0]) * 0.5
         hip_center = (fk["LeftUpperLeg"][0] + fk["RightUpperLeg"][0]) * 0.5
         up = (shoulder_center - hip_center).normalized()
         right = ((fk["RightUpperArm"][0] - fk["LeftUpperArm"][0]) +
                 (fk["RightUpperLeg"][0] - fk["LeftUpperLeg"][0])).normalized()
         forward = right.cross(up).normalized()
+        right = up.cross(forward)
         return Matrix((right, up, forward)).transposed().to_quaternion()
 
     def body_transform(self, muscle_lookup, keep_position_xz=True, keep_position_y=True,
