@@ -1,0 +1,3 @@
+[submodule "ruri_pybridge"]
+	path = ruri_pybridge
+	url = https://github.com/ShiyumeMeguri/RuriRipperPyBridge.git

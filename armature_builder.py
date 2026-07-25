@@ -17,11 +17,9 @@ import json
 
 try:
     from . import coordinate, hierarchy
-except ImportError:
+except ImportError:  # standalone (non-package) testing
     import coordinate
     import hierarchy
-
-import numpy as np
 
 import bpy
 from mathutils import Matrix, Vector
@@ -105,8 +103,7 @@ def build_armature(context, unity_file, name="UnityArmature"):
         if bone_name and node.path:
             path_to_bone[node.path] = bone_name
 
-    file_id_to_world = {fid: np.array(node.world, dtype=np.float64)
-                        for fid, node in nodes.items()}
+    file_id_to_world = hierarchy.world_matrices(nodes)
 
     # Stamp the Unity rig identity onto the armature object (persists in the
     # .blend): per pathed node, its final bone name and Unity-space LOCAL rest

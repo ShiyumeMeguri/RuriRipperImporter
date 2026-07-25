@@ -1,61 +1,68 @@
-"""Unity <-> Blender coordinate conversion.
+"""Blender's side of the Unity -> Blender conversion: a ``mathutils`` face on
+the shared numpy one.
 
-Unity is left-handed, Y-up.  Blender is right-handed, Z-up.  Converting between
-them requires swapping the Y and Z axes, which is a reflection (determinant -1)
-that simultaneously fixes the up-axis and the handedness:
+The conversion ITSELF -- swap Y and Z, which is a reflection (determinant -1)
+that fixes the up-axis and the handedness at once, plus everything that follows
+from being a reflection (winding, tangent handedness) -- lives in
+``ruri_pybridge.math3d.coordinate`` as ``BLENDER``, where it is testable with no
+Blender running and cannot drift apart from the glTF space beside it.
 
-    p_blender = (x, z, y)
+What is Blender-specific, and all that stays here, is the TYPE: ``eb.matrix``
+and ``obj.matrix_world`` take a ``mathutils.Matrix``, and the animation builder
+does its rest-pose maths with ``Matrix``/``Quaternion`` methods. So this module
+converts at that boundary and leaves every call site unchanged.
 
-Because a single reflection ``C`` is its own inverse, an entire transform is
-converted by conjugation::
-
-    M_blender = C @ M_unity @ C
-
-This converts rotation, translation and handedness consistently with no
-per-quaternion guesswork.  Since ``det(C) = -1`` the conversion flips triangle
-winding, so faces must have their winding reversed to keep normals outward.
+Vertex arrays are not converted to anything: they are numpy on both sides and go
+straight through to ``foreach_set``.
 """
 
 from __future__ import annotations
 
-import numpy as np
+from mathutils import Matrix
 
 try:
-    from mathutils import Matrix, Quaternion, Vector
-except ImportError:  # allows importing the module for pure unit tests
-    Matrix = Quaternion = Vector = None
+    from .ruri_pybridge.math3d import coordinate as _shared
+except ImportError:  # standalone (non-package) testing
+    from ruri_pybridge.math3d import coordinate as _shared
+
+SPACE = _shared.BLENDER
 
 
-# 4x4 reflection that swaps Y and Z (its own inverse).
+def _as_matrix(array):
+    """numpy 4x4 -> mathutils.Matrix (both are row-major, so this is direct)."""
+    return Matrix([[float(v) for v in row] for row in array])
+
+
 def conversion_matrix():
-    return Matrix((
-        (1.0, 0.0, 0.0, 0.0),
-        (0.0, 0.0, 1.0, 0.0),
-        (0.0, 1.0, 0.0, 0.0),
-        (0.0, 0.0, 0.0, 1.0),
-    ))
+    """The reflection C, as a Matrix. Its own inverse, so ``C @ M @ C`` converts
+    a transform in either direction."""
+    return _as_matrix(SPACE.matrix)
 
 
 def convert_matrix(unity_matrix):
-    """Conjugate a Unity 4x4 (mathutils.Matrix) into Blender space."""
-    c = conversion_matrix()
-    return c @ unity_matrix @ c
+    """Conjugate a Unity 4x4 -- numpy array OR mathutils.Matrix -- into Blender
+    space, returning a Matrix."""
+    return _as_matrix(SPACE.convert_matrix(unity_matrix))
 
 
 def unity_trs(position, rotation, scale):
-    """Build a Unity-space TRS matrix from dict components {x,y,z[,w]}."""
-    t = Matrix.Translation((position["x"], position["y"], position["z"]))
-    q = Quaternion((rotation["w"], rotation["x"], rotation["y"], rotation["z"]))
-    r = q.to_matrix().to_4x4()
-    s = Matrix.Diagonal((scale["x"], scale["y"], scale["z"], 1.0))
-    return t @ r @ s
+    """Unity-space TRS from dict components {x,y,z[,w]}, as a Matrix. Still in
+    UNITY space -- conversion is the separate, explicit step above."""
+    return _as_matrix(_shared.unity_trs(position, rotation, scale))
 
 
 def convert_points(positions):
-    """Convert an (n, 3) numpy array of Unity positions to Blender space."""
-    return positions[:, (0, 2, 1)].astype(np.float32, copy=True)
+    """(n, 3) Unity positions/normals -> Blender space, float32."""
+    return SPACE.convert_points(positions)
+
+
+def convert_tangents(tangents):
+    """(n, 4) Unity tangents -> Blender space. The handedness sign FLIPS here,
+    unlike the glTF space where the V flip cancels it -- see
+    Space.tangent_w_sign for the derivation."""
+    return SPACE.convert_tangents(tangents)
 
 
 def reverse_winding(triangles):
     """Reverse triangle winding to compensate for the reflection."""
-    return triangles[:, (0, 2, 1)]
+    return SPACE.reverse_winding(triangles)

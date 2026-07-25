@@ -15,11 +15,11 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, PointerProperty
 
 try:
-    from . import cabmap_state, prefab_importer, scene_state
+    from . import prefab_importer
+    from .ruri_pybridge.session import cabmap_state, scene_state
 except ImportError:  # standalone (non-package) testing
-    import cabmap_state
     import prefab_importer
-    import scene_state
+    from ruri_pybridge.session import cabmap_state, scene_state
 
 # Kept alive at module scope -- Blender's dynamic EnumProperty items callback
 # requires the returned list to outlive the call (a fresh list literal
@@ -184,8 +184,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             _report_exception(self, "Scene import (bridge) failed", exc)
             return {"CANCELLED"}
 
-        bridge_asset_db = _bridge_asset_db_module()
-        db = bridge_asset_db.BridgeAssetDatabase(
+        db = _bridge_asset_db_module().BridgeAssetDatabase(
             documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         try:
             imported, placed, unresolved = prefab_importer.import_scene_placements(
@@ -201,10 +200,12 @@ class RURI_OT_scene_import(bpy.types.Operator):
 
 
 def _bridge_asset_db_module():
+    """Imported lazily: only the bridge path needs it, and the scene tab draws
+    long before any bridge session exists."""
     try:
-        from . import bridge_asset_db
-    except ImportError:
-        import bridge_asset_db
+        from .ruri_pybridge.unity import bridge_asset_db
+    except ImportError:  # standalone (non-package) testing
+        from ruri_pybridge.unity import bridge_asset_db
     return bridge_asset_db
 
 

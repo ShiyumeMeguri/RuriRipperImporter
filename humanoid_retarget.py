@@ -101,102 +101,25 @@ except ImportError:  # allow import without Blender (parsing/inspection only)
     Matrix = Quaternion = Vector = None
 
 
-# --- muscle -> (human bone, degree-of-freedom axis) -------------------------
-#
-# dof axis: 0 = X (twist), 1 = Y, 2 = Z.  The "Twist"/"Turn" muscle drives X;
-# the primary bend drives Y; the secondary bend drives Z.  Bones without a twist
-# (shoulder/hand) leave X unused (the avatar locks that axis' limit to 0).  The
-# exact Y/Z assignment and signs are validated against the clip's IK markers.
-_MUSCLE_DOF = {
-    "Spine Front-Back": ("Spine", 2),
-    "Spine Left-Right": ("Spine", 1),
-    "Spine Twist Left-Right": ("Spine", 0),
-    "Chest Front-Back": ("Chest", 2),
-    "Chest Left-Right": ("Chest", 1),
-    "Chest Twist Left-Right": ("Chest", 0),
-    "UpperChest Front-Back": ("UpperChest", 2),
-    "UpperChest Left-Right": ("UpperChest", 1),
-    "UpperChest Twist Left-Right": ("UpperChest", 0),
-    "Neck Nod Down-Up": ("Neck", 2),
-    "Neck Tilt Left-Right": ("Neck", 1),
-    "Neck Turn Left-Right": ("Neck", 0),
-    "Head Nod Down-Up": ("Head", 2),
-    "Head Tilt Left-Right": ("Head", 1),
-    "Head Turn Left-Right": ("Head", 0),
-    "Left Upper Leg Front-Back": ("LeftUpperLeg", 2),
-    "Left Upper Leg In-Out": ("LeftUpperLeg", 1),
-    "Left Upper Leg Twist In-Out": ("LeftUpperLeg", 0),
-    "Left Lower Leg Stretch": ("LeftLowerLeg", 2),
-    "Left Lower Leg Twist In-Out": ("LeftLowerLeg", 0),
-    "Left Foot Up-Down": ("LeftFoot", 2),
-    "Left Foot Twist In-Out": ("LeftFoot", 1),
-    "Left Toes Up-Down": ("LeftToes", 1),
-    "Right Upper Leg Front-Back": ("RightUpperLeg", 2),
-    "Right Upper Leg In-Out": ("RightUpperLeg", 1),
-    "Right Upper Leg Twist In-Out": ("RightUpperLeg", 0),
-    "Right Lower Leg Stretch": ("RightLowerLeg", 2),
-    "Right Lower Leg Twist In-Out": ("RightLowerLeg", 0),
-    "Right Foot Up-Down": ("RightFoot", 2),
-    "Right Foot Twist In-Out": ("RightFoot", 1),
-    "Right Toes Up-Down": ("RightToes", 1),
-    "Left Shoulder Down-Up": ("LeftShoulder", 2),
-    "Left Shoulder Front-Back": ("LeftShoulder", 1),
-    "Left Arm Down-Up": ("LeftUpperArm", 2),
-    "Left Arm Front-Back": ("LeftUpperArm", 1),
-    "Left Arm Twist In-Out": ("LeftUpperArm", 0),
-    "Left Forearm Stretch": ("LeftLowerArm", 2),
-    "Left Forearm Twist In-Out": ("LeftLowerArm", 0),
-    "Left Hand Down-Up": ("LeftHand", 2),
-    "Left Hand In-Out": ("LeftHand", 1),
-    "Right Shoulder Down-Up": ("RightShoulder", 2),
-    "Right Shoulder Front-Back": ("RightShoulder", 1),
-    "Right Arm Down-Up": ("RightUpperArm", 2),
-    "Right Arm Front-Back": ("RightUpperArm", 1),
-    "Right Arm Twist In-Out": ("RightUpperArm", 0),
-    "Right Forearm Stretch": ("RightLowerArm", 2),
-    "Right Forearm Twist In-Out": ("RightLowerArm", 0),
-    "Right Hand Down-Up": ("RightHand", 2),
-    "Right Hand In-Out": ("RightHand", 1),
-    # Eyes/jaw follow the same per-bone axis pattern as the head group: the primary
-    # (vertical) DoF drives Z, the secondary (horizontal) DoF drives Y, no twist.
-    "Left Eye Down-Up": ("LeftEye", 2),
-    "Left Eye In-Out": ("LeftEye", 1),
-    "Right Eye Down-Up": ("RightEye", 2),
-    "Right Eye In-Out": ("RightEye", 1),
-    "Jaw Close": ("Jaw", 2),
-    "Jaw Left-Right": ("Jaw", 1),
-}
+# The muscle taxonomy itself -- which attribute drives which human bone on
+# which axis, the BoneType enum order, the twist-solve pairs, the mass-centre
+# formula -- is Unity's own definition and host-independent, so it lives in the
+# shared package (ruri_pybridge.unity.muscles) where anything that merely needs
+# to RECOGNISE a humanoid clip can read it without dragging in mathutils. The
+# solving below is what stays here, because it is written in mathutils.
+try:
+    from .ruri_pybridge.unity import muscles as _muscles
+except ImportError:  # standalone (non-package) testing
+    from ruri_pybridge.unity import muscles as _muscles
 
-# Finger muscles ("LeftHand.Thumb.1 Stretched" ...): 2 hands x 5 fingers x 4 DoF = 40.
-# 1/2/3 Stretched curl the proximal/intermediate/distal phalange about Z; Spread swings the
-# proximal about Y (Unity muscle taxonomy, mirrored from the C# AvatarMuscleReferential).
-# Keys into the same _axes table as the body via Unity's HumanDescription human names
-# ("Left Thumb Proximal" ...).
-_FINGER_NAMES = ("Thumb", "Index", "Middle", "Ring", "Little")
-_PHALANGE_NAMES = ("Proximal", "Intermediate", "Distal")
-
-def _build_finger_dof():
-    for side, hand in (("Left", "LeftHand"), ("Right", "RightHand")):
-        for finger in _FINGER_NAMES:
-            proximal = f"{side} {finger} Proximal"
-            intermediate = f"{side} {finger} Intermediate"
-            distal = f"{side} {finger} Distal"
-            _MUSCLE_DOF[f"{hand}.{finger}.1 Stretched"] = (proximal, 2)
-            _MUSCLE_DOF[f"{hand}.{finger}.Spread"] = (proximal, 1)
-            _MUSCLE_DOF[f"{hand}.{finger}.2 Stretched"] = (intermediate, 2)
-            _MUSCLE_DOF[f"{hand}.{finger}.3 Stretched"] = (distal, 2)
-
-_build_finger_dof()
-
-# BoneType enum order (Unity HumanBodyBones / MuscleHelper.BoneType); indexes the
-# avatar's m_HumanBoneIndex array.
-_BONE_TYPE_NAMES = (
-    "Hips", "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg",
-    "LeftFoot", "RightFoot", "Spine", "Chest", "UpperChest", "Neck", "Head",
-    "LeftShoulder", "RightShoulder", "LeftUpperArm", "RightUpperArm",
-    "LeftLowerArm", "RightLowerArm", "LeftHand", "RightHand", "LeftToes",
-    "RightToes", "LeftEye", "RightEye", "Jaw",
-)
+_MUSCLE_DOF = _muscles.MUSCLE_DOF
+_BONE_TYPE_NAMES = _muscles.BONE_TYPE_NAMES
+_FINGER_NAMES = _muscles.FINGER_NAMES
+_PHALANGE_NAMES = _muscles.PHALANGE_NAMES
+_TWIST_SOLVE_PAIRS = _muscles.TWIST_SOLVE_PAIRS
+_MASS_CENTER_FORMULA = _muscles.MASS_CENTER_FORMULA
+is_muscle = _muscles.is_muscle
+is_root = _muscles.is_root
 
 
 # The four limb segments (upper/lower arm, upper/lower leg) apply their own
@@ -226,18 +149,7 @@ _BONE_TYPE_NAMES = (
 # bone back) can only ever observe the "rescale this bone's own twist" half
 # of this -- never the child-compensation half, which needs the PARENT's
 # twist muscle active and the CHILD's own resulting rotation read back.
-_TWIST_SOLVE_PAIRS = (
-    ("LeftLowerArm", "LeftHand", "fore_arm_twist"),
-    ("LeftUpperArm", "LeftLowerArm", "arm_twist"),
-    ("RightLowerArm", "RightHand", "fore_arm_twist"),
-    ("RightUpperArm", "RightLowerArm", "arm_twist"),
-    ("LeftLowerLeg", "LeftFoot", "leg_twist"),
-    ("LeftUpperLeg", "LeftLowerLeg", "upper_leg_twist"),
-    ("RightLowerLeg", "RightFoot", "leg_twist"),
-    ("RightUpperLeg", "RightLowerLeg", "upper_leg_twist"),
-)
-
-_HEXDIGITS = set("0123456789abcdefABCDEF")
+# The eight pairs themselves: _TWIST_SOLVE_PAIRS (muscles.TWIST_SOLVE_PAIRS).
 
 
 # --- root motion (Hips) reconstruction ---------------------------------------
@@ -273,41 +185,17 @@ _HEXDIGITS = set("0123456789abcdefABCDEF")
 # is the same class of issue the MotionT subtraction below already exists
 # for -- it is a pre-existing limitation for MotionT-less clips, not a
 # regression introduced by this formula.
-_MASS_CENTER_FORMULA = {
-    "Hips": (("LeftUpperLeg", 1.0 / 3.0), ("RightUpperLeg", 1.0 / 3.0), ("Spine", 1.0 / 3.0)),
-    "LeftUpperLeg": (("LeftUpperLeg", 0.5), ("LeftLowerLeg", 0.5)),
-    "RightUpperLeg": (("RightUpperLeg", 0.5), ("RightLowerLeg", 0.5)),
-    "LeftLowerLeg": (("LeftLowerLeg", 0.5), ("LeftFoot", 0.5)),
-    "RightLowerLeg": (("RightLowerLeg", 0.5), ("RightFoot", 0.5)),
-    "Spine": (("Spine", 0.5), ("Chest", 0.5)),
-    "Chest": (("Chest", 0.5), ("UpperChest", 0.5)),
-    "UpperChest": (("UpperChest", 0.25), ("Neck", 0.25), ("LeftShoulder", 0.25), ("RightShoulder", 0.25)),
-    "Neck": (("Neck", 0.5), ("Head", 0.5)),
-    "LeftShoulder": (("LeftShoulder", 0.5), ("LeftUpperArm", 0.5)),
-    "RightShoulder": (("RightShoulder", 0.5), ("RightUpperArm", 0.5)),
-    "LeftUpperArm": (("LeftUpperArm", 0.5), ("LeftLowerArm", 0.5)),
-    "RightUpperArm": (("RightUpperArm", 0.5), ("RightLowerArm", 0.5)),
-    "LeftLowerArm": (("LeftLowerArm", 0.5), ("LeftHand", 0.5)),
-    "RightLowerArm": (("RightLowerArm", 0.5), ("RightHand", 0.5)),
-}
-# Any body bone not listed above (feet, hands, toes, eyes, head, jaw) uses its
-# own provisional position directly, matching HumanComputeBoneMassCenter's
-# default case.
-
-
-def is_muscle(attribute):
-    """True if a float-curve attribute string is a body muscle this module drives."""
-    return attribute in _MUSCLE_DOF
-
-
-def is_root(attribute):
-    """True if a float-curve attribute is a body root-motion channel: the hips'
-    pose in the animation-root frame (RootT/RootQ) or the root motion
-    (MotionT/MotionQ) used to make it root-local.  None are muscles."""
-    return attribute.split(".", 1)[0] in ("RootT", "RootQ", "MotionT", "MotionQ")
+#
+# The per-bone weights are _MASS_CENTER_FORMULA (muscles.MASS_CENTER_FORMULA);
+# any body bone absent from it (feet, hands, toes, eyes, head, jaw) uses its own
+# provisional position directly, matching HumanComputeBoneMassCenter's default
+# case.
 
 
 # --- parsing helpers --------------------------------------------------------
+
+_HEXDIGITS = set("0123456789abcdefABCDEF")
+
 
 def _unwrap(value):
     """Peel Unity's OffsetPtr ``{data: ...}`` indirection."""

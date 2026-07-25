@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import traceback
 
 import bpy
@@ -27,14 +28,16 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import cabmap_state, pythonnet_bootstrap, pythonnet_bridge, bridge_asset_db, prefab_importer, scene_panel
+    from . import prefab_importer, scene_panel
+    from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
+    from .ruri_pybridge.session import cabmap_state
+    from .ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
-    import cabmap_state
-    import pythonnet_bootstrap
-    import pythonnet_bridge
-    import bridge_asset_db
     import prefab_importer
     import scene_panel
+    from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
+    from ruri_pybridge.session import cabmap_state
+    from ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
 
 _HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
@@ -132,8 +135,50 @@ def _reapply_and_refresh(context):
     _redraw_all(context)
 
 
+# --- search debounce --------------------------------------------------------
+# The filtering itself is cabmap_state.reapply_filter; the TIMER is Blender's,
+# which is why it lives here and not in the shared browser model. Only actually
+# filter ~SEARCH_DEBOUNCE_SECONDS after the user stops typing, not on every
+# keystroke: a synchronous substring match across 4 columns over 260k rows per
+# keystroke visibly stutters the text field (the WinForms browser this one
+# mirrors hit the same wall and used a 250ms Timer for the same reason).
+_pending_query = None
+_last_edit_time = 0.0
+_timer_registered = False
+
+
+def _schedule_filter(query, on_ready):
+    global _pending_query, _last_edit_time, _timer_registered
+
+    _pending_query = query
+    _last_edit_time = time.monotonic()
+    if _timer_registered:
+        return
+    _timer_registered = True
+
+    def _tick():
+        global _timer_registered
+        if time.monotonic() - _last_edit_time < cabmap_state.SEARCH_DEBOUNCE_SECONDS:
+            return 0.05
+        try:
+            # Keeps whatever Include/Exclude rules are currently active.
+            cabmap_state.reapply_filter(_pending_query)
+            on_ready()
+        finally:
+            # MUST run even if the filter or the callback raises -- this flag is
+            # the only thing _schedule_filter checks before registering a new
+            # timer, so leaving it True after an exception would silently
+            # disable search for the rest of the session (every later keystroke
+            # would just update _pending_query and register nothing).
+            _timer_registered = False
+        return None  # unregister this timer
+
+    bpy.app.timers.register(_tick, first_interval=0.05)
+
+
 def _on_search_edit(self, context):
-    cabmap_state.schedule_filter(self.search, lambda: (_rebuild_window(context.scene.ruri_cabmap), _redraw_all(context)))
+    _schedule_filter(self.search,
+                     lambda: (_rebuild_window(context.scene.ruri_cabmap), _redraw_all(context)))
 
 
 def _on_filter_rule_edit(self, context):
@@ -226,7 +271,7 @@ class RURI_PG_hook_entry(bpy.types.PropertyGroup):
 
 class RURI_PG_filter_rule(bpy.types.PropertyGroup):
     """One Process-Monitor-style Include/Exclude rule -- [Field][Relation][Value]
-    then [Include/Exclude], matching cabmap_state.SimpleRule's shape exactly so
+    then [Include/Exclude], matching cabmap_state.Rule's shape exactly so
     the plain-Python filter engine can consume these PropertyGroup instances
     directly (duck typing: .field/.relation/.value/.action/.enabled)."""
     field: EnumProperty(name="Field", items=_FIELD_ITEMS, update=_on_filter_rule_edit)
@@ -239,7 +284,7 @@ class RURI_PG_filter_rule(bpy.types.PropertyGroup):
 
 class RURI_PG_animation_clip(bpy.types.PropertyGroup):
     """One discovered-but-not-yet-built animation clip -- see
-    prefab_importer.discover_clip_refs_from_db. `selected` drives the
+    discovery.discover_clip_refs. `selected` drives the
     checkbox in RURI_UL_animation_clips; nothing here has been parsed past a
     cheap name/size peek, so ticking a box is free until Import is clicked."""
     guid: StringProperty()
@@ -390,7 +435,7 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready()
+        return bootstrap.is_ready()
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
@@ -429,7 +474,7 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
     # only for games with custom encryption/VFS/typetree drift.
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready()
+        return bootstrap.is_ready()
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
@@ -472,7 +517,7 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
     # Zero checked hooks is valid -- see RURI_OT_build_cabmap.poll.
     @classmethod
     def poll(cls, context):
-        return pythonnet_bootstrap.is_ready()
+        return bootstrap.is_ready()
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
@@ -991,7 +1036,7 @@ def _import_loose_closure_assets(op, context, state, db, textures):
     silently import nothing, since the root-selection logic in
     _import_hierarchy_rows only ever looks for .prefab/.unity roots). Walks
     every guid in the resolved closure, classifies it with the same cheap
-    peek prefab_importer.discover_clip_refs_from_db uses, and imports
+    peek discovery.discover_clip_refs uses, and imports
     everything _import_single_asset knows how to build -- the same "import
     everything reachable in the closure" philosophy _import_hierarchy_rows
     already applies to prefab roots (see its own comment on a bundled row
@@ -1001,7 +1046,7 @@ def _import_loose_closure_assets(op, context, state, db, textures):
         text = db.raw_text(guid)
         if not text:
             continue
-        class_name, name = prefab_importer._peek_class_and_name(text)
+        class_name, name = discovery.peek_class_and_name(text)
         if class_name not in _LOOSE_ASSET_CLASSES:
             continue
         if _import_single_asset(op, context, state, db, textures, guid,
@@ -1094,7 +1139,7 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
             if clip_doc is None:
                 continue
             clip = clip_doc.data
-        ratio, total = prefab_importer.clip_path_match_ratio(clip, path_to_bone)
+        ratio, total = clip_paths.clip_path_match_ratio(clip, path_to_bone)
         if total:
             checked_any = True
             any_ratio = max(any_ratio, ratio)
@@ -1256,7 +1301,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
                     ok = False
                     continue
                 text = db.raw_text(primary_guid)
-                class_name = prefab_importer._peek_class_and_name(text)[0] if text else None
+                class_name = discovery.peek_class_and_name(text)[0] if text else None
                 if class_name != "GameObject":
                     if _import_single_asset(self, context, state, db, textures,
                                             primary_guid, class_name, row["name"]) == {"FINISHED"}:
@@ -1572,8 +1617,8 @@ class RURI_PT_cabmap(bpy.types.Panel):
         layout = self.layout
         state = context.scene.ruri_cabmap
 
-        if not pythonnet_bootstrap.is_ready():
-            err = pythonnet_bootstrap.last_error()
+        if not bootstrap.is_ready():
+            err = bootstrap.last_error()
             if err:
                 layout.label(text="pythonnet install failed:", icon="ERROR")
                 layout.label(text=err[:60])
@@ -1839,7 +1884,7 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             # across through clips_by_cab -- this is deliberate and visible,
             # not a side effect: from here on the list shows exactly what can
             # be built, and a second Import needs no lazy build at all.
-            refs = prefab_importer.discover_clip_refs_from_db(db, prefab_file)
+            refs = discovery.discover_clip_refs(db, prefab_file)
             state.available_clips.clear()
             state.animation_character_name = arm_obj.name
             for ref in refs:

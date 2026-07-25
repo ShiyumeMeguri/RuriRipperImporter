@@ -17,11 +17,12 @@ from __future__ import annotations
 import numpy as np
 
 try:
-    from . import clip_curves, coordinate, humanoid_retarget
-except ImportError:
-    import clip_curves
+    from . import coordinate, humanoid_retarget
+    from .ruri_pybridge.unity import clip_curves
+except ImportError:  # standalone (non-package) testing
     import coordinate
     import humanoid_retarget
+    from ruri_pybridge.unity import clip_curves
 
 import bpy
 from mathutils import Matrix, Quaternion

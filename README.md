@@ -130,18 +130,33 @@ prefab。已端到端验证:真实角色 FBX → dump → Blender,骨架、贴�
 ```
 RuriRipperImporter/            ← 插件本体(装这个)
   __init__.py                  ← 单一「Unity Asset」导入算子
-  unity_yaml.py                ← Unity YAML 解析器
-  class_registry.py/.json      ← 全版本 class id ↔ 名字 表
-  asset_db.py                  ← GUID 索引 + 文件缓存
-  mesh_decoder.py              ← 顶点/索引/蒙皮/blendshape 解码
-  clip_curves.py               ← clip 曲线规范模型:blob 零解析 / regex 快路径 / 向量化采样
-  coordinate.py                ← Unity↔Blender 坐标转换
-  hierarchy.py armature_builder.py mesh_builder.py
-  material_builder.py animation_builder.py prefab_importer.py
+  coordinate.py hierarchy.py   ← 共用实现的 mathutils 边界(见下)
+  armature_builder.py mesh_builder.py material_builder.py
+  animation_builder.py humanoid_retarget.py prefab_importer.py
+  cabmap_panel.py scene_panel.py
+  ruri_pybridge/               ← git submodule:与 Painter 插件共用的那一半
+    unity/    Unity YAML 解析、class id 表、GUID 解析、网格解码、
+              Renderer 发现、材质属性、LOD/路径规则、clip 曲线与重锚、muscle 表
+    runtime/  依赖 bootstrap、CoreCLR + RipperHook 桥、列式行表、设置/工作区
+    session/  cabmap 浏览模型、场景 placement 模型
+    math3d/   Unity→Blender / Unity→glTF 坐标空间
 RuriYamlDumper/RuriYamlDumper.cs ← 可选:Unity 端 FBX→YAML 导出工具
 tools/build_class_registry.py  ← 重新生成 class_registry.json
 cli_import.py  selftest.py      ← 无头测试脚手架(自测:Pelica 14/14)
 ```
+
+克隆时别忘了子模块:
+
+```bash
+git clone --recurse-submodules https://github.com/ShiyumeMeguri/RuriRipperImporter.git
+# 已经克隆过的:
+git submodule update --init --recursive
+```
+
+`ruri_pybridge` 里**不许出现 bpy/mathutils**(它同时要在 Substance Painter 里跑,那边
+没有这两个东西)。所以 `coordinate.py` / `hierarchy.py` 留在插件里,只做一件事:把共用层
+的 numpy 4x4 在边界上转成 `mathutils.Matrix`。共用层自己带 129 个自测:
+`python ruri_pybridge/run_tests.py`。
 
 无头运行自测:
 

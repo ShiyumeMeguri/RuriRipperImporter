@@ -1,14 +1,11 @@
 """Build Blender materials from Unity ``.mat`` assets.
 
-Game shaders vary wildly in property naming, so textures are located by trying a
-prioritised list of candidate names per logical slot -- curated from the real
-HGRP/Lit and HGRP/CharacterNPR shader source (ground truth: the ported .shader
-files under E:\\SpeedProject\\AzureNihil\\Assets\\packages\\com.hg.render-
-pipelines\\runtime\\shaders\\materials, cross-checked against their HLSL
-channel-unpacking code, not guessed), with a generic keyword-substring
-fallback for the single-texture slots so an entirely unrecognised shader
-family still gets *something* instead of losing its textures outright. The
-first populated candidate wins.
+READING the .mat -- Unity's three property-table serialisations, and the
+prioritised candidate names that locate a logical slot (base colour, normal,
+packed PBR, emission) across wildly different game shaders -- is shared with the
+Painter plugin (``ruri_pybridge.unity.material``), because it is a fact about
+Unity and the HGRP shader family rather than about Blender. This module is what
+Blender does with the answer: a Principled BSDF node graph.
 """
 
 from __future__ import annotations
@@ -17,68 +14,10 @@ import os
 
 import bpy
 
-# Candidate property names per logical slot, in priority order.
-BASE_COLOR_NAMES = [
-    "_MainTex", "_BaseMap", "_BaseColorMap", "_BaseColorTex", "_Albedo",
-    "_AlbedoMap", "_DiffuseMap", "_Diffuse", "_DiffuseTex", "_ColorTex",
-]
-NORMAL_NAMES = [
-    "_BumpMap", "_NormalMap", "_NormalTex", "_Normal", "_NormalMap1", "_BumpMap1",
-]
-# HGRP/CharacterNPR hair-only: a dual-channel (RG=diffuse normal, BA=specular
-# normal) split normal map, decoded with a DIFFERENT hemisphere-reconstruction
-# order than every other normal slot here -- see _wire_hair_split_normal's
-# docstring. Checked before the generic NORMAL_NAMES list; a material carrying
-# this property is unambiguously hair (no other shader in this family declares
-# it), so there's no ambiguity to resolve like MRO_NAMES vs METALLIC_GLOSS_NAMES.
-SPLIT_NORMAL_NAMES = ["_SplitNormalMap"]
-EMISSION_NAMES = ["_EmissionMap", "_EmissiveMap", "_EmissionTex", "_GlowMap"]
-
-# Packed metallic/roughness(/occlusion) maps -- two conventions, ground-
-# truthed against the real shader HLSL (not guessed):
-#   HGRP/Lit._MROMap                    R=Metallic G=Roughness B=Occlusion
-#     (lit.shader: SAMPLE_TEXTURE2D(_MROMap, ...); metallicT=mro.x
-#     roughT=mro.y occT=mro.z)
-#   HGRP/CharacterNPR._MetallicGlossMap R=Metallic A=Smoothness (so
-#     Roughness = 1-A); G=Spec/B=ShadowMask have no Principled BSDF
-#     equivalent and are left unconnected (characternpr.shader:
-#     metallic=mg.r specScale=mg.g shadowMask=mg.b roughnessRaw=1.0-mg.a)
-# A material only ever has one of these (they come from different shader
-# families) -- MRO is tried first since its 3-channel packing is unambiguous.
-# No generic fallback for this slot: guessing an unknown shader's packed-map
-# channel order (MRO vs. glTF-style ORB vs. something else) risks silently
-# wrong-looking-but-incorrect metal/rough/occlusion values, which is worse
-# than leaving the slot at its default.
-MRO_NAMES = ["_MROMap"]
-METALLIC_GLOSS_NAMES = ["_MetallicGlossMap", "_SpecGlossMap"]
-
-BASE_COLOR_FACTORS = ["_BaseColor", "_Color", "_MainColor", "_TintColor"]
-
-# Last-resort fallback when a shader family isn't covered by the curated
-# lists above: substrings to look for in ANY texture env name. Safe for
-# these three slots specifically because "does this texture just BE the
-# base color/normal/emission map" has no channel-order ambiguity, unlike the
-# packed PBR slot above.
-_GENERIC_BASE_COLOR_HINTS = ("basecolor", "albedo", "diffuse", "maintex", "basemap", "colormap")
-_GENERIC_NORMAL_HINTS = ("normal", "bump")
-_GENERIC_EMISSION_HINTS = ("emission", "emissive", "glow")
-
-
-def _flatten(entries):
-    """Normalize ``m_TexEnvs``/``m_Colors`` to a plain ``{name: value}`` dict.
-
-    A real Unity Editor "Force Text" save serializes these C# Dictionary fields
-    as a list of single-key maps (``- _BaseMap: {...}``); AssetRipper's own YAML
-    writer instead emits the same data as one nested map directly. Both are
-    valid on-disk shapes for the same data model -- accept either."""
-    if isinstance(entries, dict):
-        return entries
-    out = {}
-    for entry in entries or []:
-        if isinstance(entry, dict):
-            for key, value in entry.items():
-                out[key] = value
-    return out
+try:
+    from .ruri_pybridge.unity import material as unity_material
+except ImportError:  # standalone (non-package) testing
+    from ruri_pybridge.unity import material as unity_material
 
 
 def _image_from_png_bytes(png, name):
@@ -123,22 +62,6 @@ def _disable_alpha_interpretation(image):
         image.alpha_mode = "NONE"
     except Exception:
         pass
-
-
-def _first_texture(tex_envs, names, generic_hints=()):
-    for name in names:
-        env = tex_envs.get(name)
-        if isinstance(env, dict):
-            tex = env.get("m_Texture")
-            if isinstance(tex, dict) and tex.get("guid"):
-                return name, tex
-    for key, env in tex_envs.items():
-        lower = key.lower()
-        if any(hint in lower for hint in generic_hints) and isinstance(env, dict):
-            tex = env.get("m_Texture")
-            if isinstance(tex, dict) and tex.get("guid"):
-                return key, tex
-    return None, None
 
 
 def _wire_packed_mro(nt, bsdf, img, location):
@@ -356,12 +279,8 @@ class MaterialBuilder:
         return cached
 
     def _build(self, doc):
-        data = doc.data
-        name = data.get("m_Name", "UnityMaterial")
-        props = data.get("m_SavedProperties") or {}
-        tex_envs = _flatten(props.get("m_TexEnvs"))
-        colors = _flatten(props.get("m_Colors"))
-        floats = _flatten(props.get("m_Floats"))
+        props = unity_material.parse_material(doc)
+        name = props.name or "UnityMaterial"
 
         mat = bpy.data.materials.new(name)
         mat.use_nodes = True
@@ -374,9 +293,10 @@ class MaterialBuilder:
         nt.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
         # Base colour.
-        base_name, base_tex = _first_texture(tex_envs, BASE_COLOR_NAMES, _GENERIC_BASE_COLOR_HINTS)
-        if base_tex:
-            img = self._load_image(base_tex["guid"])
+        base_name, base_guid = props.find_texture(
+            unity_material.BASE_COLOR_NAMES, unity_material.GENERIC_BASE_COLOR_HINTS)
+        if base_guid:
+            img = self._load_image(base_guid)
             if img:
                 node = nt.nodes.new("ShaderNodeTexImage")
                 node.image = img
@@ -386,28 +306,26 @@ class MaterialBuilder:
                 if self.options.get("connect_alpha", True):
                     nt.links.new(node.outputs["Alpha"], bsdf.inputs["Alpha"])
         else:
-            for factor in BASE_COLOR_FACTORS:
-                col = colors.get(factor)
-                if isinstance(col, dict):
-                    bsdf.inputs["Base Color"].default_value = (
-                        col.get("r", 1.0), col.get("g", 1.0), col.get("b", 1.0), col.get("a", 1.0))
-                    break
+            col = props.find_color(unity_material.BASE_COLOR_FACTORS)
+            if col is not None:
+                bsdf.inputs["Base Color"].default_value = tuple(col)
 
         # Normal map -- hair's dual-channel split normal takes priority (see
-        # SPLIT_NORMAL_NAMES/_wire_hair_split_normal's docstring): its presence
-        # unambiguously identifies a hair material, and the generic DXT5nm path
-        # below would decode it completely wrong (different channel layout,
-        # different hemisphere-reconstruction order).
-        _sname, split_tex = _first_texture(tex_envs, SPLIT_NORMAL_NAMES)
-        if split_tex:
-            img = self._load_image(split_tex["guid"], non_color=True)
+        # material.SPLIT_NORMAL_NAMES / _wire_hair_split_normal's docstring):
+        # its presence unambiguously identifies a hair material, and the generic
+        # DXT5nm path below would decode it completely wrong (different channel
+        # layout, different hemisphere-reconstruction order).
+        _sname, split_guid = props.find_texture(unity_material.SPLIT_NORMAL_NAMES)
+        if split_guid:
+            img = self._load_image(split_guid, non_color=True)
             if img:
-                bump_scale = floats.get("_BumpScale", 1.0)
+                bump_scale = props.float("_BumpScale", 1.0)
                 _wire_hair_split_normal(nt, bsdf, img, bump_scale, (-400, -250))
         else:
-            _nname, normal_tex = _first_texture(tex_envs, NORMAL_NAMES, _GENERIC_NORMAL_HINTS)
-            if normal_tex:
-                img = self._load_image(normal_tex["guid"], non_color=True)
+            _nname, normal_guid = props.find_texture(
+                unity_material.NORMAL_NAMES, unity_material.GENERIC_NORMAL_HINTS)
+            if normal_guid:
+                img = self._load_image(normal_guid, non_color=True)
                 if img:
                     node = nt.nodes.new("ShaderNodeTexImage")
                     node.image = img
@@ -419,24 +337,25 @@ class MaterialBuilder:
                     nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
 
         # Packed metallic/roughness(/occlusion) -- MRO tried first, then
-        # MetallicGlossMap; see the module docstring for the ground-truthed
-        # channel layout of each. No generic fallback here (see MRO_NAMES).
-        _mroname, mro_tex = _first_texture(tex_envs, MRO_NAMES)
-        if mro_tex:
-            img = self._load_image(mro_tex["guid"], non_color=True)
+        # MetallicGlossMap; the ground-truthed channel layout of each is
+        # documented on material.MRO_NAMES. No generic fallback for this slot.
+        _mroname, mro_guid = props.find_texture(unity_material.MRO_NAMES)
+        if mro_guid:
+            img = self._load_image(mro_guid, non_color=True)
             if img:
                 _wire_packed_mro(nt, bsdf, img, (-400, -420))
         else:
-            _mgname, mg_tex = _first_texture(tex_envs, METALLIC_GLOSS_NAMES)
-            if mg_tex:
-                img = self._load_image(mg_tex["guid"], non_color=True)
+            _mgname, mg_guid = props.find_texture(unity_material.METALLIC_GLOSS_NAMES)
+            if mg_guid:
+                img = self._load_image(mg_guid, non_color=True)
                 if img:
                     _wire_packed_metallic_gloss(nt, bsdf, img, (-400, -420))
 
         # Emission.
-        _ename, emis_tex = _first_texture(tex_envs, EMISSION_NAMES, _GENERIC_EMISSION_HINTS)
-        if emis_tex:
-            img = self._load_image(emis_tex["guid"])
+        _ename, emis_guid = props.find_texture(
+            unity_material.EMISSION_NAMES, unity_material.GENERIC_EMISSION_HINTS)
+        if emis_guid:
+            img = self._load_image(emis_guid)
             if img:
                 node = nt.nodes.new("ShaderNodeTexImage")
                 node.image = img

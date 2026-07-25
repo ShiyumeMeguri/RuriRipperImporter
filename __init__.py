@@ -21,12 +21,12 @@ bl_info = {
 }
 
 import importlib
+import sys
 
-from . import (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
-               armature_builder, mesh_builder, material_builder,
-               animation_builder, prefab_importer, bridge_asset_db,
-               pythonnet_bootstrap, pythonnet_bridge, cabmap_state, cabmap_panel,
-               scene_state, scene_panel)
+from . import (coordinate, hierarchy, humanoid_retarget, armature_builder,
+               mesh_builder, material_builder, animation_builder,
+               prefab_importer, cabmap_panel, scene_panel)
+from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
 # ones that hold real, expensive-to-rebuild process state (the claimed CLR
@@ -41,11 +41,19 @@ from . import (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
 # second, spurious set_runtime() attempt after a Reload-Scripts-triggered
 # reload). cabmap_panel/scene_panel are safe to reload -- just UI/operator
 # code, no state of their own (PropertyGroup data lives on bpy.types.Scene).
-_STATEFUL_MODULES = (pythonnet_bootstrap, pythonnet_bridge, cabmap_state, scene_state)
-for _mod in (unity_yaml, mesh_decoder, coordinate, asset_db, hierarchy,
-             armature_builder, mesh_builder, material_builder,
-             animation_builder, prefab_importer, bridge_asset_db, cabmap_panel,
-             scene_panel):
+_STATEFUL_SUFFIXES = ("runtime.bootstrap", "runtime.pythonnet_bridge",
+                      "session.cabmap_state", "session.scene_state")
+
+# Shared package first (in sys.modules order, i.e. parents before children), so
+# the add-on modules reloaded after it pick up the new objects rather than
+# holding references to the previous generation.
+_shared_prefix = __package__ + ".ruri_pybridge."
+for _name, _mod in list(sys.modules.items()):
+    if _name.startswith(_shared_prefix) and not _name.endswith(_STATEFUL_SUFFIXES):
+        importlib.reload(_mod)
+for _mod in (coordinate, hierarchy, humanoid_retarget, armature_builder,
+             mesh_builder, material_builder, animation_builder, prefab_importer,
+             cabmap_panel, scene_panel):
     importlib.reload(_mod)
 
 import bpy
@@ -53,8 +61,13 @@ from bpy.props import BoolProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 
+_BIN_DIR_HINT = ('Set it in Edit > Preferences > Add-ons > RuriRipperImporter > '
+                 '"Ruri-RipperHook Bin Dir", or set the RURI_RIPPERHOOK_BIN '
+                 'environment variable.')
+
+
 def _on_ripperhook_repo_change(self, context):
-    pythonnet_bridge.set_repo_root(self.ripperhook_repo)
+    pythonnet_bridge.set_bin_dir(self.ripperhook_repo)
 
 
 class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
@@ -155,11 +168,13 @@ def register():
     # imported data plays only through its slot, and most UI surfaces outside
     # the Action editor don't auto-pick one).
     animation_builder.register_slot_autofix()
-    # Push the user's saved repo-path preference into pythonnet_bridge BEFORE the early CoreCLR
+    # Push the user's saved bin-dir preference into pythonnet_bridge BEFORE the early CoreCLR
     # claim below, since _dll_dir() (called from claim_runtime_early -> _runtime_config_path)
-    # needs it to find Ruri.RipperHook.dll at all.
+    # needs it to find Ruri.RipperHook.dll at all. The hint goes with it: the shared bridge
+    # has no idea where THIS host keeps that setting, and says so in its error.
     prefs = bpy.context.preferences.addons[__package__].preferences
-    pythonnet_bridge.set_repo_root(prefs.ripperhook_repo)
+    pythonnet_bridge.set_bin_dir(prefs.ripperhook_repo)
+    pythonnet_bridge.set_bin_dir_hint(_BIN_DIR_HINT)
     # Claim the process-wide CLR runtime (CoreCLR) as early as possible, before
     # any other addon in this profile gets a chance to trigger its own lazy
     # `import clr` (which defaults to .NET Framework on Windows and would
@@ -172,10 +187,12 @@ def register():
         pythonnet_bridge.claim_runtime_early()
     except Exception as exc:  # best-effort -- _ensure_runtime() retries for real on first use
         print(f"[RuriRipper] early CoreCLR claim skipped: {exc}")
-    # Non-blocking: a first-time pythonnet install can take 10-60s and must not
-    # freeze Blender's UI. The N-panel gates on pythonnet_bootstrap.is_ready()
-    # until this finishes.
-    pythonnet_bootstrap.ensure_pythonnet_async(report_fn=print)
+    # Non-blocking: a first-time dependency install can take 10-60s and must not
+    # freeze Blender's UI. The N-panel gates on bootstrap.is_ready() until this
+    # finishes. on_ready closes the one window the synchronous claim above
+    # cannot cover: pythonnet only becoming importable partway through the
+    # session, after that claim already no-opped.
+    bootstrap.ensure_async(report_fn=print, on_ready=pythonnet_bridge.claim_runtime_early)
 
 
 def unregister():

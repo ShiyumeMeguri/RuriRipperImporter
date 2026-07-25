@@ -8,18 +8,24 @@ import time
 
 import numpy as np
 
+# `clip_paths` is aliased to clip_repair and `prefab` to prefab_scan: both names
+# are already taken here by local variables (a list of .anim paths, a parsed
+# prefab UnityFile) that appear in almost every function below.
 try:
-    from . import (armature_builder, asset_db, clip_curves, coordinate, animation_builder,
-                   material_builder, mesh_builder, mesh_decoder)
-except ImportError:
+    from . import (armature_builder, coordinate, animation_builder,
+                   material_builder, mesh_builder)
+    from .ruri_pybridge.unity import (asset_db, asset_paths, clip_curves,
+                                      clip_paths as clip_repair, discovery,
+                                      mesh_decoder, prefab as prefab_scan, skinning)
+except ImportError:  # standalone (non-package) testing
     import armature_builder
-    import asset_db
-    import clip_curves
     import coordinate
     import animation_builder
     import material_builder
     import mesh_builder
-    import mesh_decoder
+    from ruri_pybridge.unity import (asset_db, asset_paths, clip_curves,
+                                     clip_paths as clip_repair, discovery,
+                                     mesh_decoder, prefab as prefab_scan, skinning)
 
 import bpy
 
@@ -37,10 +43,6 @@ DEFAULT_OPTIONS = {
     "import_shadow_proxies": False,
 }
 
-# Unity ShadowCastingMode.ShadowsOnly — these renderers are invisible to the
-# camera (shadow proxies) and are skipped unless explicitly requested.
-_SHADOWS_ONLY = 3
-
 
 class ImportReport:
     def __init__(self):
@@ -52,18 +54,20 @@ class ImportReport:
         self.bones = 0
         self.skipped_lod = 0
         self.skipped_shadow = 0
+        self.skipped_inactive = 0
         self.warnings = []
         self.seconds = 0.0
         self.maps = None        # hierarchy/bone maps (for external clip application)
         self.db = None          # AssetDatabase (for further resolution)
         self.path_to_meshobjects = None
-        self.available_clips = []  # bridge mode only: discover_clip_refs_from_db() results
+        self.available_clips = []  # bridge mode only: discovery.discover_clip_refs() results
 
     def summary(self):
         return (f"armature_bones={self.bones} meshes={len(self.mesh_objects)} "
                 f"materials={self.materials} textures={self.textures} "
                 f"actions={self.actions} lod_skipped={self.skipped_lod} "
-                f"shadow_skipped={self.skipped_shadow} time={self.seconds:.2f}s")
+                f"shadow_skipped={self.skipped_shadow} "
+                f"inactive_skipped={self.skipped_inactive} time={self.seconds:.2f}s")
 
 
 def _resolve_options(options):
@@ -71,30 +75,6 @@ def _resolve_options(options):
     if options:
         merged.update(options)
     return merged
-
-
-def _lod_discard_set(prefab):
-    """Return the set of renderer fileIDs that belong to LOD1+ (to discard)."""
-    keep = set()
-    discard = set()
-    for group in prefab.all("LODGroup"):
-        lods = group.data.get("m_LODs") or []
-        for level, lod in enumerate(lods):
-            for ref in (lod.get("renderers") or []):
-                renderer = ref.get("renderer") if isinstance(ref, dict) else None
-                fid = renderer.get("fileID") if isinstance(renderer, dict) else None
-                if fid is None:
-                    continue
-                if level == 0:
-                    keep.add(fid)
-                else:
-                    discard.add(fid)
-    return discard - keep
-
-
-def _go_name(prefab, go_id):
-    go = prefab.get(go_id)
-    return str(go.data.get("m_Name", "Object")) if go else "Object"
 
 
 def import_prefab(context, prefab_path, options=None):
@@ -136,24 +116,15 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
     built here: a character's dependency closure can hold dozens of clips at
     ~100MB each, and building actions for all of them synchronously is what
     used to hang Blender on import. Clips are only DISCOVERED (cheap -- see
-    discover_clip_refs_from_db) and reported on report.available_clips; the
+    discovery.discover_clip_refs) and reported on report.available_clips; the
     caller builds actions later, only for whichever clips the user actually
     picks in the animation browser, via build_selected_animations."""
     options = _resolve_options(options)
-    arm_name = name or _prefab_display_name(prefab_file)
+    arm_name = name or discovery.prefab_display_name(prefab_file)
     report = _import_prefab_core(context, db, prefab_file, arm_name, [], options)
     if options["import_animations"]:
-        report.available_clips = discover_clip_refs_from_db(db, prefab_file)
+        report.available_clips = discovery.discover_clip_refs(db, prefab_file)
     return report
-
-
-def _prefab_display_name(prefab):
-    root = prefab.first("GameObject")
-    if root is not None:
-        name = root.data.get("m_Name")
-        if name:
-            return str(name)
-    return "UnityModel"
 
 
 def _load_clip_fast(clip_path):
@@ -186,73 +157,6 @@ def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
     return clip_files
 
 
-_CLASS_HEADER_RE = re.compile(r"^---\s+!u!\d+\s+&-?\d+(?:\s+stripped)?\s*$", re.MULTILINE)
-_NAME_FIELD_RE = re.compile(r"^\s*m_Name:\s*(.*?)\s*$", re.MULTILINE)
-_PEEK_CHARS = 4096  # Unity always writes the class name + m_Name within the
-                     # first few dozen lines of an object, however large the
-                     # trailing curve/blob data further down the document is.
-
-
-def _peek_class_and_name(text):
-    """Cheap classification without a full unity_yaml.parse_text: read the
-    class name off the line right after the document header, and m_Name from
-    a bounded prefix of the body. A dense AnimationClip can run to 100+MB, and
-    most guids in a closure aren't clips at all -- this keeps closure-wide
-    discovery O(clip count) instead of O(total closure bytes)."""
-    prefix = text[:_PEEK_CHARS]
-    header = _CLASS_HEADER_RE.search(prefix)
-    if header is None:
-        return None, None
-    rest = prefix[header.end():].lstrip("\r\n")
-    line_end = rest.find("\n")
-    class_line = rest if line_end == -1 else rest[:line_end]
-    class_name = class_line.split(":", 1)[0].strip() or None
-    name_match = _NAME_FIELD_RE.search(prefix)
-    name = name_match.group(1).strip() or None if name_match else None
-    return class_name, name
-
-
-def discover_clip_refs_from_db(db, prefab):
-    """Bridge-mode animation clip DISCOVERY: same guid scope as the old eager
-    gather (controller-referenced clips plus every AnimationClip document
-    present in the closure) but returns lightweight metadata (guid/name/
-    approximate size) via _peek_class_and_name instead of a full parse -- so
-    browsing what's available doesn't pay to decode every clip up front. That
-    cost is deferred to build_selected_animations, and only for whichever
-    clips the user actually checks in the animation browser."""
-    refs = []
-    seen_ids = set()
-
-    def _consider(guid):
-        if guid in seen_ids:
-            return
-        text = db.raw_text(guid)
-        if text is None:
-            return
-        class_name, name = _peek_class_and_name(text)
-        if class_name != "AnimationClip":
-            return
-        seen_ids.add(guid)
-        refs.append({"guid": guid, "name": name or guid, "size_bytes": len(text)})
-
-    animator = prefab.first("Animator")
-    controller_ref = animator.data.get("m_Controller") if animator is not None else None
-    if isinstance(controller_ref, dict) and controller_ref.get("guid"):
-        controller_file = db.load_guid(controller_ref["guid"])
-        if controller_file is not None:
-            guids = set()
-            for doc in controller_file.documents:
-                _collect_guids(doc.data, guids)
-            for guid in guids:
-                _consider(guid)
-
-    for guid in db.all_guids():
-        _consider(guid)
-
-    refs.sort(key=lambda r: r["name"].lower())
-    return refs
-
-
 def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options):
     """Build Blender actions for exactly the given clip guids -- the checked
     subset from the animation browser. This is the only place that now pays
@@ -260,7 +164,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     user explicitly picks a clip rather than paying it for every clip in a
     character's closure up front.
 
-    Before building, every clip gets repair_hashed_clip_paths against the
+    Before building, every clip gets clip_repair.repair_hashed_clip_paths against the
     target armature: clips exported without their rig in scope carry
     "path_0x<CRC32>_" placeholder paths, and the armature's own bone paths
     are the hash preimages -- so a standalone-imported clip binds to the
@@ -285,11 +189,11 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
                 continue
             clip = clip_curves.ClipCurves.from_document(clip_doc.data)
         clip_name = clip.name or guid
-        repaired, unmatched = repair_hashed_clip_paths(clip, path_to_bone)
+        repaired, unmatched = clip_repair.repair_hashed_clip_paths(clip, path_to_bone)
         if unmatched:
             warnings.append(f"{clip_name}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
-        is_humanoid = clip_is_humanoid(clip)
+        is_humanoid = clip_repair.clip_is_humanoid(clip)
         if maps.get("retargeter") is None and is_humanoid:
             warnings.append(f"{clip_name}: humanoid (muscle) clip but "
                             f"no Avatar in scope -- body motion dropped, only generic curves "
@@ -343,49 +247,38 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
         # Still need the hierarchy maps for naming/skinning resolution.
         try:
             from . import hierarchy
-        except ImportError:
+        except ImportError:  # standalone (non-package) testing
             import hierarchy
         nodes, roots = hierarchy.build_hierarchy(prefab)
-        import numpy as _np
         maps = {"nodes": nodes, "roots": roots,
                 "file_id_to_bone": {}, "path_to_bone": {},
-                "file_id_to_world": {fid: _np.array(n.world, dtype=_np.float64)
-                                     for fid, n in nodes.items()}}
+                "file_id_to_world": hierarchy.world_matrices(nodes)}
 
     nodes = maps["nodes"]
     go_to_node = {n.go_id: n for n in nodes.values()}
 
     mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
-    discard = _lod_discard_set(prefab) if options["lod0_only"] else set()
 
     path_to_meshobjects = {}
 
-    keep_shadow = options.get("import_shadow_proxies", False)
-    renderers = prefab.all("SkinnedMeshRenderer")
-    for smr in renderers:
-        if smr.file_id in discard:
-            report.skipped_lod += 1
-            continue
-        if not keep_shadow and smr.data.get("m_CastShadows") == _SHADOWS_ONLY:
-            report.skipped_shadow += 1
-            continue
-        obj = _import_skinned(context, db, prefab, smr, arm_obj, maps,
-                              mat_builder, options, report, go_to_node)
+    # Which renderers actually draw -- LODGroup levels, ShadowsOnly proxies,
+    # disabled/inactive GameObjects and static-batch windows are all decided by
+    # the shared rules (ruri_pybridge.unity.prefab), so this add-on and the
+    # Painter plugin cannot disagree about what a prefab contains.
+    stats = prefab_scan.SkipStats()
+    for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats):
+        if renderer.is_skinned:
+            obj = _import_skinned(context, db, renderer, arm_obj, maps,
+                                  mat_builder, options, report)
+            if obj is not None and renderer.node is not None:
+                path_to_meshobjects.setdefault(renderer.node.path, []).append(obj)
+        else:
+            obj = _import_static(context, db, renderer, mat_builder, options, report)
         if obj is not None:
             report.mesh_objects.append(obj)
-            node = go_to_node.get((smr.data.get("m_GameObject") or {}).get("fileID"))
-            if node:
-                path_to_meshobjects.setdefault(node.path, []).append(obj)
-
-    # Static meshes (MeshRenderer + MeshFilter).
-    for mr in prefab.all("MeshRenderer"):
-        if mr.file_id in discard:
-            report.skipped_lod += 1
-            continue
-        obj = _import_static(context, db, prefab, mr, maps, mat_builder,
-                             options, report, go_to_node)
-        if obj is not None:
-            report.mesh_objects.append(obj)
+    report.skipped_lod += stats.lod
+    report.skipped_shadow += stats.shadow
+    report.skipped_inactive += stats.inactive
 
     if mat_builder is not None:
         report.materials = len(mat_builder._cache)
@@ -418,7 +311,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
                 clip = clip_doc
                 humanoid_probe = clip_doc.data
                 clip_name = clip_doc.data.get("m_Name", "clip")
-            if retargeter is None and clip_is_humanoid(humanoid_probe):
+            if retargeter is None and clip_repair.clip_is_humanoid(humanoid_probe):
                 # Without the Avatar's muscle referential a humanoid clip's body
                 # motion is mathematically unrecoverable -- the action comes out
                 # empty-looking. Say so loudly instead of importing silence: the
@@ -444,44 +337,6 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
     report.path_to_meshobjects = path_to_meshobjects
     report.seconds = time.time() - start
     return report
-
-
-def _collect_guids(obj, out):
-    """Recursively collect every guid referenced anywhere in a parsed structure."""
-    if isinstance(obj, dict):
-        guid = obj.get("guid")
-        if isinstance(guid, str) and len(guid) == 32:
-            out.add(guid)
-        for value in obj.values():
-            _collect_guids(value, out)
-    elif isinstance(obj, list):
-        for value in obj:
-            _collect_guids(value, out)
-
-
-def clips_from_controller(db, controller_file):
-    """Resolve every AnimationClip referenced (at any depth) by a controller.
-
-    Returns de-duplicated absolute .anim paths.  Animator controllers reference
-    their clips through ``m_Motion`` on states and through blend-tree children;
-    collecting every guid and keeping those that resolve to a clip file captures
-    them all without guessing at the structure.
-    """
-    paths = []
-    seen = set()
-    guids = set()
-    for doc in controller_file.documents:
-        _collect_guids(doc.data, guids)
-    for guid in guids:
-        path = db.resolve_guid(guid)
-        if not path:
-            continue
-        ap = os.path.abspath(path)
-        key = ap.lower()
-        if key not in seen and key.endswith(".anim") and os.path.isfile(ap):
-            seen.add(key)
-            paths.append(ap)
-    return paths
 
 
 def _load_retargeter(db, prefab, path_to_bone=None):
@@ -522,7 +377,7 @@ def find_retargeter_in_db(db, path_to_bone=None):
         text = db.raw_text(guid)
         if text is None:
             continue
-        class_name, _name = _peek_class_and_name(text)
+        class_name, _name = discovery.peek_class_and_name(text)
         if class_name != "Avatar":
             continue
         retargeter = _retargeter_from_avatar_file(db.load_guid(guid), path_to_bone)
@@ -601,10 +456,9 @@ def retargeter_from_stamped_armature(arm_obj, path_to_bone=None):
     usable Avatar. Returns None when the armature has no stamp (pre-feature
     import, or a character whose avatar never resolved)."""
     try:
-        from . import armature_builder, unity_yaml
-    except ImportError:
-        import armature_builder
-        import unity_yaml
+        from .ruri_pybridge.unity import unity_yaml
+    except ImportError:  # standalone (non-package) testing
+        from ruri_pybridge.unity import unity_yaml
     raw = arm_obj.get(armature_builder.AVATAR_YAML_PROP)
     if not raw:
         return None
@@ -616,27 +470,6 @@ def retargeter_from_stamped_armature(arm_obj, path_to_bone=None):
         return None
     avatar_file = unity_yaml.UnityFile("stamped_avatar", unity_yaml.parse_text(text, "stamped_avatar"))
     return _retargeter_from_avatar_file(avatar_file, path_to_bone)
-
-
-def clip_is_humanoid(clip_data):
-    """Whether a parsed AnimationClip drives a humanoid rig: humanoid body
-    motion ships as muscle/root float curves (attribute names like
-    "Spine Front-Back" / "RootT.x"), not transform curves -- the exact
-    predicate _bake_muscles gates on, exposed for callers that need to KNOW
-    (e.g. to warn that a humanoid clip was imported without an Avatar in
-    scope, which would silently drop the entire body's motion)."""
-    try:
-        from . import humanoid_retarget
-    except ImportError:
-        import humanoid_retarget
-    if isinstance(clip_data, clip_curves.ClipCurves):
-        return any(humanoid_retarget.is_muscle(ch.attribute) or humanoid_retarget.is_root(ch.attribute)
-                   for ch in clip_data.floats)
-    for entry in clip_data.get("m_FloatCurves") or []:
-        attribute = entry.get("attribute") or ""
-        if humanoid_retarget.is_muscle(attribute) or humanoid_retarget.is_root(attribute):
-            return True
-    return False
 
 
 def _gather_clip_paths(db, prefab, prefab_path, assets_dir=None):
@@ -680,7 +513,7 @@ def _gather_clip_paths(db, prefab, prefab_path, assets_dir=None):
     if isinstance(controller_ref, dict) and controller_ref.get("guid"):
         controller_file = db.load_guid(controller_ref["guid"])
         if controller_file is not None:
-            for path in clips_from_controller(db, controller_file):
+            for path in discovery.clip_paths_from_controller(db, controller_file):
                 key = path.lower()
                 if key not in seen:
                     seen.add(key)
@@ -729,119 +562,52 @@ def _assign_first_action(arm_obj, action, slot=None):
         pass
 
 
-def _build_materials(db, prefab, renderer, mat_builder, report):
-    materials = []
+def _build_materials(renderer, mat_builder):
+    """The renderer's material slots, in Unity's own order (a slot that doesn't
+    resolve stays as None, so the remaining slots keep their indices)."""
     if mat_builder is None:
-        return materials
-    for ref in (renderer.data.get("m_Materials") or []):
-        materials.append(mat_builder.build_from_ref(ref))
-    return materials
+        return []
+    return [mat_builder.build_from_ref(ref) for ref in renderer.material_refs]
 
 
-def _import_skinned(context, db, prefab, smr, arm_obj, maps, mat_builder,
-                    options, report, go_to_node):
-    mesh_ref = smr.data.get("m_Mesh")
-    if not isinstance(mesh_ref, dict) or not mesh_ref.get("guid"):
-        return None
-    mesh_file = db.load_guid(mesh_ref["guid"])
-    if mesh_file is None:
-        report.warnings.append(f"Mesh {mesh_ref.get('guid')} not found")
-        return None
-    mesh_doc = mesh_file.first("Mesh")
-    if mesh_doc is None:
-        return None
-    decoded = mesh_decoder.decode_mesh(mesh_doc)
-    if decoded.positions is None or len(decoded.positions) == 0:
-        return None
+def _decode_renderer_mesh(db, renderer, report):
+    """Follow a renderer's mesh reference through the shared resolver and turn
+    whatever went wrong into this add-on's own wording. None means no geometry."""
+    loaded = prefab_scan.load_mesh(db, renderer.mesh_ref, renderer.name)
+    if loaded.ok:
+        if loaded.dropped_topologies:
+            report.warnings.append(
+                f"{renderer.name}: dropped {len(loaded.dropped_topologies)} non-triangle "
+                f"submesh(es) ({', '.join(mesh_decoder.TOPOLOGY_NAMES.get(t, str(t)) for t in loaded.dropped_topologies)}).")
+        return loaded.decoded
+    if loaded.problem == "not_found":
+        report.warnings.append(f"Mesh {loaded.detail} not found")
+    elif loaded.problem == "empty":
+        report.warnings.append(f"{renderer.name}: {loaded.detail}")
+    return None
 
-    name = _go_name(prefab, (smr.data.get("m_GameObject") or {}).get("fileID"))
-    materials = _build_materials(db, prefab, smr, mat_builder, report)
-    smr_bones = smr.data.get("m_Bones") or []
+
+def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, report):
+    decoded = _decode_renderer_mesh(db, renderer, report)
+    if decoded is None:
+        return None
+    materials = _build_materials(renderer, mat_builder)
     # Bake vertices from mesh-local into bind-pose world space so they align
     # with the armature regardless of the mesh's authored coordinate frame.
-    _bake_bind_pose(decoded, smr_bones, maps.get("file_id_to_world", {}))
-    obj = mesh_builder.build_mesh_object(
-        context, decoded, name, arm_obj, smr_bones,
+    skinning.bake_bind_pose(decoded, renderer.bones, maps.get("file_id_to_world", {}))
+    return mesh_builder.build_mesh_object(
+        context, decoded, renderer.name, arm_obj, renderer.bones,
         maps["file_id_to_bone"], materials, options)
-    return obj
 
 
-def _bake_bind_pose(decoded, smr_bones, file_id_to_world):
-    """Transform mesh-local vertices to their bind-pose world positions.
-
-    bind_world(v) = sum_j w_j * (boneWorld_j @ bindpose_j) @ v_local
-
-    This reconstructs the exact pose the mesh has at rest, in world space, so it
-    aligns with the armature whose bones are placed at their world transforms.
-    """
-    if (decoded.bind_poses is None or decoded.bone_weights is None
-            or decoded.bone_indices is None or not smr_bones):
-        return
-    n = len(decoded.positions)
-    n_bones = len(smr_bones)
-    world = np.tile(np.eye(4, dtype=np.float64), (n_bones, 1, 1))
-    for slot, ref in enumerate(smr_bones):
-        fid = ref.get("fileID") if isinstance(ref, dict) else None
-        wmat = file_id_to_world.get(fid)
-        if wmat is not None:
-            world[slot] = wmat
-    bind = decoded.bind_poses.astype(np.float64)
-    count = min(n_bones, bind.shape[0])
-    skin = np.tile(np.eye(4, dtype=np.float64), (n_bones, 1, 1))
-    skin[:count] = world[:count] @ bind[:count]
-
-    idx = np.clip(decoded.bone_indices, 0, n_bones - 1)
-    weights = decoded.bone_weights
-    vh = np.concatenate([decoded.positions.astype(np.float64),
-                         np.ones((n, 1))], axis=1)
-    baked = np.zeros((n, 3), dtype=np.float64)
-    for j in range(idx.shape[1]):
-        mats = skin[idx[:, j]]
-        transformed = np.einsum("nij,nj->ni", mats, vh)[:, :3]
-        baked += weights[:, j, None] * transformed
-    decoded.positions = baked.astype(np.float32)
-
-    if decoded.normals is not None:
-        rot = skin[:, :3, :3]
-        nvecs = decoded.normals.astype(np.float64)
-        baked_n = np.zeros((n, 3), dtype=np.float64)
-        for j in range(idx.shape[1]):
-            mats = rot[idx[:, j]]
-            baked_n += weights[:, j, None] * np.einsum("nij,nj->ni", mats, nvecs)
-        lengths = np.linalg.norm(baked_n, axis=1, keepdims=True)
-        lengths[lengths < 1e-6] = 1.0
-        decoded.normals = (baked_n / lengths).astype(np.float32)
-
-
-def _import_static(context, db, prefab, mr, maps, mat_builder, options, report,
-                   go_to_node):
-    go_id = (mr.data.get("m_GameObject") or {}).get("fileID")
-    node = go_to_node.get(go_id)
-    if node is None:
+def _import_static(context, db, renderer, mat_builder, options, report):
+    decoded = _decode_renderer_mesh(db, renderer, report)
+    if decoded is None:
         return None
-    # Find the MeshFilter on the same GameObject.
-    mesh_ref = None
-    for comp_id in node.components:
-        comp = prefab.get(comp_id)
-        if comp and comp.class_name == "MeshFilter":
-            mesh_ref = comp.data.get("m_Mesh")
-            break
-    if not isinstance(mesh_ref, dict) or not mesh_ref.get("guid"):
-        return None
-    mesh_file = db.load_guid(mesh_ref["guid"])
-    if mesh_file is None:
-        return None
-    mesh_doc = mesh_file.first("Mesh")
-    if mesh_doc is None:
-        return None
-    decoded = mesh_decoder.decode_mesh(mesh_doc)
-    if decoded.positions is None or len(decoded.positions) == 0:
-        return None
-    name = _go_name(prefab, go_id)
-    materials = _build_materials(db, prefab, mr, mat_builder, report)
+    materials = _build_materials(renderer, mat_builder)
     obj = mesh_builder.build_mesh_object(
-        context, decoded, name, None, [], {}, materials, options)
-    obj.matrix_world = coordinate.convert_matrix(node.world)
+        context, decoded, renderer.name, None, [], {}, materials, options)
+    obj.matrix_world = coordinate.convert_matrix(renderer.node.world)
     return obj
 
 
@@ -883,11 +649,12 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
     if mesh_doc is None:
         report.warnings.append("No Mesh object in file")
         return report
+    name = str(mesh_doc.data.get("m_Name") or "Mesh")
     decoded = mesh_decoder.decode_mesh(mesh_doc)
     if decoded.positions is None or len(decoded.positions) == 0:
-        report.warnings.append("Empty mesh")
+        # Say WHICH of Unity's three vertex-data storages holds it instead.
+        report.warnings.append(mesh_decoder.diagnose_empty(mesh_doc, name))
         return report
-    name = str(mesh_doc.data.get("m_Name") or "Mesh")
     obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {}, materials or [], options)
     report.mesh_objects.append(obj)
     report.seconds = time.time() - start
@@ -924,97 +691,6 @@ def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
     report.bones = len(arm_obj.data.bones)
     report.seconds = time.time() - start
     return report
-
-
-def build_mesh_name_index_from_db(db):
-    """Peek every document's class+name (see _peek_class_and_name -- cheap,
-    no full parse) and index the Mesh-classed ones by LOWERCASED name. CabMap
-    only maps container path -> CAB name, not -> guid, and a single CAB can
-    host several named sub-objects (a multi-object FBX) -- this is what lets
-    a scene placement's expected sub-object name (parsed from its
-    ##subname-suffixed AssetPath, see _expected_mesh_name) resolve to a
-    specific guid once its CAB has been imported by name alone.
-    Lowercased because the hash-LUT-resolved AssetPath is consistently
-    all-lowercase while a real Mesh's m_Name preserves its original authored
-    casing (confirmed against the real game: AssetPath "...col1_um01" vs the
-    actual m_Name "...COL1_UM01") -- the same case-insensitive join CabMap's
-    own container-path normalization already needed, for the same reason."""
-    index = {}
-    for guid in db.all_guids():
-        text = db.raw_text(guid)
-        if text is None:
-            continue
-        class_name, name = _peek_class_and_name(text)
-        if class_name == "Mesh" and name:
-            index[name.lower()] = guid
-    return index
-
-
-def _expected_mesh_name(asset_path):
-    """The specific named sub-object a scene placement's hash-LUT-resolved
-    AssetPath refers to: either the ##subname suffix (a multi-object FBX,
-    e.g. "...building.fbx##building_col1"), or the file stem for a bare
-    single-object .mesh path (Unity's convention: a standalone .mesh asset's
-    own Mesh object is named after the file). Lowercased to match
-    build_mesh_name_index_from_db's keys -- see that function's docstring."""
-    if "##" in asset_path:
-        return asset_path.split("##", 1)[1].lower()
-    leaf = asset_path.rsplit("/", 1)[-1]
-    return (leaf.rsplit(".", 1)[0] if "." in leaf else leaf).lower()
-
-
-_LOD_SUFFIX_RE = re.compile(r"_lod(\d+)$", re.IGNORECASE)
-_VARIANT_SUFFIX_RE = re.compile(r"_(?:lod\d+|col\d+_[a-z]+\d*)$", re.IGNORECASE)
-_COL_SUFFIX_RE = re.compile(r"_col\d+_", re.IGNORECASE)
-
-
-def _lod_rank(asset_path):
-    """Lower is more preferred: lod0=0, lod1=1, ..., unsuffixed/unleveled=-1
-    (as good as lod0 -- a single-LOD piece), collision meshes (_colN_xxx) last
-    (rank 1000) since they routinely ship with zero render geometry (see
-    import_scene_placements' mesh-decode note) -- tried only when nothing
-    else in the group exists at all."""
-    name = _expected_mesh_name(asset_path)
-    match = _LOD_SUFFIX_RE.search(name)
-    if match:
-        return int(match.group(1))
-    if _COL_SUFFIX_RE.search(name):
-        return 1000
-    return -1
-
-
-def _lod_group_key(asset_path, px, py, pz):
-    """(rounded position, base stem with its LOD/collision suffix stripped) --
-    identifies the parallel sibling entities a real map places for the SAME
-    instance at different detail levels: confirmed against base01_lv002 that
-    a numbered-LOD and/or col1-collision sibling sits at the EXACT SAME
-    position as its lod0 render counterpart, as separate ECS entities (see
-    EndfieldSceneBridge.DecodeStreamingChunkPlacements). Position is rounded
-    to collapse float noise between siblings placed identically. Used to pick
-    the best AVAILABLE variant per instance (select_best_lod) instead of a
-    blind per-entity suffix filter, which wrongly drops an entire instance
-    whenever its only shipped variant happens to be a non-zero LOD (e.g. a
-    piece with only _lod2 + _col1 siblings and no _lod0 at all -- confirmed
-    this is what silently dropped base01_lv002's building-shell/floor piece
-    even though the game genuinely ships visible geometry for it, just not
-    at LOD0)."""
-    stem = _VARIANT_SUFFIX_RE.sub("", _expected_mesh_name(asset_path))
-    return (round(px, 2), round(py, 2), round(pz, 2), stem)
-
-
-def select_best_lod(rows):
-    """Group placements into per-instance LOD-sibling sets (_lod_group_key)
-    and keep only the best-ranked (_lod_rank) member of each group. Replaces
-    a blind "keep unless explicitly non-zero-LOD" filter, which assumes a
-    LOD0 sibling always exists -- when it doesn't (only _lod1/_lod2/_col1
-    variants were ever placed for that instance), the old filter dropped the
-    instance entirely instead of falling back to whatever detail level the
-    game actually shipped."""
-    groups = {}
-    for row in rows:
-        key = _lod_group_key(row["asset_path"], row["px"], row["py"], row["pz"])
-        groups.setdefault(key, []).append(row)
-    return [min(members, key=lambda r: _lod_rank(r["asset_path"])) for members in groups.values()]
 
 
 class _StampedNode:
@@ -1076,153 +752,6 @@ def maps_from_stamped_armature(arm_obj):
     }
 
 
-# AssetRipper's placeholder for an animation curve path it could not restore to
-# a transform-path string (the rig wasn't in the export scope): the raw Unity
-# binding hash -- CRC32 of the UTF-8 path string, verified empirically against
-# the real game (crc32(b"Root") == 0xB6C65665 == the exported "path_0xB6C65665_
-# WvpMuNH" placeholder, exact match across every probe) -- hex-encoded with a
-# random uniquifying suffix.
-_HASHED_PATH_RE = re.compile(r"^path_0x([0-9A-Fa-f]{1,8})_")
-
-_CURVE_LIST_FIELDS = ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves",
-                      "m_EulerCurves", "m_FloatCurves")
-
-
-def build_suffix_crc_table(path_to_bone):
-    """{CRC32 -> full stamped path} over EVERY level-suffix of every bone path
-    of the target armature. Unity's animation binding hashes are CRC32 of the
-    path RELATIVE to the Animator's own node, while the armature stamps paths
-    from the prefab ROOT -- and different model variants nest the rig at
-    different depths (confirmed against the real game: a uimodel's clip paths
-    start "Root/Bip001/..." while a postmodel armature stamps
-    "chr_0013_aglina_postmodel/.../Root/Bip001/..."), so whole-path CRC never
-    matches across variants. Enumerating each path's suffixes ("a/b/c", "b/c",
-    "c") makes the join prefix-agnostic: the clip's Animator-relative path IS
-    one of the suffixes when the bone genuinely exists under the selected
-    skeleton. Suffix-CRC collisions keep the LONGEST suffix (deepest anchor
-    wins -- a leaf-only match can be ambiguous, a long chain can't). This is
-    path-structure identity, not display-name guessing: the same segments
-    Unity itself hashed, just re-anchored."""
-    import zlib
-
-    table = {}
-    for path in path_to_bone:
-        parts = path.split("/")
-        for i in range(len(parts)):
-            suffix = "/".join(parts[i:])
-            crc = zlib.crc32(suffix.encode("utf-8")) & 0xFFFFFFFF
-            prev = table.get(crc)
-            if prev is None or len(suffix) > prev[0]:
-                table[crc] = (len(suffix), path)
-    return {crc: path for crc, (_length, path) in table.items()}
-
-
-def _entry_crc(path):
-    """The binding CRC32 a curve entry's path stands for: hashed placeholders
-    ("path_0x<hex>_junk") carry it literally; restored string paths hash to
-    it (crc32 of the UTF-8 path) -- one join key for both forms."""
-    import zlib
-
-    hash_match = _HASHED_PATH_RE.match(path)
-    if hash_match:
-        return int(hash_match.group(1), 16)
-    return zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
-
-
-def repair_hashed_clip_paths(clip_data, path_to_bone):
-    """Rewrite a parsed AnimationClip's curve paths to the target armature's
-    OWN stamped full paths, joining through the suffix-CRC table (see
-    build_suffix_crc_table): hashed placeholders resolve by their literal
-    CRC32, and already-restored string paths that don't literally appear in
-    path_to_bone (rig nested at a different depth in this model variant)
-    resolve by hashing -- both land on the exact path build_action's
-    path_to_bone lookup needs. Returns (repaired, unmatched) counts; paths
-    already matching the armature verbatim are left untouched."""
-    table = build_suffix_crc_table(path_to_bone)
-    repaired = 0
-    unmatched = 0
-    if isinstance(clip_data, clip_curves.ClipCurves):
-        for channels in clip_data.all_channel_lists():
-            for channel in channels:
-                path = channel.path or ""
-                if not path or path in path_to_bone:
-                    continue
-                real = table.get(_entry_crc(path))
-                if real is None:
-                    unmatched += 1
-                    continue
-                channel.path = real
-                repaired += 1
-        return repaired, unmatched
-    for field in _CURVE_LIST_FIELDS:
-        for entry in clip_data.get(field) or []:
-            # "path:" with no value parses to an EXISTING key holding None (root-level
-            # curves) -- `or ""` covers both missing and null, .get default only the former.
-            path = entry.get("path") or ""
-            if not path or path in path_to_bone:
-                continue
-            real = table.get(_entry_crc(path))
-            if real is None:
-                unmatched += 1
-                continue
-            entry["path"] = real
-            repaired += 1
-    return repaired, unmatched
-
-
-def clip_path_match_ratio(clip_data, path_to_bone):
-    """Fraction of the clip's transform-curve paths that resolve to a bone of
-    the target armature -- the compatibility check for importing a clip onto
-    the user's selected skeleton. Uses the same suffix-CRC join as
-    repair_hashed_clip_paths (hashed and string paths alike), so a clip whose
-    Animator-relative paths anchor anywhere inside the armature's hierarchy
-    counts as matching. Returns (ratio, total); (0.0, 0) for a clip with no
-    transform curves at all (e.g. pure blendshape clips)."""
-    table = build_suffix_crc_table(path_to_bone)
-    total = 0
-    matched = 0
-    if isinstance(clip_data, clip_curves.ClipCurves):
-        for channels in clip_data.transform_channel_lists():
-            for channel in channels:
-                path = channel.path or ""
-                if not path:
-                    continue
-                total += 1
-                if path in path_to_bone or _entry_crc(path) in table:
-                    matched += 1
-        return (matched / total if total else 0.0), total
-    for field in ("m_RotationCurves", "m_PositionCurves", "m_ScaleCurves", "m_EulerCurves"):
-        for entry in clip_data.get(field) or []:
-            path = entry.get("path") or ""  # "path:" null-valued for root-level curves
-            if not path:
-                continue
-            total += 1
-            if path in path_to_bone or _entry_crc(path) in table:
-                matched += 1
-    return (matched / total if total else 0.0), total
-
-
-def build_material_name_index_from_db(db):
-    """Peek every document's class+name (see _peek_class_and_name) and index
-    the Material-classed ones by LOWERCASED name -- mirrors
-    build_mesh_name_index_from_db exactly, just filtering a different class.
-    Joins a scene placement's own material_asset_paths (see scene_state.py,
-    ultimately EndfieldSceneBridge.cs's FBPropertyAssetData AssetType==1
-    resolution -- the entity's own real material hash, ground-truthed
-    against EndFieldSceneLoader's SceneLoaderWindow.cs CollectAssetPathsTyped/
-    ResolveHash/AttachMeshAndMaterials) to a guid once its CAB is in the
-    resolved closure."""
-    index = {}
-    for guid in db.all_guids():
-        text = db.raw_text(guid)
-        if text is None:
-            continue
-        class_name, name = _peek_class_and_name(text)
-        if class_name == "Material" and name:
-            index[name.lower()] = guid
-    return index
-
-
 def _scene_materials_for(material_index, mat_builder, material_asset_paths):
     """Real materials for a scene-placed mesh, resolved directly from its own
     material_asset_paths -- the entity's actual material hash(es), resolved
@@ -1232,54 +761,13 @@ def _scene_materials_for(material_index, mat_builder, material_asset_paths):
         return []
     materials = []
     for path in material_asset_paths:
-        guid = material_index.get(_expected_mesh_name(path))
+        guid = material_index.get(asset_paths.expected_mesh_name(path))
         if guid is None:
             continue
         mat = mat_builder.build_from_ref({"guid": guid})
         if mat is not None:
             materials.append(mat)
     return materials
-
-
-def is_full_prefab_path(asset_path):
-    """True when a scene placement's resolved asset_path is itself a real
-    .prefab (the DynamicScene family -- Model/Effect/Tree, resolved via
-    EndfieldSceneBridge.cs's DecodeDynamicSceneChunkPlacements -- always
-    resolves to a full authored prefab, carrying its own real Renderer +
-    Materials already) rather than a raw FBX mesh sub-asset (the Streaming
-    family's '...models/s_x.fbx##subname' shape, which needs the separate
-    mesh + material-hash resolution path)."""
-    return asset_path.lower().endswith(".prefab")
-
-
-def _prefab_asset_stem(asset_path):
-    """Basename (no extension, lowercased) of a resolved .prefab asset_path,
-    e.g. '.../Prefabs/P_anm_com_satellite+1_001_01.prefab' ->
-    'p_anm_com_satellite+1_001_01' -- for matching against
-    build_prefab_name_index_from_roots' keys."""
-    leaf = asset_path.rsplit("/", 1)[-1]
-    stem = leaf.rsplit(".", 1)[0] if "." in leaf else leaf
-    return stem.lower()
-
-
-def build_prefab_name_index_from_roots(db, roots):
-    """{prefab stem (lowercased, from its own display name) -> guid}, built
-    from ImportCabs' own top-level-.prefab guid list for the resolved
-    closure. Used to resolve DynamicScene Model/Effect/Tree placements
-    (is_full_prefab_path) to a specific guid -- mirrors
-    build_mesh_name_index_from_db's name-based join, but keyed off each
-    root's own display name rather than a peeked Mesh's m_Name, since
-    `roots` is already the small, pre-filtered set of prefab-classed
-    top-level assets in the closure (no full-closure scan needed)."""
-    index = {}
-    for guid in roots:
-        prefab_file = db.load_guid(guid)
-        if prefab_file is None:
-            continue
-        name = _prefab_display_name(prefab_file)
-        if name:
-            index[name.lower()] = guid
-    return index
 
 
 def _duplicate_hierarchy(context, anchor):
@@ -1339,13 +827,13 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
 
     - Streaming family (raw FBX mesh sub-assets, e.g.
       '...models/s_x.fbx##subname'): resolves the expected mesh sub-object
-      by name (build_mesh_name_index_from_db), materials from the
-      placement's own material_asset_paths (build_material_name_index_from_db
+      by name (discovery.mesh_name_index), materials from the
+      placement's own material_asset_paths (discovery.material_name_index
       -- FBPropertyAssetData AssetType==1, same hashLut as the mesh, no
       naming-convention guess), and builds via import_mesh_from_db.
     - DynamicScene family (Model/Effect/Tree, resolved to REAL .prefab
-      paths -- is_full_prefab_path): resolves the prefab by name against
-      `roots` (build_prefab_name_index_from_roots) and builds via
+      paths -- asset_paths.is_full_prefab_path): resolves the prefab by name against
+      `roots` (discovery.prefab_name_index) and builds via
       import_prefab_from_db, which already brings real Renderer + Materials
       (no separate material-hash lookup needed for these).
 
@@ -1359,10 +847,10 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
     a similar reason.
     Returns (imported_count, placed_count, unresolved_count)."""
     options = _resolve_options(options)
-    name_index = build_mesh_name_index_from_db(db)
-    prefab_index = build_prefab_name_index_from_roots(db, roots)
+    name_index = discovery.mesh_name_index(db)
+    prefab_index = discovery.prefab_name_index(db, roots)
     mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
-    material_index = build_material_name_index_from_db(db) if mat_builder is not None else {}
+    material_index = discovery.material_name_index(db) if mat_builder is not None else {}
     obj_by_guid = {}
     anchor_by_guid = {}
     imported = 0
@@ -1372,8 +860,8 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
     for placement in placements:
         asset_path = placement["asset_path"]
 
-        if is_full_prefab_path(asset_path):
-            guid = prefab_index.get(_prefab_asset_stem(asset_path))
+        if asset_paths.is_full_prefab_path(asset_path):
+            guid = prefab_index.get(asset_paths.prefab_asset_stem(asset_path))
             if guid is None:
                 unresolved += 1
                 continue
@@ -1396,7 +884,7 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
 
             target = _duplicate_hierarchy(context, base_anchor)
         else:
-            expected_name = _expected_mesh_name(asset_path)
+            expected_name = asset_paths.expected_mesh_name(asset_path)
             guid = name_index.get(expected_name)
             if guid is None:
                 unresolved += 1
@@ -1606,5 +1094,5 @@ def import_controller(context, controller_path, options=None):
     db = asset_db.AssetDatabase(os.path.dirname(controller_path),
                                 asset_db.find_assets_dir(controller_path))
     controller_file = db.load_file(controller_path)
-    clip_paths = clips_from_controller(db, controller_file)
+    clip_paths = discovery.clip_paths_from_controller(db, controller_file)
     return _apply_clip_paths(context, clip_paths, options)

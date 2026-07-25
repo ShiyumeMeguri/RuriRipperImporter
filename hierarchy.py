@@ -1,87 +1,49 @@
-"""Reconstruct the Transform hierarchy of a Unity prefab.
+"""Blender's view of a Unity prefab's Transform hierarchy.
 
-Every Unity ``Transform`` (class 4) is a node with a parent (``m_Father``), a
-local TRS and a back-reference to its ``GameObject`` (which carries the name and
-the list of attached components).  This module rebuilds that tree, computes each
-node's Unity-space world matrix, and assigns each node a stable root-relative
-path (used to map animation curves onto bones).
+The tree itself -- parents, per-node Unity-space local/world matrices, stable
+root-relative paths (the key animation curves bind to) -- is built by
+``ruri_pybridge.unity.hierarchy`` in plain numpy. This module is only the
+boundary: it hands back the same nodes with ``local``/``world`` as
+``mathutils.Matrix``, because everything downstream in the add-on does rest-pose
+maths on them with Matrix/Quaternion methods (``.to_quaternion()``,
+``.inverted_safe()``, ``.translation``, ``.to_scale()``) and assigns them
+straight to ``eb.matrix``/``obj.matrix_world``.
+
+Still UNITY space, exactly as before -- ``coordinate.convert_matrix`` is the
+separate, explicit step.
 """
 
 from __future__ import annotations
 
-try:
-    from . import coordinate
-except ImportError:
-    import coordinate
-
 from mathutils import Matrix
 
+try:
+    from .ruri_pybridge.unity import hierarchy as _shared
+except ImportError:  # standalone (non-package) testing
+    from ruri_pybridge.unity import hierarchy as _shared
 
-class Node:
-    __slots__ = ("file_id", "go_id", "name", "active", "local", "world",
-                 "parent", "children", "path", "components")
+Node = _shared.Node
 
-    def __init__(self, file_id):
-        self.file_id = file_id
-        self.go_id = 0
-        self.name = "Node"
-        self.active = True
-        self.local = Matrix.Identity(4)   # Unity-space local TRS
-        self.world = Matrix.Identity(4)   # Unity-space world matrix
-        self.parent = None
-        self.children = []
-        self.path = ""
-        self.components = []              # list of component fileIDs
+
+def _as_matrix(array):
+    return Matrix([[float(v) for v in row] for row in array])
 
 
 def build_hierarchy(unity_file):
-    """Return (nodes_by_id, roots) for all transforms in a prefab UnityFile."""
-    gameobjects = {d.file_id: d for d in unity_file.all("GameObject")}
-    transforms = unity_file.all("Transform")
-    # Unity also uses RectTransform (class 224) for UI; treat the same way.
-    transforms += unity_file.all("RectTransform")
-
-    nodes = {}
-    for tr in transforms:
-        node = Node(tr.file_id)
-        data = tr.data
-        go_ref = data.get("m_GameObject") or {}
-        node.go_id = go_ref.get("fileID", 0)
-        go = gameobjects.get(node.go_id)
-        if go:
-            node.name = str(go.data.get("m_Name", "Node"))
-            node.active = bool(go.data.get("m_IsActive", 1))
-            comps = go.data.get("m_Component") or []
-            for c in comps:
-                ref = c.get("component") if isinstance(c, dict) else None
-                if isinstance(ref, dict):
-                    node.components.append(ref.get("fileID"))
-        pos = data.get("m_LocalPosition") or {"x": 0, "y": 0, "z": 0}
-        rot = data.get("m_LocalRotation") or {"x": 0, "y": 0, "z": 0, "w": 1}
-        scl = data.get("m_LocalScale") or {"x": 1, "y": 1, "z": 1}
-        node.local = coordinate.unity_trs(pos, rot, scl)
-        nodes[tr.file_id] = node
-
-    # Wire parents/children.
-    for tr in transforms:
-        node = nodes[tr.file_id]
-        father = (tr.data.get("m_Father") or {}).get("fileID", 0)
-        parent = nodes.get(father)
-        if parent is not None:
-            node.parent = parent
-            parent.children.append(node)
-
-    roots = [n for n in nodes.values() if n.parent is None]
-
-    # Compute world matrices and paths from the roots down (iterative DFS).
-    for root in roots:
-        stack = [(root, root.name)]
-        root.world = root.local
-        root.path = ""  # the animator root has an empty relative path
-        while stack:
-            node, _ = stack.pop()
-            for child in node.children:
-                child.world = node.world @ child.local
-                child.path = child.name if node.path == "" else node.path + "/" + child.name
-                stack.append((child, child.path))
+    """Return (nodes_by_id, roots) for all transforms in a prefab UnityFile,
+    with mathutils matrices on every node."""
+    nodes, roots = _shared.build_hierarchy(unity_file)
+    for node in nodes.values():
+        node.local = _as_matrix(node.local)
+        node.world = _as_matrix(node.world)
     return nodes, roots
+
+
+def world_matrices(nodes):
+    """{transform fileID -> Unity-space world 4x4 as numpy} -- what
+    ``skinning.bake_bind_pose`` consumes. numpy, not Matrix: the bake is matrix
+    maths over every bone at once."""
+    import numpy as np
+
+    return {file_id: np.array(node.world, dtype=np.float64)
+            for file_id, node in nodes.items()}
