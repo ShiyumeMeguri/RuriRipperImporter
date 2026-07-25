@@ -179,17 +179,24 @@ def _wire_packed_metallic_gloss(nt, bsdf, img, location):
 
 def _wire_hair_split_normal(nt, bsdf, img, bump_scale, location):
     """HGRP CharacterNPR hair's _SplitNormalMap: NOT a standard DXT5nm normal map
-    -- ground-truthed against characternpr_hair.shader's own unpack (the split-
-    normal branch, `#if defined(_NORMALMAP) && defined(_SPECULAR_NORMALMAP)`):
+    -- ground-truthed instruction-by-instruction against the real compiled
+    shader (characternpr_hair, variant b101):
 
-        dnX = (R*2-1) * _BumpScale;  dnY = (G*2-1) * _BumpScale
-        dnZ = sqrt(max(1 - dnX*dnX - dnY*dnY, eps))     -- hemisphere reconstruction,
-        N = normalize(dnX*tangent + dnY*bitangent + dnZ*normal)   AFTER scale is
-                                                            applied (the body shader
-                                                            reconstructs Z from the
-                                                            UNscaled x/y instead --
-                                                            do not conflate the two;
-                                                            hair's order matters here).
+        _491 = R*2-1 ;  _493 = G*2-1                          (no AG multiply: the
+                                                               alpha here is the
+                                                               SPEC normal's Y)
+        _501 = max(sqrt(1 - min(dot(xy,xy), 1)), 1e-16)       <- from the UNSCALED xy
+        _507 = _491 * _BumpScale ;  _508 = _493 * _BumpScale  <- scale hits xy only
+        N = normalize(_501*normal + _507*tangent + _508*bitangent)
+
+    The hemisphere reconstruction uses the UNSCALED x/y and the scale is applied
+    to x/y afterwards. That is the same order the body/skin shader uses (skin
+    b113: _462/_470/_474) and the same one fur and VFX use -- there is NO
+    per-part difference, contrary to what this docstring previously claimed.
+    Reconstructing Z from the SCALED x/y (which this function used to do, on the
+    strength of that claim) collapses Z to ~0 once _BumpScale > 1, because
+    1 - scaled^2 goes negative and clamps; the two orders agree only at
+    _BumpScale == 1, which is why it went unnoticed.
 
     B,A pack a SEPARATE specular-highlight normal (specN in the shader, used only
     to shift the anisotropic highlight lobes) -- left unwired: Principled BSDF has
@@ -235,19 +242,27 @@ def _wire_hair_split_normal(nt, bsdf, img, bump_scale, location):
     dn_xy.inputs["Scale"].default_value = bump_scale
     nt.links.new(rg_unit.outputs["Vector"], dn_xy.inputs[0])
 
-    # sumSq = dnX*dnX + dnY*dnY (Z component is 0, so a self dot product gives
-    # exactly this with no separate per-axis Math nodes).
+    # sumSq = dot(xy, xy) on the UNSCALED xy (rg_unit, NOT dn_xy) -- see the
+    # docstring: the shader reconstructs Z before applying _BumpScale. Z's
+    # component is 0 in rg_unit, so a self dot product is exactly x*x + y*y.
     sum_sq = nt.nodes.new("ShaderNodeVectorMath")
     sum_sq.operation = "DOT_PRODUCT"
     sum_sq.location = (x + 1060, y)
-    nt.links.new(dn_xy.outputs["Vector"], sum_sq.inputs[0])
-    nt.links.new(dn_xy.outputs["Vector"], sum_sq.inputs[1])
+    nt.links.new(rg_unit.outputs["Vector"], sum_sq.inputs[0])
+    nt.links.new(rg_unit.outputs["Vector"], sum_sq.inputs[1])
+
+    # min(dot, 1) before the subtract, matching the shader's own clamp.
+    capped = nt.nodes.new("ShaderNodeMath")
+    capped.operation = "MINIMUM"
+    capped.location = (x + 1160, y)
+    capped.inputs[1].default_value = 1.0
+    nt.links.new(sum_sq.outputs["Value"], capped.inputs[0])
 
     one_minus = nt.nodes.new("ShaderNodeMath")
     one_minus.operation = "SUBTRACT"
     one_minus.location = (x + 1260, y)
     one_minus.inputs[0].default_value = 1.0
-    nt.links.new(sum_sq.outputs["Value"], one_minus.inputs[1])
+    nt.links.new(capped.outputs["Value"], one_minus.inputs[1])
 
     clamped = nt.nodes.new("ShaderNodeMath")
     clamped.operation = "MAXIMUM"
