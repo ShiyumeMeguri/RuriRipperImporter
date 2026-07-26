@@ -40,6 +40,7 @@ clip 原样搬进 Blender。
 1. 启用插件:Blender → **编辑 ▸ 偏好设置 ▸ 插件 ▸ 安装…** → 选 `RuriRipperImporter`
    文件夹/zip → 勾选启用 **RuriRipperImporter**。
 2. 导入入口:**文件 ▸ 导入 ▸ Unity Asset (.prefab / .asset / .anim / .controller)**。
+3. https://github.com/FractalTools/Ruri.RipperHook/actions 配置好构建的工具dll路径
 
 插件会从你选的文件向上自动定位工程的 `Assets/` 根目录,并通过同名 `.meta` 里的 GUID
 解析每一个贴图 / clip / avatar(只有引用未命中时才扩大扫描范围)。
