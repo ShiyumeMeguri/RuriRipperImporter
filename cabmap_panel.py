@@ -343,14 +343,18 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
     # AssetList.cs: Columns.Add("Name", 240)/("Container", 320)/("Type", 150)/
     # ("Source", 200)/("Deps", 50)), so this is the Blender-native substitute.
     # Each factor is relative to the space LEFT after the previous column
-    # (UILayout.split() semantics, nested) -- defaults are that same
-    # reference's pixel widths converted through the same nesting so the
-    # on-screen proportions start out identical: Name 240/960, Container
+    # (UILayout.split() semantics, nested). Container/Type/Deps keep that
+    # reference's pixel widths converted through the same nesting (Container
     # 320/960 of what's left after Name, Type 150/960 of what's left after
-    # both, Deps 50/960 of what's left after all three -- Source (no slider;
-    # the row's last cell) fills whatever remains, always exactly 200/960.
+    # both, Deps 50/960 of what's left after all three -- Source, no slider,
+    # is the row's last cell and fills whatever remains); Name overrides it at
+    # 0.8, since the asset name is the one cell whose content is a long unique
+    # identifier worth reading in full and the reference's 240/960 truncated
+    # nearly every row. Because the other three factors are relative, widening
+    # Name alone shrinks them all in proportion -- on screen that lands at
+    # Name .800 / Container .089 / Type .042 / Deps .014 / Source .056.
     col_name_factor: FloatProperty(
-        name="Name", default=0.25, min=0.05, max=0.95, subtype="FACTOR",
+        name="Name", default=0.8, min=0.05, max=0.95, subtype="FACTOR",
         description="Width of the Name column")
     col_container_factor: FloatProperty(
         name="Path", default=0.4444, min=0.05, max=0.95, subtype="FACTOR",
