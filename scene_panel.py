@@ -185,7 +185,8 @@ class RURI_OT_scene_import(bpy.types.Operator):
             return {"CANCELLED"}
 
         db = _bridge_asset_db_module().BridgeAssetDatabase(
-            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
         try:
             imported, placed, unresolved = prefab_importer.import_scene_placements(
                 context, db, scene_state.placeable(scene_import.lod0_only), roots,

@@ -31,14 +31,14 @@ try:
     from . import armature_builder, prefab_importer, scene_panel
     from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from .ruri_pybridge.session import cabmap_state
-    from .ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
+    from .ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
     import armature_builder
     import prefab_importer
     import scene_panel
     from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from ruri_pybridge.session import cabmap_state
-    from ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
+    from ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 
 _HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
 # Enabled for every session regardless of what is ticked -- see _hook_ids.
@@ -1270,16 +1270,28 @@ class RURI_OT_import_selected(bpy.types.Operator):
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
 
+        # A mixed selection (character rows + clip rows) resolves ONE union closure
+        # instead of two: the clip flow's closure co-seeds the whole character anyway
+        # (avatar scope for the muscle solve), so the sequential second resolve
+        # re-loaded everything the first one just loaded. Per-root CAB attribution
+        # (bridge root_cabs_by_guid) keeps the hierarchy import's root set identical.
+        union = None
+        if other_rows and clip_rows:
+            union = self._resolve_union_closure(context, other_rows, clip_rows)
+            if union is None:
+                return {"CANCELLED"}
+
         imported = 0
         if other_rows:
             # Hierarchy/asset rows first: a co-selected character import may
             # create the very armature the clip rows then attach onto.
             _ok, imported = self._import_hierarchy_rows(
-                context, state, other_rows, populate_browser=(len(target_rows) == 1))
+                context, state, other_rows, populate_browser=(len(target_rows) == 1),
+                preresolved=union)
 
         clips_ok = True
         if clip_rows:
-            clips_ok = self._import_clip_rows(context, state, clip_rows)
+            clips_ok = self._import_clip_rows(context, state, clip_rows, preresolved=union)
 
         if other_rows:
             self.report({"INFO"}, f"Imported {imported} asset root(s) from "
@@ -1290,19 +1302,71 @@ class RURI_OT_import_selected(bpy.types.Operator):
             return {"CANCELLED"}
         return {"FINISHED"}
 
-    def _import_hierarchy_rows(self, context, state, rows, populate_browser):
+    def _resolve_union_closure(self, context, other_rows, clip_rows):
+        """One bridge resolve covering a mixed selection: the hierarchy rows plus the
+        clip rows' full seed set (each clip's associated rig/avatar CABs). Returns the
+        shared closure pieces both flows consume, with the hierarchy import's root set
+        already restricted to ITS OWN sub-closure -- a root is dropped only when its
+        CAB attribution places it POSITIVELY outside the hierarchy rows' closure (the
+        co-seeded rig FBX prefab); an unattributed root stays, exactly as inclusive as
+        the separate-resolve flow was. None on bridge failure (already reported)."""
+        hierarchy_cabs = [row["cab"] for row in other_rows]
+        seeds = list(hierarchy_cabs)
+        try:
+            for row in clip_rows:
+                if row["cab"] not in seeds:
+                    seeds.append(row["cab"])
+            for row in clip_rows:
+                for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
+                    if avatar_cab not in seeds:
+                        seeds.append(avatar_cab)
+            # The sequential flow co-seeded the just-imported character's stamped CABs;
+            # in a mixed selection that character IS the hierarchy rows being imported,
+            # already in `seeds` -- the union call needs no armature to read them from.
+            assets, roots, seed_roots, clips_by_cab, scene_roots = \
+                cabmap_state.BRIDGE.import_cabs(seeds)
+            union_closure = {c.lower() for c in
+                             cabmap_state.BRIDGE.resolve_closure_cab_names(seeds)}
+            hierarchy_closure = {c.lower() for c in
+                                 cabmap_state.BRIDGE.resolve_closure_cab_names(hierarchy_cabs)}
+        except Exception as exc:
+            _report_exception(self, "Import (bridge) failed", exc)
+            return None
+        clip_only_cabs = union_closure - hierarchy_closure
+        root_cabs = cabmap_state.BRIDGE.root_cabs_by_guid
+        hierarchy_roots = [guid for guid in roots
+                           if root_cabs.get(guid, "") not in clip_only_cabs]
+        db = bridge_asset_db.BridgeAssetDatabase(
+            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+        return {
+            "db": db,
+            "roots": hierarchy_roots,
+            "seed_roots": seed_roots,
+            "scene_roots": scene_roots,
+            "clips_by_cab": clips_by_cab,
+        }
+
+    def _import_hierarchy_rows(self, context, state, rows, populate_browser, preresolved=None):
         """One shared closure resolve for every non-clip row, then per-row
         dispatch. Returns (all_ok, imported_count)."""
         cabs = [row["cab"] for row in rows]
-        try:
-            assets, roots, seed_roots, _clips_by_cab, scene_roots = \
-                cabmap_state.BRIDGE.import_cabs(cabs)
-        except Exception as exc:
-            _report_exception(self, "Import (bridge) failed", exc)
-            return False, 0
+        if preresolved is not None:
+            db = preresolved["db"]
+            roots = preresolved["roots"]
+            seed_roots = preresolved["seed_roots"]
+            scene_roots = preresolved["scene_roots"]
+        else:
+            try:
+                assets, roots, seed_roots, _clips_by_cab, scene_roots = \
+                    cabmap_state.BRIDGE.import_cabs(cabs)
+            except Exception as exc:
+                _report_exception(self, "Import (bridge) failed", exc)
+                return False, 0
 
-        db = bridge_asset_db.BridgeAssetDatabase(
-            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+            db = bridge_asset_db.BridgeAssetDatabase(
+                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
         options = state.as_options()
         ok = True
         imported = 0
@@ -1403,12 +1467,16 @@ class RURI_OT_import_selected(bpy.types.Operator):
         _populate_animation_browser(state, primary_report if populate_browser else None)
         return ok, imported
 
-    def _import_clip_rows(self, context, state, clip_rows):
+    def _import_clip_rows(self, context, state, clip_rows, preresolved=None):
         """One shared closure resolve for every selected clip-only row (each
         co-seeding its associated rig-FBX CAB so AssetRipper restores hashed
         curve paths and a real Avatar is in scope), then a single standalone
-        build of the union clip set onto the target armature. Returns
-        success."""
+        build of the union clip set onto the target armature. A mixed selection
+        hands the already-resolved union closure in via ``preresolved`` and no
+        second bridge resolve happens at all. Returns success."""
+        if preresolved is not None:
+            return self._build_clip_rows(context, state, clip_rows,
+                                         preresolved["clips_by_cab"], preresolved["db"])
         seeds = []
         try:
             for row in clip_rows:
@@ -1425,12 +1493,25 @@ class RURI_OT_import_selected(bpy.types.Operator):
             for cab in _target_character_cabs(context):
                 if cab not in seeds:
                     seeds.append(cab)
+            # Export-side allowlist: this flow reads nothing but the exported clips (blob +
+            # YAML fallback); the co-seeded character/avatar CABs only need to be LOADED for
+            # the muscle solve and hashed-path restore, not re-serialized.
             assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
-                cabmap_state.BRIDGE.import_cabs(seeds)
+                cabmap_state.BRIDGE.import_cabs(
+                    seeds, export_class_ids=[class_registry.id_for_name("AnimationClip")])
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return False
 
+        db = bridge_asset_db.BridgeAssetDatabase(
+            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+        return self._build_clip_rows(context, state, clip_rows, clips_by_cab, db)
+
+    def _build_clip_rows(self, context, state, clip_rows, clips_by_cab, db):
+        """Shared tail of both clip resolve paths: translate the rows to real clip
+        guids through clips_by_cab (the cabmap's own identity) and build them onto
+        the target armature."""
         clip_guids = []
         missing = []
         for row in clip_rows:
@@ -1448,8 +1529,6 @@ class RURI_OT_import_selected(bpy.types.Operator):
                                    "selected row(s) -- see console.")
             return False
 
-        db = bridge_asset_db.BridgeAssetDatabase(
-            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         result = _import_clips_standalone(self, context, state, clip_rows[0]["cab"],
                                           clip_guids, db)
         return result == {"FINISHED"}
@@ -1871,7 +1950,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
             db = bridge_asset_db.BridgeAssetDatabase(
-                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
 
             selected_guids = []
             for cab in checked_keys:
