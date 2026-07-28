@@ -20,22 +20,26 @@ except ImportError:  # standalone (non-package) testing
     from ruri_pybridge.unity import material as unity_material
 
 
-def _image_from_png_bytes(png, name):
-    """Load raw PNG bytes (already produced by the C# bridge's texture
-    exporter -- AssetRipper's own TextureConverter, so no compressed/mipmap
-    formats ever reach here) into a Blender image through a temp file and
-    Blender's OWN native image loader -- the same path disk-mode texture
-    loading already used (bpy.data.images.load), NOT Pillow. Measured on the
-    real Pelica texture set (66 textures): the previous PIL-decode + numpy +
-    foreach_set push cost 5.3s wall (dominated by Pillow's own import, itself
-    slowed by a known CPython enum-module regression); the native loader does
-    the same 66 textures in 0.16s -- pixel-identical (0.0 max delta), since
-    it's the exact decoder Blender uses for every other image in the file."""
+def _image_from_texture_bytes(data, name):
+    """Load an exported texture's raw bytes (produced by AssetRipper's own
+    TextureConverter, so no compressed/mipmap formats ever reach here) into a
+    Blender image through a temp file and Blender's OWN native image loader --
+    the same path disk-mode texture loading already used (bpy.data.images.load),
+    NOT Pillow. Measured on the real Pelica texture set (66 textures): the
+    previous PIL-decode + numpy + foreach_set push cost 5.3s wall (dominated by
+    Pillow's own import, itself slowed by a known CPython enum-module
+    regression); the native loader does the same 66 textures in 0.16s --
+    pixel-identical (0.0 max delta), since it's the exact decoder Blender uses
+    for every other image in the file.
+
+    The container is deliberately not named or checked anywhere: Blender's loader
+    identifies an image by its content, so png/tga/exr all arrive the same way and
+    a new export format needs no code here."""
     import tempfile
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     try:
-        tmp.write(png)
+        tmp.write(data)
         tmp.close()
         try:
             image = bpy.data.images.load(tmp.name)
@@ -255,11 +259,11 @@ class MaterialBuilder:
             return None
         cached = self._image_cache.get(key)
         if cached is None:
-            if hasattr(self.db, "png_bytes"):
-                png = self.db.png_bytes(key)
-                if png is None:
+            if hasattr(self.db, "texture_bytes"):
+                data = self.db.texture_bytes(key)
+                if data is None:
                     return None
-                cached = _image_from_png_bytes(png, key)
+                cached = _image_from_texture_bytes(data, key)
             else:
                 if not os.path.isfile(key):
                     return None

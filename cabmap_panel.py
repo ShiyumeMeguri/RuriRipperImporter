@@ -949,7 +949,7 @@ def _selected_target_rows(state):
     return [row] if row is not None else []
 
 
-def _import_single_asset(op, context, state, db, textures, guid, class_name, name):
+def _import_single_asset(op, context, state, db, guid, class_name, name):
     """Import exactly one non-hierarchy asset by class: a per-asset browser
     row (a non-bundled file's Mesh/Material/Texture2D/Avatar/TextAsset, keyed
     "<file>::<pathID>") or one loose asset found inside a bundled CAB with no
@@ -982,20 +982,19 @@ def _import_single_asset(op, context, state, db, textures, guid, class_name, nam
         op.report({"INFO"}, f"Imported material '{mat.name}' (browse it in the material list).")
         return {"FINISHED"}
 
-    if class_name is None and guid in textures:
-        # Texture rows resolve to PNG bytes, not a YAML document.
-        import tempfile
-        png = textures[guid]
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    texture_data = db.texture_bytes(guid) if hasattr(db, "texture_bytes") else None
+    if class_name is None and texture_data is not None:
+        # A texture row carries image bytes rather than a YAML document. Loading goes through the
+        # material builder's loader so there is exactly one place that turns exported bytes into a
+        # Blender image (and one place that knows about alpha reinterpretation).
         try:
-            tmp.write(png)
-            tmp.close()
-            image = bpy.data.images.load(tmp.name)
-            image.name = name
-            image.pack()
-            image.filepath = ""
-        finally:
-            os.unlink(tmp.name)
+            from . import material_builder
+        except ImportError:
+            import material_builder
+        image = material_builder._image_from_texture_bytes(texture_data, name)
+        if image is None:
+            op.report({"ERROR"}, f"Texture '{name}' failed to load -- see console.")
+            return {"CANCELLED"}
         op.report({"INFO"}, f"Imported texture '{name}' (packed into this .blend, see the image list).")
         return {"FINISHED"}
 
@@ -1033,7 +1032,7 @@ def _import_single_asset(op, context, state, db, textures, guid, class_name, nam
 _LOOSE_ASSET_CLASSES = ("Mesh", "Material", "Avatar", "TextAsset")
 
 
-def _import_loose_closure_assets(op, context, state, db, textures):
+def _import_loose_closure_assets(op, context, state, db):
     """Fallback for a resolved closure with no .prefab/.unity root at all -- a
     bundled CAB of loose Mesh/Material/Avatar/TextAsset data with no
     GameObject (e.g. a shared "materials" sub-bundle: selecting it used to
@@ -1053,7 +1052,7 @@ def _import_loose_closure_assets(op, context, state, db, textures):
         class_name, name = discovery.peek_class_and_name(text)
         if class_name not in _LOOSE_ASSET_CLASSES:
             continue
-        if _import_single_asset(op, context, state, db, textures, guid,
+        if _import_single_asset(op, context, state, db, guid,
                                 class_name, name or guid) == {"FINISHED"}:
             imported += 1
     return imported
@@ -1277,14 +1276,14 @@ class RURI_OT_import_selected(bpy.types.Operator):
         dispatch. Returns (all_ok, imported_count)."""
         cabs = [row["cab"] for row in rows]
         try:
-            documents, textures, roots, seed_roots, _clips_by_cab, scene_roots = \
+            assets, roots, seed_roots, _clips_by_cab, scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(cabs)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return False, 0
 
         db = bridge_asset_db.BridgeAssetDatabase(
-            documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         options = state.as_options()
         ok = True
         imported = 0
@@ -1307,7 +1306,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 text = db.raw_text(primary_guid)
                 class_name = discovery.peek_class_and_name(text)[0] if text else None
                 if class_name != "GameObject":
-                    if _import_single_asset(self, context, state, db, textures,
+                    if _import_single_asset(self, context, state, db,
                                             primary_guid, class_name, row["name"]) == {"FINISHED"}:
                         imported += 1
                     else:
@@ -1345,7 +1344,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             # No GameObject-rooted .prefab/.unity anywhere in the closure -- a
             # bundled CAB of loose Mesh/Material/Avatar/TextAsset data (see
             # _import_loose_closure_assets) rather than a dead end.
-            loose_imported = _import_loose_closure_assets(self, context, state, db, textures)
+            loose_imported = _import_loose_closure_assets(self, context, state, db)
             if loose_imported == 0:
                 self.report({"WARNING"}, "No importable (.prefab/.unity) asset, and no loose "
                                          "Mesh/Material/Avatar/TextAsset, found in the resolved closure.")
@@ -1395,7 +1394,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
                     if avatar_cab not in seeds:
                         seeds.append(avatar_cab)
-            documents, textures, _roots, _seed_roots, clips_by_cab, _scene_roots = \
+            assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(seeds)
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
@@ -1419,7 +1418,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             return False
 
         db = bridge_asset_db.BridgeAssetDatabase(
-            documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
         result = _import_clips_standalone(self, context, state, clip_rows[0]["cab"],
                                           clip_guids, db)
         return result == {"FINISHED"}
@@ -1836,13 +1835,13 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                         for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab):
                             if avatar_cab not in seeds:
                                 seeds.append(avatar_cab)
-                documents, textures, roots, seed_roots, clips_by_cab, _scene_roots = \
+                assets, roots, seed_roots, clips_by_cab, _scene_roots = \
                     cabmap_state.BRIDGE.import_cabs(seeds)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
             db = bridge_asset_db.BridgeAssetDatabase(
-                documents, textures, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
+                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid)
 
             selected_guids = []
             for cab in checked_keys:
