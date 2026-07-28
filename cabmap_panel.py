@@ -206,8 +206,22 @@ def _hook_ids(state):
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
 
+def _cabmap_identity_hook_ids(state):
+    """The hooks that identify a cabmap's CONTENT, i.e. the ticked GAME hooks only.
+
+    Not the same set as _hook_ids: that one is "what to enable for this session" and
+    appends _REQUIRED_HOOK_IDS unconditionally. Those are export-time processors
+    (AR_HumanoidToGeneric_ resolves a clip's muscle encoding at export) with zero
+    influence on what a cabmap scan produces, so naming a cabmap after them claims a
+    distinction that does not exist -- and gave every fresh map a
+    "<game>+AR_HumanoidToGeneric_.cabmap" name that no longer matched the maps already
+    on disk."""
+    return [item.id for item in state.available_hooks
+            if item.selected and item.id not in _REQUIRED_HOOK_IDS]
+
+
 def _default_cabmap_filename(hook_ids):
-    """A sensible default cabmap filename from the checked hook id(s) (e.g.
+    """A sensible default cabmap filename from the game hook id(s) (e.g.
     "EndField_1.3.3.cabmap", or "EndField_1.3.3+GirlsFrontline2_1.0.cabmap" for
     more than one) -- used to auto-complete the Cabmap field when it's a bare
     folder with no filename (see RURI_OT_build_cabmap)."""
@@ -227,7 +241,8 @@ def _auto_default_cabmap_filename(state):
     filename once the real hook selection is known)."""
     raw = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
     if raw and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
-        state.cabmap_path = os.path.join(raw, _default_cabmap_filename(_hook_ids(state)))
+        state.cabmap_path = os.path.join(
+            raw, _default_cabmap_filename(_cabmap_identity_hook_ids(state)))
 
 
 def _resolve_build_output_path(state):
