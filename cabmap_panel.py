@@ -28,11 +28,12 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import prefab_importer, scene_panel
+    from . import armature_builder, prefab_importer, scene_panel
     from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from .ruri_pybridge.session import cabmap_state
     from .ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
+    import armature_builder
     import prefab_importer
     import scene_panel
     from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
@@ -1061,6 +1062,21 @@ def _import_loose_closure_assets(op, context, state, db):
     return imported
 
 
+def _target_character_cabs(context):
+    """The CABs stamped on the armature a standalone clip import will drive (see
+    armature_builder.CHARACTER_CABS_PROP). Empty when no armature resolves yet, when it carries
+    no stamp (imported before this existed), or when the choice is ambiguous -- co-seeding is an
+    enrichment, so an unresolved target simply adds nothing rather than failing the import here;
+    _resolve_target_armature reports the real error later."""
+    active = context.active_object
+    if active is not None and active.type == "ARMATURE":
+        return armature_builder.read_character_cabs(active)
+    scene_arms = [o for o in context.scene.objects if o.type == "ARMATURE"]
+    if len(scene_arms) == 1:
+        return armature_builder.read_character_cabs(scene_arms[0])
+    return []
+
+
 def _resolve_target_armature(context):
     """The armature a standalone clip import should drive, plus its rebuilt
     maps: the user's ACTIVE armature first (their explicit choice), else the
@@ -1356,6 +1372,11 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 continue
             report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
             imported += 1
+            # Record which CABs this character came from, so a later standalone clip import can
+            # put its Avatar back in the export closure -- the C# muscle solve runs at export
+            # time and can only use an Avatar that is in scope then. See
+            # armature_builder.CHARACTER_CABS_PROP.
+            armature_builder.stamp_character_cabs(report.armature, cabs)
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
             if root_guid == primary_of_single:
@@ -1382,6 +1403,13 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
                     if avatar_cab not in seeds:
                         seeds.append(avatar_cab)
+            # The neighbourhood search above can only reach what the clip actually depends on, and
+            # for a battle clip that is its controller alone -- whose only Avatar is a weapon stub.
+            # The character the user selected knows its own CABs, so re-seed those too and the real
+            # rig Avatar is in scope for the C# muscle solve no matter how the clip was authored.
+            for cab in _target_character_cabs(context):
+                if cab not in seeds:
+                    seeds.append(cab)
             assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(seeds)
         except Exception as exc:

@@ -34,8 +34,44 @@ _DEFAULT_BONE_LENGTH = 0.03
 # prefab_importer.maps_from_stamped_armature.
 UNITY_RIG_PROP = "ruri_unity_rig"
 
-# (The "ruri_avatar_yaml" armature stamp is retired: humanoid clips are resolved to generic
-# curves on the C# side before export, so nothing here needs an Avatar at animation time.)
+# Custom-property key under which a character import records the cabmap CABs its closure was
+# seeded from. The humanoid muscle solve happens on the C# side, at export time, and it can only
+# use an Avatar that is IN the exported closure -- so a later standalone clip import re-seeds these
+# CABs to put this character's own Avatar back in scope.
+#
+# That matters because a clip's own dependency neighbourhood does not reliably contain the
+# character rig at all: EndField's battle AnimatorControllers are attached by game code rather than
+# through bundle dependencies, so a battle clip's closure reaches only its controller, whose sole
+# Avatar is a weapon stub. The rig identity therefore travels with the skeleton the user selects,
+# exactly as the retired Python retargeter's avatar-YAML stamp did -- but carrying the CAB identity
+# instead of the parsed avatar, so the C# pass gets the real asset rather than a re-parse.
+CHARACTER_CABS_PROP = "ruri_character_cabs"
+
+
+def stamp_character_cabs(arm_obj, cab_names):
+    """Record the CABs this character was imported from (see CHARACTER_CABS_PROP)."""
+    if arm_obj is None or not cab_names:
+        return
+    existing = read_character_cabs(arm_obj)
+    merged = list(existing)
+    for cab in cab_names:
+        if cab and cab not in merged:
+            merged.append(cab)
+    arm_obj[CHARACTER_CABS_PROP] = json.dumps(merged, separators=(",", ":"))
+
+
+def read_character_cabs(arm_obj):
+    """The CABs stamped by stamp_character_cabs, or [] when the armature carries none."""
+    if arm_obj is None:
+        return []
+    raw = arm_obj.get(CHARACTER_CABS_PROP)
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(c) for c in value] if isinstance(value, list) else []
 
 
 def _bone_length(node):
