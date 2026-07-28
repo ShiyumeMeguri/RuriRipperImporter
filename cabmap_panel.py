@@ -40,6 +40,8 @@ except ImportError:  # standalone (non-package) testing
     from ruri_pybridge.unity import bridge_asset_db, clip_paths, discovery
 
 _HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
+# Enabled for every session regardless of what is ticked -- see _hook_ids.
+_REQUIRED_HOOK_IDS = ("AR_HumanoidToGeneric_",)
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
 
 # Static EnumProperty item lists (Blender wants a stable list, not a callable, to avoid its
@@ -186,7 +188,18 @@ def _on_filter_rule_edit(self, context):
 
 
 def _hook_ids(state):
-    return [item.id for item in state.available_hooks if item.selected]
+    """The ticked hooks, plus the ones this importer cannot function without.
+
+    AR_HumanoidToGeneric is not optional: it is what resolves a humanoid clip's muscle encoding
+    into ordinary per-bone transform curves, on the C# side, before anything reaches here. Without
+    it a humanoid clip arrives as ~95 unreadable float curves and every body bone stays at rest --
+    so it is appended unconditionally rather than left to a checkbox the user has no way to know
+    they must tick."""
+    ids = [item.id for item in state.available_hooks if item.selected]
+    for required in _REQUIRED_HOOK_IDS:
+        if required not in ids:
+            ids.append(required)
+    return ids
 
 
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
@@ -1107,24 +1120,12 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         return {"CANCELLED"}
     maps = maps_or_error
 
-    # Humanoid support: without a muscle retargeter, a humanoid clip (body
-    # motion = muscle float curves, not transform curves) imports as an
-    # almost-motionless action. Sources, in order: any USABLE Avatar in this
-    # closure (co-seeded rig-FBX CABs; stubs are auto-skipped by content
-    # probing), else the avatar YAML stamped onto the target armature at
-    # character-import time -- battle clips' own dependency neighborhood
-    # contains NO character rig at all (their controller is attached by game
-    # code, not bundle dependencies; verified: its only Avatar is a weapon
-    # stub), so the referential travels with the skeleton instead.
-    # build_action self-gates: generic clips are untouched by the
-    # retargeter's presence.
-    if maps.get("retargeter") is None:
-        retargeter = (prefab_importer.find_retargeter_in_db(db, maps["path_to_bone"])
-                      or prefab_importer.retargeter_from_stamped_armature(
-                          arm_obj, maps["path_to_bone"]))
-        if retargeter is not None:
-            maps = dict(maps)
-            maps["retargeter"] = retargeter
+    # Humanoid clips need no special handling here any more: their muscle encoding was already
+    # resolved into ordinary per-bone transform curves on the C# side, by the AR_HumanoidToGeneric
+    # pass that runs for every session (see _hook_ids). That also retires the avatar hunt this used
+    # to do -- searching the closure for a usable Avatar, then falling back to one stamped onto the
+    # armature at character-import time, because a battle clip's own dependency neighbourhood
+    # carries no character rig at all.
 
     # Compatibility gate: at least one transform curve must resolve to a bone
     # of the chosen armature (string path or CRC32-of-path match). A clip for

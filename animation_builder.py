@@ -17,11 +17,10 @@ from __future__ import annotations
 import numpy as np
 
 try:
-    from . import coordinate, humanoid_retarget
+    from . import coordinate
     from .ruri_pybridge.unity import clip_curves
 except ImportError:  # standalone (non-package) testing
     import coordinate
-    import humanoid_retarget
     from ruri_pybridge.unity import clip_curves
 
 import bpy
@@ -280,7 +279,7 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     options = options or {}
     # Pose bones default to QUATERNION already; the armature OBJECT itself
     # defaults to XYZ Euler, so object-level rotation_quaternion f-curves
-    # (extracted root motion, see _bake_muscles) would silently do nothing
+    # (a clip's extracted root motion rides the animator root path) would silently do nothing
     # without this -- Blender only evaluates the channel matching the
     # current rotation_mode.
     armature_obj.rotation_mode = 'QUATERNION'
@@ -320,22 +319,14 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     animated_paths = set(rot) | set(pos) | set(scale) | set(euler)
     conv = coordinate.conversion_matrix()
 
-    # Bones the humanoid retargeter drives take that data's motion, not any
-    # co-existing generic transform curve for the same path: a Human bone can
-    # collide by name with a literal skeleton node (e.g. Hips mapped to a bone
-    # literally named "Root", which also carries its own root-motion Position/
-    # Rotation curves at path "") -- Unity's own Mecanim runtime always plays a
-    # humanoid Avatar-bound clip through the muscle system for these bones, and
-    # _bake_muscles unconditionally writes every retargeter.bone_targets() bone
-    # further down, so skip them here to avoid writing the same fcurve twice.
-    retargeter = maps.get("retargeter")
-    muscle_bone_names = set(retargeter.bone_targets().values()) if retargeter is not None else set()
-
+    # Every clip reaching here is generic: a humanoid clip's muscle encoding was already resolved
+    # into these same per-bone transform curves on the C# side (HumanoidToGenericProcessor), so
+    # there is one kind of curve to bake and no muscle solver in this importer at all.
     frames = times * sample_rate
     for path in animated_paths:
         bone_name = path_to_bone.get(path)
         node = path_to_node.get(path)
-        if not bone_name or node is None or bone_name in muscle_bone_names:
+        if not bone_name or node is None:
             continue
         rest_quat = node.local.to_quaternion()
         l_rest_inv = node.local.inverted_safe()
@@ -383,136 +374,11 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
         _write_bone_fcurves(bone_fcurves, bone_name, frames,
                             out_locs, out_quats, out_scales)
 
-    if retargeter is not None:
-        _bake_muscles(retargeter, clip, name_to_node, bone_fcurves, conv,
-                      times, n_frames, sample_rate)
-
     if path_to_meshobjects:
         _apply_float_curves(action, clip, path_to_meshobjects, sample_rate, times)
 
     return action, slot, n_frames
 
-
-def _bake_muscles(retargeter, clip, name_to_node, bone_fcurves, conv, times,
-                  n_frames, sample_rate):
-    """Reconstruct and bake every human bone's rotation from the clip's muscle
-    curves -- the body's only motion in a humanoid clip.
-
-    Mirrors the transform-curve baking: the muscles give each bone a local-frame
-    rotation delta, applied to its rest local matrix and conjugated into the
-    pose-bone basis exactly as an animated transform path is.
-    """
-    sampled = {}
-    for channel in clip.floats:
-        attribute = channel.attribute
-        if humanoid_retarget.is_muscle(attribute) or humanoid_retarget.is_root(attribute):
-            sampled[attribute] = channel.sample(times)[:, 0]
-    if not sampled:
-        return
-    # Whichever Root axes the clip doesn't "keep original" for are extracted
-    # as root motion belonging to the character's root, not the hips -- see
-    # humanoid_retarget.py's body_transform() docstring.
-    keep_position_xz = clip.keep_position_xz
-    keep_position_y = clip.keep_position_y
-    keep_orientation = clip.keep_orientation
-    # Every channel is sampled at every frame in ONE vectorized pass above;
-    # the per-frame dicts below are just cheap views for the muscle solver's
-    # lookup interface, reused across all driven bones.
-    attributes = list(sampled)
-    columns = [sampled[a] for a in attributes]
-    values = [{attributes[ci]: columns[ci][fi] for ci in range(len(attributes))}
-              for fi in range(n_frames)]
-
-    frames = times * sample_rate
-    hips_bone = retargeter.hips_bone()
-    # Root motion body_transform() extracts (whichever axes keep_position_xz/y/
-    # keep_orientation are False) belongs on the character's own root object,
-    # not the hips -- collected here while baking the hips bone below, then
-    # written onto the armature object's own transform afterward.  Defaults to
-    # identity (matches an object with no root-motion track).
-    motion_locs = np.zeros((n_frames, 3), dtype=np.float32)
-    motion_quats = np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (n_frames, 1))
-    has_motion = False
-
-    # Every non-hips bone's rotation for every frame, WITH Unity's TwistSolve
-    # parent<->child redistribution already applied (see
-    # humanoid_retarget.py's body_local_quats) -- computed once per frame
-    # here rather than once per (bone, frame) inside the loop below, since
-    # TwistSolve needs several bones' rotations together, not one at a time.
-    body_quats_by_frame = [retargeter.body_local_quats(values[fi].get) for fi in range(n_frames)]
-
-    for human_name, bone_name in retargeter.bone_targets().items():
-        node = name_to_node.get(bone_name)
-        if node is None:
-            continue
-        rest_loc = node.local.translation
-        rest_quat = node.local.to_quaternion()
-        rest_scale = node.local.to_scale()
-        l_rest_inv = node.local.inverted_safe()
-        is_hips = bone_name == hips_bone
-
-        in_locs = np.tile((rest_loc.x, rest_loc.y, rest_loc.z), (n_frames, 1))
-        in_quats = np.tile((rest_quat.w, rest_quat.x, rest_quat.y, rest_quat.z),
-                           (n_frames, 1))
-        in_scales = np.tile((rest_scale.x, rest_scale.y, rest_scale.z), (n_frames, 1))
-        if is_hips:
-            # body_transform() reconstructs the hips' FULL absolute local
-            # transform directly (see humanoid_retarget.py's root-motion
-            # section: RootT/RootQ are the avatar's mass-center/orientation
-            # reference, not the hips' own transform, so this composes a
-            # provisional FK against them rather than reading RootT/RootQ
-            # as a hips-local delta).  Used directly, like the muscle
-            # branch below -- not composed with rest_quat. A None result
-            # leaves this frame at rest (= node.local, which IS the rest TRS).
-            for fi in range(n_frames):
-                body = retargeter.body_transform(values[fi].get,
-                                                 keep_position_xz=keep_position_xz,
-                                                 keep_position_y=keep_position_y,
-                                                 keep_orientation=keep_orientation)
-                if body is None:
-                    continue
-                position, rotation, motion = body
-                in_locs[fi] = (position.x, position.y, position.z)
-                in_quats[fi] = (rotation.w, rotation.x, rotation.y, rotation.z)
-                motion_t, motion_q = motion
-                motion_locs[fi] = (motion_t.x, motion_t.y, motion_t.z)
-                motion_quats[fi] = (motion_q.w, motion_q.x, motion_q.y, motion_q.z)
-                # Data-driven: write object motion iff any frame actually
-                # carries some (trajectory clips always do; the settings
-                # flags no longer decide -- see body_transform).
-                if (motion_t.length_squared > 1e-10
-                        or abs(motion_q.w) < 0.99999995):
-                    has_motion = True
-        else:
-            # The muscle gives this bone's FULL absolute local rotation for the
-            # frame directly (preQ @ swingTwist @ inv(postQ), then TwistSolve's
-            # parent<->child redistribution) -- not a delta, and not composed
-            # with rest_quat (see humanoid_retarget.py's module docstring
-            # RETRACTION for why an earlier revision's rest_quat
-            # division/recomposition here was a no-op that happened to still work).
-            for fi in range(n_frames):
-                anim_quat = body_quats_by_frame[fi].get(human_name)
-                if anim_quat is not None:
-                    in_quats[fi] = (anim_quat.w, anim_quat.x, anim_quat.y, anim_quat.z)
-        locs, quats, scales = _conjugated_pose_arrays(
-            in_locs, in_quats, in_scales, l_rest_inv, conv)
-        _write_bone_fcurves(bone_fcurves, bone_name, frames, locs, quats, scales)
-
-    # Bake whatever body_transform() extracted as root motion onto the
-    # armature object's own transform, in Unity world/root space -- there is
-    # no "rest" to subtract here (the object's own rest is identity), so each
-    # frame is a straight coordinate.convert_matrix of the extracted TRS.
-    # has_motion is now set per-frame off the ACTUAL extracted values (see the
-    # hips branch above) -- a trajectory clip writes its object track whatever
-    # the keep-flags say, and a genuinely motion-free clip writes none.
-    if has_motion:
-        # Same conjugation as every bone channel, with an identity "rest": the
-        # object's own rest IS identity, so left = conv @ I.
-        obj_locs, obj_quats, _decomposed_scales = _conjugated_pose_arrays(
-            motion_locs.astype(np.float64), motion_quats.astype(np.float64),
-            np.ones((n_frames, 3), dtype=np.float64), Matrix.Identity(4), conv)
-        _write_bone_fcurves(bone_fcurves, None, frames, obj_locs, obj_quats,
-                            np.ones((n_frames, 3), dtype=np.float32))
 
 
 def _prepare_channels(action, slot_name, id_type):
