@@ -80,6 +80,10 @@ def _rebuild_window(state):
     past the size the original flat-only list was already tuned for."""
     state.window.clear()
     selected = cabmap_state.SELECTED_CABS
+    # The one funnel every navigation path already runs through (enter dir, breadcrumb
+    # jump, jump-to-row's folder, Build/Load) -- record the browsed folder here rather
+    # than at each of those call sites, so no future navigation can forget to.
+    state.browsed_dir = cabmap_state.dir_to_key()
 
     if cabmap_state.has_active_query(state.search, state.filter_rules):
         total, window = cabmap_state.display_window()
@@ -362,6 +366,11 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
         default="assetbundle")
     search: StringProperty(name="Search", update=_on_search_edit,
                            description="Filter by Name / Container / Source / Type")
+    # The virtual folder the browser is in, as cabmap_state.dir_to_key's flat string.
+    # Lives on the Scene (so it survives a .blend save) rather than in cabmap_state,
+    # whose CURRENT_DIR is live session state -- reloading a cabmap then lands back on
+    # this folder instead of dumping the user at the root every time.
+    browsed_dir: StringProperty(default="")
     status: StringProperty(default="No cabmap loaded.")
     window: CollectionProperty(type=RURI_PG_cabmap_row)
     active_index: IntProperty()
@@ -522,7 +531,7 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
                 return {"CANCELLED"}
             bridge.load_cab_map(out)
-            cabmap_state.load_rows()
+            cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
             state.loaded = True
         except Exception as exc:
@@ -551,7 +560,10 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
         try:
             bridge = cabmap_state.ensure_bridge(_hook_ids(state))
             bridge.load_cab_map(path)
-            cabmap_state.load_rows()
+            # Land back on the folder the user was browsing (persisted on the scene),
+            # not the root -- browse_dir falls back to the root if this map has no
+            # such folder, so a key left over from a different game is harmless.
+            cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
             state.loaded = True
         except Exception as exc:
