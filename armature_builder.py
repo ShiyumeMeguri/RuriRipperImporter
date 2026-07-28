@@ -34,13 +34,8 @@ _DEFAULT_BONE_LENGTH = 0.03
 # prefab_importer.maps_from_stamped_armature.
 UNITY_RIG_PROP = "ruri_unity_rig"
 
-# Custom-property key under which the character import stamps the WORKING
-# humanoid Avatar's raw YAML (zlib+base64) onto the armature object -- the
-# muscle referential travels with the skeleton, because a clip's own
-# dependency neighborhood does not reliably contain the character rig at all
-# (battle controllers are attached by game code, not bundle dependencies).
-# See prefab_importer._stamp_avatar_on_armature / retargeter_from_stamped_armature.
-AVATAR_YAML_PROP = "ruri_avatar_yaml"
+# (The "ruri_avatar_yaml" armature stamp is retired: humanoid clips are resolved to generic
+# curves on the C# side before export, so nothing here needs an Avatar at animation time.)
 
 
 def _bone_length(node):
@@ -139,18 +134,19 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     above). Works for Generic avatars too, not just Humanoid ones -- the raw
     skeleton is populated either way.
 
-    Returns (arm_obj, retargeter) -- the caller (prefab_importer.
-    import_avatar_from_db) uses the retargeter's source_key to stamp the
-    avatar YAML onto the armature via the SAME _stamp_avatar_on_armature a
-    full character import already uses, so a later standalone AnimationClip
-    import can retarget straight onto this armature."""
+    Returns the armature object; the caller stamps the avatar YAML onto it so
+    a later standalone AnimationClip import can find the mapping."""
     try:
-        from . import humanoid_retarget
+        from .ruri_pybridge.unity import avatar as avatar_module
     except ImportError:
-        import humanoid_retarget
+        from ruri_pybridge.unity import avatar as avatar_module
+    from mathutils import Quaternion
 
-    retargeter = humanoid_retarget.HumanoidRetargeter(avatar_file)
-    raw_nodes = retargeter.skeleton_nodes()
+    avatar_doc = avatar_file.first("Avatar")
+    if avatar_doc is None:
+        raise ValueError("file has no Avatar object")
+    raw_nodes = [(name, parent, Vector(t), Quaternion(q))
+                 for name, parent, t, q in avatar_module.skeleton_nodes(avatar_doc.data)]
 
     # World matrix per node, parent-before-child via memoized recursion --
     # same composition _provisional_fk uses for posed data, applied here to
@@ -221,4 +217,4 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
             index_to_editbone[index].parent = index_to_editbone[parent]
 
     bpy.ops.object.mode_set(mode="OBJECT")
-    return arm_obj, retargeter
+    return arm_obj

@@ -398,16 +398,6 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
                     "panel below after import. Clips are NOT built until you "
                     "check them there and click Import -- a single clip can "
                     "be 100+MB, so nothing is loaded automatically")
-    endfield_ik: BoolProperty(
-        name="EndField IK (constraints)", default=False,
-        description="On rigs exposing EndField's IK_* target bones, set up a "
-                    "posing-aid rig: live IK/Copy-Rotation constraints (plus "
-                    "four hidden RuriIK.* effector helper bones) targeting "
-                    "the clip's animated IK bones, ALL at influence 0 -- "
-                    "playback stays bit-identical raw FK until you raise a "
-                    "constraint's influence yourself. Off (the default) adds "
-                    "nothing at all")
-
     animation_character_name: StringProperty(default="")
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)
     available_clips_active_index: IntProperty()
@@ -419,7 +409,6 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
-            "endfield_ik": self.endfield_ik,
         }
 
 
@@ -468,7 +457,8 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
         for hook_id in hook_ids:
             item = state.available_hooks.add()
             item.id = hook_id
-            item.selected = (hook_id in previously_selected
+            item.selected = (hook_id in _REQUIRED_HOOK_IDS
+                             or hook_id in previously_selected
                              or (hook_id == _HOOK_IDS_DEFAULT
                                  and hook_id not in previously_listed
                                  and not previously_selected))
@@ -1120,12 +1110,9 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         return {"CANCELLED"}
     maps = maps_or_error
 
-    # Humanoid clips need no special handling here any more: their muscle encoding was already
-    # resolved into ordinary per-bone transform curves on the C# side, by the AR_HumanoidToGeneric
-    # pass that runs for every session (see _hook_ids). That also retires the avatar hunt this used
-    # to do -- searching the closure for a usable Avatar, then falling back to one stamped onto the
-    # armature at character-import time, because a battle clip's own dependency neighbourhood
-    # carries no character rig at all.
+    # Humanoid clips arrive already generic: the C# AR_HumanoidToGeneric pass (forced on for
+    # every session -- see _hook_ids) resolved their muscle encoding before export, so there is
+    # nothing avatar-related to do here.
 
     # Compatibility gate: at least one transform curve must resolve to a bone
     # of the chosen armature (string path or CRC32-of-path match). A clip for
@@ -1711,7 +1698,6 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_materials")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
-            opts.prop(state, "endfield_ik")
 
             batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)
@@ -2001,7 +1987,6 @@ class RURI_PT_animation_browser(bpy.types.Panel):
         summary = f"Selected: {len(selected)} clip(s)" if selected else "Nothing checked yet."
         layout.label(text=summary)
 
-        layout.prop(state, "endfield_ik")
         layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT")
 
 

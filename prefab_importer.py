@@ -202,13 +202,6 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         action, slot, n_frames = animation_builder.build_action(
             clip, arm_obj, maps, path_to_meshobjects, options)
 
-        # EndField's IK posing aid needs the human-bone -> rig-bone mapping the muscle referential
-        # used to supply. That mapping now lives only on the C# side, so the aid is off until it is
-        # exposed across the bridge; say so rather than silently doing nothing.
-        if options.get("endfield_ik", False):
-            warnings.append(f"{clip_name}: EndField IK posing aid is unavailable -- its human-bone "
-                            f"mapping is not yet exposed by the C# humanoid pass")
-
         built += 1
         if first is None:
             first = (action, slot)

@@ -106,15 +106,6 @@ class _ImportOptionsMixin:
     import_colors: BoolProperty(name="Import Vertex Colors", default=True)
     import_blendshapes: BoolProperty(name="Import Blendshapes", default=True)
     flip_v: BoolProperty(name="Flip UV V", default=False)
-    endfield_ik: BoolProperty(
-        name="EndField IK (constraints)", default=False,
-        description="On rigs exposing EndField's IK_* target bones, set up a "
-                    "posing-aid rig: live IK/Copy-Rotation constraints (plus "
-                    "four hidden RuriIK.* effector helper bones) targeting "
-                    "the clip's animated IK bones, ALL at influence 0 -- "
-                    "playback stays bit-identical raw FK until you raise a "
-                    "constraint's influence yourself. Off (the default) adds "
-                    "nothing at all")
 
     def as_options(self):
         return {
@@ -127,7 +118,6 @@ class _ImportOptionsMixin:
             "import_colors": self.import_colors,
             "import_blendshapes": self.import_blendshapes,
             "flip_v": self.flip_v,
-            "endfield_ik": self.endfield_ik,
         }
 
 
