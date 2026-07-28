@@ -314,7 +314,11 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     action = bpy.data.actions.new(name)
     if hasattr(action, "use_fake_user"):
         action.use_fake_user = True
-    bone_fcurves, slot = _prepare_channels(action, name, "OBJECT")
+    # action.name, not the clip name: Blender has already uniquified it against every
+    # existing action, which is exactly the guarantee the slot identifier needs (see
+    # _prepare_channels). Importing the same clip twice would otherwise mint a second
+    # slot with an identical identifier and re-arm the 5.1.2 crash.
+    bone_fcurves, slot = _prepare_channels(action, action.name, "OBJECT")
 
     animated_paths = set(rot) | set(pos) | set(scale) | set(euler)
     conv = coordinate.conversion_matrix()
@@ -385,14 +389,15 @@ def _prepare_channels(action, slot_name, id_type):
     """Return (fcurves_collection, slot) for the new slotted Action API,
     falling back to legacy ``action.fcurves`` on older Blender.
 
-    The slot is deliberately named after the CLIP (slot_name = the clip's
-    m_Name), NOT uniformly after the armature. Do not "improve" this to a
-    shared name: Blender 5.1.2 has an empirically-pinned segfault (reproduced
-    5/5 headless, same crash address every time) when an ARMATURE object has
-    an action + explicitly-set slot assigned and two actions exist whose slots
-    share one identifier -- the very next ``animation_data.action`` write
-    (assign, switch, or even ``= None``) dies in the identifier-matched
-    auto-pick path. Unique per-clip identifiers keep that branch unreachable.
+    The slot is deliberately named after the ACTION (slot_name = action.name,
+    already uniquified by Blender), NOT uniformly after the armature. Do not
+    "improve" this to a shared name: Blender 5.1.2 has an empirically-pinned
+    segfault (reproduced 5/5 headless, same crash address every time) when an
+    ARMATURE object has an action + explicitly-set slot assigned and two
+    actions exist whose slots share one identifier -- the very next
+    ``animation_data.action`` write (assign, switch, or even ``= None``) dies
+    in the identifier-matched auto-pick path. Per-action identifiers keep that
+    branch unreachable even when the same clip is imported more than once.
     The cost of uniqueness -- Blender auto-picks no slot when the user assigns
     one of these actions by hand -- is repaired by the msgbus watcher below
     (_on_animdata_action_changed), which explicitly assigns the action's own

@@ -168,11 +168,18 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     target armature: clips exported without their rig in scope carry
     "path_0x<CRC32>_" placeholder paths, and the armature's own bone paths
     are the hash preimages -- so a standalone-imported clip binds to the
-    user's selected skeleton exactly when the hashes match. Returns
-    (built, warnings)."""
+    user's selected skeleton exactly when the hashes match.
+
+    Assignment: importing ONE clip always puts it on the armature -- picking a single
+    animation IS the request to see it, and leaving it as a loose datablock for the user
+    to hunt down in the Action editor is not a neutral default. A multi-clip batch keeps
+    the don't-clobber guard: which of N would be arbitrary, so it only fills an armature
+    that has no action yet. Returns (built, warnings)."""
     built = 0
     first = None
     warnings = []
+    guids = list(guids)
+    assign_always = len(guids) == 1
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
     path_to_bone = maps.get("path_to_bone") or {}
     for guid in guids:
@@ -205,7 +212,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         built += 1
         if first is None:
             first = (action, slot)
-    if first is not None and not has_action:
+    if first is not None and (assign_always or not has_action):
         _assign_first_action(arm_obj, first[0], first[1])
     return built, warnings
 
