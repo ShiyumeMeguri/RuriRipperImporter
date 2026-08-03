@@ -9,14 +9,25 @@ Endfield keeps its configuration in ``Data/TableCfg/*.bytes``, one self-describi
 container per table, riding the same VFS as the asset bundles. The cast comes
 out of three of them, joined the way the game itself joins them:
 
-    CharacterTable   playable characters, keyed by charId ("chr_0004_pelica")
-    NpcTable         npcs, keyed by npcId, grouped by the game's own npcGroupId
-    NpcInfoTable     npcId -> the avatar templet id its model is authored under
+    CharacterTable          playable characters, keyed by charId ("chr_0004_pelica")
+    NpcTemplateGroupTable   named npcs, keyed by the npc's own id ("si"), each
+                            carrying the templateId its model is authored under
+    NpcInfoTable            every npc placement id -> that same templateId
 
-Display names are never in those rows: a name is an ``I18nText`` carrying a
-numeric id, and the text lives in ``I18nTextTable_<LANG>``. Selecting the
-language is therefore selecting which container to join through -- one string,
-not a code path.
+``NpcTable`` is deliberately NOT the npc source: it only holds the npcs that
+carry dialogue configuration (359 of them), so it is missing whole cast members,
+and it is keyed by PLACEMENT -- one character standing in twenty scenes is twenty
+rows of the same name and the same model. The template table is keyed by the unit
+that can actually be loaded, which is why it neither repeats nor omits.
+
+Display names are never in the rows themselves, and the two families reach them
+differently -- which is exactly what a join CHAIN is for:
+
+    character   name -> I18nText{id} ---------------> I18nTextTable_<LANG>[id]
+    npc         name -> a text key -> TextTable[key].id -> I18nTextTable_<LANG>[id]
+
+Selecting the language is selecting which container the last hop lands in -- one
+string, not a code path.
 
 No path is guessed anywhere here. A roster key is the id the game itself uses.
 """
@@ -28,8 +39,9 @@ import os
 CONTAINER_DIR = "Data/TableCfg"
 
 CHARACTER_TABLE = "CharacterTable"
-NPC_TABLE = "NpcTable"
+NPC_TABLE = "NpcTemplateGroupTable"
 NPC_INFO_TABLE = "NpcInfoTable"
+TEXT_TABLE = "TextTable"
 
 # The languages the game actually ships a text table for.
 LANGUAGES = ("CN", "TC", "EN", "JP", "KR", "DE", "FR", "IT", "RU", "TH", "VN", "ID", "BR", "MX")
@@ -91,50 +103,84 @@ def character_columns(language):
 
 
 def npc_columns(language):
-    """NpcTable. ``group`` is the game's own npcGroupId, which is what its own
-    tooling groups npcs by; the faction line is the localized label."""
-    text = text_container(language)
+    """NpcTemplateGroupTable. ``name``/``title`` are text KEYS here (not the
+    ``I18nText`` the character table carries), so both take the two-hop chain."""
+    chain = [container(TEXT_TABLE), text_container(language)]
     return [
-        ("display", "name.id", text, ""),
-        ("title", "title.id", text, ""),
-        ("faction", "faction.id", text, ""),
-        ("group", "npcGroupId"),
-        ("icon", "headIcon"),
+        ("display", "name", chain, ["id", ""]),
+        ("title", "title", chain, ["id", ""]),
+        ("template", "templateId"),
     ]
 
 
 def npc_template_columns():
-    """npcId -> the avatar templet id the npc's model is authored under. The
-    game's own link; nothing about it is derivable from the npc id."""
+    """Every npc placement id -> the template its model is authored under. Read
+    only for its template SET: it covers models no named npc row mentions."""
     return [("template", "templateId")]
 
 
-def load_characters(bridge, game_root, language):
-    return bridge.query_data_table(vfs_roots(game_root), container(CHARACTER_TABLE),
-                                   character_columns(language))
-
-
-def load_npcs(bridge, game_root, language):
-    return bridge.query_data_table(vfs_roots(game_root), container(NPC_TABLE),
-                                   npc_columns(language))
-
-
-def load_npc_templates(bridge, game_root):
-    return bridge.query_data_table(vfs_roots(game_root), container(NPC_INFO_TABLE),
-                                   npc_template_columns())
-
-
-def grouped(table, group_column="group", label_column="display"):
-    """Rows bucketed by the game's own grouping field, each bucket sorted by the
-    label the user actually sees. Returns [(group, [(row_index, label, key)])],
-    groups in the game's own ordering of first appearance made stable by name."""
-    buckets = {}
+def character_rows(bridge, game_root, language):
+    """One row per playable character, grouped by the game's own profession."""
+    table = bridge.query_data_table(vfs_roots(game_root), container(CHARACTER_TABLE),
+                                    character_columns(language))
     keys = table.values("key")
-    groups = table.values(group_column)
-    labels = table.values(label_column)
+    display = table.values("display")
+    english = table.values("english")
+    element = table.values("element")
+    weapon = table.values("weapon")
+    profession = table.values("group")
+    rows = []
     for index in range(table.row_count):
-        buckets.setdefault(groups[index], []).append(
-            (index, labels[index] or keys[index], keys[index]))
-    for members in buckets.values():
-        members.sort(key=lambda member: member[1])
-    return sorted(buckets.items(), key=lambda bucket: bucket[0])
+        rows.append({
+            "key": keys[index],
+            "label": display[index] or keys[index],
+            "detail": " · ".join(part for part in (english[index], element[index], weapon[index]) if part),
+            "group": profession[index],
+        })
+    rows.sort(key=lambda row: (row["group"], row["label"]))
+    return rows
+
+
+def npc_rows(bridge, game_root, language):
+    """One row per distinct model prefab.
+
+    The game lists an npc once per place it stands, so the raw tables repeat the
+    same character (and the same prefab) dozens of times. Only the prefab can
+    actually be loaded, so that is the row: templates are collapsed, and the
+    named entry wins when several npcs share one model. Placement-only templates
+    -- models no named npc row mentions -- are kept too, under their own id,
+    because dropping them is how a cast list ends up incomplete."""
+    roots = vfs_roots(game_root)
+    named = bridge.query_data_table(roots, container(NPC_TABLE), npc_columns(language))
+    placements = bridge.query_data_table(roots, container(NPC_INFO_TABLE), npc_template_columns())
+
+    keys = named.values("key")
+    display = named.values("display")
+    title = named.values("title")
+    template = named.values("template")
+
+    by_template = {}
+    for index in range(named.row_count):
+        model = template[index]
+        if not model:
+            continue
+        existing = by_template.get(model)
+        # A named entry beats an unnamed one; between two named ones the first
+        # wins, which is stable because the projection's row order is. An entry
+        # is "named" exactly when its label is not just the template id again.
+        if existing is not None and (existing["label"] != existing["key"] or not display[index]):
+            continue
+        by_template[model] = {
+            "key": model,
+            "label": display[index] or model,
+            "detail": " · ".join(part for part in (keys[index], title[index]) if part),
+            "group": "",
+        }
+
+    for model in placements.values("template"):
+        if model and model not in by_template:
+            by_template[model] = {"key": model, "label": model, "detail": "", "group": ""}
+
+    rows = list(by_template.values())
+    rows.sort(key=lambda row: row["label"])
+    return rows

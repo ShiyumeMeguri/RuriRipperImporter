@@ -1,11 +1,12 @@
 """Browse the game's cast the way the game itself lists it.
 
 The rows come from the game's own config containers (see ``roster``): playable
-characters keyed by charId, npcs keyed by npcId and grouped by the game's own
-npcGroupId. Names are the real localized names, in whichever language Blender
-is running in -- ``bpy.app.translations.locale`` picks which text container the
-C# side joins through, so switching Blender's language switches the roster with
-no reload of anything else.
+characters keyed by charId and grouped by the game's own profession, and npcs
+collapsed to one row per distinct model prefab. Names are the real localized
+names, in whichever language Blender is running in --
+``bpy.app.translations.locale`` picks which text container the C# side joins
+through, so switching Blender's language switches the roster with no reload of
+anything else.
 
 The list behaves like the bundle browser next door: type to filter, click to
 select, and one button reveals where the selection lives over in that browser.
@@ -23,9 +24,10 @@ from . import roster
 CHARACTERS = "characters"
 NPCS = "npcs"
 
-# Loaded tables, by (kind, language). Module scope, not scene state: these are
-# columnar buffers, not something Blender's property system can hold.
-_TABLES = {}
+# Loaded row lists, by (kind, language). Module scope, not scene state: rebuilding
+# the drawn list must not cost a re-read, and a plain list is not something
+# Blender's property system can hold anyway.
+_ROWS = {}
 
 
 def _report(operator, message, level="WARNING"):
@@ -51,7 +53,7 @@ def _on_kind_change(self, context):
     operator called from a property update runs with the UI mid-update, and its
     poll failing there raises rather than reporting."""
     state = context.scene.ruri_roster
-    if _table(state) is None:
+    if _rows(state) is None:
         state.entries.clear()
         state.status = "Refresh to read the {0} out of the game's tables.".format(state.kind)
         return
@@ -62,7 +64,7 @@ class RURI_PG_roster(bpy.types.PropertyGroup):
     kind: EnumProperty(
         name="Cast",
         items=[(CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
-               (NPCS, "NPCs", "Non-playable cast, grouped by the game's own npc group")],
+               (NPCS, "NPCs", "Non-playable cast, one row per distinct model prefab")],
         default=CHARACTERS,
         update=_on_kind_change)
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_filter_edit,
@@ -89,45 +91,44 @@ def _language(state):
     return roster.language_for_locale(bpy.app.translations.locale)
 
 
-def _table(state):
-    return _TABLES.get((state.kind, _language(state)))
+def _rows(state):
+    return _ROWS.get((state.kind, _language(state)))
 
 
 def _rebuild(state):
-    """Rebuild the drawn line list from the loaded table. Group headers are the
-    game's own grouping field; a filter that empties a group drops the header
-    with it."""
+    """Rebuild the drawn line list. Rows arrive already deduplicated and sorted
+    (see ``roster``); this only filters and inserts the group headers, which
+    exist exactly while the game itself supplies a grouping field. A filter that
+    empties a group drops its header with it."""
     state.entries.clear()
-    table = _table(state)
-    if table is None:
+    rows = _rows(state)
+    if rows is None:
         return
     needle = state.search.strip().lower()
-    detail_column = "english" if state.kind == CHARACTERS else "title"
-    details = table.values(detail_column)
+    kept = [row for row in rows
+            if not needle
+            or needle in row["label"].lower()
+            or needle in row["key"].lower()
+            or needle in row["detail"].lower()
+            or needle in row["group"].lower()]
 
-    total = 0
-    for group, members in roster.grouped(table):
-        kept = [member for member in members
-                if not needle
-                or needle in member[1].lower()
-                or needle in member[2].lower()
-                or needle in group.lower()]
-        if not kept:
-            continue
-        header = state.entries.add()
-        header.label = "{0}  ({1})".format(group or "(ungrouped)", len(kept))
-        header.group = group
-        header.is_group = True
-        for row_index, label, key in kept:
-            entry = state.entries.add()
-            entry.label = label
-            entry.key = key
-            entry.group = group
-            entry.detail = details[row_index]
-            entry.row_index = row_index
-            total += 1
+    current_group = None
+    for index, row in enumerate(kept):
+        if row["group"] and row["group"] != current_group:
+            current_group = row["group"]
+            members = sum(1 for other in kept if other["group"] == current_group)
+            header = state.entries.add()
+            header.label = "{0}  ({1})".format(current_group, members)
+            header.group = current_group
+            header.is_group = True
+        entry = state.entries.add()
+        entry.label = row["label"]
+        entry.key = row["key"]
+        entry.group = row["group"]
+        entry.detail = row["detail"]
+        entry.row_index = index
     state.status = "{0} of {1} {2} · {3}".format(
-        total, table.row_count, state.kind, _language(state))
+        len(kept), len(rows), state.kind, _language(state))
     if state.active_index >= len(state.entries):
         state.active_index = 0
 
@@ -151,6 +152,12 @@ class RURI_UL_roster(bpy.types.UIList):
             return
         row = layout.row(align=True)
         row.label(text=item.label, icon="OUTLINER_OB_ARMATURE")
+        # The game's own id, dimmed: with several rows sharing a display name it
+        # is the only thing that tells them apart. Skipped when the name already
+        # IS the id, so nothing is printed twice.
+        identifier = row.row()
+        identifier.enabled = False
+        identifier.label(text="" if item.key == item.label else "({0})".format(item.key))
         sub = row.row()
         sub.alignment = "RIGHT"
         sub.label(text=item.detail)
@@ -178,14 +185,14 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         state.language = language
         try:
             if state.kind == CHARACTERS:
-                table = roster.load_characters(cabmap_state.BRIDGE, game_root, language)
+                rows = roster.character_rows(cabmap_state.BRIDGE, game_root, language)
             else:
-                table = roster.load_npcs(cabmap_state.BRIDGE, game_root, language)
+                rows = roster.npc_rows(cabmap_state.BRIDGE, game_root, language)
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             _report(self, state.status)
             return {"CANCELLED"}
-        _TABLES[(state.kind, language)] = table
+        _ROWS[(state.kind, language)] = rows
         _rebuild(state)
         return {"FINISHED"}
 
@@ -250,4 +257,4 @@ def unregister():
     del bpy.types.Scene.ruri_roster
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
-    _TABLES.clear()
+    _ROWS.clear()
