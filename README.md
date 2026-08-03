@@ -126,24 +126,49 @@ prefab。已端到端验证:真实角色 FBX → dump → Blender,骨架、贴�
 
 ---
 
+## 按游戏解耦的 GUI
+
+hook 是针对具体游戏写的,面板也该是。所以**一个游戏一个文件夹**:`Game/<游戏>/` 里放
+这个游戏专属的 tab、面板和导入通道,`Game/__init__.py` 只是个注册表。
+
+联结方式不是约定而是精确推导:hook id 就是 `{GameName}_{Version}`
+(`Ruri.Hook.RuriHook.BuildHookId`,如 `EndField_1.4.4`),所以一个 hook 属于哪个游戏 =
+最后一个下划线之前的部分,而一个游戏模块的 `game_name` 就是上游那个 `GameType` 成员。
+于是:
+
+- **勾上某个游戏的任意版本 hook → 它的 tab 才出现**,不需要维护版本清单;
+- 取消勾选,tab 连同它的操作符一起消失,停留在该 tab 的界面自动退回 `VirtualAssetBundle`;
+- `cabmap_panel.py`(微内核:hook 选择、cabmap 构建/加载、虚拟资源浏览、导入)
+  **代码里出现不了任何游戏名**,加一个游戏 = 新建一个文件夹,核心零改动。
+
+目前 `Game/EndField/` 提供 Scene(流式场景整图导入)与 Character(SkeletalMorph 表情
+系统)两个 tab,覆盖 Endfield 全部已 hook 的版本。
+
+---
+
 ## 文件清单
 
 ```
 RuriRipperImporter/            ← 插件本体(装这个)
-  __init__.py                  ← 单一「Unity Asset」导入算子
+  __init__.py                  ← 单一「Unity Asset」导入算子 + 注册/重载
   coordinate.py hierarchy.py   ← 共用实现的 mathutils 边界(见下)
   armature_builder.py mesh_builder.py material_builder.py
-  animation_builder.py humanoid_retarget.py prefab_importer.py
-  cabmap_panel.py scene_panel.py
+  animation_builder.py prefab_importer.py
+  cabmap_panel.py              ← 微内核面板:hook / cabmap / 浏览 / 导入,零游戏知识
+  Game/                        ← 按游戏解耦的 GUI(见上)
+    __init__.py                ← 注册表:GameModule / GameTab + hook id → 游戏
+    EndField/                  ← Endfield 全版本专属
+      __init__.py              ← GAME_MODULE 声明(两个 tab + 默认 hook id)
+      scene_panel.py scene_importer.py character_panel.py
   ruri_pybridge/               ← git submodule:与 Painter 插件共用的那一半
     unity/    Unity YAML 解析、class id 表、GUID 解析、网格解码、
-              Renderer 发现、材质属性、LOD/路径规则、clip 曲线与重锚、muscle 表
+              Renderer 发现、材质属性、clip 曲线与重锚、Avatar 骨架
     runtime/  依赖 bootstrap、CoreCLR + RipperHook 桥、列式行表、设置/工作区
-    session/  cabmap 浏览模型、场景 placement 模型
+    session/  cabmap 浏览模型
+    game/     一个游戏一个子包(endfield:寻址路径/LOD 规则、场景 placement、
+              SkeletalMorph 表情系统)
     math3d/   Unity→Blender / Unity→glTF 坐标空间
 RuriYamlDumper/RuriYamlDumper.cs ← 可选:Unity 端 FBX→YAML 导出工具
-tools/build_class_registry.py  ← 重新生成 class_registry.json
-cli_import.py  selftest.py      ← 无头测试脚手架(自测:Pelica 14/14)
 ```
 
 克隆时别忘了子模块:
@@ -156,13 +181,11 @@ git submodule update --init --recursive
 
 `ruri_pybridge` 里**不许出现 bpy/mathutils**(它同时要在 Substance Painter 里跑,那边
 没有这两个东西)。所以 `coordinate.py` / `hierarchy.py` 留在插件里,只做一件事:把共用层
-的 numpy 4x4 在边界上转成 `mathutils.Matrix`。共用层自己带 129 个自测:
-`python ruri_pybridge/run_tests.py`。
-
-无头运行自测:
+的 numpy 4x4 在边界上转成 `mathutils.Matrix`。这条规矩由自测本身把关(`test_no_host_imports`
+按 AST 扫全包);共用层自带 145 个自测:
 
 ```bash
-blender --background --factory-startup --python selftest.py
+python ruri_pybridge/run_tests.py
 ```
 
 ---

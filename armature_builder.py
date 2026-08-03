@@ -40,7 +40,7 @@ UNITY_RIG_PROP = "ruri_unity_rig"
 # CABs to put this character's own Avatar back in scope.
 #
 # That matters because a clip's own dependency neighbourhood does not reliably contain the
-# character rig at all: EndField's battle AnimatorControllers are attached by game code rather than
+# character rig at all: battle AnimatorControllers are routinely attached by game code rather than
 # through bundle dependencies, so a battle clip's closure reaches only its controller, whose sole
 # Avatar is a weapon stub. The rig identity therefore travels with the skeleton the user selects,
 # exactly as the retired Python retargeter's avatar-YAML stamp did -- but carrying the CAB identity

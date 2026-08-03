@@ -28,20 +28,25 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import armature_builder, character_panel, prefab_importer, scene_panel
+    from . import Game, armature_builder, prefab_importer
     from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from .ruri_pybridge.session import cabmap_state
     from .ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
+    import Game
     import armature_builder
-    import character_panel
     import prefab_importer
-    import scene_panel
     from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from ruri_pybridge.session import cabmap_state
     from ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 
-_HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
+# The only tab this module owns, because it is the only one that is not about a
+# game: the cabmap itself. Every other tab is contributed by a game module (see
+# Game) and shows up exactly while one of that game's hooks is ticked -- which is
+# why nothing here names a game or knows how many tabs exist.
+BROWSER_TAB_ID = "assetbundle"
+BROWSER_TAB_LABEL = "VirtualAssetBundle"
+BROWSER_TAB_DESCRIPTION = "Browse/search the loaded cabmap's rows and import individual assets"
 # Enabled for every session regardless of what is ticked -- see _hook_ids.
 # Only what THIS host needs. Hooks every AssetRipper host needs (currently
 # AR_SerializeReference_) are not listed here: they live in the one place that
@@ -218,6 +223,26 @@ def _hook_ids(state):
     return ids
 
 
+def _active_tab(state):
+    """The game tab actually being shown, or None for the browser.
+
+    The stored tab only counts while its own game still has a hook ticked --
+    unticking one must take its tabs away rather than leave the panel drawing a
+    game that is no longer enabled. Read-only, so a draw callback can call it."""
+    for tab in Game.active_tabs(_hook_ids(state)):
+        if tab.key == state.active_tab:
+            return tab
+    return None
+
+
+def _tab_bar(state):
+    """(key, label) for every tab currently offered: the browser, then whatever
+    the enabled games contribute."""
+    entries = [(BROWSER_TAB_ID, BROWSER_TAB_LABEL)]
+    entries.extend((tab.key, tab.label) for tab in Game.active_tabs(_hook_ids(state)))
+    return entries
+
+
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
 
@@ -236,10 +261,10 @@ def _cabmap_identity_hook_ids(state):
 
 
 def _default_cabmap_filename(hook_ids):
-    """A sensible default cabmap filename from the game hook id(s) (e.g.
-    "EndField_1.3.3.cabmap", or "EndField_1.3.3+GirlsFrontline2_1.0.cabmap" for
-    more than one) -- used to auto-complete the Cabmap field when it's a bare
-    folder with no filename (see RURI_OT_build_cabmap)."""
+    """A sensible default cabmap filename from the game hook id(s) --
+    "<Game>_<Version>.cabmap", or "<Game>_<Version>+<Other>_<Version>.cabmap" for
+    more than one. Used to auto-complete the Cabmap field when it's a bare folder
+    with no filename (see RURI_OT_build_cabmap)."""
     stem = "+".join(hook_ids) if hook_ids else "output"
     return _FILENAME_UNSAFE.sub("_", stem) + ".cabmap"
 
@@ -305,10 +330,11 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
 
 
 class RURI_PG_hook_entry(bpy.types.PropertyGroup):
-    """One hook id (e.g. "EndField_1.3.3") as reported live by RipperBlenderBridge.
+    """One hook id ("<GameName>_<Version>") as reported live by RipperBlenderBridge.
     ListAvailableHooks() -- see RURI_OT_refresh_hooks. `selected` drives the checkbox in the
-    N-panel's Hooks box; multiple can be ticked at once, since Initialize() accepts more than one
-    hook id (e.g. a VFS-game hook plus an independent AR_* export-side hook)."""
+    N-panel's Hooks box, and is also what reveals that game's own tabs (see Game); multiple can
+    be ticked at once, since Initialize() accepts more than one hook id (a VFS-game hook plus an
+    AR_* export-side one)."""
     id: StringProperty()
     selected: BoolProperty(default=False)
 
@@ -368,15 +394,12 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
     available_hooks_active_index: IntProperty()
     hooks_status: StringProperty(default="Click Refresh to list hooks compiled into Ruri.RipperHook.dll.")
     loaded: BoolProperty(default=False)
-    active_tab: EnumProperty(
-        name="Tab",
-        items=[
-            ("assetbundle", "VirtualAssetBundle", "Browse/search the loaded cabmap's rows and import individual assets"),
-            ("scene", "Scene", "Discover a whole map's placements and import it in one go"),
-            ("character", "Character", "Drive an imported character's face: the SkeletalMorph "
-                                       "emotion/pose/lipsync library and its morph animations"),
-        ],
-        default="assetbundle")
+    # A plain string, not an EnumProperty: the tab set is whatever the enabled
+    # games contribute, and Blender's dynamic-enum items callback stores an index
+    # into a list that changes the moment a hook is ticked -- the stored value
+    # would then point at a different tab. A key nobody offers any more simply
+    # falls back to the browser (see _active_tab).
+    active_tab: StringProperty(default=BROWSER_TAB_ID)
     search: StringProperty(name="Search", update=_on_search_edit,
                            description="Filter by Name / Container / Source / Type")
     # The virtual folder the browser is in, as cabmap_state.dir_to_key's flat string.
@@ -452,26 +475,15 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
 
 class RURI_OT_refresh_hooks(bpy.types.Operator):
     """Populate the Hooks checklist straight from RipperBlenderBridge.ListAvailableHooks() --
-    the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll. Ticked
-    state is preserved across a re-refresh for any id that's still present.
+    the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll.
 
-    Root-cause fix (2026-07-18): the default-hook auto-tick used to be gated on
-    `not had_any_before` -- "this is the very first refresh this Blender session has ever run" --
-    a ONE-SHOT gate, not "is the default hook newly available". A session that ran Refresh even
-    once before Ruri.RipperHook.dll exposed AlsoCoversVersions alias ids (so _HOOK_IDS_DEFAULT,
-    "EndField_1.3.3", was never in the list to begin with) permanently poisoned that gate: on every
-    later refresh (even after rebuilding the DLL / Blender's Reload Scripts, since this
-    CollectionProperty lives on the Scene and survives a script reload) the list now correctly
-    contains "EndField_1.3.3", but it silently comes back unchecked forever -- nothing ever
-    selects it, and nothing tells the user they have to tick it by hand. Symptom: cabmap tab looks
-    fine, but Scene tab's "Discover Maps" keeps throwing "No VFS game hook active" no matter how
-    many times Build/Load Cabmap is retried, because the checked-hooks set feeding
-    cabmap_state.ensure_bridge() is (and was always going to stay) empty.
-    Fix: auto-tick per-id -- the default id gets selected whenever it's newly appearing (wasn't in
-    the PREVIOUS listing) and the user hasn't already deliberately selected something else this
-    session (previously_selected is empty) -- covers both "brand new session" (old behavior) and
-    "the default just became available for the first time" (the bug above), without ever
-    overriding an explicit user choice.
+    Ticked state survives a re-refresh for any id still listed. A game module's declared
+    default id (Game.default_hook_ids) auto-ticks PER ID, on the first refresh that id appears
+    in the listing at all, and only while the user has ticked nothing of their own -- so a
+    default that only becomes available later (a rebuilt DLL, a new alias id) still gets
+    selected, and an explicit choice is never overridden. This list lives on the Scene and
+    survives a script reload, so a one-shot "first refresh ever" gate would miss that case
+    permanently and leave the session with no game hook at all.
     """
     bl_idname = "ruri.refresh_hooks"
     bl_label = "Refresh Hooks"
@@ -491,13 +503,14 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
 
         previously_selected = {item.id for item in state.available_hooks if item.selected}
         previously_listed = {item.id for item in state.available_hooks}
+        default_ids = Game.default_hook_ids()
         state.available_hooks.clear()
         for hook_id in hook_ids:
             item = state.available_hooks.add()
             item.id = hook_id
             item.selected = (hook_id in _REQUIRED_HOOK_IDS
                              or hook_id in previously_selected
-                             or (hook_id == _HOOK_IDS_DEFAULT
+                             or (hook_id in default_ids
                                  and hook_id not in previously_listed
                                  and not previously_selected))
         state.hooks_status = (f"{len(hook_ids)} hook(s) available." if hook_ids
@@ -583,6 +596,28 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             _report_exception(self, "Load cabmap failed", exc)
             return {"CANCELLED"}
         self.report({"INFO"}, f"Cabmap loaded: {len(cabmap_state.ROWS)} CABs.")
+        return {"FINISHED"}
+
+
+class RURI_OT_select_tab(bpy.types.Operator):
+    """One button of the tab bar. Buttons rather than an expanded EnumProperty
+    because which tabs exist depends on which games are hooked -- see
+    RURI_PG_cabmap.active_tab."""
+    bl_idname = "ruri.select_tab"
+    bl_label = "Tab"
+    bl_options = {"INTERNAL"}
+    tab: StringProperty()
+
+    @classmethod
+    def description(cls, context, properties):
+        if properties.tab == BROWSER_TAB_ID:
+            return BROWSER_TAB_DESCRIPTION
+        tab = Game.tab_by_key(properties.tab)
+        return tab.description if tab is not None else cls.bl_label
+
+    def execute(self, context):
+        context.scene.ruri_cabmap.active_tab = self.tab
+        _redraw_all(context)
         return {"FINISHED"}
 
 
@@ -824,7 +859,7 @@ class RURI_OT_cabmap_select_all(bpy.types.Operator):
         # checks scope the shortcut to the RuriRipper sidebar specifically.
         scene = getattr(context, "scene", None)
         state = getattr(scene, "ruri_cabmap", None)
-        if state is None or not state.loaded or state.active_tab != "assetbundle":
+        if state is None or not state.loaded or _active_tab(state) is not None:
             return False
         if not cabmap_state.VISIBLE:
             return False
@@ -1018,7 +1053,7 @@ def _import_single_asset(op, context, state, db, guid, class_name, name):
             from . import material_builder
         except ImportError:
             import material_builder
-        builder = material_builder.MaterialBuilder(db, prefab_importer._resolve_options(state.as_options()))
+        builder = material_builder.MaterialBuilder(db, prefab_importer.resolve_options(state.as_options()))
         mat = builder.build_from_ref({"guid": guid})
         if mat is None:
             op.report({"ERROR"}, "Material failed to build -- see console.")
@@ -1786,10 +1821,15 @@ class RURI_PT_cabmap(bpy.types.Panel):
         if not state.loaded:
             layout.label(text="Build or load a cabmap to browse/import.", icon="LOCKED")
 
+        active = _active_tab(state)
+        active_key = active.key if active is not None else BROWSER_TAB_ID
         tabs = gated.row(align=True)
-        tabs.prop(state, "active_tab", expand=True)
+        for key, label in _tab_bar(state):
+            op = tabs.operator(RURI_OT_select_tab.bl_idname, text=label,
+                               depress=(key == active_key))
+            op.tab = key
 
-        if state.active_tab == "assetbundle":
+        if active is None:
             search_row = gated.row(align=True)
             search_row.prop(state, "search", icon="VIEWZOOM")
             active_rules = sum(1 for r in state.filter_rules if r.enabled)
@@ -1855,10 +1895,8 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op = gated.operator(RURI_OT_cabmap_import_with_dependents.bl_idname,
                                text=f"Import{batch} (With Dependents)", icon="LOOP_BACK")
             op.reset_scene = False
-        elif state.active_tab == "scene":
-            scene_panel.draw_scene_tab(gated, context)
         else:
-            character_panel.draw_character_tab(gated, context)
+            active.draw(gated, context)
 
 
 class RURI_OT_discover_animations(bpy.types.Operator):
@@ -2090,8 +2128,7 @@ class RURI_OT_animation_select_all(bpy.types.Operator):
 
 
 class RURI_PT_animation_browser(bpy.types.Panel):
-    """Checkbox animation browser -- mirrors the Scene tab's
-    discover-then-select-then-commit shape (scene_panel.draw_scene_tab): always
+    """Checkbox animation browser -- discover, then select, then commit: always
     visible once a cabmap is loaded, with its own "Discover Animations"
     button front and center, rather than being an invisible side effect of
     the generic Import buttons gated behind an easy-to-miss checkbox (the
@@ -2109,7 +2146,7 @@ class RURI_PT_animation_browser(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         state = context.scene.ruri_cabmap
-        return state.loaded and state.active_tab == "assetbundle"
+        return state.loaded and _active_tab(state) is None
 
     def draw(self, context):
         layout = self.layout
@@ -2168,6 +2205,7 @@ _CLASSES = (
     RURI_OT_refresh_hooks,
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
+    RURI_OT_select_tab,
     RURI_OT_cabmap_sort,
     RURI_OT_cabmap_import_with_dependents,
     RURI_OT_import_selected,

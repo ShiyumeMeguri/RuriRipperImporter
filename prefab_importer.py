@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import os
-import re
 import time
-
-import numpy as np
 
 # `clip_paths` is aliased to clip_repair and `prefab` to prefab_scan: both names
 # are already taken here by local variables (a list of .anim paths, a parsed
@@ -14,7 +11,7 @@ import numpy as np
 try:
     from . import (armature_builder, coordinate, animation_builder,
                    material_builder, mesh_builder)
-    from .ruri_pybridge.unity import (asset_db, asset_paths, clip_curves,
+    from .ruri_pybridge.unity import (asset_db, clip_curves,
                                       clip_paths as clip_repair, discovery,
                                       mesh_decoder, prefab as prefab_scan, skinning)
 except ImportError:  # standalone (non-package) testing
@@ -23,11 +20,9 @@ except ImportError:  # standalone (non-package) testing
     import animation_builder
     import material_builder
     import mesh_builder
-    from ruri_pybridge.unity import (asset_db, asset_paths, clip_curves,
+    from ruri_pybridge.unity import (asset_db, clip_curves,
                                      clip_paths as clip_repair, discovery,
                                      mesh_decoder, prefab as prefab_scan, skinning)
-
-import bpy
 
 DEFAULT_OPTIONS = {
     "lod0_only": True,
@@ -70,7 +65,7 @@ class ImportReport:
                 f"inactive_skipped={self.skipped_inactive} time={self.seconds:.2f}s")
 
 
-def _resolve_options(options):
+def resolve_options(options):
     merged = dict(DEFAULT_OPTIONS)
     if options:
         merged.update(options)
@@ -78,7 +73,7 @@ def _resolve_options(options):
 
 
 def import_prefab(context, prefab_path, options=None):
-    options = _resolve_options(options)
+    options = resolve_options(options)
     assets_dir = asset_db.find_assets_dir(prefab_path)
     db = asset_db.AssetDatabase(os.path.dirname(prefab_path), assets_dir)
     prefab = db.load_file(prefab_path)
@@ -119,7 +114,7 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
     discovery.discover_clip_refs) and reported on report.available_clips; the
     caller builds actions later, only for whichever clips the user actually
     picks in the animation browser, via build_selected_animations."""
-    options = _resolve_options(options)
+    options = resolve_options(options)
     arm_name = name or discovery.prefab_display_name(prefab_file)
     report = _import_prefab_core(context, db, prefab_file, arm_name, [], options)
     if options["import_animations"]:
@@ -451,7 +446,7 @@ def _import_static(context, db, renderer, mat_builder, options, report):
 
 def import_mesh(context, mesh_path, options=None):
     """Import a standalone Unity Mesh .asset as a single static object."""
-    options = _resolve_options(options)
+    options = resolve_options(options)
     report = ImportReport()
     start = time.time()
     assets_dir = asset_db.find_assets_dir(mesh_path)
@@ -471,16 +466,13 @@ def import_mesh(context, mesh_path, options=None):
 
 def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
     """Bridge-mode sibling of import_mesh: a standalone mesh, no armature.
-    Scene placements (see scene_state.py) resolve to one specific named mesh
-    inside a multi-object FBX (e.g. "...building_001.fbx##building_001_lod2"),
-    not a full prefab/GameObject hierarchy -- there is no MeshRenderer on the
-    mesh's own CAB to read a material list from (confirmed: every scene mesh
-    CAB checked holds exactly one Mesh document, nothing else). Real
-    materials, when available, are resolved by the CALLER via a sibling
-    prefab (see _scene_materials_for) and passed in here; when none were
-    found (or import_materials is off), `materials` is None/empty and the
-    mesh imports flat, matching the prior behavior."""
-    options = _resolve_options(options)
+
+    A mesh reached on its own -- a lone Mesh CAB, or one named sub-object of a
+    multi-object FBX -- carries no MeshRenderer to read a material list from, so
+    `materials` is whatever the caller could resolve for it by other means (a
+    game's scene importer resolves them from the placement's own material
+    hashes). Empty/None imports the mesh flat."""
+    options = resolve_options(options)
     report = ImportReport()
     start = time.time()
     mesh_doc = mesh_file.first("Mesh")
@@ -503,7 +495,7 @@ def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
     """Bridge-mode standalone Avatar import: a Blender armature built straight from the avatar's
     OWN embedded skeleton (armature_builder.build_armature_from_avatar), independent of any
     accompanying rig FBX/prefab."""
-    options = _resolve_options(options)
+    options = resolve_options(options)
     report = ImportReport()
     start = time.time()
     avatar_doc = avatar_file.first("Avatar")
@@ -579,174 +571,6 @@ def maps_from_stamped_armature(arm_obj):
         "path_to_bone": path_to_bone,
         "file_id_to_world": {},
     }
-
-
-def _scene_materials_for(material_index, mat_builder, material_asset_paths):
-    """Real materials for a scene-placed mesh, resolved directly from its own
-    material_asset_paths -- the entity's actual material hash(es), resolved
-    through the same StringPathHash LUT as its mesh. [] when the entity
-    carries no material, none resolved, or import_materials is off."""
-    if mat_builder is None or not material_asset_paths:
-        return []
-    materials = []
-    for path in material_asset_paths:
-        guid = material_index.get(asset_paths.expected_mesh_name(path))
-        if guid is None:
-            continue
-        mat = mat_builder.build_from_ref({"guid": guid})
-        if mat is not None:
-            materials.append(mat)
-    return materials
-
-
-def _duplicate_hierarchy(context, anchor):
-    """Deep-copies an anchor Empty and every descendant object beneath it
-    (sharing mesh/material/armature DATA -- only object-level transform and
-    parent differ), returning the new anchor. The prefab-placement
-    equivalent of the mesh-instancing pattern import_scene_placements
-    already uses for Streaming meshes -- a repeated DynamicScene prop
-    (a satellite dish, a decoration) shares one import instead of a second
-    full prefab rebuild."""
-    def _walk(obj):
-        new_obj = obj.copy()
-        if obj.data is not None:
-            new_obj.data = obj.data
-        context.collection.objects.link(new_obj)
-        for child in obj.children:
-            new_child = _walk(child)
-            new_child.parent = new_obj
-        return new_obj
-    return _walk(anchor)
-
-
-def _place_prefab_report(context, report, placement):
-    """Wraps every top-level object import_prefab_from_db produced (mesh
-    objects with no parent, plus the armature if any -- static/environmental
-    DynamicScene prefabs are not expected to have one, but this stays
-    correct either way) under a new anchor Empty, then moves that anchor to
-    the placement's resolved world transform. Only objects with no parent
-    need the placement applied -- Blender already propagates parent-to-child
-    transforms for anything nested under an armature or another mesh."""
-    top_level = []
-    if report.armature is not None and report.armature.parent is None:
-        top_level.append(report.armature)
-    for obj in report.mesh_objects:
-        if obj.parent is None and obj not in top_level:
-            top_level.append(obj)
-    if not top_level:
-        return None
-
-    anchor = bpy.data.objects.new(f"{top_level[0].name}_placement", None)
-    context.collection.objects.link(anchor)
-    for obj in top_level:
-        obj.parent = anchor
-
-    unity_matrix = coordinate.unity_trs(
-        {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
-        {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
-        {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
-    anchor.matrix_world = coordinate.convert_matrix(unity_matrix)
-    return anchor
-
-
-def import_scene_placements(context, db, placements, roots=(), options=None):
-    """Import a batch of scene placements (see scene_state.py) into the
-    current scene, against an already-resolved closure db covering every CAB
-    those placements need. Covers BOTH scene-data families in one pass:
-
-    - Streaming family (raw FBX mesh sub-assets, e.g.
-      '...models/s_x.fbx##subname'): resolves the expected mesh sub-object
-      by name (discovery.mesh_name_index), materials from the
-      placement's own material_asset_paths (discovery.material_name_index
-      -- FBPropertyAssetData AssetType==1, same hashLut as the mesh, no
-      naming-convention guess), and builds via import_mesh_from_db.
-    - DynamicScene family (Model/Effect/Tree, resolved to REAL .prefab
-      paths -- asset_paths.is_full_prefab_path): resolves the prefab by name against
-      `roots` (discovery.prefab_name_index) and builds via
-      import_prefab_from_db, which already brings real Renderer + Materials
-      (no separate material-hash lookup needed for these).
-
-    Either way, imports each DISTINCT asset exactly once; every further
-    placement of the same asset becomes a linked-data duplicate (mesh path:
-    .copy() sharing mesh data; prefab path: _duplicate_hierarchy sharing the
-    whole object graph's data) instead of a second full import -- a real map
-    can place the same prop hundreds of times, and re-decoding identical
-    bytes that many times would be exactly the kind of eagerly-repeated cost
-    the animation browser fix (see cabmap_state.py) already had to solve for
-    a similar reason.
-    Returns (imported_count, placed_count, unresolved_count)."""
-    options = _resolve_options(options)
-    name_index = discovery.mesh_name_index(db)
-    prefab_index = discovery.prefab_name_index(db, roots)
-    mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
-    material_index = discovery.material_name_index(db) if mat_builder is not None else {}
-    obj_by_guid = {}
-    anchor_by_guid = {}
-    imported = 0
-    placed = 0
-    unresolved = 0
-
-    for placement in placements:
-        asset_path = placement["asset_path"]
-
-        if asset_paths.is_full_prefab_path(asset_path):
-            guid = prefab_index.get(asset_paths.prefab_asset_stem(asset_path))
-            if guid is None:
-                unresolved += 1
-                continue
-
-            base_anchor = anchor_by_guid.get(guid)
-            if base_anchor is None:
-                prefab_file = db.load_guid(guid)
-                if prefab_file is None:
-                    unresolved += 1
-                    continue
-                report = import_prefab_from_db(context, db, prefab_file, options)
-                anchor = _place_prefab_report(context, report, placement)
-                if anchor is None:
-                    unresolved += 1
-                    continue
-                anchor_by_guid[guid] = anchor
-                imported += 1
-                placed += 1
-                continue
-
-            target = _duplicate_hierarchy(context, base_anchor)
-        else:
-            expected_name = asset_paths.expected_mesh_name(asset_path)
-            guid = name_index.get(expected_name)
-            if guid is None:
-                unresolved += 1
-                continue
-
-            base_obj = obj_by_guid.get(guid)
-            if base_obj is None:
-                mesh_file = db.load_guid(guid)
-                if mesh_file is None:
-                    unresolved += 1
-                    continue
-                materials = _scene_materials_for(material_index, mat_builder, placement.get("material_asset_paths") or [])
-                report = import_mesh_from_db(context, db, mesh_file, options, materials)
-                if not report.mesh_objects:
-                    unresolved += 1
-                    continue
-                base_obj = report.mesh_objects[0]
-                obj_by_guid[guid] = base_obj
-                imported += 1
-                target = base_obj
-            else:
-                target = base_obj.copy()
-                target.data = base_obj.data
-                context.collection.objects.link(target)
-
-        unity_matrix = coordinate.unity_trs(
-            {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
-            {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
-            {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
-        target.matrix_world = coordinate.convert_matrix(unity_matrix)
-        placed += 1
-
-    return imported, placed, unresolved
 
 
 # --- unified entry point ----------------------------------------------------
@@ -857,7 +681,7 @@ def _apply_clip_paths(context, clip_paths, options):
                 continue
             clip = clip_doc
         action, slot, _frames = animation_builder.build_action(
-            clip, arm, maps, None, _resolve_options(options))
+            clip, arm, maps, None, resolve_options(options))
         report.actions += 1
         if first is None:
             first = (action, slot)

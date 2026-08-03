@@ -6,12 +6,12 @@ Endfield does not animate faces with transform curves -- body clips stop at the
 humanoid "Jaw Close" muscle and key no facial joint at all. Expression lives in
 a separate family of assets that animate named **ctrl drivers** (a weight per
 ctrl, constant for a pose, an AnimationCurve for an animation). See
-ruri_pybridge/unity/skeletal_morph.py for the format.
+ruri_pybridge/game/endfield/skeletal_morph.py for the format.
 
-draw_character_tab() is called directly by cabmap_panel.py's RURI_PT_cabmap.draw()
-for its "Character" tab, exactly like scene_panel.draw_scene_tab -- so it shares
-the same cabmap-loaded gate and tab bar instead of being a separate always-on
-sub-panel.
+draw_character_tab() is the draw function this game's "Character" tab declares
+(see the package's GAME_MODULE), exactly like scene_panel.draw_scene_tab -- so it
+shares the core panel's cabmap-loaded gate and tab bar instead of being a
+separate always-on sub-panel.
 
 BINDING. A ctrl is a name, not a target; what it moves is per-rig, and two
 kinds of target exist:
@@ -27,9 +27,9 @@ Both are merged into one RigBinding, so a ctrl bound as both drives both, and a
 third kind of target is a new provider class rather than a rewrite.
 
 The avatar table only exists in an export when AssetRipper's
-[SerializeReference] pass is on -- see cabmap_panel._REQUIRED_HOOK_IDS. Without
-it the whole MonoBehaviour is dropped and every character's face silently binds
-to nothing.
+[SerializeReference] pass is on -- which it always is, from the C# side's own
+Bootstrap.AlwaysOnHookIds. Without it the whole MonoBehaviour is dropped and
+every character's face silently binds to nothing.
 """
 
 from __future__ import annotations
@@ -40,15 +40,9 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
-try:
-    from . import animation_builder, coordinate
-    from .ruri_pybridge.session import cabmap_state, morph_state
-    from .ruri_pybridge.unity import skeletal_morph
-except ImportError:  # standalone (non-package) testing
-    import animation_builder
-    import coordinate
-    from ruri_pybridge.session import cabmap_state, morph_state
-    from ruri_pybridge.unity import skeletal_morph
+from ... import animation_builder, coordinate
+from ...ruri_pybridge.game.endfield import morph_state, skeletal_morph
+from ...ruri_pybridge.session import cabmap_state
 
 # The game bakes a ctrl driver onto a mesh as a shape key named after the DCC
 # rig channel that drove it: "<ctrl>_tx_max" (translate-X at its maximum), with
@@ -466,10 +460,7 @@ def _rig_maps(armature_obj):
     """The Unity rig identity stamped on the armature at import time. Without it
     there is no rest matrix to conjugate against, so bone binding is impossible
     and says so rather than posing the face wrongly."""
-    try:
-        from . import prefab_importer
-    except ImportError:  # standalone (non-package) testing
-        import prefab_importer
+    from ... import prefab_importer
     try:
         return prefab_importer.maps_from_stamped_armature(armature_obj)
     except Exception:
@@ -836,10 +827,7 @@ class RURI_OT_character_load_library(bpy.types.Operator):
 def _bridge_asset_db_module():
     """Imported lazily -- only the bridge path needs it, and this tab draws long
     before any bridge session exists."""
-    try:
-        from .ruri_pybridge.unity import bridge_asset_db
-    except ImportError:  # standalone (non-package) testing
-        from ruri_pybridge.unity import bridge_asset_db
+    from ...ruri_pybridge.unity import bridge_asset_db
     return bridge_asset_db
 
 
@@ -1147,9 +1135,8 @@ class RURI_UL_morph_drivers(bpy.types.UIList):
 # ── tab ───────────────────────────────────────────────────────────────────────
 
 def draw_character_tab(layout, context):
-    """Draw the Character tab's content into ``layout`` -- called from
-    cabmap_panel.py's RURI_PT_cabmap.draw() when active_tab == 'character'. The
-    caller already handled the cabmap-loaded gate both tabs share."""
+    """Draw the Character tab's content into ``layout``. The core panel already
+    handled the cabmap-loaded gate every tab shares."""
     state = context.scene.ruri_character
 
     rig_row = layout.row(align=True)

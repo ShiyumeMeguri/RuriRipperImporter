@@ -23,38 +23,44 @@ bl_info = {
 import importlib
 import sys
 
-from . import (coordinate, hierarchy, armature_builder,
+from . import (Game, coordinate, hierarchy, armature_builder,
                mesh_builder, material_builder, animation_builder,
-               prefab_importer, cabmap_panel, scene_panel, character_panel)
+               prefab_importer, cabmap_panel)
 from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
-# ones that hold real, expensive-to-rebuild process state (the claimed CLR
-# runtime handle, the loaded bridge/DLL type, the loaded cabmap + its 260k-row
-# cache, the discovered-but-not-yet-imported scene placements): a reload
-# resets a module's globals to their source-code defaults even though the
-# underlying state they were tracking (a process-wide CLR runtime that can
-# never be re-claimed once set; a cabmap already paid for with a
-# multi-second load) is still very much alive. Reloading them on every
-# re-register both throws away that live state for no reason AND desyncs
-# their "already done" guards from reality (this is exactly what caused a
-# second, spurious set_runtime() attempt after a Reload-Scripts-triggered
-# reload). cabmap_panel/scene_panel are safe to reload -- just UI/operator
-# code, no state of their own (PropertyGroup data lives on bpy.types.Scene).
-_STATEFUL_SUFFIXES = ("runtime.bootstrap", "runtime.pythonnet_bridge",
-                      "session.cabmap_state", "session.scene_state",
-                      "session.morph_state")
+# ones that say they hold real, expensive-to-rebuild process state. A reload
+# resets a module's globals to their source-code defaults even though what they
+# were tracking (a process-wide CLR runtime that can never be re-claimed once
+# set; a cabmap already paid for with a multi-second load) is still very much
+# alive, which both throws that away and desyncs the module's "already done"
+# guards from reality. Which modules those are is each module's own declaration
+# (HOLDS_PROCESS_STATE), not a list kept here: a list here would have to know
+# every game's session modules, and would silently reload a new one.
+def _holds_process_state(module):
+    return bool(getattr(module, "HOLDS_PROCESS_STATE", False))
+
 
 # Shared package first (in sys.modules order, i.e. parents before children), so
 # the add-on modules reloaded after it pick up the new objects rather than
 # holding references to the previous generation.
 _shared_prefix = __package__ + ".ruri_pybridge."
 for _name, _mod in list(sys.modules.items()):
-    if _name.startswith(_shared_prefix) and not _name.endswith(_STATEFUL_SUFFIXES):
+    if _name.startswith(_shared_prefix) and not _holds_process_state(_mod):
         importlib.reload(_mod)
 for _mod in (coordinate, hierarchy, armature_builder,
              mesh_builder, material_builder, animation_builder, prefab_importer,
-             character_panel, cabmap_panel, scene_panel):
+             cabmap_panel):
+    importlib.reload(_mod)
+# The game subtree goes registry-first then DEEPEST-first: a game package's
+# GAME_MODULE captures both the registry's GameTab/GameModule classes and its own
+# panels' draw functions, so it has to be rebuilt after all of them.
+_game_prefix = __package__ + ".Game"
+importlib.reload(sys.modules[_game_prefix])
+_game_modules = [_entry for _entry in sys.modules.items()
+                 if _entry[0].startswith(_game_prefix + ".")
+                 and not _holds_process_state(_entry[1])]
+for _name, _mod in sorted(_game_modules, key=lambda entry: -entry[0].count(".")):
     importlib.reload(_mod)
 
 import bpy
@@ -153,8 +159,9 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
-    scene_panel.register()
-    character_panel.register()
+    # Every game folder under Game/ registers itself; the panel above names none
+    # of them and simply draws whatever tabs the enabled hooks turn on.
+    Game.register()
     # Repairs "action assigned but no slot picked" states after any UI-driven
     # action assignment -- see animation_builder's slotted-action notes (the
     # imported data plays only through its slot, and most UI surfaces outside
@@ -189,8 +196,7 @@ def register():
 
 def unregister():
     animation_builder.unregister_slot_autofix()
-    character_panel.unregister()
-    scene_panel.unregister()
+    Game.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
     for cls in reversed(_CLASSES):

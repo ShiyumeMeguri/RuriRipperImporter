@@ -3,23 +3,19 @@
 then commit. Mirrors the animation browser's discover-then-commit shape
 (cabmap_panel.py's RURI_PT_animation_browser).
 
-draw_scene_tab() is called directly by cabmap_panel.py's RURI_PT_cabmap.draw()
-for its "Scene" tab (see RURI_PG_cabmap.active_tab) -- NOT drawn as its own
-stacked bl_parent_id sub-panel, so it shares the same hard gate (nothing here
-is reachable before a cabmap is loaded) and tab bar as the AssetBundle browser
-instead of always being visible below it regardless of which tab is active."""
+draw_scene_tab() is the draw function this game's "Scene" tab declares (see the
+package's GAME_MODULE) -- NOT its own stacked bl_parent_id sub-panel, so it
+shares the core panel's hard gate (nothing here is reachable before a cabmap is
+loaded) and tab bar instead of always being visible below it."""
 
 from __future__ import annotations
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, PointerProperty
 
-try:
-    from . import prefab_importer
-    from .ruri_pybridge.session import cabmap_state, scene_state
-except ImportError:  # standalone (non-package) testing
-    import prefab_importer
-    from ruri_pybridge.session import cabmap_state, scene_state
+from ...ruri_pybridge.game.endfield import scene_state
+from ...ruri_pybridge.session import cabmap_state
+from . import scene_importer
 
 # Kept alive at module scope -- Blender's dynamic EnumProperty items callback
 # requires the returned list to outlive the call (a fresh list literal
@@ -188,7 +184,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
             mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
         try:
-            imported, placed, unresolved = prefab_importer.import_scene_placements(
+            imported, placed, unresolved = scene_importer.import_scene_placements(
                 context, db, scene_state.placeable(scene_import.lod0_only), roots,
                 context.scene.ruri_cabmap.as_options())
         except Exception as exc:
@@ -203,18 +199,14 @@ class RURI_OT_scene_import(bpy.types.Operator):
 def _bridge_asset_db_module():
     """Imported lazily: only the bridge path needs it, and the scene tab draws
     long before any bridge session exists."""
-    try:
-        from .ruri_pybridge.unity import bridge_asset_db
-    except ImportError:  # standalone (non-package) testing
-        from ruri_pybridge.unity import bridge_asset_db
+    from ...ruri_pybridge.unity import bridge_asset_db
     return bridge_asset_db
 
 
 def draw_scene_tab(layout, context):
-    """Draw the Scene tab's content into `layout` -- called from cabmap_panel.py's
-    RURI_PT_cabmap.draw() when RURI_PG_cabmap.active_tab == 'scene'. The caller has already
-    handled the loaded/not-loaded gate and lock message for the whole gated area (both tabs
-    share it), so this only draws the scene-import controls themselves."""
+    """Draw the Scene tab's content into `layout`. The core panel has already
+    handled the loaded/not-loaded gate and lock message for the whole gated area
+    (every tab shares it), so this only draws the scene-import controls."""
     scene_import = context.scene.ruri_scene_import
 
     row = layout.row(align=True)
