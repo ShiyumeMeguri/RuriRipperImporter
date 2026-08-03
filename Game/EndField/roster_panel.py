@@ -19,7 +19,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
 from ...ruri_pybridge.session import cabmap_state
-from . import roster
+from . import asset_paths, roster
 
 CHARACTERS = "characters"
 NPCS = "npcs"
@@ -83,6 +83,12 @@ class RURI_PG_roster(bpy.types.PropertyGroup):
         name="LOD",
         default=0, min=0, max=3,
         description="Detail level to load. 0 is the full-detail model")
+    model_kind: EnumProperty(
+        name="Model",
+        items=[("postmodel", "Post", "The in-world actor model"),
+               ("uimodel", "UI", "The model menus and portraits pose")],
+        default="postmodel",
+        description="Which of the game's own model families to import")
 
 
 def _language(state):
@@ -197,6 +203,127 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _prefab_rows(query, model_kind=""):
+    """Every cabmap row whose container path is a .prefab carrying ``query``.
+
+    ``query`` is the id the GAME keys the row by, matched against the game's own
+    addressable index -- no path convention of ours is involved. ``model_kind``
+    narrows to one of the game's own model families ("postmodel" is the in-world
+    actor, "uimodel" the one menus pose), by the suffix the game names them with.
+
+    One row per distinct path: the same prefab is listed by every bundle that
+    carries it, and importing it thirty times is thirty times the work for the
+    same result. Returns [(row index, container path)]."""
+    cabmap_state.apply_filter(query)
+    needle = query.lower()
+    # The whole leaf must BE the id (plus the family suffix), not merely contain
+    # it: "chr_0004_pelica" is also a substring of the ability-entity effect
+    # prefab "abilityentity_chr_0004_pelica_ultimate_skill_postmodel", which is
+    # not the character and must not be imported as one.
+    wanted = "{0}_{1}".format(needle, model_kind) if model_kind else None
+    by_path = {}
+    for row in cabmap_state.VISIBLE:
+        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+            path = cabmap_state.ROWS.container_path(row, path_index)
+            low = path.lower()
+            if not low.endswith(".prefab") or low in by_path:
+                continue
+            stem = low.rsplit("/", 1)[-1][:-len(".prefab")]
+            if stem == wanted if wanted else needle in low:
+                by_path[low] = (row, path)
+    return sorted(by_path.values(), key=lambda hit: hit[1])
+
+
+def _for_cast(hits, kind):
+    """When the same model is published under more than one folder, take the one
+    belonging to the cast being browsed -- the game files a character's actor
+    model under ``.../characters/`` and its npc-usage copy under ``.../npc/``,
+    and importing both is the same geometry twice."""
+    folder = "/characters/" if kind == CHARACTERS else "/npc/"
+    preferred = [hit for hit in hits if folder in hit[1].lower()]
+    return preferred or hits
+
+
+def _at_detail_level(hits, level):
+    """The hits at the requested detail level, or -- when the model simply is
+    not authored at that level -- the closest one it does have, reported rather
+    than silently substituted. ``asset_paths.lod_rank`` is the game's own
+    suffix convention, already used by the scene importer."""
+    ranked = [(asset_paths.lod_rank(path), row, path) for row, path in hits]
+    exact = [(row, path) for rank, row, path in ranked if rank == level]
+    if exact:
+        return exact, level
+    # -1 is "no LOD suffix at all", i.e. a single-detail model: as good as LOD0.
+    best = min((rank for rank, _, _ in ranked), key=lambda rank: (rank < 0, abs(rank - level)))
+    return [(row, path) for rank, row, path in ranked if rank == best], best
+
+
+class RURI_OT_roster_load(bpy.types.Operator):
+    """Import the selected cast member's model prefab.
+
+    Deliberately not its own importer: it resolves the row to prefab CABs, puts
+    them in the browser's own selection, and runs the browser's own import. One
+    import path, so a fix there is a fix here."""
+    bl_idname = "ruri.roster_load"
+    bl_label = "Load Model"
+    bl_description = "Import this one's model prefab, exactly as the bundle browser would"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return (context.scene.ruri_cabmap.loaded
+                and cabmap_state.BRIDGE is not None
+                and _selected(context.scene.ruri_roster) is not None)
+
+    def execute(self, context):
+        state = context.scene.ruri_roster
+        entry = _selected(state)
+        if entry is None:
+            return {"CANCELLED"}
+
+        hits = _prefab_rows(entry.key, state.model_kind)
+        if not hits:
+            # Say which of the two it is: "no prefab at all" and "no prefab of
+            # THIS family" need different next steps from the user.
+            any_prefab = _prefab_rows(entry.key)
+            if any_prefab:
+                self.report({"WARNING"}, "'{0}' has no _{1} prefab; it does have {2}.".format(
+                    entry.label, state.model_kind, ", ".join(path for _row, path in any_prefab[:3])))
+            else:
+                self.report({"WARNING"},
+                            "No prefab in the loaded cabmap is named after '{0}'. Generic npcs are "
+                            "assembled from part prefabs rather than shipped as one, so their model "
+                            "has to come from their avatar templet -- not wired up yet.".format(entry.key))
+            return {"CANCELLED"}
+
+        chosen, level = _at_detail_level(_for_cast(hits, state.kind), state.lod)
+        cabmap_state.clear_selection()
+        for row, _path in chosen:
+            cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+
+        result = bpy.ops.ruri.import_selected()
+        if "FINISHED" not in result:
+            return {"CANCELLED"}
+        if level != state.lod:
+            self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
+                entry.label, state.lod, level))
+
+        if state.load_expressions:
+            self._load_expressions(context, entry)
+        return {"FINISHED"}
+
+    def _load_expressions(self, context, entry):
+        """The face library is a separate asset family, so it is a separate
+        import -- the existing Character-tab flow, driven rather than copied."""
+        if bpy.ops.ruri.character_scan.poll():
+            bpy.ops.ruri.character_scan()
+        if bpy.ops.ruri.character_load_library.poll():
+            bpy.ops.ruri.character_load_library()
+        else:
+            self.report({"WARNING"},
+                        "Model loaded, but no rig was found to bind '{0}'s expressions to.".format(entry.label))
+
+
 class RURI_OT_roster_reveal(bpy.types.Operator):
     """Open where the selected cast member lives, over in the bundle browser.
 
@@ -232,9 +359,11 @@ def draw_roster(layout, context):
     entry = _selected(state)
     options = layout.column(align=True)
     options.enabled = entry is not None
+    options.row(align=True).prop(state, "model_kind", expand=True)
     row = options.row(align=True)
     row.prop(state, "lod")
     row.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
+    options.operator(RURI_OT_roster_load.bl_idname, icon="IMPORT")
     options.operator(RURI_OT_roster_reveal.bl_idname, icon="FILE_FOLDER")
 
 
@@ -243,6 +372,7 @@ _CLASSES = (
     RURI_PG_roster,
     RURI_UL_roster,
     RURI_OT_roster_refresh,
+    RURI_OT_roster_load,
     RURI_OT_roster_reveal,
 )
 
