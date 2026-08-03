@@ -13,9 +13,8 @@ from __future__ import annotations
 import bpy
 from bpy.props import BoolProperty, EnumProperty, PointerProperty
 
-from ...ruri_pybridge.game.endfield import scene_state
 from ...ruri_pybridge.session import cabmap_state
-from . import scene_importer
+from . import scene_importer, scene_state
 
 # Kept alive at module scope -- Blender's dynamic EnumProperty items callback
 # requires the returned list to outlive the call (a fresh list literal

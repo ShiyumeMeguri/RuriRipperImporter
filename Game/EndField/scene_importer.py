@@ -3,8 +3,8 @@
 The generic importer knows how to build ONE prefab or ONE mesh out of a resolved
 closure; what a placement is, how its asset path resolves to a named mesh
 sub-object, and which of its LOD siblings to keep are all facts about this game
-(see ``ruri_pybridge.game.endfield.asset_paths`` / ``scene_state``), so the pass
-that walks placements lives here rather than in that importer.
+(see ``asset_paths`` / ``scene_state`` next to this file), so the pass that walks
+placements lives here rather than in that importer.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from __future__ import annotations
 import bpy
 
 from ... import coordinate, material_builder, prefab_importer
-from ...ruri_pybridge.game.endfield import asset_paths
 from ...ruri_pybridge.unity import discovery
+from . import asset_paths
 
 
 def _scene_materials_for(material_index, mat_builder, material_asset_paths):

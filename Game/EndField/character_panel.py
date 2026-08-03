@@ -6,7 +6,7 @@ Endfield does not animate faces with transform curves -- body clips stop at the
 humanoid "Jaw Close" muscle and key no facial joint at all. Expression lives in
 a separate family of assets that animate named **ctrl drivers** (a weight per
 ctrl, constant for a pose, an AnimationCurve for an animation). See
-ruri_pybridge/game/endfield/skeletal_morph.py for the format.
+skeletal_morph.py in this folder for the format.
 
 draw_character_tab() is the draw function this game's "Character" tab declares
 (see the package's GAME_MODULE), exactly like scene_panel.draw_scene_tab -- so it
@@ -41,8 +41,8 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
 from ... import animation_builder, coordinate
-from ...ruri_pybridge.game.endfield import morph_state, skeletal_morph
 from ...ruri_pybridge.session import cabmap_state
+from . import morph_state, skeletal_morph
 
 # The game bakes a ctrl driver onto a mesh as a shape key named after the DCC
 # rig channel that drove it: "<ctrl>_tx_max" (translate-X at its maximum), with

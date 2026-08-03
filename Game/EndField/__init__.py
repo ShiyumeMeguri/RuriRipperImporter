@@ -1,12 +1,19 @@
-"""Endfield (Arknights: Endfield) -- everything the add-on shows only for this
-game, across every hooked version of it.
+"""Endfield (Arknights: Endfield) -- everything the add-on has for this game and
+nothing else, across every hooked version of it.
 
 Two tabs, neither of which means anything for another title:
 
 ``Scene``      the streaming-scene import: pick a map, discover its entity
                placements out of the game's own chunk format, import the lot.
+               (``scene_state`` + ``asset_paths`` + ``scene_importer``)
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
+               (``skeletal_morph`` + ``morph_state``)
+
+All of it lives here, including the parts that touch no bpy: the game's
+addressable-path conventions and its studio-written MonoBehaviour schemas are
+still ONE GAME'S facts, and ``ruri_pybridge`` -- shared with a host that has no
+such feature -- may not carry them.
 
 Declared as one GAME_MODULE row (see ``Game``), so the core panel reveals both
 tabs exactly while an ``EndField_*`` hook is ticked and never names this game
