@@ -28,12 +28,13 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import armature_builder, prefab_importer, scene_panel
+    from . import armature_builder, character_panel, prefab_importer, scene_panel
     from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from .ruri_pybridge.session import cabmap_state
     from .ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
     import armature_builder
+    import character_panel
     import prefab_importer
     import scene_panel
     from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
@@ -362,6 +363,8 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
         items=[
             ("assetbundle", "VirtualAssetBundle", "Browse/search the loaded cabmap's rows and import individual assets"),
             ("scene", "Scene", "Discover a whole map's placements and import it in one go"),
+            ("character", "Character", "Drive an imported character's face: the SkeletalMorph "
+                                       "emotion/pose/lipsync library and its morph animations"),
         ],
         default="assetbundle")
     search: StringProperty(name="Search", update=_on_search_edit,
@@ -1842,8 +1845,10 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op = gated.operator(RURI_OT_cabmap_import_with_dependents.bl_idname,
                                text=f"Import{batch} (With Dependents)", icon="LOOP_BACK")
             op.reset_scene = False
-        else:
+        elif state.active_tab == "scene":
             scene_panel.draw_scene_tab(gated, context)
+        else:
+            character_panel.draw_character_tab(gated, context)
 
 
 class RURI_OT_discover_animations(bpy.types.Operator):

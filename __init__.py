@@ -25,7 +25,7 @@ import sys
 
 from . import (coordinate, hierarchy, armature_builder,
                mesh_builder, material_builder, animation_builder,
-               prefab_importer, cabmap_panel, scene_panel)
+               prefab_importer, cabmap_panel, scene_panel, character_panel)
 from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
@@ -42,7 +42,8 @@ from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
 # reload). cabmap_panel/scene_panel are safe to reload -- just UI/operator
 # code, no state of their own (PropertyGroup data lives on bpy.types.Scene).
 _STATEFUL_SUFFIXES = ("runtime.bootstrap", "runtime.pythonnet_bridge",
-                      "session.cabmap_state", "session.scene_state")
+                      "session.cabmap_state", "session.scene_state",
+                      "session.morph_state")
 
 # Shared package first (in sys.modules order, i.e. parents before children), so
 # the add-on modules reloaded after it pick up the new objects rather than
@@ -53,7 +54,7 @@ for _name, _mod in list(sys.modules.items()):
         importlib.reload(_mod)
 for _mod in (coordinate, hierarchy, armature_builder,
              mesh_builder, material_builder, animation_builder, prefab_importer,
-             cabmap_panel, scene_panel):
+             character_panel, cabmap_panel, scene_panel):
     importlib.reload(_mod)
 
 import bpy
@@ -153,6 +154,7 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
     scene_panel.register()
+    character_panel.register()
     # Repairs "action assigned but no slot picked" states after any UI-driven
     # action assignment -- see animation_builder's slotted-action notes (the
     # imported data plays only through its slot, and most UI surfaces outside
@@ -187,6 +189,7 @@ def register():
 
 def unregister():
     animation_builder.unregister_slot_autofix()
+    character_panel.unregister()
     scene_panel.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
