@@ -103,13 +103,21 @@ def character_columns(language):
 
 
 def npc_columns(language):
-    """NpcTemplateGroupTable. ``name``/``title`` are text KEYS here (not the
-    ``I18nText`` the character table carries), so both take the two-hop chain."""
-    chain = [container(TEXT_TABLE), text_container(language)]
+    """Read from NpcInfoTable, which is the only container listing EVERY model,
+    and reach the name by chaining out of it:
+
+        npcId -> NpcTemplateGroupTable[npcId].name   (a text key)
+              -> TextTable[key].id                   (a numeric text id)
+              -> I18nTextTable_<LANG>[id]            (the string)
+
+    Three hops, one declaration. Both tables are keyed by the same npc id, which
+    is what makes the first hop legal at all."""
+    chain = [container(NPC_TABLE), container(TEXT_TABLE), text_container(language)]
     return [
-        ("display", "name", chain, ["id", ""]),
-        ("title", "title", chain, ["id", ""]),
+        ("display", "npcId", chain, ["name", "id", ""]),
+        ("title", "npcId", chain, ["title", "id", ""]),
         ("template", "templateId"),
+        ("npc", "npcId"),
     ]
 
 
@@ -119,68 +127,40 @@ def npc_template_columns():
     return [("template", "templateId")]
 
 
-def character_rows(bridge, game_root, language):
-    """One row per playable character, grouped by the game's own profession."""
-    table = bridge.query_data_table(vfs_roots(game_root), container(CHARACTER_TABLE),
-                                    character_columns(language))
-    keys = table.values("key")
-    display = table.values("display")
-    english = table.values("english")
-    element = table.values("element")
-    weapon = table.values("weapon")
-    profession = table.values("group")
-    rows = []
-    for index in range(table.row_count):
-        rows.append({
-            "key": keys[index],
-            "label": display[index] or keys[index],
-            "detail": " · ".join(part for part in (english[index], element[index], weapon[index]) if part),
-            "group": profession[index],
-        })
-    rows.sort(key=lambda row: (row["group"], row["label"]))
-    return rows
+CHARACTERS = "characters"
+NPCS = "npcs"
+
+# How a projected table is DRAWN: which column is the row's identity (also what
+# "load" and "reveal" resolve against), which is its name, which trail after it,
+# and which one groups it. Data, so a new cast is a new entry here.
+DISPLAY = {
+    CHARACTERS: {"key": "key", "label": "display", "detail": ("english", "element", "weapon"), "group": "group"},
+    NPCS: {"key": "template", "label": "display", "detail": ("npc", "title"), "group": ""},
+}
 
 
-def npc_rows(bridge, game_root, language):
-    """One row per distinct model prefab.
-
-    The game lists an npc once per place it stands, so the raw tables repeat the
-    same character (and the same prefab) dozens of times. Only the prefab can
-    actually be loaded, so that is the row: templates are collapsed, and the
-    named entry wins when several npcs share one model. Placement-only templates
-    -- models no named npc row mentions -- are kept too, under their own id,
-    because dropping them is how a cast list ends up incomplete."""
+def load(bridge, game_root, language, kind):
+    """The projected table for one cast, built entirely on the C# side -- read,
+    joined, deduplicated and searchable there. Nothing is assembled here."""
     roots = vfs_roots(game_root)
-    named = bridge.query_data_table(roots, container(NPC_TABLE), npc_columns(language))
-    placements = bridge.query_data_table(roots, container(NPC_INFO_TABLE), npc_template_columns())
+    if kind == CHARACTERS:
+        return bridge.query_data_table(roots, container(CHARACTER_TABLE), character_columns(language))
+    # One row per distinct model prefab, keeping the named entry when several
+    # npcs share a model -- the collapse the raw table cannot express itself.
+    return bridge.query_data_table(roots, container(NPC_INFO_TABLE), npc_columns(language),
+                                   distinct_by="template", prefer_non_empty="display")
 
-    keys = named.values("key")
-    display = named.values("display")
-    title = named.values("title")
-    template = named.values("template")
 
-    by_template = {}
-    for index in range(named.row_count):
-        model = template[index]
-        if not model:
-            continue
-        existing = by_template.get(model)
-        # A named entry beats an unnamed one; between two named ones the first
-        # wins, which is stable because the projection's row order is. An entry
-        # is "named" exactly when its label is not just the template id again.
-        if existing is not None and (existing["label"] != existing["key"] or not display[index]):
-            continue
-        by_template[model] = {
-            "key": model,
-            "label": display[index] or model,
-            "detail": " · ".join(part for part in (keys[index], title[index]) if part),
-            "group": "",
-        }
+def row(table, index, kind):
+    """One drawn row, pulled straight out of the columns."""
+    spec = DISPLAY[kind]
+    key = table.cell(index, spec["key"])
+    return {
+        "key": key,
+        "label": table.cell(index, spec["label"]) or key,
+        "detail": " · ".join(part for part in
+                             (table.cell(index, column) for column in spec["detail"]) if part),
+        "group": table.cell(index, spec["group"]) if spec["group"] else "",
+    }
 
-    for model in placements.values("template"):
-        if model and model not in by_template:
-            by_template[model] = {"key": model, "label": model, "detail": "", "group": ""}
 
-    rows = list(by_template.values())
-    rows.sort(key=lambda row: row["label"])
-    return rows

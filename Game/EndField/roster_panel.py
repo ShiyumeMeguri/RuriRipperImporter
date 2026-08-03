@@ -21,8 +21,8 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 from ...ruri_pybridge.session import cabmap_state
 from . import asset_paths, roster
 
-CHARACTERS = "characters"
-NPCS = "npcs"
+CHARACTERS = roster.CHARACTERS
+NPCS = roster.NPCS
 
 # Loaded row lists, by (kind, language). Module scope, not scene state: rebuilding
 # the drawn list must not cost a re-read, and a plain list is not something
@@ -102,29 +102,30 @@ def _rows(state):
 
 
 def _rebuild(state):
-    """Rebuild the drawn line list. Rows arrive already deduplicated and sorted
-    (see ``roster``); this only filters and inserts the group headers, which
-    exist exactly while the game itself supplies a grouping field. A filter that
-    empties a group drops its header with it."""
+    """Rebuild the drawn line list.
+
+    The filter is NOT evaluated here: the search text goes to the same C# engine
+    the bundle browser searches with, over the very buffers this table was built
+    from (one ASCII fold per column, then a parallel vectorized sweep). This side
+    receives row ids and reads cells."""
     state.entries.clear()
-    rows = _rows(state)
-    if rows is None:
+    table = _rows(state)
+    if table is None:
         return
-    needle = state.search.strip().lower()
-    kept = [row for row in rows
-            if not needle
-            or needle in row["label"].lower()
-            or needle in row["key"].lower()
-            or needle in row["detail"].lower()
-            or needle in row["group"].lower()]
+    matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip())
+    rows = sorted((roster.row(table, int(index), state.kind) for index in matched),
+                  key=lambda row: (row["group"], row["label"]))
+
+    counts = {}
+    for row in rows:
+        counts[row["group"]] = counts.get(row["group"], 0) + 1
 
     current_group = None
-    for index, row in enumerate(kept):
+    for index, row in enumerate(rows):
         if row["group"] and row["group"] != current_group:
             current_group = row["group"]
-            members = sum(1 for other in kept if other["group"] == current_group)
             header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, members)
+            header.label = "{0}  ({1})".format(current_group, counts[current_group])
             header.group = current_group
             header.is_group = True
         entry = state.entries.add()
@@ -134,7 +135,7 @@ def _rebuild(state):
         entry.detail = row["detail"]
         entry.row_index = index
     state.status = "{0} of {1} {2} · {3}".format(
-        len(kept), len(rows), state.kind, _language(state))
+        len(rows), table.row_count, state.kind, _language(state))
     if state.active_index >= len(state.entries):
         state.active_index = 0
 
@@ -190,10 +191,7 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         language = _language(state)
         state.language = language
         try:
-            if state.kind == CHARACTERS:
-                rows = roster.character_rows(cabmap_state.BRIDGE, game_root, language)
-            else:
-                rows = roster.npc_rows(cabmap_state.BRIDGE, game_root, language)
+            rows = roster.load(cabmap_state.BRIDGE, game_root, language, state.kind)
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             _report(self, state.status)
