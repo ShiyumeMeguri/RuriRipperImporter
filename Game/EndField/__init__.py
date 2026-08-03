@@ -23,16 +23,18 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, scene_panel
+from . import character_panel, roster_panel, scene_panel
 
 
 def _register():
     scene_panel.register()
+    roster_panel.register()
     character_panel.register()
 
 
 def _unregister():
     character_panel.unregister()
+    roster_panel.unregister()
     scene_panel.unregister()
 
 

@@ -42,7 +42,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import animation_builder, coordinate
 from ...ruri_pybridge.session import cabmap_state
-from . import morph_state, skeletal_morph
+from . import morph_state, roster_panel, skeletal_morph
 
 # The game bakes a ctrl driver onto a mesh as a shape key named after the DCC
 # rig channel that drove it: "<ctrl>_tx_max" (translate-X at its maximum), with
@@ -1136,7 +1136,12 @@ class RURI_UL_morph_drivers(bpy.types.UIList):
 
 def draw_character_tab(layout, context):
     """Draw the Character tab's content into ``layout``. The core panel already
-    handled the cabmap-loaded gate every tab shares."""
+    handled the cabmap-loaded gate every tab shares.
+
+    Two halves: the game's own cast list on top (roster_panel), and below it the
+    face rig for whichever character is actually in the scene."""
+    roster_panel.draw_roster(layout.box(), context)
+
     state = context.scene.ruri_character
 
     rig_row = layout.row(align=True)

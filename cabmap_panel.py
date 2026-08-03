@@ -682,6 +682,51 @@ class RURI_OT_cabmap_goto_dir(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_cabmap_reveal(bpy.types.Operator):
+    """Reveal something in the file browser from another tab -- the tab bar
+    switches to the browser and the browser goes to where that thing lives.
+
+    The caller passes an identifier the GAME itself uses (a roster id, an
+    addressable name), never a path this add-on invented. If every bundle
+    carrying that identifier sits under one virtual folder, the browser jumps
+    to that folder and clears the search, which is the "open file location"
+    the user asked for; when the hits are spread across folders there is no
+    single right folder to open, so the search stays on and shows all of them.
+
+    Generic on purpose: it lives here with the browser it drives, and no game
+    module has to reach into the browser's own state to use it."""
+    bl_idname = "ruri.cabmap_reveal"
+    bl_label = "Reveal in Browser"
+    bl_description = "Switch to the file browser and show where this lives"
+    bl_options = {"INTERNAL"}
+    query: StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        state.active_tab = BROWSER_TAB_ID
+        for rule in state.filter_rules:
+            rule.enabled = False
+
+        cabmap_state.apply_filter(self.query)
+        matches = list(cabmap_state.VISIBLE)
+        folders = {cabmap_state.folder_of(row, cabmap_state.best_path_index_for_jump(row, self.query))
+                   for row in matches}
+        if len(folders) == 1:
+            state.search = ""
+            cabmap_state.browse_dir(folders.pop())
+        else:
+            state.search = self.query
+        _rebuild_window(state)
+        _redraw_all(context)
+        if not matches:
+            self.report({"WARNING"}, f"Nothing in the loaded cabmap carries '{self.query}'.")
+        return {"FINISHED"}
+
+
 class RURI_OT_cabmap_goto_row_folder(bpy.types.Operator):
     """One-click 'reveal in folder' -- jumps the folder browser straight to
     the virtual folder this row's container path lives under, the way a
@@ -2192,6 +2237,7 @@ _CLASSES = (
     RURI_OT_cabmap_click,
     RURI_OT_cabmap_enter_dir,
     RURI_OT_cabmap_goto_dir,
+    RURI_OT_cabmap_reveal,
     RURI_OT_cabmap_goto_row_folder,
     RURI_OT_cabmap_select_all,
     RURI_OT_filter_add_rule,
