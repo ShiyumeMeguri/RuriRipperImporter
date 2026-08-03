@@ -43,7 +43,13 @@ except ImportError:  # standalone (non-package) testing
 
 _HOOK_IDS_DEFAULT = "EndField_1.3.3"  # pre-ticked on first successful hook refresh, if present
 # Enabled for every session regardless of what is ticked -- see _hook_ids.
-_REQUIRED_HOOK_IDS = ("AR_HumanoidToGeneric_", "AR_SerializeReference_")
+# Only what THIS host needs. Hooks every AssetRipper host needs (currently
+# AR_SerializeReference_) are not listed here: they live in the one place that
+# knows them, Bootstrap.AlwaysOnHookIds on the C# side, and Bootstrap.ApplyHooks
+# folds them in for the CLI, the GUI and this bridge alike. Re-listing one here
+# would recreate exactly the per-host drift that left this bridge running
+# without AR_SerializeReference_ in the first place.
+_REQUIRED_HOOK_IDS = ("AR_HumanoidToGeneric_",)
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
 
 # Static EnumProperty item lists (Blender wants a stable list, not a callable, to avoid its
@@ -202,11 +208,9 @@ def _hook_ids(state):
     so it is appended unconditionally rather than left to a checkbox the user has no way to know
     they must tick.
 
-    AR_SerializeReference is not optional either: AssetRipper drops the ENTIRE field structure of
-    any MonoBehaviour that carries a ManagedReferencesRegistry, exporting a field-less shell. The
-    CLI and the GUI both force it on for that reason; this bridge did not, and the result was that
-    every character's SkeletalMorphAvatarDataSO -- the ctrl-to-bone table the whole facial morph
-    system hangs off -- arrived empty (416 bytes instead of 700 KB) with no error anywhere."""
+    Hooks that EVERY AssetRipper host needs are deliberately absent from this list -- see
+    _REQUIRED_HOOK_IDS. The C# side adds them inside Bootstrap.ApplyHooks, which is the one call
+    all three hosts go through."""
     ids = [item.id for item in state.available_hooks if item.selected]
     for required in _REQUIRED_HOOK_IDS:
         if required not in ids:
