@@ -151,6 +151,13 @@ def load(bridge, game_root, language, kind):
                                    distinct_by="template", prefer_non_empty="display")
 
 
+def buildable_templates(bridge, game_root):
+    """The templates the game actually ships an assembled model for, from its own
+    manifest. A roster row outside this set (an enemy, a prop, a cut character)
+    has nothing to load, so offering it a Load button would be a lie."""
+    return set(bridge.npc_prefab_manifest(vfs_roots(game_root)))
+
+
 def row(table, index, kind):
     """One drawn row, pulled straight out of the columns."""
     spec = DISPLAY[kind]

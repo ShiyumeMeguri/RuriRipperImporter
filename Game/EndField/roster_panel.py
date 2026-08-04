@@ -101,6 +101,23 @@ def _rows(state):
     return _ROWS.get((state.kind, _language(state)))
 
 
+_BUILDABLE = {}
+
+
+def context_game_root():
+    return bpy.context.scene.ruri_cabmap.game_root
+
+
+def _buildable(game_root):
+    """Cached: the manifest is one small file, but a redraw must not re-read it."""
+    if game_root not in _BUILDABLE:
+        try:
+            _BUILDABLE[game_root] = roster.buildable_templates(cabmap_state.BRIDGE, game_root)
+        except Exception:
+            _BUILDABLE[game_root] = None
+    return _BUILDABLE[game_root]
+
+
 def _rebuild(state):
     """Rebuild the drawn line list.
 
@@ -113,8 +130,15 @@ def _rebuild(state):
     if table is None:
         return
     matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip())
-    rows = sorted((roster.row(table, int(index), state.kind) for index in matched),
-                  key=lambda row: (row["group"], row["label"]))
+    rows = [roster.row(table, int(index), state.kind) for index in matched]
+    if state.kind == NPCS:
+        # Row ids index the WHOLE projected table, which is what the C# search
+        # returns them against -- so the unbuildable ones are dropped here rather
+        # than by subsetting the table out from under the search.
+        buildable = _buildable(context_game_root())
+        if buildable is not None:
+            rows = [row for row in rows if row["key"] in buildable]
+    rows.sort(key=lambda row: (row["group"], row["label"]))
 
     counts = {}
     for row in rows:
@@ -310,6 +334,33 @@ def _prefab_named(name):
     return sorted(found.values(), key=lambda hit: hit[1])
 
 
+def _model_parts(context, entry):
+    """(manifest, [(part, row, path)], [unresolved part]) for an npc row.
+
+    A part is taken as ONE asset: the game publishes some parts as a generated
+    prefab and the rest only as the authored skinned mesh, and where both a
+    ``_variant`` and a ``_static`` prefab exist the variant is the one skinned
+    onto the shared skeleton -- the static one is a standalone posed copy, which
+    is what lands unparented with no armature modifier."""
+    roots = roster.vfs_roots(context.scene.ruri_cabmap.game_root)
+    try:
+        info = cabmap_state.BRIDGE.npc_prefab_parts(roots, entry.key)
+    except Exception:
+        return None, [], []
+    hits = []
+    missing = []
+    for part in info["parts"]:
+        candidates = _prefab_named(part)
+        if not candidates:
+            missing.append(part)
+            continue
+        skinned = [hit for hit in candidates if "_variant." in hit[1].lower()]
+        row, path = (skinned or candidates)[0]
+        hits.append((part, row, path))
+    return info, hits, missing
+
+
+
 def _for_cast(hits, kind):
     """When the same model is published under more than one folder, take the one
     belonging to the cast being browsed -- the game files a character's actor
@@ -405,39 +456,28 @@ class RURI_OT_roster_load(bpy.types.Operator):
         return {"FINISHED"}
 
     def _load_npc(self, context, state, entry):
-        """An npc is assembled, not shipped: its template's own manifest lists the
+        """An npc is assembled, not shipped: its template's manifest lists the
         part prefabs (body, face, hair, ear, tail), and a named actor's manifest
-        simply lists one whole prefab instead. Either way the parts are imported
-        together, so the pieces land in one scene."""
-        roots = roster.vfs_roots(context.scene.ruri_cabmap.game_root)
-        try:
-            info = cabmap_state.BRIDGE.npc_prefab_parts(roots, entry.key)
-        except Exception as exc:
-            self.report({"WARNING"}, "No prefab manifest for '{0}': {1}".format(entry.key, exc))
+        lists one whole prefab instead."""
+        info, hits, missing = _model_parts(context, entry)
+        if info is None:
+            self.report({"WARNING"}, "'{0}' ({1}) has no part manifest -- the game ships no "
+                                     "assembled model for it.".format(entry.label, entry.key))
             return {"CANCELLED"}
-        if not info["parts"]:
-            self.report({"WARNING"}, "'{0}' lists no parts to assemble.".format(entry.label))
+        if not hits:
+            self.report({"WARNING"}, "None of {0}'s {1} part(s) are in the loaded cabmap.".format(
+                entry.label, len(info["parts"])))
             return {"CANCELLED"}
 
         cabmap_state.clear_selection()
-        missing = []
-        for part in info["parts"]:
-            hits = _prefab_named(part)
-            if not hits:
-                missing.append(part)
-                continue
-            row, _path = _at_detail_level(hits, state.lod)[0][0]
+        for _part, row, _path in hits:
             cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
-        if not cabmap_state.SELECTED_CABS:
-            self.report({"WARNING"}, "None of {0}'s {1} part prefab(s) are in the loaded cabmap: {2}".format(
-                entry.label, len(info["parts"]), ", ".join(info["parts"][:4])))
-            return {"CANCELLED"}
 
         result = bpy.ops.ruri.import_selected()
         if "FINISHED" not in result:
             return {"CANCELLED"}
         if missing:
-            self.report({"WARNING"}, "{0} of {1} part(s) were not in the cabmap: {2}".format(
+            self.report({"WARNING"}, "{0} of {1} part(s) are not in the cabmap: {2}".format(
                 len(missing), len(info["parts"]), ", ".join(missing)))
         else:
             self.report({"INFO"}, "Assembled '{0}' from {1} part(s).".format(
@@ -472,9 +512,19 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
         return _selected(context.scene.ruri_roster) is not None
 
     def execute(self, context):
-        entry = _selected(context.scene.ruri_roster)
+        state = context.scene.ruri_roster
+        entry = _selected(state)
         if entry is None:
             return {"CANCELLED"}
+        # The folder of the model this row actually loads -- not a text search,
+        # which lands on every asset whose name merely contains the id.
+        if state.kind == CHARACTERS:
+            paths = [path for _row, path in _prefab_rows(entry.key, state.model_kind)]
+        else:
+            paths = [path for _part, _row, path in _model_parts(context, entry)[1]]
+        if paths:
+            folder = tuple(part for part in paths[0].split("/")[:-1] if part)
+            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder="/".join(folder))
         return bpy.ops.ruri.cabmap_reveal(query=entry.key)
 
 
@@ -522,4 +572,5 @@ def unregister():
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     _ROWS.clear()
+    _BUILDABLE.clear()
     _CHARACTER_MODELS.clear()

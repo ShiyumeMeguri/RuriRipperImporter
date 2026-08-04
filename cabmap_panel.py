@@ -700,6 +700,10 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
     bl_description = "Switch to the file browser and show where this lives"
     bl_options = {"INTERNAL"}
     query: StringProperty()
+    folder: StringProperty(
+        description="The exact virtual folder to open. When the caller already knows which "
+                    "asset it means, this beats searching -- a search lands on every name "
+                    "that merely contains the query")
 
     @classmethod
     def poll(cls, context):
@@ -710,6 +714,13 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
         state.active_tab = BROWSER_TAB_ID
         for rule in state.filter_rules:
             rule.enabled = False
+
+        if self.folder:
+            state.search = ""
+            cabmap_state.browse_dir(tuple(p for p in self.folder.split("/") if p))
+            _rebuild_window(state)
+            _redraw_all(context)
+            return {"FINISHED"}
 
         cabmap_state.apply_filter(self.query)
         matches = list(cabmap_state.VISIBLE)
