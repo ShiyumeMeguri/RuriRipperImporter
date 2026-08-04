@@ -561,12 +561,15 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
         # The folder of the model this row actually loads -- not a text search,
         # which lands on every asset whose name merely contains the id.
         if state.kind == CHARACTERS:
-            paths = [path for _row, path in _prefab_rows(entry.key, state.model_kind)]
+            found = [(row, path) for row, path in
+                     _for_cast(_prefab_rows(entry.key, state.model_kind), CHARACTERS)]
         else:
-            paths = [path for _part, _row, path in _model_parts(context, entry)[1]]
-        if paths:
-            folder = tuple(part for part in paths[0].split("/")[:-1] if part)
-            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder="/".join(folder))
+            found = [(row, path) for _part, row, path in _model_parts(context, entry)[1]]
+        if found:
+            row, path = found[0]
+            folder = path.rpartition("/")[0]
+            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder=folder,
+                                              cab=cabmap_state.ROWS.cab(row))
         return bpy.ops.ruri.cabmap_reveal(query=entry.key)
 
 

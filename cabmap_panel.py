@@ -700,6 +700,10 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
     bl_description = "Switch to the file browser and show where this lives"
     bl_options = {"INTERNAL"}
     query: StringProperty()
+    cab: StringProperty(
+        description="The exact CAB to highlight, so the row is selected rather than "
+                    "leaving whatever was selected before. A cab is unambiguous; the "
+                    "displayed name is abbreviated for a multi-path row")
     folder: StringProperty(
         description="The exact virtual folder to open. When the caller already knows which "
                     "asset it means, this beats searching -- a search lands on every name "
@@ -719,6 +723,16 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
             state.search = ""
             cabmap_state.browse_dir(tuple(p for p in self.folder.split("/") if p))
             _rebuild_window(state)
+            # Opening the folder is only half of "reveal": without moving the
+            # highlight the list keeps whatever row was selected before, which
+            # reads as having jumped to a completely unrelated asset.
+            if self.cab:
+                for position, item in enumerate(state.window):
+                    if not item.is_folder and item.cab == self.cab:
+                        state.active_index = position
+                        cabmap_state.clear_selection()
+                        cabmap_state.SELECTED_CABS.add(item.cab)
+                        break
             _redraw_all(context)
             return {"FINISHED"}
 
