@@ -23,6 +23,8 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 from ...ruri_pybridge.session import cabmap_state
 from . import asset_paths, roster
 
+SKELETON_PART = "<skeleton>"
+
 CHARACTERS = roster.CHARACTERS
 NPCS = roster.NPCS
 
@@ -405,7 +407,7 @@ def _model_parts(context, entry):
     if templet and any("GameObject" not in cabmap_state.ROWS[row]["type_names"]
                        for _part, row, _path in hits):
         for row, path in _asset_named("data_npc_avatartemplet_" + templet.lower()):
-            hits.append(("<skeleton>", row, path))
+            hits.append((SKELETON_PART, row, path))
             break
     return info, hits, missing
 
@@ -525,12 +527,20 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # runs for a closure with NO root in it, so mixing both kinds into one
         # selection means the mesh-only parts are silently dropped -- which is
         # exactly how an npc arrived as a floating head.
-        rooted, loose = [], []
-        for _part, row, _path in hits:
-            (rooted if "GameObject" in cabmap_state.ROWS[row]["type_names"] else loose).append(row)
+        skeleton, rooted, loose = [], [], []
+        for part, row, _path in hits:
+            if part == SKELETON_PART:
+                skeleton.append(row)
+            elif "GameObject" in cabmap_state.ROWS[row]["type_names"]:
+                rooted.append(row)
+            else:
+                loose.append(row)
 
+        # Skeleton first, and on its own: a loose skinned mesh binds to whatever
+        # rig is already in the scene, so importing it alongside its own skeleton
+        # is a race it loses.
         imported_any = False
-        for group in (rooted, loose):
+        for group in (skeleton, rooted, loose):
             if not group:
                 continue
             cabmap_state.clear_selection()

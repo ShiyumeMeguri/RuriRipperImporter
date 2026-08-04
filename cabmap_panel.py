@@ -1109,7 +1109,12 @@ def _import_single_asset(op, context, state, db, guid, class_name, name):
         if mesh_file is None:
             op.report({"ERROR"}, "Resolved mesh document failed to parse -- see console.")
             return {"CANCELLED"}
-        report = prefab_importer.import_mesh_from_db(context, db, mesh_file, state.as_options())
+        # A loose skinned mesh binds to whichever armature is already in the scene
+        # when the mesh names bones it has (see _standalone_skin_binding): parts of
+        # an assembled character arrive as separate rows, so the skeleton is
+        # usually imported by an earlier row of the same batch.
+        report = prefab_importer.import_mesh_from_db(context, db, mesh_file, state.as_options(),
+                                                     armature_obj=_scene_skin_target(context))
         for warning in report.warnings[:5]:
             op.report({"WARNING"}, warning)
         if not report.mesh_objects:
@@ -1181,6 +1186,21 @@ def _import_single_asset(op, context, state, db, guid, class_name, name):
 _LOOSE_ASSET_CLASSES = ("Mesh", "Material", "Avatar", "TextAsset")
 
 
+def _scene_skin_target(context):
+    """The armature a loose skinned mesh should bind to: the one with the most
+    bones in the scene. A body/hair/tail part weights against the shared body
+    skeleton, which is always the largest rig present -- a face or ear part
+    brings only its own handful."""
+    best = None
+    for obj in context.scene.objects:
+        if obj.type != "ARMATURE" or not obj.data.bones:
+            continue
+        if best is None or len(obj.data.bones) > len(best.data.bones):
+            best = obj
+    return best
+
+
+
 def _import_loose_closure_assets(op, context, state, db):
     """Fallback for a resolved closure with no .prefab/.unity root at all -- a
     bundled CAB of loose Mesh/Material/Avatar/TextAsset data with no
@@ -1194,6 +1214,9 @@ def _import_loose_closure_assets(op, context, state, db):
     already applies to prefab roots (see its own comment on a bundled row
     pulling in more than just its own root). Returns the count imported."""
     imported = 0
+    # Skeletons first. A loose skinned mesh binds to a rig that already exists,
+    # so importing an Avatar after the meshes it owns leaves them unbound.
+    classified = []
     for guid in db.all_guids():
         text = db.raw_text(guid)
         if not text:
@@ -1201,6 +1224,9 @@ def _import_loose_closure_assets(op, context, state, db):
         class_name, name = discovery.peek_class_and_name(text)
         if class_name not in _LOOSE_ASSET_CLASSES:
             continue
+        classified.append((0 if class_name == "Avatar" else 1, class_name, guid, name))
+    classified.sort(key=lambda entry: entry[0])
+    for _order, class_name, guid, name in classified:
         if _import_single_asset(op, context, state, db, guid,
                                 class_name, name or guid) == {"FINISHED"}:
             imported += 1
