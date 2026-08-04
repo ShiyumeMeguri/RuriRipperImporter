@@ -441,6 +441,22 @@ class RigBinding:
         return len(self.ctrls)
 
 
+def _avatars_for(state):
+    """The avatar tables belonging to this rig's character.
+
+    Joined by the game's own tag when the character is known: its data asset
+    states a SkeletalMorphComponentData tagId and each avatar table states the
+    same one back, so the pairing is identity rather than a guess about names.
+    A rig the roster never loaded has no character to look up, and only then is
+    the name token all there is to go on."""
+    tag = roster_panel.character_tag(state.character_token)
+    if tag:
+        matched = morph_state.avatars_for_tag(tag)
+        if matched:
+            return matched
+    return morph_state.avatars_for(state.character_token)
+
+
 def resolve_bindings(armature_obj, avatars=()):
     """Everything this rig exposes: baked shape keys always, plus the avatar's
     bone table when one is loaded for this character. Both are merged into one
@@ -486,7 +502,7 @@ def _bindings_for(state):
         armature_obj = bpy.data.objects.get(state.armature_name)
         if armature_obj is None or armature_obj.type != "ARMATURE":
             return RigBinding("", [])
-        BINDING = resolve_bindings(armature_obj, morph_state.avatars_for(state.character_token))
+        BINDING = resolve_bindings(armature_obj, _avatars_for(state))
     return BINDING
 
 
@@ -797,7 +813,7 @@ class RURI_OT_character_load_library(bpy.types.Operator):
         # table the whole system runs on -- only exists after this load.
         global BINDING
         armature_obj = bpy.data.objects.get(state.armature_name)
-        avatars = morph_state.avatars_for(state.character_token)
+        avatars = _avatars_for(state)
         if armature_obj is not None and armature_obj.type == "ARMATURE":
             BINDING = resolve_bindings(armature_obj, avatars)
         bindings = _bindings_for(state)

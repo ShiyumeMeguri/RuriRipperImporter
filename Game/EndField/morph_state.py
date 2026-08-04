@@ -146,6 +146,20 @@ def load_from_db(db, guids=None):
     return added
 
 
+def avatars_for_tag(tag_id):
+    """Every avatar table the game itself joins to one character.
+
+    A character's data asset states its SkeletalMorphComponentData tagId, and
+    each avatar table states the same tagId back -- so this is the game's own
+    identity join, not a guess about names. It is exact: an unmatched tag
+    returns nothing rather than some other character's face."""
+    if not tag_id:
+        return []
+    matches = [avatar for avatar in AVATARS.values()
+               if getattr(avatar, "tag_id", 0) == tag_id]
+    return sorted(matches, key=lambda avatar: avatar.name)
+
+
 def avatars_for(token=""):
     """EVERY avatar table belonging to one character, not one of them: the game
     splits a face across several (``data_facemorph_avatar_pelica`` for the face

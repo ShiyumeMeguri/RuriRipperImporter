@@ -258,6 +258,23 @@ def _character_model(character_id):
     return _CHARACTER_MODELS.get(character_id, {}).get("model", "")
 
 
+def character_tag(token):
+    """The SkeletalMorph tag the game itself assigns a character, matched from a
+    rig's name token. Empty when the token names no character in the roster's
+    own data, which is what a rig imported from somewhere else looks like."""
+    needle = (token or "").strip().lower()
+    if not needle:
+        return 0
+    _character_model("")  # ensures the map is read
+    for character_id, declared in _CHARACTER_MODELS.items():
+        if needle in character_id.lower() and declared.get("tag"):
+            try:
+                return int(declared["tag"])
+            except ValueError:
+                return 0
+    return 0
+
+
 def _prefab_named(name):
     """The importable rows for one part of an assembled npc.
 

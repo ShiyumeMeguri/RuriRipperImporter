@@ -346,11 +346,14 @@ class MorphBoneDelta:
 class MorphAvatar:
     """One character's ctrl -> bone-delta table."""
 
-    __slots__ = ("guid", "name", "bone_names", "base_pose", "mappings", "shader_params")
+    __slots__ = ("guid", "name", "tag_id", "bone_names", "base_pose", "mappings", "shader_params")
 
-    def __init__(self, guid, name):
+    def __init__(self, guid, name, tag_id=0):
         self.guid = guid
         self.name = name
+        # The game's own character <-> avatar-table join: a character data asset's
+        # SkeletalMorphComponentData carries this same tagId. Identity, not a name.
+        self.tag_id = tag_id
         self.bone_names = []      # boneID -> bone name
         self.base_pose = {}       # boneID -> MorphBoneDelta
         self.mappings = {}        # ctrl name -> [MorphBoneDelta]
@@ -411,7 +414,9 @@ def parse_avatar(data, guid="", name=""):
     if not isinstance(payload, dict) or "morphMappingNames" not in payload:
         return None
 
-    avatar = MorphAvatar(guid, name or (data.get("m_Name") or ""))
+    tag = data.get("tag")
+    tag_id = _number(tag.get("tagId", 0)) if isinstance(tag, dict) else 0
+    avatar = MorphAvatar(guid, name or (data.get("m_Name") or ""), int(tag_id))
     avatar.bone_names = [str(n) for n in (payload.get("allBoneNames") or [])]
     name_by_hash = {bone_name_hash(name): name for name in avatar.bone_names}
     for entry in payload.get("basePoseConfig") or ():
