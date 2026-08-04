@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+import zlib
+
+import bpy
 
 # `clip_paths` is aliased to clip_repair and `prefab` to prefab_scan: both names
 # are already taken here by local variables (a list of .anim paths, a parsed
@@ -485,10 +488,81 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
         # Say WHICH of Unity's three vertex-data storages holds it instead.
         report.warnings.append(mesh_decoder.diagnose_empty(mesh_doc, name))
         return report
-    obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {}, materials or [], options)
+    # A mesh authored against a SHARED skeleton arrives on its own: the game
+    # rebinds it at runtime, so nothing upstream calls it skinned even though it
+    # carries its weights, its bone identities (m_BoneNameHashes) and its bind
+    # poses. Rebuild that skeleton once and bind every part to it, or the parts
+    # land weightless at the origin.
+    rig, order, names = _shared_skeleton_bind(context, decoded)
+    if rig is not None:
+        obj = mesh_builder.build_mesh_object(context, decoded, name, rig, order, names,
+                                             materials or [], options)
+        obj.parent = rig
+        if not any(m.type == "ARMATURE" for m in obj.modifiers):
+            obj.modifiers.new(name="Armature", type="ARMATURE").object = rig
+    else:
+        obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {},
+                                             materials or [], options)
     report.mesh_objects.append(obj)
     report.seconds = time.time() - start
     return report
+
+
+SHARED_SKELETON_NAME = "NpcSharedSkeleton"
+
+
+def _shared_skeleton_bind(context, decoded):
+    """(rig, bone slots, slot -> bone name) for a mesh whose skeleton lives outside
+    its own asset.
+
+    The mesh carries everything the skeleton needs: one bind pose per bone (its
+    inverse is that bone's rest world matrix) and one CRC32 name hash per bone. The
+    rig is built once from the first part that needs it and reused by every later
+    part, so an assembled character lands on ONE armature the way a shipped one
+    does. Slots are ``{"fileID": i}`` because that is the shape build_mesh_object
+    reads a bone reference as. (None, [], {}) for an unskinned mesh."""
+    hashes = getattr(decoded, "bone_name_hashes", None)
+    binds = getattr(decoded, "bind_poses", None)
+    if (hashes is None or len(hashes) == 0 or binds is None or len(binds) != len(hashes)
+            or decoded.bone_indices is None or decoded.bone_weights is None):
+        return None, [], {}
+
+    names = {index: "bone_{0:08x}".format(int(value) & 0xFFFFFFFF)
+             for index, value in enumerate(hashes)}
+    rig = bpy.data.objects.get(SHARED_SKELETON_NAME)
+    if rig is None or rig.type != "ARMATURE":
+        rig = _build_rig_from_bind_poses(context, binds, names)
+    elif not any(bone_name in rig.data.bones for bone_name in names.values()):
+        return None, [], {}
+    return rig, [{"fileID": index} for index in range(len(hashes))], names
+
+
+def _build_rig_from_bind_poses(context, binds, names):
+    """One flat armature whose bones sit at the inverse of each bind pose. Flat on
+    purpose: bind poses give world rest transforms, not parentage, and inventing a
+    hierarchy would move vertices that are already correct in world space."""
+    import mathutils
+
+    armature = bpy.data.armatures.new(SHARED_SKELETON_NAME)
+    rig = bpy.data.objects.new(SHARED_SKELETON_NAME, armature)
+    context.scene.collection.objects.link(rig)
+    previous = context.view_layer.objects.active
+    context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode="EDIT")
+    for index, bone_name in names.items():
+        matrix = mathutils.Matrix([[float(v) for v in row] for row in binds[index]])
+        matrix.transpose()
+        rest = coordinate.convert_matrix(matrix.inverted_safe())
+        bone = armature.edit_bones.new(bone_name)
+        bone.head = rest.to_translation()
+        bone.tail = bone.head + rest.to_quaternion() @ mathutils.Vector((0.0, 0.05, 0.0))
+        bone.matrix = rest
+        if bone.length < 0.001:
+            bone.tail = bone.head + mathutils.Vector((0.0, 0.05, 0.0))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    context.view_layer.objects.active = previous
+    return rig
+
 
 
 def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
