@@ -232,6 +232,41 @@ def _prefab_rows(query, model_kind=""):
     return sorted(by_path.values(), key=lambda hit: hit[1])
 
 
+def _prefab_named(name):
+    """The importable rows for one part of an assembled npc.
+
+    A part manifest names the part, not the asset that holds it, and the game
+    ships parts in two shapes: some as a generated prefab
+    (``.../generated/.../prefabs/p_<part>_static.prefab``), the rest only as the
+    authored skinned mesh (``arts/entity/npc/.../models/sk_<part>.fbx``). Both
+    are the same part; which one exists is the game's choice, so both are
+    accepted and prefabs win when a part has both.
+
+    The leading kind letter is the game's own asset-kind prefix (``p_`` prefab,
+    ``sk_`` skinned mesh, ``m_`` material, ``t_`` texture), so the part id is the
+    stem underneath it -- matched exactly, never as a substring."""
+    core = name.lower()
+    if core.startswith("p_"):
+        core = core[2:]
+    cabmap_state.apply_filter(core)
+    prefabs = {}
+    meshes = {}
+    for row in cabmap_state.VISIBLE:
+        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+            path = cabmap_state.ROWS.container_path(row, path_index)
+            low = path.lower()
+            leaf = low.rsplit("/", 1)[-1]
+            stem, _, extension = leaf.rpartition(".")
+            if extension == "prefab" and (
+                    stem == core or stem == "p_" + core
+                    or stem.startswith(core + "_") or stem.startswith("p_" + core + "_")):
+                prefabs[low] = (row, path)
+            elif extension == "fbx" and stem in (core, "sk_" + core):
+                meshes[low] = (row, path)
+    found = prefabs or meshes
+    return sorted(found.values(), key=lambda hit: hit[1])
+
+
 def _for_cast(hits, kind):
     """When the same model is published under more than one folder, take the one
     belonging to the cast being browsed -- the game files a character's actor
@@ -279,19 +314,16 @@ class RURI_OT_roster_load(bpy.types.Operator):
         if entry is None:
             return {"CANCELLED"}
 
+        if state.kind == NPCS:
+            return self._load_npc(context, state, entry)
+
         hits = _prefab_rows(entry.key, state.model_kind)
         if not hits:
-            # Say which of the two it is: "no prefab at all" and "no prefab of
-            # THIS family" need different next steps from the user.
             any_prefab = _prefab_rows(entry.key)
-            if any_prefab:
-                self.report({"WARNING"}, "'{0}' has no _{1} prefab; it does have {2}.".format(
-                    entry.label, state.model_kind, ", ".join(path for _row, path in any_prefab[:3])))
-            else:
-                self.report({"WARNING"},
-                            "No prefab in the loaded cabmap is named after '{0}'. Generic npcs are "
-                            "assembled from part prefabs rather than shipped as one, so their model "
-                            "has to come from their avatar templet -- not wired up yet.".format(entry.key))
+            self.report({"WARNING"}, "'{0}' has no _{1} prefab; it does have {2}.".format(
+                entry.label, state.model_kind, ", ".join(path for _row, path in any_prefab[:3]))
+                if any_prefab else
+                "No prefab in the loaded cabmap is named after '{0}'.".format(entry.key))
             return {"CANCELLED"}
 
         chosen, level = _at_detail_level(_for_cast(hits, state.kind), state.lod)
@@ -306,6 +338,48 @@ class RURI_OT_roster_load(bpy.types.Operator):
             self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
                 entry.label, state.lod, level))
 
+        if state.load_expressions:
+            self._load_expressions(context, entry)
+        return {"FINISHED"}
+
+    def _load_npc(self, context, state, entry):
+        """An npc is assembled, not shipped: its template's own manifest lists the
+        part prefabs (body, face, hair, ear, tail), and a named actor's manifest
+        simply lists one whole prefab instead. Either way the parts are imported
+        together, so the pieces land in one scene."""
+        roots = roster.vfs_roots(context.scene.ruri_cabmap.game_root)
+        try:
+            info = cabmap_state.BRIDGE.npc_prefab_parts(roots, entry.key)
+        except Exception as exc:
+            self.report({"WARNING"}, "No prefab manifest for '{0}': {1}".format(entry.key, exc))
+            return {"CANCELLED"}
+        if not info["parts"]:
+            self.report({"WARNING"}, "'{0}' lists no parts to assemble.".format(entry.label))
+            return {"CANCELLED"}
+
+        cabmap_state.clear_selection()
+        missing = []
+        for part in info["parts"]:
+            hits = _prefab_named(part)
+            if not hits:
+                missing.append(part)
+                continue
+            row, _path = _at_detail_level(hits, state.lod)[0][0]
+            cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+        if not cabmap_state.SELECTED_CABS:
+            self.report({"WARNING"}, "None of {0}'s {1} part prefab(s) are in the loaded cabmap: {2}".format(
+                entry.label, len(info["parts"]), ", ".join(info["parts"][:4])))
+            return {"CANCELLED"}
+
+        result = bpy.ops.ruri.import_selected()
+        if "FINISHED" not in result:
+            return {"CANCELLED"}
+        if missing:
+            self.report({"WARNING"}, "{0} of {1} part(s) were not in the cabmap: {2}".format(
+                len(missing), len(info["parts"]), ", ".join(missing)))
+        else:
+            self.report({"INFO"}, "Assembled '{0}' from {1} part(s).".format(
+                entry.label, len(info["parts"])))
         if state.load_expressions:
             self._load_expressions(context, entry)
         return {"FINISHED"}
