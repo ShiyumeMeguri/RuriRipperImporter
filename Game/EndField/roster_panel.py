@@ -334,6 +334,21 @@ def _prefab_named(name):
     return sorted(found.values(), key=lambda hit: hit[1])
 
 
+def _asset_named(stem):
+    """Cabmap rows whose asset leaf IS this name, any extension."""
+    cabmap_state.apply_filter(stem)
+    wanted = stem.lower()
+    found = {}
+    for row in cabmap_state.VISIBLE:
+        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+            path = cabmap_state.ROWS.container_path(row, path_index)
+            low = path.lower()
+            if low.rsplit("/", 1)[-1].rsplit(".", 1)[0] == wanted:
+                found[low] = (row, path)
+    return sorted(found.values(), key=lambda hit: hit[1])
+
+
+
 def _model_parts(context, entry):
     """(manifest, [(part, row, path)], [unresolved part]) for an npc row.
 
@@ -349,6 +364,10 @@ def _model_parts(context, entry):
         return None, [], []
     hits = []
     missing = []
+    # The shared skeleton. A part published only as its authored mesh brings an
+    # Avatar with no bones in it -- the bones live in the template the manifest
+    # names, so it has to come along or those parts have nothing to skin to.
+    templet = (info.get("avatar_templet") or "").rsplit("/", 1)[-1]
     for part in info["parts"]:
         candidates = _prefab_named(part)
         if not candidates:
@@ -357,6 +376,15 @@ def _model_parts(context, entry):
         skinned = [hit for hit in candidates if "_variant." in hit[1].lower()]
         row, path = (skinned or candidates)[0]
         hits.append((part, row, path))
+
+    # Only when a part actually needs it. A named actor ships one fully rigged
+    # postmodel prefab; adding the template there imports the same meshes a
+    # second time, unparented, on top of the good ones.
+    if templet and any("GameObject" not in cabmap_state.ROWS[row]["type_names"]
+                       for _part, row, _path in hits):
+        for row, path in _asset_named("data_npc_avatartemplet_" + templet.lower()):
+            hits.append(("<skeleton>", row, path))
+            break
     return info, hits, missing
 
 
@@ -469,12 +497,26 @@ class RURI_OT_roster_load(bpy.types.Operator):
                 entry.label, len(info["parts"])))
             return {"CANCELLED"}
 
-        cabmap_state.clear_selection()
+        # Two passes, and it has to be two. A part published as a prefab carries a
+        # GameObject; a part published only as its authored mesh carries Mesh +
+        # Avatar and no GameObject at all. The browser's loose-asset import only
+        # runs for a closure with NO root in it, so mixing both kinds into one
+        # selection means the mesh-only parts are silently dropped -- which is
+        # exactly how an npc arrived as a floating head.
+        rooted, loose = [], []
         for _part, row, _path in hits:
-            cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+            (rooted if "GameObject" in cabmap_state.ROWS[row]["type_names"] else loose).append(row)
 
-        result = bpy.ops.ruri.import_selected()
-        if "FINISHED" not in result:
+        imported_any = False
+        for group in (rooted, loose):
+            if not group:
+                continue
+            cabmap_state.clear_selection()
+            for row in group:
+                cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+            if "FINISHED" in bpy.ops.ruri.import_selected():
+                imported_any = True
+        if not imported_any:
             return {"CANCELLED"}
         if missing:
             self.report({"WARNING"}, "{0} of {1} part(s) are not in the cabmap: {2}".format(
