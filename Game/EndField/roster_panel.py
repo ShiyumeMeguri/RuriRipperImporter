@@ -373,6 +373,48 @@ def _asset_named(stem):
 
 
 
+def _register_skeleton_bone_names(hits):
+    """Hand the importer the bone names the game's own avatar templet declares.
+
+    A part mesh identifies its bones by hash, so a rebuilt shared skeleton would
+    otherwise carry hash names and nothing keyed by bone name could drive an npc
+    the way it drives a character. ``bonePathsStr`` on the templet is that list."""
+    from ... import prefab_importer
+    prefab_importer.set_shared_bone_names([])
+    templet = next((row for part, row, _p in hits if part == SKELETON_PART), None)
+    if templet is None:
+        return
+    try:
+        assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
+            [cabmap_state.ROWS.cab(templet)])
+        from ...ruri_pybridge.unity import bridge_asset_db
+        db = bridge_asset_db.BridgeAssetDatabase(assets)
+        for guid in db.all_guids():
+            text = db.raw_text(guid) or ""
+            if "bonePathsStr" not in text:
+                continue
+            names = []
+            collecting = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("bonePathsStr"):
+                    collecting = True
+                    continue
+                if not collecting:
+                    continue
+                if stripped.startswith("-"):
+                    names.append(stripped[1:].strip())
+                elif stripped:
+                    break
+            if names:
+                prefab_importer.set_shared_bone_names(names)
+                prefab_importer.set_shared_leaf_names(names)
+                return
+    except Exception:
+        return
+
+
+
 def _model_parts(context, entry):
     """(manifest, [(part, row, path)], [unresolved part]) for an npc row.
 
@@ -527,6 +569,7 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # runs for a closure with NO root in it, so mixing both kinds into one
         # selection means the mesh-only parts are silently dropped -- which is
         # exactly how an npc arrived as a floating head.
+        _register_skeleton_bone_names(hits)
         skeleton, rooted, loose = [], [], []
         for part, row, _path in hits:
             if part == SKELETON_PART:
@@ -540,7 +583,10 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # rig is already in the scene, so importing it alongside its own skeleton
         # is a race it loses.
         imported_any = False
-        for group, one_at_a_time in ((skeleton, False), (rooted, False), (loose, True)):
+        # Rigged parts first: they arrive with named bone hierarchies, and every
+        # later part identifies its bones by the hash of that same path -- so the
+        # names have to be in the scene before anything that needs them.
+        for group, one_at_a_time in ((rooted, False), (skeleton, False), (loose, True)):
             if not group:
                 continue
             # Root-less rows go ONE AT A TIME. The browser only falls back to its

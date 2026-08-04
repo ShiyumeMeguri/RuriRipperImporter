@@ -510,6 +510,93 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
 
 SHARED_SKELETON_NAME = "NpcSharedSkeleton"
 
+# Real bone names for a rebuilt shared skeleton, keyed by the CRC32 the meshes
+# carry. A game module fills this from whatever names ITS own skeleton declares
+# before importing; empty just leaves a bone named after its hash.
+SHARED_BONE_NAMES = {}
+
+
+def set_shared_bone_names(names):
+    """Register the names a rebuilt shared skeleton should use, as transform
+    PATHS: Unity hashes a bone's whole path ("Root/Bip001/Bip001_Pelvis"), not its
+    leaf, so only a path reproduces the number the mesh carries."""
+    SHARED_BONE_NAMES.clear()
+    for path in names or ():
+        if not path:
+            continue
+        key = zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
+        SHARED_BONE_NAMES.setdefault(key, path.rsplit("/", 1)[-1])
+        _remember_path(key, path)
+
+
+# Leaf names the game's own skeleton declares, in no particular hierarchy -- see
+# set_shared_leaf_names. Used to reconstruct transform paths the meshes hash.
+SHARED_LEAF_NAMES = []
+
+
+def set_shared_leaf_names(leaves):
+    """Register the bone leaf names a skeleton declares. Unity hashes a bone's
+    whole PATH, and this list has no parentage in it, so the paths are grown from
+    the ones already known (see _grow_bone_paths) rather than assumed."""
+    SHARED_LEAF_NAMES[:] = [leaf for leaf in (leaves or ()) if leaf]
+
+
+def _grow_bone_paths(wanted_hashes):
+    """Reconstruct the transform paths a mesh hashes, from known paths plus a bag
+    of leaf names.
+
+    Unity hashes "Root/Bip001/Bip001_Spine/..."; the skeleton asset lists only the
+    leaf names, with no parentage. But a child's path is its parent's path plus
+    its own name, so every hash that is still unknown can be tested against
+    <known path>/<unused leaf> -- and each hit is itself a parent for the next
+    round. Repeats until a round adds nothing, which is when the tree is as
+    complete as the data allows."""
+    if not SHARED_LEAF_NAMES:
+        return
+    targets = {int(v) & 0xFFFFFFFF for v in wanted_hashes} - set(SHARED_BONE_NAMES)
+    if not targets:
+        return
+    frontier = [path for path in _known_paths()]
+    while frontier and targets:
+        discovered = []
+        for parent in frontier:
+            for leaf in SHARED_LEAF_NAMES:
+                candidate = parent + "/" + leaf
+                key = zlib.crc32(candidate.encode("utf-8")) & 0xFFFFFFFF
+                if key in targets:
+                    SHARED_BONE_NAMES[key] = leaf
+                    _remember_path(key, candidate)
+                    targets.discard(key)
+                    discovered.append(candidate)
+        frontier = discovered
+
+
+_KNOWN_PATHS = {}
+
+
+def _remember_path(key, path):
+    _KNOWN_PATHS[key] = path
+
+
+def _known_paths():
+    return list(_KNOWN_PATHS.values())
+
+
+
+def _bone_paths_of(armature_obj):
+    """Every bone of a rig as its Unity transform path -- the chain of names from
+    the rig's root down to the bone, which is what Unity hashed."""
+    paths = []
+    for bone in armature_obj.data.bones:
+        chain = []
+        node = bone
+        while node is not None:
+            chain.append(node.name)
+            node = node.parent
+        chain.reverse()
+        paths.append("/".join(chain))
+    return paths
+
 
 def _shared_skeleton_bind(context, decoded):
     """(rig, bone slots, slot -> bone name) for a mesh whose skeleton lives outside
@@ -527,8 +614,19 @@ def _shared_skeleton_bind(context, decoded):
             or decoded.bone_indices is None or decoded.bone_weights is None):
         return None, [], {}
 
-    names = {index: "bone_{0:08x}".format(int(value) & 0xFFFFFFFF)
-             for index, value in enumerate(hashes)}
+    # Rigs imported alongside carry their own hierarchy, so their transform paths
+    # reproduce exactly the hashes a part mesh stores.
+    for other in context.scene.objects:
+        if other.type == "ARMATURE" and other.name != SHARED_SKELETON_NAME:
+            for path in _bone_paths_of(other):
+                key = zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
+                SHARED_BONE_NAMES.setdefault(key, path.rsplit("/", 1)[-1])
+                _remember_path(key, path)
+    _grow_bone_paths(hashes)
+    names = {}
+    for index, value in enumerate(hashes):
+        key = int(value) & 0xFFFFFFFF
+        names[index] = SHARED_BONE_NAMES.get(key) or "bone_{0:08x}".format(key)
     rig = bpy.data.objects.get(SHARED_SKELETON_NAME)
     if rig is None or rig.type != "ARMATURE":
         rig = _build_rig_from_bind_poses(context, binds, names)
