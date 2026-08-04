@@ -371,30 +371,38 @@ def _asset_named(stem):
 
 
 
-def _templet_skeleton(info):
-    """``(skeleton_paths, leaf_names)`` for an npc's shared skeleton, read from the
-    avatar template the manifest names.
+def _avatar_skeleton(db, avatar_file):
+    """``(world_rests, paths)`` from an Avatar UnityFile in ``db`` -- the standing
+    rest a shared-skeleton part mesh bakes against, plus its transform paths."""
+    from ...ruri_pybridge.unity import avatar
+    avatar_doc = avatar_file.first("Avatar") if avatar_file is not None else None
+    if avatar_doc is None:
+        return {}, []
+    return avatar.skeleton_world_rests(avatar_doc.data), avatar.transform_paths(avatar_doc.data)
 
-    The template's ``sizeAvatar`` carries the whole skeleton's ``m_TOS`` -- the
-    CRC32(path)->path table a part mesh hashes its bones from -- which is the
-    authoritative source for real names AND the parent chain (Root/Bip001/...).
-    ``bonePathsStr`` is kept as leaf-name vocabulary for any part-specific bone
-    the table does not name (closure reconstruction). Both read through parsed
-    documents, not raw text."""
+
+def _templet_skeleton(info):
+    """``(world_rests, paths, leaf_names)`` for an npc's shared skeleton, read from
+    the avatar template the manifest names.
+
+    The template's ``sizeAvatar`` carries the whole skeleton's STANDING world rest
+    (m_AvatarSkeleton + m_AvatarSkeletonPose) AND its ``m_TOS`` name/parent table
+    -- the authoritative pose a part mesh is bind-baked against, exactly what a
+    shipped rig gets from its prefab transform hierarchy. ``bonePathsStr`` is kept
+    as leaf-name vocabulary for any part-specific bone the table does not name."""
     templet = (info.get("avatar_templet") or "").rsplit("/", 1)[-1]
     if not templet:
-        return [], []
+        return {}, [], []
     rows = _asset_named("data_npc_avatartemplet_" + templet.lower())
     if not rows:
-        return [], []
-    from ...ruri_pybridge.unity import avatar, bridge_asset_db
+        return {}, [], []
+    from ...ruri_pybridge.unity import bridge_asset_db
     try:
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
             [cabmap_state.ROWS.cab(rows[0][0])])
     except Exception:
-        return [], []
+        return {}, [], []
     db = bridge_asset_db.BridgeAssetDatabase(assets)
-    leaves, paths = [], []
     for guid in db.all_guids():
         mono = db.load_guid(guid)
         doc = mono.first("MonoBehaviour") if mono is not None else None
@@ -402,19 +410,18 @@ def _templet_skeleton(info):
             continue
         leaves = [str(name) for name in (doc.data.get("bonePathsStr") or [])]
         size_ref = doc.data.get("sizeAvatar")
+        world_rests, paths = {}, []
         if isinstance(size_ref, dict) and size_ref.get("guid"):
-            avatar_file = db.load_guid(size_ref["guid"])
-            avatar_doc = avatar_file.first("Avatar") if avatar_file is not None else None
-            if avatar_doc is not None:
-                paths = avatar.transform_paths(avatar_doc.data)
-        break
-    return paths, leaves
+            world_rests, paths = _avatar_skeleton(db, db.load_guid(size_ref["guid"]))
+        return world_rests, paths, leaves
+    return {}, [], []
 
 
-def _import_loose_part(context, cab, binder, options, level):
-    """Import a loose part's best-LOD meshes, each bound onto the shared rig the
-    binder is growing. One cab's own closure at a time (see _load_npc). True when
-    anything built."""
+def _import_part(context, cab, binder, options, level):
+    """Import one part's best-LOD meshes, each baked onto the shared rig the binder
+    is growing. Works for every part kind -- a body/hair/tail fbx or a face/ear
+    _variant prefab -- since each is a skinned mesh with a bind pose and its own
+    avatar. One cab's own closure at a time. True when anything built."""
     from ... import prefab_importer
     from ...ruri_pybridge.unity import bridge_asset_db
     try:
@@ -422,6 +429,13 @@ def _import_loose_part(context, cab, binder, options, level):
     except Exception:
         return False
     db = bridge_asset_db.BridgeAssetDatabase(assets)
+    # This part's own Avatar supplies the standing rest for any bone it alone
+    # introduces (the base skeleton already came from the template avatar).
+    for guid in db.all_guids():
+        part_file = db.load_guid(guid)
+        if part_file is not None and part_file.first("Avatar") is not None:
+            binder.add_skeleton(*_avatar_skeleton(db, part_file))
+            break
     imported = False
     for guid in _loose_part_mesh_guids(db, level):
         mesh_file = db.load_guid(guid)
@@ -602,43 +616,37 @@ class RURI_OT_roster_load(bpy.types.Operator):
                 entry.label, len(info["parts"])))
             return {"CANCELLED"}
 
-        # A part published as a prefab carries a GameObject and imports through the
-        # browser's own hierarchy path (bringing its own rig); a part published
-        # only as its authored mesh carries Mesh + a boneless Avatar and binds onto
-        # the shared skeleton the binder rebuilds from the template's leaf names.
-        rooted, loose = [], []
-        for _part, row, _path in hits:
-            (rooted if "GameObject" in cabmap_state.ROWS[row]["type_names"] else loose).append(row)
-
-        binder = None
-        if loose:
-            skeleton_paths, leaf_names = _templet_skeleton(info)
-            binder = armature_builder.SkeletonBinder(entry.key, skeleton_paths, leaf_names)
-
         options = context.scene.ruri_cabmap.as_options()
-        imported_any = False
-        # Loose parts first, one at a time: each rebuilds or extends the shared rig
-        # from its own bind poses. A loose row batched with anything that drags in a
-        # rooted dependency is hidden behind that root and silently never built.
-        for row in loose:
-            if _import_loose_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod):
-                imported_any = True
-
-        # Rooted parts through the browser's own import, then fold each new rig into
-        # the main skeleton so the character ends on exactly one armature.
-        before = {o for o in context.scene.objects if o.type == "ARMATURE"}
-        for row in rooted:
-            cabmap_state.clear_selection()
-            cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
-            if "FINISHED" in bpy.ops.ruri.import_selected():
-                imported_any = True
-        new_arms = [o for o in context.scene.objects
-                    if o.type == "ARMATURE" and o not in before]
-        target = (binder.armature if binder is not None and binder.armature is not None
-                  else (new_arms[0] if new_arms else None))
-        for arm in new_arms:
-            if arm is not target:
-                armature_builder.graft_armature(context, target, arm)
+        # A named actor (manifest carries correspondingCharId) ships one complete
+        # standing prefab and takes the prefab path; a generic npc is assembled
+        # from parts that share the template skeleton and takes the binder path.
+        named_actor = bool(info.get("character_id"))
+        world_rests, paths, leaf_names = ({}, [], []) if named_actor else _templet_skeleton(info)
+        if world_rests:
+            # Assembled npc: every part is a skinned mesh sharing one skeleton
+            # (the template avatar's standing pose). Each part -- body/hair/tail
+            # authored standing, face/ear authored at their own origin -- is baked
+            # onto ONE binder rig, its own bones aligned onto the shared skeleton.
+            binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
+            imported_any = False
+            for _part, row, _path in hits:
+                if _import_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod):
+                    imported_any = True
+        else:
+            # Named actor: one complete standing prefab (no shared-skeleton
+            # template) -- the browser's own hierarchy import, grafting any extra
+            # roots into the first so it ends on one armature.
+            imported_any = False
+            before = {o for o in context.scene.objects if o.type == "ARMATURE"}
+            for _part, row, _path in hits:
+                cabmap_state.clear_selection()
+                cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+                if "FINISHED" in bpy.ops.ruri.import_selected():
+                    imported_any = True
+            new_arms = [o for o in context.scene.objects
+                        if o.type == "ARMATURE" and o not in before]
+            for arm in new_arms[1:]:
+                armature_builder.graft_armature(context, new_arms[0], arm)
 
         if not imported_any:
             return {"CANCELLED"}

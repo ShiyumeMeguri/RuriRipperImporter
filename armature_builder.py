@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import zlib
 
+import numpy as np
+
 try:
     from . import coordinate, hierarchy
     from .ruri_pybridge.unity import skinning
@@ -266,53 +268,101 @@ def _crc32(text):
     return zlib.crc32(text.encode("utf-8")) & 0xFFFFFFFF
 
 
-def _rest_from_bind_pose(bind_pose):
-    """Blender-space rest world matrix from a Unity bind pose (b's inverse is its
-    rest world; the stored 4x4 is column-major, so transpose first)."""
-    matrix = Matrix([[float(v) for v in row] for row in bind_pose])
-    matrix.transpose()
-    return coordinate.convert_matrix(matrix.inverted_safe())
-
-
 def _bone_name_for(path, key):
     """Real leaf name from a reconstructed path, or the hash when unresolved."""
     return path.rsplit("/", 1)[-1] if path else "bone_{0:08x}".format(key)
 
 
 class SkeletonBinder:
-    """One armature for an assembled character, named and parented from the
-    template skeleton's own transform paths, posed from the part meshes' bind poses.
+    """One armature for an assembled character, posed from the template skeleton's
+    OWN standing rest -- not from the part meshes' bind poses.
 
-    A part mesh authored against a shared skeleton arrives on its own: it carries
-    a bind pose per bone (whose inverse is that bone's rest world matrix) and a
-    CRC32 name hash per bone, but no armature and no hierarchy. The template's
-    Avatar carries the whole skeleton's ``crc32(path) -> path`` table, so every
-    hash resolves to its real Unity path -- real leaf name, real parent chain.
-    Each skinned bone is placed at its own bind-pose rest (exact); the structural
-    ancestors those paths imply (Root, Bip001 -- carried by no mesh) are created
-    too, at their children's positions, so the rig runs unbroken to the root the
-    way a shipped one does. The first mesh builds the rig; later parts EXTEND it.
-    Any hash the table does not name is reconstructed from the template's leaf
+    A part mesh authored against a shared skeleton arrives on its own, in its
+    authoring-local space (a 3ds-Max Biped exports Z-up), carrying a bind pose and
+    a CRC32 name hash per bone but no armature and no standing pose. The template's
+    Avatar carries both halves of what a shipped rig gets from its prefab: the
+    ``crc32(path) -> path`` table (real leaf names + parent chain) AND the whole
+    skeleton's STANDING world rest (m_AvatarSkeleton posed by m_AvatarSkeletonPose,
+    Unity Y-up). Each bone -- skinned or purely structural (Root, Bip001) -- is
+    placed at that world rest; each part mesh is bind-BAKED against it
+    (``skinning.bake_bind_pose``: v_world = sum w * restWorld * bindpose * v_local)
+    exactly as the prefab path bakes against its transform hierarchy, which is why
+    the result stands instead of lying flat. The first mesh builds the rig; later
+    parts EXTEND it. A hash the table does not name is reconstructed from the leaf
     names via skinning.resolve_bone_paths, or kept hash-named as a last resort.
 
     The rig is one armature OBJECT carrying the top-level root yaw; its bones stay
-    in pure-C armature space. Generic: the caller supplies the paths and leaves."""
+    in pure-C armature space. Generic: the caller supplies the avatar tables."""
 
-    def __init__(self, name, skeleton_paths=(), leaf_names=()):
+    def __init__(self, name, world_rests=None, paths=None, leaf_names=()):
         self.name = name
         self._leaves = [str(n) for n in (leaf_names or ()) if n]
         self.armature = None
-        # crc32(path) -> path, seeded from the template skeleton's own table.
-        self._path_by_hash = {_crc32(str(p)): str(p) for p in (skeleton_paths or ()) if p}
-        self._rest_by_hash = {}   # crc32 -> Blender rest matrix (skinned bones only)
-        self._hash_to_bone = {}   # crc32 -> final (uniquified) bone name on the rig
+        self._world_rest = {}      # crc32(path) -> Unity world rest 4x4 (numpy), aligned
+        self._path_by_hash = {}    # crc32(path) -> full path
+        self._world_by_name = {}   # leaf name -> aligned world rest (for attachment)
+        self._hash_to_bone = {}    # crc32(path) -> final (uniquified) bone name
+        self.add_skeleton(world_rests, paths)
+
+    def add_skeleton(self, world_rests, paths):
+        """Merge one avatar's skeleton into the rig, ALIGNED onto what is already
+        there. The template avatar brings the base standing skeleton; a part
+        (face, ear) is often authored at its OWN origin, so its bones are shifted
+        so the shared bone it hangs under (its attachment) lands on the standing
+        skeleton's copy of that bone. setdefault keeps the first, authoritative
+        rest for a bone a later part references again."""
+        world_rests = world_rests or {}
+        name_by_hash = {}
+        for path in (paths or ()):
+            if path:
+                key = _crc32(str(path))
+                self._path_by_hash.setdefault(key, str(path))
+                name_by_hash.setdefault(key, str(path).rsplit("/", 1)[-1])
+        offset = self._alignment(world_rests, name_by_hash)
+        for key, rest in world_rests.items():
+            aligned = offset @ np.asarray(rest, dtype=np.float64)
+            self._world_rest.setdefault(key, aligned)
+            name = name_by_hash.get(key)
+            if name:
+                self._world_by_name.setdefault(name, aligned)
+
+    def _alignment(self, world_rests, name_by_hash):
+        """The 4x4 that moves this part onto the shared skeleton: it lands the
+        part's ATTACHMENT bone (the shared bone most of the part's own bones hang
+        under -- e.g. a face rig hangs under Bip001_Head) onto the standing copy
+        already on the rig. Identity for the base skeleton, or a part already
+        authored in the standing frame."""
+        if not self._world_by_name:
+            return np.eye(4)
+        part_by_name = {}
+        for key in world_rests:
+            name = name_by_hash.get(key)
+            if name:
+                part_by_name.setdefault(name, world_rests[key])
+        counts = {}
+        for key in world_rests:
+            name = name_by_hash.get(key)
+            path = self._path_by_hash.get(key)
+            if not path or name in self._world_by_name:
+                continue  # a bone already on the rig is not what THIS part hangs by
+            segments = path.split("/")
+            for cut in range(len(segments) - 1, 0, -1):
+                ancestor = segments[cut - 1]
+                if ancestor in self._world_by_name and ancestor in part_by_name:
+                    counts[ancestor] = counts.get(ancestor, 0) + 1
+                    break
+        if not counts:
+            return np.eye(4)
+        attach = max(counts, key=counts.get)
+        return (np.asarray(self._world_by_name[attach], dtype=np.float64)
+                @ np.linalg.inv(np.asarray(part_by_name[attach], dtype=np.float64)))
 
     def bind(self, context, decoded):
-        """Ensure every bone ``decoded`` references (and their structural
-        ancestors) exist on the rig -- building it on the first call, extending it
-        after -- and return the ``(smr_bones, file_id_to_bone)`` pair
-        build_mesh_object skins with: ``[{"fileID": i}]`` and ``{i: bone_name}``.
-        (None, None) when the mesh carries no usable bind data."""
+        """Bind-bake ``decoded`` onto the standing rest and ensure every bone it
+        references (plus their structural ancestors) exists on the rig, returning
+        the ``(smr_bones, file_id_to_bone)`` pair build_mesh_object skins with:
+        ``[{"fileID": i}]`` and ``{i: bone_name}``. (None, None) when the mesh
+        carries no usable bind data (it is placed unskinned instead)."""
         hashes = getattr(decoded, "bone_name_hashes", None)
         binds = getattr(decoded, "bind_poses", None)
         if (hashes is None or len(hashes) == 0 or binds is None
@@ -326,20 +376,26 @@ class SkeletonBinder:
                 unresolved, self._leaves, seed_paths=list(self._path_by_hash.values()))
             self._path_by_hash.update(found)
 
-        for index, key in enumerate(keys):
-            self._rest_by_hash.setdefault(key, _rest_from_bind_pose(binds[index]))
+        smr_bones = [{"fileID": i} for i in range(len(keys))]
+        # Bake mesh-local vertices to their standing WORLD positions against the
+        # avatar rest -- the same bake the prefab path runs against its hierarchy.
+        file_id_to_world = {i: self._world_rest[keys[i]]
+                            for i in range(len(keys)) if keys[i] in self._world_rest}
+        skinning.bake_bind_pose(decoded, smr_bones, file_id_to_world)
         self._grow(context, keys)
 
-        smr_bones = [{"fileID": i} for i in range(len(keys))]
         file_id_to_bone = {i: self._hash_to_bone.get(keys[i], _bone_name_for(None, keys[i]))
                            for i in range(len(keys))}
         return smr_bones, file_id_to_bone
 
-    def _grow(self, context, skinned_keys):
-        """Add every not-yet-built bone this mesh needs: its own skinned bones plus
-        the structural ancestors their paths imply."""
-        needed = self._with_ancestors(skinned_keys)
-        new_keys = [key for key in needed if key not in self._hash_to_bone]
+    def _grow(self, context, mesh_keys):
+        """Add every not-yet-built bone this mesh needs -- its own bones that the
+        avatar rests, plus the structural ancestors their paths imply -- each at
+        its avatar world rest, conjugated into Blender armature space."""
+        rooted = [key for key in mesh_keys if key in self._world_rest]
+        needed = self._with_ancestors(rooted)
+        new_keys = [key for key in needed
+                    if key not in self._hash_to_bone and key in self._world_rest]
         if not new_keys:
             return
 
@@ -358,40 +414,35 @@ class SkeletonBinder:
 
         # Shallow paths first, so a child's parent bone already exists.
         ordered = sorted(new_keys, key=self._depth)
+        created = []
         for key in ordered:
             path = self._path_by_hash.get(key)
-            eb = edit_bones.new(_bone_name_for(path, key))
+            bone_name = _bone_name_for(path, key)
+            # A bone this name already exists (an earlier part's copy of a shared
+            # bone) IS that joint -- reuse it, so a part rebinds onto the shared
+            # skeleton instead of duplicating it.
+            existing = edit_bones.get(bone_name)
+            if existing is not None:
+                self._hash_to_bone[key] = existing.name
+                continue
+            eb = edit_bones.new(bone_name)
             eb.head = (0.0, 0.0, 0.0)
             eb.tail = (0.0, _DEFAULT_BONE_LENGTH, 0.0)
-            rest = self._rest_by_hash.get(key)
-            if rest is not None:
-                eb.matrix = rest
-                eb.length = _DEFAULT_BONE_LENGTH
+            eb.matrix = coordinate.convert_matrix(self._world_rest[key])
+            eb.length = _DEFAULT_BONE_LENGTH
             self._hash_to_bone[key] = eb.name  # Blender may uniquify
+            created.append(key)
 
-        for key in ordered:
+        for key in created:
             path = self._path_by_hash.get(key)
             parent = self._parent_bone(path) if path else None
             if parent is not None and parent in edit_bones:
                 edit_bones[self._hash_to_bone[key]].parent = edit_bones[parent]
 
-        # Structural bones (no bind pose) sit at their children's heads, deepest
-        # first so a child is placed before its own parent reads it. They carry no
-        # weight, so position is cosmetic -- only the parent chain matters.
-        structural = [key for key in new_keys
-                      if key not in self._rest_by_hash and self._path_by_hash.get(key)]
-        for key in sorted(structural, key=self._depth, reverse=True):
-            eb = edit_bones.get(self._hash_to_bone[key])
-            heads = [child.head.copy() for child in eb.children] if eb else []
-            if heads:
-                mean = sum(heads, Vector((0.0, 0.0, 0.0))) / len(heads)
-                eb.head = mean
-                eb.tail = mean + Vector((0.0, _DEFAULT_BONE_LENGTH, 0.0))
-
         # Cosmetic length only (never direction -- that would rotate the rest and
         # break a later animation): reach toward the nearest child head.
-        for name in self._hash_to_bone.values():
-            eb = edit_bones.get(name)
+        for key in created:
+            eb = edit_bones.get(self._hash_to_bone[key])
             if eb is None:
                 continue
             distances = [(eb.head - child.head).length for child in eb.children]
@@ -413,9 +464,8 @@ class SkeletonBinder:
             segments = path.split("/")
             for cut in range(1, len(segments)):
                 ancestor = "/".join(segments[:cut])
-                ancestor_key = _crc32(ancestor)
-                self._path_by_hash.setdefault(ancestor_key, ancestor)
-                needed.add(ancestor_key)
+                self._path_by_hash.setdefault(_crc32(ancestor), ancestor)
+                needed.add(_crc32(ancestor))
         return needed
 
     def _depth(self, key):
