@@ -263,7 +263,10 @@ class MaterialBuilder:
                 data = self.db.texture_bytes(key)
                 if data is None:
                     return None
-                cached = _image_from_texture_bytes(data, key)
+                # The image is named what the GAME names it -- the closure
+                # carries every asset's exported path. The guid stays the cache
+                # identity; it was never a name.
+                cached = _image_from_texture_bytes(data, self.db.asset_name(key) or key)
             else:
                 if not os.path.isfile(key):
                     return None

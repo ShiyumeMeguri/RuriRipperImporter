@@ -803,7 +803,8 @@ class RURI_OT_character_load_library(bpy.types.Operator):
                 cabmap_state.BRIDGE.import_cabs(cabs)
             db = _bridge_asset_db_module().BridgeAssetDatabase(
                 assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+                asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
             parsed = morph_state.load_from_db(db)
         except Exception as exc:
             _report_exception(self, "Morph library load failed", exc)

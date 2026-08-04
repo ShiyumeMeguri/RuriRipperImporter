@@ -402,7 +402,8 @@ def _templet_skeleton(info):
             [cabmap_state.ROWS.cab(rows[0][0])])
     except Exception:
         return {}, [], []
-    db = bridge_asset_db.BridgeAssetDatabase(assets)
+    db = bridge_asset_db.BridgeAssetDatabase(
+        assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
     for guid in db.all_guids():
         mono = db.load_guid(guid)
         doc = mono.first("MonoBehaviour") if mono is not None else None
@@ -428,7 +429,8 @@ def _import_part(context, cab, binder, options, level):
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs([cab])
     except Exception:
         return False
-    db = bridge_asset_db.BridgeAssetDatabase(assets)
+    db = bridge_asset_db.BridgeAssetDatabase(
+        assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
     # This part's own Avatar supplies the standing rest for any bone it alone
     # introduces (the base skeleton already came from the template avatar).
     for guid in db.all_guids():

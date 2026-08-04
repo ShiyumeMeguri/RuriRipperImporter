@@ -1468,7 +1468,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
                            if root_cabs.get(guid, "") not in clip_only_cabs]
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
         return {
             "db": db,
             "roots": hierarchy_roots,
@@ -1496,7 +1497,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
             db = bridge_asset_db.BridgeAssetDatabase(
                 assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+                asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
         options = state.as_options()
         ok = True
         imported = 0
@@ -1635,7 +1637,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
         return self._build_clip_rows(context, state, clip_rows, clips_by_cab, db)
 
     def _build_clip_rows(self, context, state, clip_rows, clips_by_cab, db):
@@ -2086,7 +2089,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 return {"CANCELLED"}
             db = bridge_asset_db.BridgeAssetDatabase(
                 assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid)
+            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
 
             selected_guids = []
             for cab in checked_keys:
