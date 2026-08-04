@@ -540,14 +540,22 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # rig is already in the scene, so importing it alongside its own skeleton
         # is a race it loses.
         imported_any = False
-        for group in (skeleton, rooted, loose):
+        for group, one_at_a_time in ((skeleton, False), (rooted, False), (loose, True)):
             if not group:
                 continue
-            cabmap_state.clear_selection()
-            for row in group:
-                cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
-            if "FINISHED" in bpy.ops.ruri.import_selected():
-                imported_any = True
+            # Root-less rows go ONE AT A TIME. The browser only falls back to its
+            # loose-asset import when the whole resolved closure has no root in it,
+            # and batching a root-less row together with anything that drags in a
+            # rooted dependency hides it behind that root -- which is exactly how
+            # a body/hair/tail mesh got resolved, selected, and then silently
+            # never built.
+            batches = [[row] for row in group] if one_at_a_time else [group]
+            for batch in batches:
+                cabmap_state.clear_selection()
+                for row in batch:
+                    cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+                if "FINISHED" in bpy.ops.ruri.import_selected():
+                    imported_any = True
         if not imported_any:
             return {"CANCELLED"}
         if missing:
