@@ -232,6 +232,32 @@ def _prefab_rows(query, model_kind=""):
     return sorted(by_path.values(), key=lambda hit: hit[1])
 
 
+# charId -> {"model", "tag", "asset"}, read once per session from the game's own
+# character data assets. Module scope for the same reason the tables are.
+_CHARACTER_MODELS = {}
+
+
+def _character_model(character_id):
+    """The model prefab the game itself declares for a character, or "" when its
+    data asset is not in the loaded cabmap.
+
+    No config table carries a model field (all 693 were swept), so
+    ``gamedata/characterdata/data_chr_*.asset`` is the only source. Read as one
+    batch: they share a handful of bundles, so paying per character would mean
+    re-resolving the same closure thirty times."""
+    if not _CHARACTER_MODELS:
+        cabs = set()
+        cabmap_state.apply_filter("gamedata/characterdata/data_chr_")
+        for row in cabmap_state.VISIBLE:
+            for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+                path = cabmap_state.ROWS.container_path(row, path_index).lower()
+                if "gamedata/characterdata/data_chr_" in path and path.endswith(".asset"):
+                    cabs.add(cabmap_state.ROWS.cab(row))
+        if cabs:
+            _CHARACTER_MODELS.update(cabmap_state.BRIDGE.read_character_models(sorted(cabs)))
+    return _CHARACTER_MODELS.get(character_id, {}).get("model", "")
+
+
 def _prefab_named(name):
     """The importable rows for one part of an assembled npc.
 
@@ -317,6 +343,17 @@ class RURI_OT_roster_load(bpy.types.Operator):
         if state.kind == NPCS:
             return self._load_npc(context, state, entry)
 
+        # The game states a character's model prefab in its own data asset; only
+        # the UI model is named by convention, because no asset declares one.
+        model = _character_model(entry.key)
+        if model and state.model_kind == "postmodel":
+            hits = _prefab_named(model)
+            if hits:
+                return self._import(context, state, entry, _for_cast(hits, state.kind), model)
+            self.report({"WARNING"}, "'{0}' declares model '{1}', which is not in the cabmap.".format(
+                entry.label, model))
+            return {"CANCELLED"}
+
         hits = _prefab_rows(entry.key, state.model_kind)
         if not hits:
             any_prefab = _prefab_rows(entry.key)
@@ -326,7 +363,13 @@ class RURI_OT_roster_load(bpy.types.Operator):
                 "No prefab in the loaded cabmap is named after '{0}'.".format(entry.key))
             return {"CANCELLED"}
 
-        chosen, level = _at_detail_level(_for_cast(hits, state.kind), state.lod)
+        return self._import(context, state, entry, _for_cast(hits, state.kind), "")
+
+    def _import(self, context, state, entry, hits, declared):
+        """Put the resolved rows in the browser's own selection and run its own
+        import. ``declared`` names the prefab the game itself asked for, when one
+        did, so the report says where the choice came from."""
+        chosen, level = _at_detail_level(hits, state.lod)
         cabmap_state.clear_selection()
         for row, _path in chosen:
             cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
@@ -337,6 +380,8 @@ class RURI_OT_roster_load(bpy.types.Operator):
         if level != state.lod:
             self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
                 entry.label, state.lod, level))
+        elif declared:
+            self.report({"INFO"}, "Loaded '{0}' -- the model its own data asset declares.".format(declared))
 
         if state.load_expressions:
             self._load_expressions(context, entry)
@@ -460,3 +505,4 @@ def unregister():
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     _ROWS.clear()
+    _CHARACTER_MODELS.clear()
