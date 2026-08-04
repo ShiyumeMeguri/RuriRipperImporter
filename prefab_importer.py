@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-import zlib
 
 # `clip_paths` is aliased to clip_repair and `prefab` to prefab_scan: both names
 # are already taken here by local variables (a list of .anim paths, a parsed
@@ -465,7 +464,7 @@ def import_mesh(context, mesh_path, options=None):
     return report
 
 
-def import_mesh_from_db(context, db, mesh_file, options=None, materials=None, armature_obj=None):
+def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
     """Bridge-mode sibling of import_mesh: a standalone mesh, no armature.
 
     A mesh reached on its own -- a lone Mesh CAB, or one named sub-object of a
@@ -486,51 +485,10 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None, ar
         # Say WHICH of Unity's three vertex-data storages holds it instead.
         report.warnings.append(mesh_decoder.diagnose_empty(mesh_doc, name))
         return report
-    # A standalone skinned mesh CAN be bound: Unity stores its skeleton as
-    # m_BoneNameHashes (the CRC32 of each bone path) right on the Mesh, so the
-    # bone a weight index refers to is recoverable without the SkinnedMeshRenderer
-    # that normally supplies m_Bones. Without this the mesh imports weightless and
-    # lands at the origin, unparented -- which is what an assembled npc's body,
-    # hair and tail did.
-    smr_bones, file_id_to_bone = _standalone_skin_binding(mesh_doc, armature_obj)
-    obj = mesh_builder.build_mesh_object(context, decoded, name, armature_obj if smr_bones else None,
-                                         smr_bones, file_id_to_bone, materials or [], options)
-    if armature_obj is not None and smr_bones:
-        obj.parent = armature_obj
-        if not any(m.type == "ARMATURE" for m in obj.modifiers):
-            modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
-            modifier.object = armature_obj
+    obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {}, materials or [], options)
     report.mesh_objects.append(obj)
     report.seconds = time.time() - start
     return report
-
-
-def _standalone_skin_binding(mesh_doc, armature_obj):
-    """(bone index list, index -> bone name) for a Mesh reached without its
-    SkinnedMeshRenderer, matched against ``armature_obj``'s bones by the hash
-    Unity stores on the mesh itself. Empty when the mesh is unskinned, when no
-    armature was offered, or when nothing matches -- a wrong binding is worse
-    than none, so it degrades to an unbound mesh rather than a scrambled one."""
-    if armature_obj is None:
-        return [], {}
-    hashes = mesh_doc.data.get("m_BoneNameHashes") or []
-    if not hashes:
-        return [], {}
-    by_hash = {}
-    for bone in armature_obj.data.bones:
-        by_hash.setdefault(zlib.crc32(bone.name.encode("utf-8")) & 0xFFFFFFFF, bone.name)
-    names = {}
-    for index, value in enumerate(hashes):
-        try:
-            key = int(value) & 0xFFFFFFFF
-        except (TypeError, ValueError):
-            continue
-        matched = by_hash.get(key)
-        if matched:
-            names[index] = matched
-    if not names:
-        return [], {}
-    return list(range(len(hashes))), names
 
 
 def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
