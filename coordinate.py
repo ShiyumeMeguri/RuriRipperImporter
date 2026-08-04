@@ -45,6 +45,20 @@ def convert_matrix(unity_matrix):
     return _as_matrix(SPACE.convert_matrix(unity_matrix))
 
 
+def convert_root_matrix(unity_matrix):
+    """convert_matrix plus the once-only top-level yaw R -- for a top-level
+    import object's world matrix ONLY (prefab root, standalone static mesh,
+    rebuilt-skeleton armature, scene placement). An identity input yields R."""
+    return _as_matrix(SPACE.convert_root_matrix(unity_matrix))
+
+
+def root_matrix():
+    """The top-level yaw R alone (convert_root_matrix of the identity), as a
+    Matrix -- for setting a rebuilt armature OBJECT whose bones already sit in
+    Blender space."""
+    return _as_matrix(SPACE.root_rotation)
+
+
 def unity_trs(position, rotation, scale):
     """Unity-space TRS from dict components {x,y,z[,w]}, as a Matrix. Still in
     UNITY space -- conversion is the separate, explicit step above."""

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-import zlib
 
 import bpy
 
@@ -82,7 +81,7 @@ def import_prefab(context, prefab_path, options=None):
     prefab = db.load_file(prefab_path)
     arm_name = os.path.splitext(os.path.basename(prefab_path))[0]
     clip_files = _gather_clip_files_disk(db, prefab, prefab_path, assets_dir)
-    report = _import_prefab_core(context, db, prefab, arm_name, clip_files, options)
+    report = _import_prefab_core(context, db, prefab, arm_name, clip_files, options, True)
     fbx_hint = _fbx_instance_hint(prefab)
     if fbx_hint:
         report.warnings.insert(0, fbx_hint)
@@ -106,7 +105,8 @@ def _fbx_instance_hint(prefab):
     return None
 
 
-def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
+def import_prefab_from_db(context, db, prefab_file, options=None, name=None,
+                          top_level=True):
     """Bridge-mode sibling of import_prefab: db/prefab_file are already resolved
     from an in-memory closure (pythonnet bridge) instead of a disk path -- same
     build body as import_prefab (via _import_prefab_core), only the front
@@ -116,10 +116,14 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None):
     used to hang Blender on import. Clips are only DISCOVERED (cheap -- see
     discovery.discover_clip_refs) and reported on report.available_clips; the
     caller builds actions later, only for whichever clips the user actually
-    picks in the animation browser, via build_selected_animations."""
+    picks in the animation browser, via build_selected_animations.
+
+    ``top_level`` is False when a caller re-parents the result under its own
+    world transform (scene placement): the pieces then convert with pure C and
+    that caller applies the once-only root yaw at the placement instead."""
     options = resolve_options(options)
     arm_name = name or discovery.prefab_display_name(prefab_file)
-    report = _import_prefab_core(context, db, prefab_file, arm_name, [], options)
+    report = _import_prefab_core(context, db, prefab_file, arm_name, [], options, top_level)
     if options["import_animations"]:
         report.available_clips = discovery.discover_clip_refs(db, prefab_file)
     return report
@@ -215,18 +219,27 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     return built, warnings
 
 
-def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
+def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_level):
     """Shared build body for import_prefab / import_prefab_from_db: armature,
     LOD0 skinned + static meshes, materials, and animation actions from an
-    already-resolved db + prefab UnityFile + pre-gathered clip UnityFiles."""
+    already-resolved db + prefab UnityFile + pre-gathered clip UnityFiles.
+
+    ``top_level`` applies the once-only root yaw R to this prefab's own top-level
+    objects (the armature object, and each unparented static mesh). A caller that
+    re-parents the whole result under its own placement passes False and applies
+    R at that placement instead, so R is never doubled."""
     report = ImportReport()
     start = time.time()
 
-    # Armature from the transform hierarchy.
+    # Armature from the transform hierarchy. The bones sit in armature space by
+    # pure C; the root yaw rides on the armature OBJECT, so every bone and skinned
+    # mesh under it turns once and stays consistent.
     arm_obj = None
     maps = None
     if options["import_skeleton"]:
         arm_obj, maps = armature_builder.build_armature(context, prefab, arm_name)
+        if top_level:
+            arm_obj.matrix_world = coordinate.root_matrix()
         report.armature = arm_obj
         report.bones = len(arm_obj.data.bones)
     else:
@@ -259,7 +272,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options):
             if obj is not None and renderer.node is not None:
                 path_to_meshobjects.setdefault(renderer.node.path, []).append(obj)
         else:
-            obj = _import_static(context, db, renderer, mat_builder, options, report)
+            obj = _import_static(context, db, renderer, mat_builder, options, report, top_level)
         if obj is not None:
             report.mesh_objects.append(obj)
     report.skipped_lod += stats.lod
@@ -436,14 +449,17 @@ def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, 
         maps["file_id_to_bone"], materials, options)
 
 
-def _import_static(context, db, renderer, mat_builder, options, report):
+def _import_static(context, db, renderer, mat_builder, options, report, top_level):
     decoded = _decode_renderer_mesh(db, renderer, report)
     if decoded is None:
         return None
     materials = _build_materials(renderer, mat_builder)
     obj = mesh_builder.build_mesh_object(
         context, decoded, renderer.name, None, [], {}, materials, options)
-    obj.matrix_world = coordinate.convert_matrix(renderer.node.world)
+    # An unparented static mesh is its own top-level object; the root yaw folds
+    # into its world matrix (skipped when a caller re-places the whole prefab).
+    convert = coordinate.convert_root_matrix if top_level else coordinate.convert_matrix
+    obj.matrix_world = convert(renderer.node.world)
     return obj
 
 
@@ -467,14 +483,20 @@ def import_mesh(context, mesh_path, options=None):
     return report
 
 
-def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
-    """Bridge-mode sibling of import_mesh: a standalone mesh, no armature.
+def import_mesh_from_db(context, db, mesh_file, options=None, materials=None, skeleton=None):
+    """Bridge-mode sibling of import_mesh: a standalone mesh.
 
     A mesh reached on its own -- a lone Mesh CAB, or one named sub-object of a
     multi-object FBX -- carries no MeshRenderer to read a material list from, so
     `materials` is whatever the caller could resolve for it by other means (a
     game's scene importer resolves them from the placement's own material
-    hashes). Empty/None imports the mesh flat."""
+    hashes). Empty/None imports the mesh flat.
+
+    `skeleton` is an armature_builder.SkeletonBinder when an assembler is building
+    ONE rig from several shared-skeleton part meshes (an npc's body/hair/tail):
+    the binder builds or extends that rig from this mesh's own bind poses and
+    binds every vertex to it. Without one the mesh imports unskinned -- the plain
+    browser semantics for a loose mesh."""
     options = resolve_options(options)
     report = ImportReport()
     start = time.time()
@@ -488,179 +510,19 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None):
         # Say WHICH of Unity's three vertex-data storages holds it instead.
         report.warnings.append(mesh_decoder.diagnose_empty(mesh_doc, name))
         return report
-    # A mesh authored against a SHARED skeleton arrives on its own: the game
-    # rebinds it at runtime, so nothing upstream calls it skinned even though it
-    # carries its weights, its bone identities (m_BoneNameHashes) and its bind
-    # poses. Rebuild that skeleton once and bind every part to it, or the parts
-    # land weightless at the origin.
-    rig, order, names = _shared_skeleton_bind(context, decoded)
-    if rig is not None:
-        obj = mesh_builder.build_mesh_object(context, decoded, name, rig, order, names,
-                                             materials or [], options)
-        obj.parent = rig
-        if not any(m.type == "ARMATURE" for m in obj.modifiers):
-            obj.modifiers.new(name="Armature", type="ARMATURE").object = rig
+    smr_bones, file_id_to_bone = (skeleton.bind(context, decoded)
+                                  if skeleton is not None else (None, None))
+    if smr_bones is not None:
+        # build_mesh_object attaches the armature modifier and parents the mesh
+        # onto the rig when given a bone list.
+        obj = mesh_builder.build_mesh_object(context, decoded, name, skeleton.armature,
+                                             smr_bones, file_id_to_bone, materials or [], options)
     else:
         obj = mesh_builder.build_mesh_object(context, decoded, name, None, [], {},
                                              materials or [], options)
     report.mesh_objects.append(obj)
     report.seconds = time.time() - start
     return report
-
-
-SHARED_SKELETON_NAME = "NpcSharedSkeleton"
-
-# Real bone names for a rebuilt shared skeleton, keyed by the CRC32 the meshes
-# carry. A game module fills this from whatever names ITS own skeleton declares
-# before importing; empty just leaves a bone named after its hash.
-SHARED_BONE_NAMES = {}
-
-
-def set_shared_bone_names(names):
-    """Register the names a rebuilt shared skeleton should use, as transform
-    PATHS: Unity hashes a bone's whole path ("Root/Bip001/Bip001_Pelvis"), not its
-    leaf, so only a path reproduces the number the mesh carries."""
-    SHARED_BONE_NAMES.clear()
-    for path in names or ():
-        if not path:
-            continue
-        key = zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
-        SHARED_BONE_NAMES.setdefault(key, path.rsplit("/", 1)[-1])
-        _remember_path(key, path)
-
-
-# Leaf names the game's own skeleton declares, in no particular hierarchy -- see
-# set_shared_leaf_names. Used to reconstruct transform paths the meshes hash.
-SHARED_LEAF_NAMES = []
-
-
-def set_shared_leaf_names(leaves):
-    """Register the bone leaf names a skeleton declares. Unity hashes a bone's
-    whole PATH, and this list has no parentage in it, so the paths are grown from
-    the ones already known (see _grow_bone_paths) rather than assumed."""
-    SHARED_LEAF_NAMES[:] = [leaf for leaf in (leaves or ()) if leaf]
-
-
-def _grow_bone_paths(wanted_hashes):
-    """Reconstruct the transform paths a mesh hashes, from known paths plus a bag
-    of leaf names.
-
-    Unity hashes "Root/Bip001/Bip001_Spine/..."; the skeleton asset lists only the
-    leaf names, with no parentage. But a child's path is its parent's path plus
-    its own name, so every hash that is still unknown can be tested against
-    <known path>/<unused leaf> -- and each hit is itself a parent for the next
-    round. Repeats until a round adds nothing, which is when the tree is as
-    complete as the data allows."""
-    if not SHARED_LEAF_NAMES:
-        return
-    targets = {int(v) & 0xFFFFFFFF for v in wanted_hashes} - set(SHARED_BONE_NAMES)
-    if not targets:
-        return
-    frontier = [path for path in _known_paths()]
-    while frontier and targets:
-        discovered = []
-        for parent in frontier:
-            for leaf in SHARED_LEAF_NAMES:
-                candidate = parent + "/" + leaf
-                key = zlib.crc32(candidate.encode("utf-8")) & 0xFFFFFFFF
-                if key in targets:
-                    SHARED_BONE_NAMES[key] = leaf
-                    _remember_path(key, candidate)
-                    targets.discard(key)
-                    discovered.append(candidate)
-        frontier = discovered
-
-
-_KNOWN_PATHS = {}
-
-
-def _remember_path(key, path):
-    _KNOWN_PATHS[key] = path
-
-
-def _known_paths():
-    return list(_KNOWN_PATHS.values())
-
-
-
-def _bone_paths_of(armature_obj):
-    """Every bone of a rig as its Unity transform path -- the chain of names from
-    the rig's root down to the bone, which is what Unity hashed."""
-    paths = []
-    for bone in armature_obj.data.bones:
-        chain = []
-        node = bone
-        while node is not None:
-            chain.append(node.name)
-            node = node.parent
-        chain.reverse()
-        paths.append("/".join(chain))
-    return paths
-
-
-def _shared_skeleton_bind(context, decoded):
-    """(rig, bone slots, slot -> bone name) for a mesh whose skeleton lives outside
-    its own asset.
-
-    The mesh carries everything the skeleton needs: one bind pose per bone (its
-    inverse is that bone's rest world matrix) and one CRC32 name hash per bone. The
-    rig is built once from the first part that needs it and reused by every later
-    part, so an assembled character lands on ONE armature the way a shipped one
-    does. Slots are ``{"fileID": i}`` because that is the shape build_mesh_object
-    reads a bone reference as. (None, [], {}) for an unskinned mesh."""
-    hashes = getattr(decoded, "bone_name_hashes", None)
-    binds = getattr(decoded, "bind_poses", None)
-    if (hashes is None or len(hashes) == 0 or binds is None or len(binds) != len(hashes)
-            or decoded.bone_indices is None or decoded.bone_weights is None):
-        return None, [], {}
-
-    # Rigs imported alongside carry their own hierarchy, so their transform paths
-    # reproduce exactly the hashes a part mesh stores.
-    for other in context.scene.objects:
-        if other.type == "ARMATURE" and other.name != SHARED_SKELETON_NAME:
-            for path in _bone_paths_of(other):
-                key = zlib.crc32(path.encode("utf-8")) & 0xFFFFFFFF
-                SHARED_BONE_NAMES.setdefault(key, path.rsplit("/", 1)[-1])
-                _remember_path(key, path)
-    _grow_bone_paths(hashes)
-    names = {}
-    for index, value in enumerate(hashes):
-        key = int(value) & 0xFFFFFFFF
-        names[index] = SHARED_BONE_NAMES.get(key) or "bone_{0:08x}".format(key)
-    rig = bpy.data.objects.get(SHARED_SKELETON_NAME)
-    if rig is None or rig.type != "ARMATURE":
-        rig = _build_rig_from_bind_poses(context, binds, names)
-    elif not any(bone_name in rig.data.bones for bone_name in names.values()):
-        return None, [], {}
-    return rig, [{"fileID": index} for index in range(len(hashes))], names
-
-
-def _build_rig_from_bind_poses(context, binds, names):
-    """One flat armature whose bones sit at the inverse of each bind pose. Flat on
-    purpose: bind poses give world rest transforms, not parentage, and inventing a
-    hierarchy would move vertices that are already correct in world space."""
-    import mathutils
-
-    armature = bpy.data.armatures.new(SHARED_SKELETON_NAME)
-    rig = bpy.data.objects.new(SHARED_SKELETON_NAME, armature)
-    context.scene.collection.objects.link(rig)
-    previous = context.view_layer.objects.active
-    context.view_layer.objects.active = rig
-    bpy.ops.object.mode_set(mode="EDIT")
-    for index, bone_name in names.items():
-        matrix = mathutils.Matrix([[float(v) for v in row] for row in binds[index]])
-        matrix.transpose()
-        rest = coordinate.convert_matrix(matrix.inverted_safe())
-        bone = armature.edit_bones.new(bone_name)
-        bone.head = rest.to_translation()
-        bone.tail = bone.head + rest.to_quaternion() @ mathutils.Vector((0.0, 0.05, 0.0))
-        bone.matrix = rest
-        if bone.length < 0.001:
-            bone.tail = bone.head + mathutils.Vector((0.0, 0.05, 0.0))
-    bpy.ops.object.mode_set(mode="OBJECT")
-    context.view_layer.objects.active = previous
-    return rig
-
 
 
 def import_avatar_from_db(context, db, avatar_file, options=None, name=None):

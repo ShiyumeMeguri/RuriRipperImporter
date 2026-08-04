@@ -49,6 +49,13 @@ def lod_rank(asset_path):
     return -1
 
 
+def lod_family_stem(name):
+    """A mesh/asset name with its LOD or collision variant suffix stripped -- the
+    key that groups an asset's parallel detail-level siblings so one level can be
+    kept out of a closure that ships every LOD."""
+    return _VARIANT_SUFFIX_RE.sub("", expected_mesh_name(name))
+
+
 def lod_group_key(asset_path, px, py, pz):
     """(rounded position, stem with its LOD/collision suffix stripped) --
     identifies the parallel sibling entities a real map places for the SAME

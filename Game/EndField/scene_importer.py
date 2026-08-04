@@ -80,7 +80,9 @@ def _place_prefab_report(context, report, placement):
         {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
         {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
         {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
-    anchor.matrix_world = coordinate.convert_matrix(unity_matrix)
+    # The placement anchor is the top-level object here: the prefab under it was
+    # imported top_level=False (pure C), so R is applied once, at this world matrix.
+    anchor.matrix_world = coordinate.convert_root_matrix(unity_matrix)
     return anchor
 
 
@@ -136,7 +138,8 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
                 if prefab_file is None:
                     unresolved += 1
                     continue
-                report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
+                report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options,
+                                                               top_level=False)
                 anchor = _place_prefab_report(context, report, placement)
                 if anchor is None:
                     unresolved += 1
@@ -178,7 +181,9 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
             {"x": placement["px"], "y": placement["py"], "z": placement["pz"]},
             {"x": placement["qx"], "y": placement["qy"], "z": placement["qz"], "w": placement["qw"]},
             {"x": placement["sx"], "y": placement["sy"], "z": placement["sz"]})
-        target.matrix_world = coordinate.convert_matrix(unity_matrix)
+        # A loose streaming mesh is placed as its own top-level object (its verts
+        # came through pure C in build_mesh_object), so the root yaw folds in here.
+        target.matrix_world = coordinate.convert_root_matrix(unity_matrix)
         placed += 1
 
     return imported, placed, unresolved
