@@ -14,6 +14,8 @@ select, and one button reveals where the selection lives over in that browser.
 
 from __future__ import annotations
 
+import re
+
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
@@ -331,7 +333,27 @@ def _prefab_named(name):
             elif extension == "fbx" and stem in (core, "sk_" + core):
                 meshes[low] = (row, path)
     found = prefabs or meshes
-    return sorted(found.values(), key=lambda hit: hit[1])
+    if found:
+        return sorted(found.values(), key=lambda hit: hit[1])
+
+    # The trailing number on a part id picks the MATERIAL variant, not the mesh:
+    # "..._body_rfg_a_04" is shipped as m_..._rfg_a_04.mat over whichever mesh the
+    # family has (sk_..._rfg_a_01.fbx / _02.fbx -- there is no _04 mesh). So when
+    # the exact index has no asset, the part is that family's mesh.
+    family = re.sub(r"_\d+$", "", core)
+    if family == core:
+        return []
+    cabmap_state.apply_filter(family)
+    siblings = {}
+    for row in cabmap_state.VISIBLE:
+        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+            path = cabmap_state.ROWS.container_path(row, path_index)
+            low = path.lower()
+            leaf = low.rsplit("/", 1)[-1]
+            stem, _, extension = leaf.rpartition(".")
+            if extension == "fbx" and re.fullmatch(re.escape("sk_" + family) + r"_\d+", stem):
+                siblings[low] = (row, path)
+    return sorted(siblings.values(), key=lambda hit: hit[1])[:1]
 
 
 def _asset_named(stem):
