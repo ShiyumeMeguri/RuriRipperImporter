@@ -1,58 +1,164 @@
-"""The scene-import model: discovered maps, the current map's placements, and
-the cheap fidelity estimate a panel shows before committing to an import.
+"""The scene-import model: the game's own scene list with its own names, one
+map's chunk inventory, and the placements of whichever streaming window is
+selected.
 
-Same reasoning as cabmap_state -- a real map's placement count runs into the
-thousands and is only ever read in bulk (discover -> estimate -> resolve ->
-import), never edited row by row, so it lives as plain data rather than in any
-host's property system.
+Two things here are declarations rather than logic. The names come out of the
+game's own config containers, exactly the way the roster's do -- which container,
+which field path, which text container to resolve the id through -- and nothing
+is parsed on this side:
+
+    MapIdTable      the open-world maps, keyed by the same id the streaming data
+                    is filed under ("map02" -> "武陵")
+    LevelDescTable  every level the game names, same shape ("dung01_wrdg001" ->
+                    "谷地像差")
+
+And the window is the game's own: a disc of chunk cells around a centre cell,
+gated by scene state, which is literally what the running game holds
+(StreamingSceneV2.primaryStreamingSourceData = StreamingUnsafeUtilsV2.
+CreateStreamingSourceData(streamingPos, chunkLoadRadius, ...) plus
+StreamingSceneV2.SetSceneState). Selecting the cells and bounding the map-wide
+chunks against them happens in C#; this file only says which window to look at.
+
+Same reasoning as cabmap_state for holding this as plain data: a real map's
+placement count runs into the hundreds of thousands and is only ever read in
+bulk (discover -> estimate -> resolve -> import), never edited row by row.
 """
 
 from __future__ import annotations
 
-import os
+from . import asset_paths, roster
 
-from . import asset_paths
-
-# Holds the current map's discovered-but-not-yet-imported placements, so a host's
-# script reload skips this module instead of throwing that discovery away.
+# Holds the current window's discovered-but-not-yet-imported placements, so a
+# host's script reload skips this module instead of throwing that discovery away.
 HOLDS_PROCESS_STATE = True
 
-DISCOVERING_LABEL = "Discovering..."
+MAP_ID_TABLE = "MapIdTable"
+LEVEL_DESC_TABLE = "LevelDescTable"
 
-MAPS = []              # list[str] -- discover_maps() output
-PLACEMENTS = []         # list[dict] -- discover_placements() output for CURRENT_MAP
-RESOLVED_CABS = []      # list[str] -- resolve_cabs() output, the CABs an import needs
+# Chunk cells around the centre, each way. One cell of a real map is already a
+# few hundred CABs; the whole of map02 is 26811, which is where "150 GB" comes
+# from. Start at the smallest window that shows a piece of world in context.
+DEFAULT_RADIUS = 1
+
+MAPS = []               # list[dict] -- one per scene the game ships streaming data for
+CHUNKS = {}             # map id -> list[dict], the cached per-map chunk inventory
+PLACEMENTS = []         # list[dict] -- the current window's placements
+RESOLVED_CABS = []      # list[str] -- the seed CABs an import of that window needs
+CLOSURE_CABS = 0        # how many CABs those seeds pull in, the real memory proxy
 CURRENT_MAP = ""
-STATUS = "No map discovered yet."
+CURRENT_WINDOW = ()     # (center_x, center_y, radius, scene_state_id)
+STATUS = "Refresh to read the game's scene list."
 
 
 def vfs_roots(game_root):
-    """VFS root paths in priority order: the hot-update overlay first, then
-    the base client. Both are needed together -- a patch's manifest can list
-    a chunk it never duplicated because that patch didn't change it, so a
-    chunk can only be found under the base client even though the overlay's
-    manifest mentions it too (confirmed against the real game; see
-    RipperBlenderBridge.ExtractFirstAvailable's doc comment in Ruri.RipperHook)."""
-    return [
-        os.path.join(game_root, "Endfield_Data", "Persistent", "VFS"),
-        os.path.join(game_root, "Endfield_Data", "StreamingAssets", "VFS"),
-    ]
+    """VFS root paths in priority order -- the hot-update overlay first, then the
+    base client. Both are needed together: a patch's manifest can list a chunk it
+    never duplicated because that patch didn't change it (see
+    RipperBlenderBridge.ExtractFirstAvailable in Ruri.RipperHook)."""
+    return roster.vfs_roots(game_root)
 
 
-def discover_maps(bridge, game_root):
-    global MAPS
-    MAPS = bridge.enumerate_scene_maps(vfs_roots(game_root))
+def name_columns(language):
+    """One column: the scene's display name, resolved through the chosen
+    language's text container. Both naming tables carry it under the same field,
+    so one declaration serves both."""
+    return [("display", "showName.id", roster.text_container(language), "")]
+
+
+def load_maps(bridge, game_root, language):
+    """Every scene the game ships streaming data for, under the name the game
+    itself shows for it.
+
+    LevelDescTable is read first and MapIdTable second, so the open-world maps
+    take their map-level name where both name the same id. A scene neither names
+    keeps its own id as its label -- the game ships no other name for it."""
+    global MAPS, STATUS
+    roots = vfs_roots(game_root)
+    names = {}
+    for table in (LEVEL_DESC_TABLE, MAP_ID_TABLE):
+        rows = bridge.query_data_table(roots, roster.container(table), name_columns(language))
+        for index in range(rows.row_count):
+            display = rows.cell(index, "display")
+            if display:
+                names[rows.cell(index, "key")] = display
+    MAPS = [{"id": scene_id, "label": names.get(scene_id, scene_id),
+             "named": scene_id in names, "group": family(scene_id)}
+            for scene_id in bridge.enumerate_scene_maps(roots)]
+    named = sum(1 for row in MAPS if row["named"])
+    STATUS = "{0} scenes, {1} named · {2}".format(len(MAPS), named, language)
     return MAPS
 
 
-def discover_placements(bridge, game_root, map_name):
-    """Discover every mesh-bearing placement for map_name. Resets state tied
-    to whatever map was previously discovered -- a different map's estimate
-    isn't meaningful once the underlying placement list has changed."""
-    global PLACEMENTS, CURRENT_MAP, STATUS
-    PLACEMENTS = bridge.discover_scene_placements(vfs_roots(game_root), map_name)
+def family(scene_id):
+    """The scene id's own family prefix ("dung01_cdg005" -> "dung01"), which is
+    how the game files them. Only used to group the drawn list."""
+    return scene_id.split("_", 1)[0]
+
+
+def load_chunks(bridge, game_root, map_name):
+    """One map's chunk inventory, read from the VFS manifests alone -- no chunk
+    byte is touched. Cached per map: it never changes under a session, and the
+    window controls read it on every redraw."""
+    if map_name not in CHUNKS:
+        CHUNKS[map_name] = bridge.enumerate_scene_chunks(vfs_roots(game_root), map_name)
+    return CHUNKS[map_name]
+
+
+def grid_extent(chunks):
+    """(min_x, max_x, min_y, max_y) over the cells the map actually ships, or
+    None when it ships none that a cell window can address."""
+    cells = [c for c in chunks if c["has_grid"]]
+    if not cells:
+        return None
+    return (min(c["grid_x"] for c in cells), max(c["grid_x"] for c in cells),
+            min(c["grid_y"] for c in cells), max(c["grid_y"] for c in cells))
+
+
+def scene_states(chunks):
+    """The scene states this map ships, lowest first. States are alternate
+    dressings of the same cells (a quest changing what stands there), so a window
+    normally wants exactly one."""
+    return sorted({c["scene_state_id"] for c in chunks})
+
+
+def busiest_cell(chunks, scene_state_id):
+    """The cell this map ships the most bytes for, at that scene state -- a
+    landing spot for the window, not a claim about where the map's content is.
+    None when the state has no cell-addressable chunk at all."""
+    cells = [c for c in chunks if c["has_grid"] and c["scene_state_id"] == scene_state_id]
+    if not cells:
+        return None
+    busiest = max(cells, key=lambda c: c["length"])
+    return (busiest["grid_x"], busiest["grid_y"])
+
+
+def inventory_summary(chunks):
+    """What the map ships, split the way a window can address it: cell-anchored
+    chunks versus the map-wide and dynamic ones that no cell window selects and
+    that get bounded against the window's cells instead."""
+    anchored = [c for c in chunks if c["has_grid"]]
+    floating = [c for c in chunks if not c["has_grid"]]
+    return {
+        "anchored_files": len(anchored),
+        "anchored_bytes": sum(c["length"] for c in anchored),
+        "floating_files": len(floating),
+        "floating_bytes": sum(c["length"] for c in floating),
+    }
+
+
+def discover_placements(bridge, game_root, map_name, center_x, center_y, radius, scene_state_id):
+    """The placements of one streaming window. Resets state tied to whatever
+    window was discovered before -- a different window's estimate is not
+    meaningful once the placement list has changed."""
+    global PLACEMENTS, RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
+    PLACEMENTS = bridge.discover_scene_placements(
+        vfs_roots(game_root), map_name, center_x, center_y, radius, [scene_state_id])
+    RESOLVED_CABS = []
+    CLOSURE_CABS = 0
     CURRENT_MAP = map_name
-    STATUS = f"Discovered {len(PLACEMENTS)} placement(s) for {map_name}."
+    CURRENT_WINDOW = (center_x, center_y, radius, scene_state_id)
+    STATUS = "{0} placement(s) in {1} ({2},{3}) r{4} state {5}.".format(
+        len(PLACEMENTS), map_name, center_x, center_y, radius, scene_state_id)
     return PLACEMENTS
 
 
@@ -92,8 +198,9 @@ def estimate(lod0_only=False):
     real map lod_filtered is normally the much larger bucket -- most pieces
     ship their whole LOD1/2/3/... chain alongside LOD0 -- so reporting both
     under "no transform" reads as far more data loss than is actually
-    happening. And (once resolve_cabs() has run) how many CABs those
-    resolve to."""
+    happening. And (once resolve_cabs() has run) the CABs those resolve to:
+    the seeds, and the closure those seeds pull in, which is what an import
+    actually has to hold."""
     with_transform = [p for p in PLACEMENTS if p["has_transform"] and p["asset_path"]]
     placeable_rows = placeable(lod0_only)
     distinct = {p["asset_path"] for p in placeable_rows}
@@ -105,6 +212,7 @@ def estimate(lod0_only=False):
         "lod_filtered": len(with_transform) - len(placeable_rows) if lod0_only else 0,
         "distinct_assets": len(distinct),
         "resolved_cabs": len(RESOLVED_CABS),
+        "closure_cabs": CLOSURE_CABS,
     }
 
 
@@ -118,21 +226,26 @@ def resolve_cabs(bridge, lod0_only=False):
     -- come along in the same closure; paths that don't resolve are silently
     dropped by resolve_cabs_for_paths, same as any other unmatched path.
     Populates RESOLVED_CABS -- the seed set ImportCabs needs to pull in the
-    whole scene's dependency closure (geometry + materials + textures) in
-    one call."""
-    global RESOLVED_CABS
+    whole window's dependency closure (geometry + materials + textures) in
+    one call -- and CLOSURE_CABS, how big that closure is, which is the one
+    number that says whether the window fits in memory before paying for it."""
+    global RESOLVED_CABS, CLOSURE_CABS
     rows = placeable(lod0_only)
     mesh_paths = {p["asset_path"] for p in rows}
     material_paths = {path for p in rows for path in (p.get("material_asset_paths") or ())}
     all_paths = sorted(mesh_paths | material_paths)
     RESOLVED_CABS = bridge.resolve_cabs_for_paths(all_paths) if all_paths else []
+    CLOSURE_CABS = len(bridge.resolve_closure_cab_names(RESOLVED_CABS)) if RESOLVED_CABS else 0
     return RESOLVED_CABS
 
 
 def reset():
-    global MAPS, PLACEMENTS, RESOLVED_CABS, CURRENT_MAP, STATUS
+    global MAPS, CHUNKS, PLACEMENTS, RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
     MAPS = []
+    CHUNKS = {}
     PLACEMENTS = []
     RESOLVED_CABS = []
+    CLOSURE_CABS = 0
     CURRENT_MAP = ""
-    STATUS = "No map discovered yet."
+    CURRENT_WINDOW = ()
+    STATUS = "Refresh to read the game's scene list."
