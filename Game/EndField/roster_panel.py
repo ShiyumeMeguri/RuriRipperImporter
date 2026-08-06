@@ -418,15 +418,53 @@ def _templet_skeleton(info):
     return {}, [], []
 
 
-def _import_part(context, cab, binder, options, level):
+def _npc_materials(context, info, template_id):
+    """{mesh name: [material container path]} for one npc template, from the
+    game's own assembly table.
+
+    An npc's colours are stated by its TEMPLATE (a material code per renderer),
+    never by its parts -- the same part takes different materials under different
+    templates, and a part's trailing number is its own index, not a material's.
+    So the codes have to be resolved against the family's shared table
+    (``data_npc_avatarmesh_<leaf>``, named by the manifest's avatarMeshName) --
+    which the C# side does, codes and path hashes being binary."""
+    leaf = (info.get("avatar_mesh") or "").rsplit("/", 1)[-1]
+    if not leaf:
+        return {}
+    rows = _asset_named("data_npc_avatarmesh_" + leaf.lower())
+    if not rows:
+        return {}
+    try:
+        assigned = cabmap_state.BRIDGE.npc_materials(
+            [cabmap_state.ROWS.cab(rows[0][0])],
+            roster.vfs_roots(context.scene.ruri_cabmap.game_root), template_id)
+    except Exception:
+        return {}
+    return {row["mesh"].lower(): row["materials"] for row in assigned}
+
+
+def _import_part(context, cab, binder, options, level, materials_by_mesh=None):
     """Import one part's best-LOD meshes, each baked onto the shared rig the binder
     is growing. Works for every part kind -- a body/hair/tail fbx or a face/ear
     _variant prefab -- since each is a skinned mesh with a bind pose and its own
-    avatar. One cab's own closure at a time. True when anything built."""
-    from ... import prefab_importer
-    from ...ruri_pybridge.unity import bridge_asset_db
+    avatar. One cab's own closure at a time. True when anything built.
+
+    ``materials_by_mesh`` maps a mesh's own name to the container paths the
+    template dresses it in (see _npc_materials); those materials live in their
+    own CABs, so they are co-seeded into this part's closure rather than looked
+    for inside it."""
+    from ... import material_builder, prefab_importer
+    from ...ruri_pybridge.unity import bridge_asset_db, discovery
+    material_paths = sorted({path for paths in (materials_by_mesh or {}).values() for path in paths})
+    seeds = [cab]
+    if material_paths:
+        try:
+            seeds.extend(c for c in cabmap_state.BRIDGE.resolve_cabs_for_paths(material_paths)
+                         if c != cab)
+        except Exception:
+            pass
     try:
-        assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs([cab])
+        assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(seeds)
     except Exception:
         return False
     db = bridge_asset_db.BridgeAssetDatabase(
@@ -438,15 +476,42 @@ def _import_part(context, cab, binder, options, level):
         if part_file is not None and part_file.first("Avatar") is not None:
             binder.add_skeleton(*_avatar_skeleton(db, part_file))
             break
+
+    mat_builder = (material_builder.MaterialBuilder(db, options)
+                   if materials_by_mesh and options["import_materials"] else None)
+    material_index = discovery.material_name_index(db) if mat_builder is not None else {}
+
     imported = False
     for guid in _loose_part_mesh_guids(db, level):
         mesh_file = db.load_guid(guid)
         if mesh_file is None:
             continue
-        report = prefab_importer.import_mesh_from_db(context, db, mesh_file, options, skeleton=binder)
+        mesh_doc = mesh_file.first("Mesh")
+        mesh_name = str((mesh_doc.data.get("m_Name") if mesh_doc is not None else "") or "")
+        report = prefab_importer.import_mesh_from_db(
+            context, db, mesh_file, options,
+            materials=_materials_for(mesh_name, materials_by_mesh, material_index, mat_builder),
+            skeleton=binder)
         if report.mesh_objects:
             imported = True
     return imported
+
+
+def _materials_for(mesh_name, materials_by_mesh, material_index, mat_builder):
+    """The built materials one submesh wears, joined on the Mesh's own name --
+    the same name the assembly table states. [] when the template dresses this
+    mesh in nothing, or a named material is not in the resolved closure."""
+    if mat_builder is None or not mesh_name:
+        return []
+    materials = []
+    for path in (materials_by_mesh or {}).get(mesh_name.lower(), ()):
+        guid = material_index.get(asset_paths.expected_mesh_name(path))
+        if guid is None:
+            continue
+        material = mat_builder.build_from_ref({"guid": guid})
+        if material is not None:
+            materials.append(material)
+    return materials
 
 
 def _loose_part_mesh_guids(db, level):
@@ -630,9 +695,11 @@ class RURI_OT_roster_load(bpy.types.Operator):
             # authored standing, face/ear authored at their own origin -- is baked
             # onto ONE binder rig, its own bones aligned onto the shared skeleton.
             binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
+            materials_by_mesh = _npc_materials(context, info, entry.key)
             imported_any = False
             for _part, row, _path in hits:
-                if _import_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod):
+                if _import_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod,
+                                materials_by_mesh):
                     imported_any = True
         else:
             # Named actor: one complete standing prefab (no shared-skeleton
