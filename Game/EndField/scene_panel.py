@@ -405,7 +405,7 @@ def _draw_estimate(layout, state):
         return
     est = scene_state.estimate()
     box = layout.box()
-    min_x, min_z, max_x, max_z, scene_state_id = scene_state.CURRENT_WINDOW
+    min_x, min_z, max_x, max_z, scene_state_id, _lod0_only = scene_state.CURRENT_WINDOW
     box.label(text="{0} state {1}".format(scene_state.CURRENT_MAP, scene_state_id)
               if min_x == float("-inf") else
               "{0} x[{1:.0f}..{2:.0f}] z[{3:.0f}..{4:.0f}] state {5}".format(
