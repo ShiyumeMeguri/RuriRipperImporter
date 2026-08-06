@@ -46,7 +46,7 @@ GAME_MODULE = GameModule(
     label="Endfield",
     # Pre-ticked the first time the DLL lists it (see RURI_OT_refresh_hooks);
     # 1.2.4's class also answers to this id via AlsoCoversVersions.
-    default_hook_id="EndField_1.3.3",
+    default_hook_id="EndField_1.4.4",
     tabs=(
         GameTab("scene", "Scene",
                 "The self-contained scenes -- small enough to import whole",
