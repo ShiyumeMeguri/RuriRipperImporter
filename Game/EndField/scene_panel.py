@@ -12,11 +12,7 @@ the shape of a name):
             holds one either -- it streams a window around the player. So these
             are imported one named PLACE at a time, at the size the game itself
             gives that place (供能高地 is x[-640..384] z[-128..896], its own
-            published rect) -- and, when even that is too much, one TILE of that
-            place: Size cuts it into 1/Size pieces per axis and the tile picker
-            says which. Measured on 供能高地: whole 6124 CABs, quarters 3120,
-            sixteenths 1976, sixty-fourths 1110 -- so a place nobody can hold at
-            once is still fully reachable, a piece at a time.
+            published rect), with a scale in case you want more or less of it.
 
 Both lists behave like the roster's next door: type to filter, click to select.
 Names are the real localized ones, in whichever language Blender is running in --
@@ -110,7 +106,7 @@ def _rect(state):
         return None
     for row in _rows(state):
         if row["id"] == entry.key:
-            return scene_state.windowed(row["rect"], state.scale, state.tile_x, state.tile_z)
+            return scene_state.scaled(row["rect"], state.scale)
     return None
 
 
@@ -234,14 +230,9 @@ class RURI_PG_scene_world(_SceneListMixin, bpy.types.PropertyGroup):
     KIND = STREAMING
     world_map: EnumProperty(name="Map", items=_map_items, update=_on_map_change,
                             description="Which open-world map's places to list")
-    scale: FloatProperty(name="Size", default=1.0, min=0.05, max=1.0,
-                         description="How much of the place to take at a time, as a fraction of the "
-                                     "size the game itself gives it. 1.0 is the whole place; 0.25 cuts "
-                                     "it into a 4x4 grid of tiles you pick from below")
-    tile_x: IntProperty(name="Tile X", default=0, min=0,
-                        description="Which tile along X, when Size is under 1.0")
-    tile_z: IntProperty(name="Tile Z", default=0, min=0,
-                        description="Which tile along Z, when Size is under 1.0")
+    scale: FloatProperty(name="Size", default=1.0, min=0.1, soft_max=3.0,
+                         description="How much of the place to take, against the size the game itself "
+                                     "gives it. 1.0 is exactly that")
 
 
 class RURI_UL_scenes(bpy.types.UIList):
@@ -478,20 +469,12 @@ def draw_world_tab(layout, context):
         box.label(text="+ {0} map-wide/dynamic chunk(s), {1:.0f} MB, bounded to the selection".format(
             summary["floating_files"], summary["floating_bytes"] / 1048576.0))
 
-    size = layout.column(align=True)
+    size = layout.row(align=True)
     size.enabled = entry is not None
     size.prop(state, "scale")
-    per_side = scene_state.tiles_per_side(state.scale)
-    if per_side > 1:
-        tiles = size.row(align=True)
-        tiles.prop(state, "tile_x", text="X")
-        tiles.prop(state, "tile_z", text="Z")
-        size.label(text="tile ({0},{1}) of {2}x{2}".format(
-            min(state.tile_x, per_side - 1), min(state.tile_z, per_side - 1), per_side))
     rect = _rect(state) if entry is not None else None
     if rect is not None:
-        size.label(text="{0:.0f} x {1:.0f} m at x[{2:.0f}..{3:.0f}] z[{4:.0f}..{5:.0f}]".format(
-            rect[2] - rect[0], rect[3] - rect[1], rect[0], rect[2], rect[1], rect[3]))
+        size.label(text="{0:.0f} x {1:.0f} m".format(rect[2] - rect[0], rect[3] - rect[1]))
     _draw_actions(layout, state, entry is not None)
 
 

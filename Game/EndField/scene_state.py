@@ -171,30 +171,13 @@ def _named(place, names):
     }
 
 
-def tiles_per_side(scale):
-    """How many pieces a place is cut into per axis at this scale. Scale IS the
-    tile size as a fraction of the place, so 0.25 is a 4x4 grid of tiles -- which
-    is what makes every part of a place reachable instead of only its middle."""
-    return max(1, int(round(1.0 / max(scale, 1e-6))))
-
-
-def windowed(rect, scale, tile_x, tile_z):
-    """One tile of a landmark's own rect. At scale 1.0 there is a single tile and
-    this IS the rect the game publishes for that place; below that the place is
-    cut into tiles_per_side(scale) pieces per axis and (tile_x, tile_z) picks one,
-    clamped into range. The last tile on an axis is nudged so it ends exactly on
-    the place's edge rather than overhanging it.
-
-    Mirrored by SceneWindow.Tile in Ruri.RipperHook.CLI's SceneSeedResolver, so
-    --scene-landmark and this panel cut a place the same way."""
+def scaled(rect, scale):
+    """A landmark's rect grown or shrunk about its own centre. 1.0 is the size the
+    game itself gives the place, which is what the panel starts at."""
     min_x, min_z, max_x, max_z = rect
-    per_side = tiles_per_side(scale)
-    width, height = (max_x - min_x) / per_side, (max_z - min_z) / per_side
-    x = min(max(tile_x, 0), per_side - 1)
-    z = min(max(tile_z, 0), per_side - 1)
-    x0 = min(min_x + x * width, max_x - width)
-    z0 = min(min_z + z * height, max_z - height)
-    return (x0, z0, x0 + width, z0 + height)
+    centre_x, centre_z = (min_x + max_x) * 0.5, (min_z + max_z) * 0.5
+    half_x, half_z = (max_x - min_x) * 0.5 * scale, (max_z - min_z) * 0.5 * scale
+    return (centre_x - half_x, centre_z - half_z, centre_x + half_x, centre_z + half_z)
 
 
 def family(scene_id):
