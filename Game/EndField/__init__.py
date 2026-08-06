@@ -3,10 +3,12 @@ nothing else, across every hooked version of it.
 
 Two tabs, neither of which means anything for another title:
 
-``Scene``      the streaming-scene import: pick a scene from the game's own list,
-               aim a streaming window at it, and import that window's entity
-               placements out of the game's own chunk format.
-               (``scene_state`` + ``asset_paths`` + ``scene_importer``)
+``Scene``      the self-contained scenes -- pick one from the game's own list and
+               import it whole.
+``World``      the open-world maps -- pick one of the places the game itself names
+               in map01/map02 and import that place, at the size the game gives
+               it, out of the game's own chunk format.
+               (both: ``scene_state`` + ``asset_paths`` + ``scene_importer``)
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
                (``skeletal_morph`` + ``morph_state``)
@@ -47,8 +49,11 @@ GAME_MODULE = GameModule(
     default_hook_id="EndField_1.3.3",
     tabs=(
         GameTab("scene", "Scene",
-                "Browse the game's scenes and import one streaming window of one",
+                "The self-contained scenes -- small enough to import whole",
                 scene_panel.draw_scene_tab),
+        GameTab("world", "World",
+                "The open-world maps -- import one named place of map01/map02 at a time",
+                scene_panel.draw_world_tab),
         GameTab("character", "Character",
                 "Drive an imported character's face: the SkeletalMorph "
                 "emotion/pose/lipsync library and its morph animations",
