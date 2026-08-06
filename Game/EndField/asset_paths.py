@@ -1,11 +1,14 @@
 """Rules over Unity addressable / asset paths.
 
-Everything here is pure string work over the paths a scene placement resolves
-to (Endfield's StringPathHash LUT hands back things like
-``.../models/s_building.fbx##building_col1`` or
-``.../Prefabs/P_anm_com_satellite+1_001_01.prefab``), plus the LOD-sibling
-selection built on top of them. No host, no db, no I/O -- which also makes it
-the one part of scene import that is trivially testable.
+Pure string work over the paths the game's own data hands back (Endfield's
+StringPathHash LUT: ``.../models/s_building.fbx##building_col1``,
+``.../Prefabs/P_anm_com_satellite+1_001_01.prefab``). No host, no db, no I/O.
+
+The BULK consumer of these rules -- selecting one detail level across a scene
+window's 10^5 placements -- lives in C# (SceneAssetPaths in Ruri.RipperHook),
+next to the rows it filters. What stays here serves the character-side flows,
+which rank a handful of candidate paths per click, and the import-side join of
+an asset path to its named mesh sub-object.
 """
 
 from __future__ import annotations
@@ -54,35 +57,6 @@ def lod_family_stem(name):
     key that groups an asset's parallel detail-level siblings so one level can be
     kept out of a closure that ships every LOD."""
     return _VARIANT_SUFFIX_RE.sub("", expected_mesh_name(name))
-
-
-def lod_group_key(asset_path, px, py, pz):
-    """(rounded position, stem with its LOD/collision suffix stripped) --
-    identifies the parallel sibling entities a real map places for the SAME
-    instance at different detail levels: confirmed against base01_lv002 that a
-    numbered-LOD and/or col1-collision sibling sits at the EXACT SAME position
-    as its lod0 render counterpart, as separate ECS entities. Position is
-    rounded to collapse float noise between siblings placed identically."""
-    stem = _VARIANT_SUFFIX_RE.sub("", expected_mesh_name(asset_path))
-    return (round(px, 2), round(py, 2), round(pz, 2), stem)
-
-
-def select_best_lod(rows):
-    """Group placements into per-instance LOD-sibling sets (lod_group_key) and
-    keep only the best-ranked (lod_rank) member of each.
-
-    Deliberately NOT a "drop everything whose name isn't lod0" filter: that
-    assumes a LOD0 sibling always exists, and when it doesn't (only
-    _lod1/_lod2/_col1 variants were ever placed for that instance) it drops the
-    instance entirely -- confirmed as exactly what silently deleted
-    base01_lv002's building-shell/floor piece, which the game does ship, just
-    not at LOD0."""
-    groups = {}
-    for row in rows:
-        key = lod_group_key(row["asset_path"], row["px"], row["py"], row["pz"])
-        groups.setdefault(key, []).append(row)
-    return [min(members, key=lambda r: lod_rank(r["asset_path"]))
-            for members in groups.values()]
 
 
 def is_full_prefab_path(asset_path):

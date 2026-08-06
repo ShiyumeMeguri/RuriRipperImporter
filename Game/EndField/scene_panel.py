@@ -110,12 +110,12 @@ def _rect(state):
     return None
 
 
-def _chunks(state):
-    """The relevant map's chunk inventory, or None when it has not been read yet.
+def _summary(state):
+    """The relevant map's chunk summary, or None when it has not been read yet.
     Never reads it itself: a redraw runs this, and a redraw must not touch the
     VFS."""
     name = _map_name(state)
-    return scene_state.CHUNKS.get(name) if name else None
+    return scene_state.SUMMARIES.get(name) if name else None
 
 
 def _rebuild(state):
@@ -147,21 +147,20 @@ def _rebuild(state):
         state.active_index = 0
 
 
-def _read_chunks(state, context, map_name):
-    """Read one map's chunk inventory (manifest-only, cached per map) and aim the
+def _read_summary(state, context, map_name):
+    """Read one map's chunk summary (manifest-only, cached per map) and aim the
     scene-state selector at the lowest state it ships."""
     if not map_name or cabmap_state.BRIDGE is None:
         return
     try:
-        chunks = scene_state.load_chunks(cabmap_state.BRIDGE,
-                                         context.scene.ruri_cabmap.game_root, map_name)
+        summary = scene_state.load_summary(cabmap_state.BRIDGE,
+                                           context.scene.ruri_cabmap.game_root, map_name)
     except Exception as exc:
         scene_state.STATUS = "{0}: {1}".format(type(exc).__name__, exc)
-        print("[RuriRipper] chunk inventory for '{0}' failed: {1}".format(map_name, exc))
+        print("[RuriRipper] chunk summary for '{0}' failed: {1}".format(map_name, exc))
         return
-    states = scene_state.scene_states(chunks)
-    if states:
-        state.scene_state_id = str(states[0])
+    if summary["scene_state_ids"]:
+        state.scene_state_id = str(summary["scene_state_ids"][0])
 
 
 def _map_items(self, context):
@@ -173,8 +172,8 @@ def _map_items(self, context):
 
 def _state_items(self, context):
     global _state_items_cache
-    chunks = _chunks(self)
-    states = scene_state.scene_states(chunks) if chunks else []
+    summary = _summary(self)
+    states = summary["scene_state_ids"] if summary else []
     _state_items_cache = [(str(s), str(s), "Scene state {0}".format(s)) for s in states] \
         or [("0", "0", "")]
     return _state_items_cache
@@ -191,11 +190,11 @@ def _on_selection_change(self, context):
     if self.KIND == SELF_CONTAINED:
         entry = _selected(self)
         if entry is not None:
-            _read_chunks(self, context, entry.key)
+            _read_summary(self, context, entry.key)
 
 
 def _on_map_change(self, context):
-    _read_chunks(self, context, self.world_map)
+    _read_summary(self, context, self.world_map)
     _rebuild(self)
 
 
@@ -288,7 +287,7 @@ class RURI_OT_scene_refresh(bpy.types.Operator):
             # callback -- read the inventory explicitly so the first map is ready
             # either way.
             world.world_map = maps[0]["id"]
-            _read_chunks(world, context, world.world_map)
+            _read_summary(world, context, world.world_map)
         _rebuild(world)
         self.report({"INFO"}, scene_state.STATUS)
         return {"FINISHED"}
@@ -318,12 +317,12 @@ class RURI_OT_scene_discover(bpy.types.Operator):
         try:
             scene_state.discover_placements(
                 cabmap_state.BRIDGE, context.scene.ruri_cabmap.game_root, map_name,
-                rect, int(state.scene_state_id))
-            scene_state.resolve_cabs(cabmap_state.BRIDGE, state.lod0_only)
+                rect, int(state.scene_state_id), state.lod0_only)
+            scene_state.resolve_cabs(cabmap_state.BRIDGE)
         except Exception as exc:
             _report_exception(self, "Read failed", exc)
             return {"CANCELLED"}
-        est = scene_state.estimate(state.lod0_only)
+        est = scene_state.estimate()
         self.report({"INFO"}, "{0} placeable, {1} distinct assets -> {2} CAB(s) in closure.".format(
             est["placeable"], est["distinct_assets"], est["closure_cabs"]))
         return {"FINISHED"}
@@ -350,7 +349,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             return {"CANCELLED"}
         # Staleness guard: whatever path led here, NEVER import something other
         # than what is currently selected -- re-read in place if they disagree.
-        window = rect + (int(state.scene_state_id),)
+        window = rect + (int(state.scene_state_id), state.lod0_only)
         if scene_state.CURRENT_MAP != map_name or scene_state.CURRENT_WINDOW != window:
             if "FINISHED" not in bpy.ops.ruri.scene_discover(kind=self.kind):
                 return {"CANCELLED"}
@@ -374,7 +373,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
         try:
             imported, placed, unresolved = scene_importer.import_scene_placements(
-                context, db, scene_state.placeable(state.lod0_only), roots,
+                context, db, scene_state.PLACEMENTS, roots,
                 context.scene.ruri_cabmap.as_options())
         except Exception as exc:
             _report_exception(self, "Scene placement build failed", exc)
@@ -404,7 +403,7 @@ def _draw_list(layout, state):
 def _draw_estimate(layout, state):
     if not scene_state.PLACEMENTS:
         return
-    est = scene_state.estimate(state.lod0_only)
+    est = scene_state.estimate()
     box = layout.box()
     min_x, min_z, max_x, max_z, scene_state_id = scene_state.CURRENT_WINDOW
     box.label(text="{0} state {1}".format(scene_state.CURRENT_MAP, scene_state_id)
@@ -462,9 +461,8 @@ def draw_world_tab(layout, context):
     _draw_list(layout, state)
 
     entry = _selected(state)
-    chunks = _chunks(state)
-    if chunks is not None:
-        summary = scene_state.inventory_summary(chunks)
+    summary = _summary(state)
+    if summary is not None:
         box = layout.box()
         box.label(text="{0}: {1} cell chunk(s), {2:.0f} MB whole".format(
             state.world_map, summary["anchored_files"], summary["anchored_bytes"] / 1048576.0))

@@ -28,7 +28,7 @@ placement count runs into the hundreds of thousands and is only ever read in bul
 
 from __future__ import annotations
 
-from . import asset_paths, roster
+from . import roster
 
 # Holds the current window's discovered-but-not-yet-imported placements, so a
 # host's script reload skips this module instead of throwing that discovery away.
@@ -88,12 +88,14 @@ STREAMING = "streaming"
 
 SCENES = {SELF_CONTAINED: [], STREAMING: []}   # kind -> list[dict]
 LANDMARKS = {}          # streaming map id -> list[dict], its named places
-CHUNKS = {}             # map id -> list[dict], the cached per-map chunk inventory
-PLACEMENTS = []         # list[dict] -- the current selection's placements
+SUMMARIES = {}          # map id -> dict, the cached per-map chunk summary
+PLACEMENTS = []         # list[dict] -- the current selection's IMPORTABLE placements
+COUNTS = {}             # the discovery's own counts (total/no_transform/lod_filtered/distinct_assets)
+SEED_PATHS = []         # list[str] -- the container paths the C# reduction extracted
 RESOLVED_CABS = []      # list[str] -- the seed CABs an import of it needs
 CLOSURE_CABS = 0        # how many CABs those seeds pull in, the real memory proxy
 CURRENT_MAP = ""
-CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id)
+CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
 STATUS = "Refresh to read the game's scene list."
 
 
@@ -184,136 +186,86 @@ def family(scene_id):
     return scene_id.split("_", 1)[0]
 
 
-def load_chunks(bridge, game_root, map_name):
-    """One map's chunk inventory, read from the VFS manifests alone -- no chunk
-    byte is touched. Cached per map: it never changes under a session, and the
-    controls read it on every redraw."""
-    if map_name not in CHUNKS:
-        CHUNKS[map_name] = bridge.enumerate_scene_chunks(vfs_roots(game_root), map_name)
-    return CHUNKS[map_name]
+def load_summary(bridge, game_root, map_name):
+    """One map's chunk inventory, summarized on the C# side that read the
+    manifests -- scene states plus the anchored/floating split. Cached per map:
+    it never changes under a session, and the controls read it on every
+    redraw."""
+    if map_name not in SUMMARIES:
+        SUMMARIES[map_name] = bridge.scene_chunk_summary(vfs_roots(game_root), map_name)
+    return SUMMARIES[map_name]
 
 
-def scene_states(chunks):
-    """The scene states this map ships, lowest first. States are alternate
-    dressings of the same world (a quest changing what stands there), so a load
-    normally wants exactly one."""
-    return sorted({c["scene_state_id"] for c in chunks})
-
-
-def inventory_summary(chunks):
-    """What the map ships, split the way a window can address it: cell-anchored
-    chunks versus the map-wide and dynamic ones that no rect selects by name and
-    that get bounded against the window's cells instead."""
-    anchored = [c for c in chunks if c["has_grid"]]
-    floating = [c for c in chunks if not c["has_grid"]]
-    return {
-        "anchored_files": len(anchored),
-        "anchored_bytes": sum(c["length"] for c in anchored),
-        "floating_files": len(floating),
-        "floating_bytes": sum(c["length"] for c in floating),
-    }
-
-
-def discover_placements(bridge, game_root, map_name, rect, scene_state_id):
-    """The placements inside one world rect of one map. Resets state tied to
-    whatever was discovered before -- a different selection's estimate is not
-    meaningful once the placement list has changed."""
-    global PLACEMENTS, RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
+def discover_placements(bridge, game_root, map_name, rect, scene_state_id, lod0_only):
+    """What one world rect of one map places, reduced on the C# side that
+    decoded it: PLACEMENTS holds only the importable rows, SEED_PATHS the
+    container paths an import needs, COUNTS the drop accounting. Resets state
+    tied to whatever was discovered before -- a different selection's estimate
+    is not meaningful once the placement list has changed."""
+    global PLACEMENTS, COUNTS, SEED_PATHS, RESOLVED_CABS, CLOSURE_CABS
+    global CURRENT_MAP, CURRENT_WINDOW, STATUS
     min_x, min_z, max_x, max_z = rect
-    PLACEMENTS = bridge.discover_scene_placements(
-        vfs_roots(game_root), map_name, min_x, min_z, max_x, max_z, [scene_state_id])
+    result = bridge.discover_scene_placements(
+        vfs_roots(game_root), map_name, min_x, min_z, max_x, max_z,
+        [scene_state_id], lod0_only)
+    PLACEMENTS = result["placements"]
+    SEED_PATHS = result["seed_paths"]
+    COUNTS = {key: result[key] for key in ("total", "no_transform", "lod_filtered", "distinct_assets")}
     RESOLVED_CABS = []
     CLOSURE_CABS = 0
     CURRENT_MAP = map_name
-    CURRENT_WINDOW = (min_x, min_z, max_x, max_z, scene_state_id)
+    CURRENT_WINDOW = (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
     STATUS = "{0} placement(s) in {1}, state {2}.".format(len(PLACEMENTS), map_name, scene_state_id)
     return PLACEMENTS
 
 
-def placeable(lod0_only=False):
-    """Placements with a ground-truth-verified transform and a resolved
-    asset path -- see RipperBlenderBridge.DiscoverScenePlacements' doc
-    comment (Ruri.RipperHook) for the three transform sources this covers
-    (ECS blob LocalToWorld, FBPropertyBytesData pose, FBPropertyBoundsData.
-    Center -- the third tier was previously missing, which silently excluded
-    large static architecture like floors/walls/terrain that carries only a
-    bounds-center transform; see EndfieldSceneBridge.DecodeStreamingChunk-
-    Placements). Placements without any of the three are excluded entirely,
-    not placed at the origin -- a Mono/Proxy entity with no resolvable
-    transform isn't geometry and doesn't need placing. lod0_only additionally
-    keeps only the best-AVAILABLE LOD sibling per placement instance (see
-    asset_paths.select_best_lod) instead of blindly dropping every
-    non-zero-LOD-suffixed entity -- a piece whose ONLY shipped variant is,
-    say, _lod2 (no _lod0 sibling exists at all for that instance) used to be
-    dropped entirely by the old per-entity suffix filter, silently deleting
-    real, visible-in-game geometry (confirmed: this is exactly what dropped
-    base01_lv002's building-shell/floor piece -- its only siblings were
-    _lod2 and a collision-only _col1, no _lod0 at all)."""
-    rows = [p for p in PLACEMENTS if p["has_transform"] and p["asset_path"]]
-    if lod0_only:
-        rows = asset_paths.select_best_lod(rows)
-    return rows
-
-
-def estimate(lod0_only=False):
-    """Cheap summary for the pre-import confirm step: distinct assets, total
-    placements, how many are placeable vs. excluded -- split into the two
-    genuinely different exclusion reasons (previously conflated into one
-    misleading "excluded (no transform)" UI label): a placement with no
-    resolvable transform/asset_path at all (no_transform) vs. one that DOES
-    have both but got dropped by the LOD0-only filter as a non-zero-LOD
-    duplicate of a piece already covered by its LOD0 (lod_filtered). On a
-    real map lod_filtered is normally the much larger bucket -- most pieces
-    ship their whole LOD1/2/3/... chain alongside LOD0 -- so reporting both
-    under "no transform" reads as far more data loss than is actually
-    happening. And (once resolve_cabs() has run) the CABs those resolve to:
-    the seeds, and the closure those seeds pull in, which is what an import
-    actually has to hold."""
-    with_transform = [p for p in PLACEMENTS if p["has_transform"] and p["asset_path"]]
-    placeable_rows = placeable(lod0_only)
-    distinct = {p["asset_path"] for p in placeable_rows}
+def estimate():
+    """The pre-import confirm numbers, straight off the C# reduction (COUNTS)
+    plus the CAB resolution once resolve_cabs() has run. Nothing is recomputed
+    here: the panel redraws on every mouse move, and a real window's row set is
+    10^5 -- which is exactly why the reduction lives on the side that already
+    held the rows. The two exclusion buckets stay separate (previously
+    conflated into one misleading "excluded (no transform)" label): no_transform
+    is a row that was never geometry, lod_filtered a real piece dropped only
+    because a better detail level of the same instance is already kept -- on a
+    real map the much larger bucket, and reporting both as "no transform" reads
+    as far more data loss than is happening."""
     return {
-        "total_placements": len(PLACEMENTS),
-        "placeable": len(placeable_rows),
-        "excluded": len(PLACEMENTS) - len(placeable_rows),
-        "no_transform": len(PLACEMENTS) - len(with_transform),
-        "lod_filtered": len(with_transform) - len(placeable_rows) if lod0_only else 0,
-        "distinct_assets": len(distinct),
+        "total_placements": COUNTS.get("total", 0),
+        "placeable": len(PLACEMENTS),
+        "no_transform": COUNTS.get("no_transform", 0),
+        "lod_filtered": COUNTS.get("lod_filtered", 0),
+        "distinct_assets": COUNTS.get("distinct_assets", 0),
         "resolved_cabs": len(RESOLVED_CABS),
         "closure_cabs": CLOSURE_CABS,
     }
 
 
-def resolve_cabs(bridge, lod0_only=False):
-    """Resolve every placeable placement's distinct asset path to the CAB
-    names hosting them (requires a loaded cabmap on bridge), PLUS every
-    distinct material_asset_paths entry (see discover_placements --
-    ultimately EndfieldSceneBridge.cs's FBPropertyAssetData AssetType==1
-    resolution: the entity's own real material hash, the same StringPathHash
-    LUT as its mesh) so real materials -- and their own texture dependencies
-    -- come along in the same closure; paths that don't resolve are silently
-    dropped by resolve_cabs_for_paths, same as any other unmatched path.
-    Populates RESOLVED_CABS -- the seed set ImportCabs needs to pull in the
-    whole selection's dependency closure (geometry + materials + textures) in
-    one call -- and CLOSURE_CABS, how big that closure is, which is the one
-    number that says whether it fits in memory before paying for it."""
+def resolve_cabs(bridge):
+    """Resolve the discovery's SEED_PATHS -- every kept placement's distinct
+    mesh path PLUS its material paths, already extracted and sorted by the C#
+    reduction -- to the CAB names hosting them (requires a loaded cabmap on
+    bridge); paths that don't resolve are silently dropped by
+    resolve_cabs_for_paths, same as any other unmatched path. Populates
+    RESOLVED_CABS -- the seed set ImportCabs needs to pull in the whole
+    selection's dependency closure (geometry + materials + textures) in one
+    call -- and CLOSURE_CABS, how big that closure is, which is the one number
+    that says whether it fits in memory before paying for it."""
     global RESOLVED_CABS, CLOSURE_CABS
-    rows = placeable(lod0_only)
-    mesh_paths = {p["asset_path"] for p in rows}
-    material_paths = {path for p in rows for path in (p.get("material_asset_paths") or ())}
-    all_paths = sorted(mesh_paths | material_paths)
-    RESOLVED_CABS = bridge.resolve_cabs_for_paths(all_paths) if all_paths else []
+    RESOLVED_CABS = bridge.resolve_cabs_for_paths(SEED_PATHS) if SEED_PATHS else []
     CLOSURE_CABS = len(bridge.resolve_closure_cab_names(RESOLVED_CABS)) if RESOLVED_CABS else 0
     return RESOLVED_CABS
 
 
 def reset():
-    global SCENES, LANDMARKS, CHUNKS, PLACEMENTS, RESOLVED_CABS, CLOSURE_CABS
-    global CURRENT_MAP, CURRENT_WINDOW, STATUS
+    global SCENES, LANDMARKS, SUMMARIES, PLACEMENTS, COUNTS, SEED_PATHS
+    global RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
     SCENES = {SELF_CONTAINED: [], STREAMING: []}
     LANDMARKS = {}
-    CHUNKS = {}
+    SUMMARIES = {}
     PLACEMENTS = []
+    COUNTS = {}
+    SEED_PATHS = []
     RESOLVED_CABS = []
     CLOSURE_CABS = 0
     CURRENT_MAP = ""
