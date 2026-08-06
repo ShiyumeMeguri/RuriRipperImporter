@@ -119,6 +119,11 @@ def draw_both(stage):
     check("draw after {0}".format(stage), not problems, "; ".join(problems))
 
 
+def _rect_of(state):
+    from RuriRipperImporter.Game.EndField import scene_panel
+    return scene_panel._rect(state)
+
+
 def select(state, key):
     index = next((i for i, e in enumerate(state.entries) if e.key == key), -1)
     if index >= 0:
@@ -191,16 +196,63 @@ def main():
     if check("select map01_lv007", select(world, "map01_lv007") >= 0):
         states = scene_state.SUMMARIES["map01"]["scene_state_ids"]
         check("state enum populated", len(states) > 1, str(states))
-        world.scene_state_id = str(states[1])
-        world.scale = 0.3
+        world.scale = 1.0
+        world.tile_x = world.tile_z = 0
         draw_both("world controls set")
-        check("world read (state {0}, scale 0.3)".format(states[1]),
+        check("world read (whole place, state {0})".format(states[0]),
               "FINISHED" in bpy.ops.ruri.scene_discover(kind=scene_state.STREAMING))
         draw_both("world read")
         est = scene_state.estimate()
         check("world estimate priced", est["closure_cabs"] > 0, str(est))
+
+        # An alternate scene state dresses only part of the world, so a window
+        # into a corner of one legitimately holds nothing -- it must report zero
+        # and still draw, not fail.
+        world.scene_state_id = str(states[1])
+        world.scale = 0.3
+        check("empty window reads cleanly",
+              "FINISHED" in bpy.ops.ruri.scene_discover(kind=scene_state.STREAMING))
+        check("empty window reports zero", scene_state.estimate()["placeable"] == 0,
+              str(scene_state.estimate()))
+        draw_both("empty window")
+
+        # Tiling: every tile of a place must be reachable, land inside the place,
+        # and tile away from the centre must differ from the middle one.
         world.scene_state_id = str(states[0])
+        place = next(p for p in scene_state.LANDMARKS["map01"] if p["id"] == "map01_lv007")
+        base = place["rect"]
+        world.scale = 0.25
+        per_side = scene_state.tiles_per_side(world.scale)
+        check("scale 0.25 cuts 4x4", per_side == 4, "{0} per side".format(per_side))
+        seen = set()
+        inside = True
+        for tx in range(per_side):
+            for tz in range(per_side):
+                r = scene_state.windowed(base, world.scale, tx, tz)
+                seen.add((round(r[0], 3), round(r[1], 3)))
+                if not (base[0] - 1e-3 <= r[0] and r[2] <= base[2] + 1e-3
+                        and base[1] - 1e-3 <= r[1] and r[3] <= base[3] + 1e-3):
+                    inside = False
+        check("every tile is distinct", len(seen) == per_side * per_side,
+              "{0} of {1}".format(len(seen), per_side * per_side))
+        check("every tile stays inside the place", inside)
+        check("out-of-range tile clamps",
+              scene_state.windowed(base, 0.25, 99, 99) == scene_state.windowed(base, 0.25, 3, 3))
+        world.tile_x, world.tile_z = 3, 0
+        corner = _rect_of(world)
+        world.tile_x, world.tile_z = 0, 0
+        origin = _rect_of(world)
+        check("moving the tile moves the window", corner != origin,
+              "{0} vs {1}".format([round(v) for v in corner], [round(v) for v in origin]))
+        draw_both("world tile picked")
+        check("world read (tile 3,0)", "FINISHED" in bpy.ops.ruri.scene_discover(kind=scene_state.STREAMING))
+        tile_est = scene_state.estimate()
+        check("a tile costs far less than the whole place",
+              tile_est["closure_cabs"] < 3000,
+              "tile {0} CABs vs 6124 for the whole place".format(tile_est["closure_cabs"]))
+        draw_both("world tile read")
         world.scale = 1.0
+        world.tile_x = world.tile_z = 0
 
     # -- Imports (each optional; run in separate processes for real sizes) -----
     if IMPORT_SCENE:
