@@ -1282,15 +1282,16 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
     any_ratio = 0.0
     checked_any = False
     for guid in clip_guids:
-        # Zero-parse blob first (see clip_curves.ClipCurves.from_blob); YAML
-        # document only when this closure carries no blob for the guid.
-        clip = db.clip_curves(guid) if hasattr(db, "clip_curves") else None
+        # The single clip surface (bridge blob or disk raw-text parser); a
+        # clip with no data can't be checked here and is flagged when built.
+        # A malformed .anim raises -- this is only a heuristic compatibility
+        # gate, so skip it here too; the real per-clip warning fires at build.
+        try:
+            clip = db.clip_curves(guid)
+        except ValueError:
+            continue
         if clip is None:
-            clip_file = db.load_guid(guid)
-            clip_doc = clip_file.first("AnimationClip") if clip_file is not None else None
-            if clip_doc is None:
-                continue
-            clip = clip_doc.data
+            continue
         ratio, total = clip_paths.clip_path_match_ratio(clip, path_to_bone)
         if total:
             checked_any = True
@@ -2159,8 +2160,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             for item in state.available_clips:
                 if not item.selected:
                     continue
-                direct = db.load_guid(item.guid)
-                if direct is not None and direct.first("AnimationClip") is not None:
+                # The one clip surface -- no full YAML parse just to sniff the class.
+                if db.clip_curves(item.guid) is not None:
                     guids.append(item.guid)
                 else:
                     unresolved.append(item.name)

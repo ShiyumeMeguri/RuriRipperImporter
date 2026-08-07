@@ -18,10 +18,8 @@ import numpy as np
 
 try:
     from . import coordinate
-    from .ruri_pybridge.unity import clip_curves
 except ImportError:  # standalone (non-package) testing
     import coordinate
-    from ruri_pybridge.unity import clip_curves
 
 import bpy
 from mathutils import Matrix, Quaternion
@@ -272,10 +270,9 @@ def _conjugated_pose_arrays(locs, quats_wxyz, scales, l_rest_inv, conv):
             out_scales.astype(np.float32))
 
 
-def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options=None):
-    """Create a Blender action from a clip -- either an already-built
-    clip_curves.ClipCurves (the bridge's zero-parse blob path) or a parsed
-    AnimationClip YAML document (converted here)."""
+def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=None):
+    """Create a Blender action from a clip_curves.ClipCurves (the one clip
+    form both the bridge blob and the disk raw-text parser produce)."""
     options = options or {}
     # Pose bones default to QUATERNION already; the armature OBJECT itself
     # defaults to XYZ Euler, so object-level rotation_quaternion f-curves
@@ -283,10 +280,6 @@ def build_action(clip_doc, armature_obj, maps, path_to_meshobjects=None, options
     # without this -- Blender only evaluates the channel matching the
     # current rotation_mode.
     armature_obj.rotation_mode = 'QUATERNION'
-    if isinstance(clip_doc, clip_curves.ClipCurves):
-        clip = clip_doc
-    else:
-        clip = clip_curves.ClipCurves.from_document(clip_doc.data)
     name = clip.name
     sample_rate = clip.sample_rate or 60.0
     nodes = maps["nodes"]
@@ -601,43 +594,3 @@ def _apply_float_curves(action, clip, path_to_meshobjects, sample_rate, times):
 
 def _escape(name):
     return name.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def import_clips_from_controller(context, controller_file, asset_db, armature_obj,
-                                 maps, path_to_meshobjects=None, options=None):
-    """Resolve every AnimationClip referenced by a controller and build actions."""
-    guids = []
-    seen = set()
-    for doc in controller_file.documents:
-        motion = doc.data.get("m_Motion") if isinstance(doc.data, dict) else None
-        if isinstance(motion, dict) and motion.get("guid") and motion["guid"] not in seen:
-            seen.add(motion["guid"])
-            guids.append(motion["guid"])
-        # AnimatorState may also hold m_Motion indirectly already handled above.
-
-    actions = []
-    for guid in guids:
-        # Disk fast path: read the .anim's raw text and regex-extract the
-        # curves (see clip_curves.from_yaml_text) -- the guid resolves to a
-        # real file path in disk mode; bridge-mode databases resolve to the
-        # guid itself, which open() can't hit, so they fall through.
-        clip = None
-        clip_path = asset_db.resolve_guid(guid)
-        if clip_path and isinstance(clip_path, str) and clip_path.lower().endswith(".anim"):
-            try:
-                with open(clip_path, "r", encoding="utf-8", errors="ignore") as handle:
-                    clip = clip_curves.ClipCurves.from_yaml_text(handle.read())
-            except (OSError, ValueError):
-                clip = None
-        if clip is None:
-            clip_file = asset_db.load_guid(guid)
-            if not clip_file:
-                continue
-            clip_doc = clip_file.first("AnimationClip")
-            if clip_doc is None:
-                continue
-            clip = clip_doc
-        action, slot, _ = build_action(clip, armature_obj, maps,
-                                       path_to_meshobjects, options)
-        actions.append((action, slot))
-    return actions

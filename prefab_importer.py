@@ -80,8 +80,9 @@ def import_prefab(context, prefab_path, options=None):
     db = asset_db.AssetDatabase(os.path.dirname(prefab_path), assets_dir)
     prefab = db.load_file(prefab_path)
     arm_name = os.path.splitext(os.path.basename(prefab_path))[0]
-    clip_files = _gather_clip_files_disk(db, prefab, prefab_path, assets_dir)
+    clip_files, clip_warnings = _gather_clip_files_disk(db, prefab, prefab_path, assets_dir)
     report = _import_prefab_core(context, db, prefab, arm_name, clip_files, options, True)
+    report.warnings.extend(clip_warnings)
     fbx_hint = _fbx_instance_hint(prefab)
     if fbx_hint:
         report.warnings.insert(0, fbx_hint)
@@ -129,34 +130,29 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None,
     return report
 
 
-def _load_clip_fast(clip_path):
-    """Disk clip fast path: regex+numpy extraction straight off the raw text
+def _load_clip(clip_path):
+    """The one disk clip loader: run the raw-text parser
     (clip_curves.ClipCurves.from_yaml_text -- validated bitwise-identical to
-    the full parser on real 82MB clips at ~3x the speed, more against a cold
-    cache). Returns None when the text isn't a clip or has a structural
-    surprise -- the caller falls back to the full YAML parser."""
-    try:
-        with open(clip_path, "r", encoding="utf-8", errors="ignore") as handle:
-            text = handle.read()
-        return clip_curves.ClipCurves.from_yaml_text(text)
-    except (OSError, ValueError):
-        return None
+    the generic parser on real 82MB clips at ~3x the speed) on the .anim file.
+    Raises OSError/ValueError on an unreadable file or any structural surprise
+    -- callers report and skip; nothing here re-parses through a second path."""
+    with open(clip_path, "r", encoding="utf-8", errors="ignore") as handle:
+        return clip_curves.ClipCurves.from_yaml_text(handle.read())
 
 
 def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
-    """Disk-mode clip gathering: resolve _gather_clip_paths's paths into
-    ClipCurves (fast path) or loaded UnityFiles (fallback)."""
+    """Disk-mode clip gathering: resolve _gather_clip_paths's paths with the
+    one clip parser. Returns (clip_files, warnings); a file that cannot be
+    parsed is skipped with an explicit warning, never re-parsed via the
+    generic YAML parser."""
     clip_files = []
+    warnings = []
     for clip_path in _gather_clip_paths(db, prefab, prefab_path, assets_dir):
-        clip = _load_clip_fast(clip_path)
-        if clip is not None:
-            clip_files.append(clip)
-            continue
         try:
-            clip_files.append(db.load_file(clip_path))
-        except OSError:
-            continue
-    return clip_files
+            clip_files.append(_load_clip(clip_path))
+        except (OSError, ValueError) as exc:
+            warnings.append(f"clip {os.path.basename(clip_path)} skipped: {exc}")
+    return clip_files, warnings
 
 
 def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options):
@@ -185,18 +181,19 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
     path_to_bone = maps.get("path_to_bone") or {}
     for guid in guids:
-        # Bridge fast path first: the exporter already handed this clip's
-        # curves across as raw float32 arrays (see clip_curves.ClipCurves.
-        # from_blob) -- no YAML parse at all. Falls back to the document.
-        clip = db.clip_curves(guid) if hasattr(db, "clip_curves") else None
+        # The single clip surface: the bridge blob (zero-parse) or the disk
+        # raw-text parser (asset_db.clip_curves) -- same API, no YAML fallback.
+        # A malformed .anim raises there; caught per-guid so one bad clip in a
+        # multi-clip batch doesn't abort the rest.
+        try:
+            clip = db.clip_curves(guid)
+        except ValueError as exc:
+            warnings.append(f"clip {guid}: {exc} -- skipped")
+            continue
         if clip is None:
-            clip_file = db.load_guid(guid)
-            if clip_file is None:
-                continue
-            clip_doc = clip_file.first("AnimationClip")
-            if clip_doc is None:
-                continue
-            clip = clip_curves.ClipCurves.from_document(clip_doc.data)
+            warnings.append(f"clip {guid}: no clip data in the source closure "
+                            f"(missing blob or .anim) -- skipped")
+            continue
         clip_name = clip.name or guid
         repaired, unmatched = clip_repair.repair_hashed_clip_paths(clip, path_to_bone)
         if unmatched:
@@ -205,7 +202,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         if clip_repair.clip_is_humanoid(clip):
             # The muscle encoding is resolved on the C# side before export
             # (HumanoidToGenericProcessor); seeing it here means that hook was not enabled, and
-            # this importer has no muscle solver of its own to fall back on.
+            # this importer has no muscle solver of its own otherwise.
             warnings.append(f"{clip_name}: still carries muscle curves -- enable the "
                             f"AR_HumanoidToGeneric hook, or the body will not move")
         action, slot, n_frames = animation_builder.build_action(
@@ -286,24 +283,13 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     # Animations: every gathered clip (source differs disk vs. bridge mode) as actions.
     if options["import_animations"] and arm_obj is not None:
         actions = []
-        for clip_file in clip_files:
-            if isinstance(clip_file, clip_curves.ClipCurves):
-                clip = clip_file
-                humanoid_probe = clip
-                clip_name = clip.name
-            else:
-                clip_doc = clip_file.first("AnimationClip")
-                if clip_doc is None:
-                    continue
-                clip = clip_doc
-                humanoid_probe = clip_doc.data
-                clip_name = clip_doc.data.get("m_Name", "clip")
-            if clip_repair.clip_is_humanoid(humanoid_probe):
+        for clip in clip_files:
+            if clip_repair.clip_is_humanoid(clip):
                 # Muscle curves are resolved to per-bone transform curves on the C# side before
                 # export; a clip still carrying them means that pass did not run, and there is no
                 # muscle solver here to compensate.
                 report.warnings.append(
-                    f"{clip_name}: still carries muscle curves -- enable the AR_HumanoidToGeneric "
+                    f"{clip.name}: still carries muscle curves -- enable the AR_HumanoidToGeneric "
                     f"hook, or this clip's body motion will be absent.")
             action, slot, _frames = animation_builder.build_action(
                 clip, arm_obj, maps, path_to_meshobjects, options)
@@ -703,17 +689,11 @@ def _apply_clip_paths(context, clip_paths, options):
     maps = _maps_from_armature(arm)
     first = None
     for clip_path in clip_paths:
-        clip = _load_clip_fast(clip_path)
-        if clip is None:
-            try:
-                clip_file = asset_db.AssetDatabase(os.path.dirname(clip_path),
-                                                   asset_db.find_assets_dir(clip_path)).load_file(clip_path)
-            except OSError:
-                continue
-            clip_doc = clip_file.first("AnimationClip")
-            if clip_doc is None:
-                continue
-            clip = clip_doc
+        try:
+            clip = _load_clip(clip_path)
+        except (OSError, ValueError) as exc:
+            report.warnings.append(f"clip {os.path.basename(clip_path)} skipped: {exc}")
+            continue
         action, slot, _frames = animation_builder.build_action(
             clip, arm, maps, None, resolve_options(options))
         report.actions += 1
