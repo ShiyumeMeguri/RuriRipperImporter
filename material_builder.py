@@ -46,12 +46,42 @@ def _image_from_texture_bytes(data, name):
         except RuntimeError:
             return None
         image.name = name
+        target = "//textures/" + name + _image_extension(image)
+        # Pack first (it reads the file still on disk), THEN name both records.
+        # Unpack writes to the path stamped on the packed-file record, NOT to
+        # image.filepath -- which is why clearing image.filepath used to leave
+        # every unpacked texture named tmpXXXXXXXX.img. Exactly one packed file
+        # exists here: this loads a single image, never a UDIM tile set.
         image.pack()
-        image.filepath = ""  # drop the temp path now that pixels are packed into the .blend
+        image.packed_files[0].filepath = target
+        image.filepath_raw = target
     finally:
         os.unlink(tmp.name)
     _disable_alpha_interpretation(image)
     return image
+
+
+def _image_extension(image):
+    """The extension Blender itself uses for this image's DETECTED format, read
+    out of Blender's own format table rather than a map here -- a container this
+    importer has never seen still unpacks under a truthful name.
+
+    Falls back to the format's own name, never to a guess like ".png": naming a
+    DDS ".png" would be worse than an unusual extension."""
+    fallback = "." + (image.file_format or "img").lower()
+    render = getattr(getattr(bpy.context, "scene", None), "render", None)
+    if render is None:
+        return fallback
+    previous = render.image_settings.file_format
+    try:
+        render.image_settings.file_format = image.file_format
+        return render.file_extension or fallback
+    except (TypeError, ValueError):
+        # Blender can READ formats it cannot render to (dds, ...); those simply
+        # have no entry in that table.
+        return fallback
+    finally:
+        render.image_settings.file_format = previous
 
 
 def _disable_alpha_interpretation(image):
