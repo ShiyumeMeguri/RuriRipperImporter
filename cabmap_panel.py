@@ -28,13 +28,14 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import Game, armature_builder, prefab_importer
+    from . import Game, armature_builder, filter_ui, prefab_importer
     from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from .ruri_pybridge.session import cabmap_state
     from .ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
     import Game
     import armature_builder
+    import filter_ui
     import prefab_importer
     from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
     from ruri_pybridge.session import cabmap_state
@@ -57,15 +58,16 @@ BROWSER_TAB_DESCRIPTION = "Browse/search the loaded cabmap's rows and import ind
 _REQUIRED_HOOK_IDS = ("AR_HumanoidToGeneric_",)
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
 
-# Static EnumProperty item lists (Blender wants a stable list, not a callable, to avoid its
-# known dynamic-items string-lifetime footgun) built from cabmap_state's plain-Python field/
-# relation/action tables -- single source of truth for both the filter engine and this UI.
-_FIELD_ITEMS = [(f, cabmap_state.FIELD_LABELS[f], "") for f in cabmap_state.FILTER_FIELDS]
-_RELATION_ITEMS = [(r, cabmap_state.RELATION_LABELS[r], "") for r in cabmap_state.RELATIONS]
-_ACTION_ITEMS = [
-    ("include", "Include", "Require rows to match this rule (each Include rule further narrows the results)"),
-    ("exclude", "Exclude", "Hide rows matching this rule -- always wins over any Include"),
-]
+# What the browser's rows can be filtered by, straight off cabmap_state's own field
+# table -- the C# engine derives a row's value for each of these names, so this list
+# is a view of that table, never a second copy of it.
+BROWSER_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
+    key=BROWSER_TAB_ID,
+    fields=tuple((f, cabmap_state.FIELD_LABELS[f]) for f in cabmap_state.FILTER_FIELDS),
+    state_for=lambda context: context.scene.ruri_cabmap,
+    apply=lambda context: _reapply_and_refresh(context),
+    # Deps is a count, so a one-click rule off a row means that exact number.
+    quick_relation_for=lambda field: "is" if field == "deps" else "contains"))
 
 
 def _add_file_item(state, selected_cabs, idx, name_override=None):
@@ -198,10 +200,6 @@ def _schedule_filter(query, on_ready):
 def _on_search_edit(self, context):
     _schedule_filter(self.search,
                      lambda: (_rebuild_window(context.scene.ruri_cabmap), _redraw_all(context)))
-
-
-def _on_filter_rule_edit(self, context):
-    _reapply_and_refresh(context)
 
 
 def _hook_ids(state):
@@ -339,19 +337,6 @@ class RURI_PG_hook_entry(bpy.types.PropertyGroup):
     selected: BoolProperty(default=False)
 
 
-class RURI_PG_filter_rule(bpy.types.PropertyGroup):
-    """One Process-Monitor-style Include/Exclude rule -- [Field][Relation][Value]
-    then [Include/Exclude], matching cabmap_state.Rule's shape exactly so
-    the plain-Python filter engine can consume these PropertyGroup instances
-    directly (duck typing: .field/.relation/.value/.action/.enabled)."""
-    field: EnumProperty(name="Field", items=_FIELD_ITEMS, update=_on_filter_rule_edit)
-    relation: EnumProperty(name="Relation", items=_RELATION_ITEMS, update=_on_filter_rule_edit)
-    value: StringProperty(name="Value", update=_on_filter_rule_edit)
-    action: EnumProperty(name="Action", items=_ACTION_ITEMS, update=_on_filter_rule_edit)
-    enabled: BoolProperty(name="Enabled", default=True, update=_on_filter_rule_edit,
-                          description="Untick to keep a rule without deleting it")
-
-
 class RURI_PG_animation_clip(bpy.types.PropertyGroup):
     """One discovered-but-not-yet-built animation clip -- see
     discovery.discover_clip_refs. `selected` drives the
@@ -383,7 +368,10 @@ def _on_game_root_change(self, context):
         _auto_default_cabmap_filename(self)
 
 
-class RURI_PG_cabmap(bpy.types.PropertyGroup):
+class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
+    # Which filter spec this state belongs to -- see filter_ui.FilterStateMixin.
+    FILTER_SPEC_KEY = BROWSER_TAB_ID
+
     game_root: StringProperty(name="Game Root", subtype="DIR_PATH",
                               description="The game's install root directory",
                               update=_on_game_root_change)
@@ -439,15 +427,6 @@ class RURI_PG_cabmap(bpy.types.PropertyGroup):
     col_deps_factor: FloatProperty(
         name="Deps", default=0.2, min=0.05, max=0.95, subtype="FACTOR",
         description="Width of the Deps column -- Source fills whatever's left")
-
-    filter_rules: CollectionProperty(type=RURI_PG_filter_rule)
-    filter_rules_active_index: IntProperty()
-    # The rule currently being assembled in the "new rule" builder row (Process
-    # Monitor's [Field][Relation][Value] then [Action] + Add).
-    new_rule_field: EnumProperty(name="Field", items=_FIELD_ITEMS)
-    new_rule_relation: EnumProperty(name="Relation", items=_RELATION_ITEMS, default="contains")
-    new_rule_value: StringProperty(name="Value")
-    new_rule_action: EnumProperty(name="Action", items=_ACTION_ITEMS)
 
     lod0_only: BoolProperty(name="LOD0 Only", default=True)
     import_materials: BoolProperty(name="Import Materials", default=True)
@@ -959,109 +938,22 @@ class RURI_OT_cabmap_select_all(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class RURI_OT_filter_add_rule(bpy.types.Operator):
-    """Add the rule currently assembled in the builder row (Field/Relation/
-    Value/Action) -- the Process Monitor dialog's "Add" button."""
-    bl_idname = "ruri.filter_add_rule"
-    bl_label = "Add Rule"
-    bl_description = "Add this rule to the filter"
-
-    def execute(self, context):
-        state = context.scene.ruri_cabmap
-        if not state.new_rule_value and state.new_rule_relation not in ("is", "is_not"):
-            self.report({"WARNING"}, "Enter a value for the rule first.")
-            return {"CANCELLED"}
-        rule = state.filter_rules.add()
-        rule.field = state.new_rule_field
-        rule.relation = state.new_rule_relation
-        rule.value = state.new_rule_value
-        rule.action = state.new_rule_action
-        rule.enabled = True
-        state.filter_rules_active_index = len(state.filter_rules) - 1
-        state.new_rule_value = ""
-        _reapply_and_refresh(context)
-        return {"FINISHED"}
-
-
-class RURI_OT_filter_remove_rule(bpy.types.Operator):
-    bl_idname = "ruri.filter_remove_rule"
-    bl_label = "Remove Rule"
-    bl_description = "Remove this filter rule"
-    bl_options = {"INTERNAL"}
-    index: IntProperty()
-
-    def execute(self, context):
-        state = context.scene.ruri_cabmap
-        if 0 <= self.index < len(state.filter_rules):
-            state.filter_rules.remove(self.index)
-            state.filter_rules_active_index = min(state.filter_rules_active_index, len(state.filter_rules) - 1)
-        _reapply_and_refresh(context)
-        return {"FINISHED"}
-
-
-class RURI_OT_filter_clear_rules(bpy.types.Operator):
-    bl_idname = "ruri.filter_clear_rules"
-    bl_label = "Clear All"
-    bl_description = "Remove every filter rule"
-
-    def execute(self, context):
-        context.scene.ruri_cabmap.filter_rules.clear()
-        _reapply_and_refresh(context)
-        return {"FINISHED"}
-
-
-class RURI_OT_filter_quick_add(bpy.types.Operator):
-    """One-click rule-from-a-row, mirroring the WinForms browser's right-click
-    'Include > Container contains "..."' quick-filter menu (Blender's UIList
-    has no native per-row context menu, so this is invoked from a dropdown
-    menu button instead -- see RURI_MT_quick_filter)."""
-    bl_idname = "ruri.filter_quick_add"
-    bl_label = "Quick Add Rule"
-    bl_options = {"INTERNAL"}
-    field: EnumProperty(items=_FIELD_ITEMS)
-    action: EnumProperty(items=_ACTION_ITEMS)
-    value: StringProperty()
-
-    def execute(self, context):
-        state = context.scene.ruri_cabmap
-        rule = state.filter_rules.add()
-        rule.field = self.field
-        rule.relation = "is" if self.field == "deps" else "contains"
-        rule.value = self.value
-        rule.action = self.action
-        rule.enabled = True
-        state.filter_rules_active_index = len(state.filter_rules) - 1
-        _reapply_and_refresh(context)
-        return {"FINISHED"}
-
-
 class RURI_MT_quick_filter(bpy.types.Menu):
     """Dynamically built from the selected row's actual values -- Include/
-    Exclude x Name/Container/Type/Source/Deps, ten one-click actions total,
-    exactly the Process Monitor right-click pattern."""
+    Exclude x every field the browser's spec declares, exactly the Process
+    Monitor right-click pattern. The body is the shared one, so a field added
+    to the spec shows up here with no edit."""
     bl_idname = "RURI_MT_quick_filter"
     bl_label = "Quick Filter Selected Row"
 
     def draw(self, context):
         layout = self.layout
-        state = context.scene.ruri_cabmap
-        row = _selected_row(state)
+        row = _selected_row(context.scene.ruri_cabmap)
         if row is None:
             layout.label(text="No row selected", icon="INFO")
             return
-        for action_id, action_label, _desc in _ACTION_ITEMS:
-            layout.label(text=action_label + ":")
-            for field_id, field_label, _fdesc in _FIELD_ITEMS:
-                value = str(getattr(row, field_id))
-                display = value if len(value) <= 40 else value[:37] + "..."
-                relation_word = "is" if field_id == "deps" else "contains"
-                op = layout.operator(RURI_OT_filter_quick_add.bl_idname,
-                                     text=f"{field_label} {relation_word} \"{display}\"")
-                op.field = field_id
-                op.action = action_id
-                op.value = value
-            if action_id != _ACTION_ITEMS[-1][0]:
-                layout.separator()
+        filter_ui.draw_quick_filter_menu(layout, BROWSER_FILTER_SPEC,
+                                         lambda field: getattr(row, field))
 
 
 def _selected_row(state):
@@ -1768,64 +1660,6 @@ class RURI_UL_animation_clips(bpy.types.UIList):
         return flags, order
 
 
-class RURI_PT_filter_popover(bpy.types.Panel):
-    """Process-Monitor-style Include/Exclude rule editor, Blender-native as a
-    popover (the same idiom the Outliner's own funnel-icon filter uses)
-    rather than a cramped multi-column row squeezed into the narrow N-panel
-    sidebar -- opened from the funnel button next to the search box.
-    Non-modal and live-apply: every edit re-filters immediately, no
-    OK/Cancel/Apply step."""
-    bl_idname = "RURI_PT_filter_popover"
-    bl_label = "Filter Rules"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_ui_units_x = 20
-
-    def draw(self, context):
-        layout = self.layout
-        state = context.scene.ruri_cabmap
-
-        col = layout.column(align=True)
-        col.label(text="Display rows matching ALL these conditions:")
-        sub = col.column(align=True)
-        sub.scale_y = 0.8
-        sub.label(text="(no rules ⇒ show all; every enabled rule", icon="BLANK1")
-        sub.label(text="must hold -- Include requires a match,", icon="BLANK1")
-        sub.label(text="Exclude requires a non-match)", icon="BLANK1")
-
-        layout.separator()
-        builder = layout.column(align=True)
-        builder.prop(state, "new_rule_field", text="")
-        builder.prop(state, "new_rule_relation", text="")
-        builder.prop(state, "new_rule_value", text="", icon="GREASEPENCIL")
-        row = builder.row(align=True)
-        row.prop(state, "new_rule_action", text="")
-        row.operator(RURI_OT_filter_add_rule.bl_idname, text="Add", icon="ADD")
-
-        layout.separator()
-        if len(state.filter_rules) == 0:
-            layout.label(text="No rules yet.", icon="INFO")
-        else:
-            rules_box = layout.column(align=True)
-            for index, rule in enumerate(state.filter_rules):
-                row = rules_box.row(align=True)
-                row.prop(rule, "enabled", text="")
-                sub = row.row(align=True)
-                sub.scale_x = 0.9
-                sub.prop(rule, "field", text="")
-                sub.prop(rule, "relation", text="")
-                row.prop(rule, "value", text="")
-                icon = "ADD" if rule.action == "include" else "REMOVE"
-                sub2 = row.row(align=True)
-                sub2.scale_x = 0.7
-                sub2.prop(rule, "action", text="", icon=icon)
-                remove = row.operator(RURI_OT_filter_remove_rule.bl_idname, text="", icon="X")
-                remove.index = index
-
-            layout.separator()
-            layout.operator(RURI_OT_filter_clear_rules.bl_idname, icon="TRASH")
-
-
 class RURI_PT_column_widths_popover(bpy.types.Panel):
     """Column-width sliders for the virtual file list below -- Blender's
     template_list draws each row through hand-rolled split() columns (see
@@ -1835,11 +1669,14 @@ class RURI_PT_column_widths_popover(bpy.types.Panel):
     This popover is the Blender-native equivalent: every split factor lives on
     the scene as a plain FloatProperty, so each row below is a normal
     click-and-drag Blender slider (and, like any Blender number field, can
-    also be typed into directly, or right-click > Reset to Default Value)."""
+    also be typed into directly, or right-click > Reset to Default Value).
+
+    HEADER region for the same reason as RURI_PT_filter_popover: a UI-region
+    panel is a sidebar panel, and a categoryless one becomes a "Misc" tab."""
     bl_idname = "RURI_PT_column_widths_popover"
     bl_label = "Column Widths"
     bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+    bl_region_type = "HEADER"
     bl_ui_units_x = 12
 
     def draw(self, context):
@@ -1904,15 +1741,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op.tab = key
 
         if active is None:
-            search_row = gated.row(align=True)
-            search_row.prop(state, "search", icon="VIEWZOOM")
-            active_rules = sum(1 for r in state.filter_rules if r.enabled)
-            # Text badge (active rule count) carries the "filter active" signal instead of a second
-            # icon -- keeps this to icons actually in Blender's icon set.
-            search_row.popover(RURI_PT_filter_popover.bl_idname,
-                               text=str(active_rules) if active_rules else "", icon="FILTER")
+            filter_ui.draw_search_row(gated, state)
 
-            if not cabmap_state.has_active_query(state.search, state.filter_rules):
+            if not filter_ui.has_active_query(state):
                 # Breadcrumb address bar -- only meaningful in the folder browser; a search/rule
                 # result is a flat global match set, not scoped to CURRENT_DIR (see apply_filter).
                 crumbs = gated.row(align=True)
@@ -2258,7 +2089,6 @@ _CLASSES = (
     # to already be registered.
     RURI_PG_cabmap_row,
     RURI_PG_hook_entry,
-    RURI_PG_filter_rule,
     RURI_PG_animation_clip,
     RURI_PG_cabmap,
     RURI_UL_hooks,
@@ -2270,12 +2100,7 @@ _CLASSES = (
     RURI_OT_cabmap_reveal,
     RURI_OT_cabmap_goto_row_folder,
     RURI_OT_cabmap_select_all,
-    RURI_OT_filter_add_rule,
-    RURI_OT_filter_remove_rule,
-    RURI_OT_filter_clear_rules,
-    RURI_OT_filter_quick_add,
     RURI_MT_quick_filter,
-    RURI_PT_filter_popover,
     RURI_PT_column_widths_popover,
     RURI_PT_cabmap,
     RURI_OT_refresh_hooks,
@@ -2321,7 +2146,21 @@ def _unregister_keymaps():
     _addon_keymaps.clear()
 
 
+def _active_filter_spec_key(context):
+    """Which list the shared filter widget is currently editing: the tab on
+    screen. The browser is the fallback, exactly as _active_tab treats it."""
+    state = getattr(context.scene, "ruri_cabmap", None)
+    if state is None:
+        return BROWSER_TAB_ID
+    active = _active_tab(state)
+    return active.key if active is not None else BROWSER_TAB_ID
+
+
 def register():
+    # Before this module's own classes: RURI_PG_cabmap holds a CollectionProperty
+    # of filter_ui's rule type, and Blender needs that type registered first.
+    filter_ui.register()
+    filter_ui.ACTIVE_SPEC_KEY = _active_filter_spec_key
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_cabmap = PointerProperty(type=RURI_PG_cabmap)
@@ -2333,4 +2172,6 @@ def unregister():
     del bpy.types.Scene.ruri_cabmap
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+    filter_ui.ACTIVE_SPEC_KEY = None
+    filter_ui.unregister()
     cabmap_state.reset()

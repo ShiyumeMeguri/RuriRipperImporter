@@ -20,11 +20,35 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
+from ... import filter_ui
 from ...ruri_pybridge.session import cabmap_state
 from . import asset_paths, roster
 
 CHARACTERS = roster.CHARACTERS
 NPCS = roster.NPCS
+
+# Column labels worth spelling out; anything else reads as its own column name,
+# so a column added to roster.py's declarations shows up here with no edit.
+_FIELD_LABELS = {"key": "Id", "display": "Name", "english": "English", "group": "Profession",
+                 "npc": "Npc Id", "template": "Template"}
+
+
+def _filter_fields():
+    """The rule vocabulary = the columns the CURRENTLY loaded roster table has.
+    Characters and NPCs are different projections, so their filterable fields
+    genuinely differ -- read off the table, never tabulated."""
+    state = getattr(bpy.context.scene, "ruri_roster", None)
+    table = _rows(state) if state is not None else None
+    if table is None:
+        return (("display", "Name"),)
+    return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
+                 for name in table.names)
+
+
+ROSTER_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
+    key="EndField:character", fields=_filter_fields,
+    state_for=lambda context: context.scene.ruri_roster,
+    apply=lambda context: _rebuild(context.scene.ruri_roster)))
 
 # Loaded row lists, by (kind, language). Module scope, not scene state: rebuilding
 # the drawn list must not cost a re-read, and a plain list is not something
@@ -62,7 +86,9 @@ def _on_kind_change(self, context):
     _rebuild(state)
 
 
-class RURI_PG_roster(bpy.types.PropertyGroup):
+class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
+    FILTER_SPEC_KEY = "EndField:character"
+
     kind: EnumProperty(
         name="Cast",
         items=[(CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
@@ -123,15 +149,17 @@ def _buildable(game_root):
 def _rebuild(state):
     """Rebuild the drawn line list.
 
-    The filter is NOT evaluated here: the search text goes to the same C# engine
-    the bundle browser searches with, over the very buffers this table was built
-    from (one ASCII fold per column, then a parallel vectorized sweep). This side
-    receives row ids and reads cells."""
+    The filter is NOT evaluated here: the search text and the Include/Exclude
+    rules go to the same C# engine the bundle browser searches with, over the very
+    buffers this table was built from (one ASCII fold per column, then a parallel
+    vectorized sweep, then the shared rule evaluator). This side receives row ids
+    and reads cells."""
     state.entries.clear()
     table = _rows(state)
     if table is None:
         return
-    matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip())
+    matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(),
+                                                    state.filter_rules)
     rows = [roster.row(table, int(index), state.kind) for index in matched]
     if state.kind == NPCS:
         # Row ids index the WHOLE projected table, which is what the C# search
@@ -781,7 +809,7 @@ def draw_roster(layout, context):
     head.prop(state, "kind", expand=True)
     head.operator(RURI_OT_roster_refresh.bl_idname, text="", icon="FILE_REFRESH")
 
-    layout.prop(state, "search", icon="VIEWZOOM", text="")
+    filter_ui.draw_search_row(layout, state)
     layout.template_list(RURI_UL_roster.bl_idname, "", state, "entries",
                          state, "active_index", rows=10)
     layout.label(text=state.status, icon="INFO")
@@ -808,6 +836,7 @@ _CLASSES = (
 
 
 def register():
+    filter_ui.register_spec(ROSTER_FILTER_SPEC)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_roster = bpy.props.PointerProperty(type=RURI_PG_roster)

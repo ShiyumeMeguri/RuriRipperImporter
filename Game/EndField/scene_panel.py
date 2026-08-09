@@ -31,11 +31,31 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
+from ... import filter_ui
 from ...ruri_pybridge.session import cabmap_state
 from . import roster, scene_importer, scene_state
 
 SELF_CONTAINED = scene_state.SELF_CONTAINED
 STREAMING = scene_state.STREAMING
+
+# What a scene row can be filtered by. The same three values the list draws, which
+# is also exactly what gets published to the search engine (see _publish).
+_FILTER_FIELDS = (("name", "Name"), ("id", "Id"), ("group", "Group"))
+_FILTER_COLUMNS = tuple(key for key, _label in _FILTER_FIELDS)
+
+SCENE_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
+    key="EndField:scene", fields=_FILTER_FIELDS,
+    state_for=lambda context: context.scene.ruri_scene_box,
+    apply=lambda context: _rebuild(context.scene.ruri_scene_box)))
+
+WORLD_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
+    key="EndField:world", fields=_FILTER_FIELDS,
+    state_for=lambda context: context.scene.ruri_scene_world,
+    apply=lambda context: _rebuild(context.scene.ruri_scene_world)))
+
+# handle -> the row list last published under it, so a keystroke re-searches an
+# already-open table instead of rebuilding one that has not changed.
+_published = {}
 
 # Kept alive at module scope -- Blender's dynamic EnumProperty items callback
 # requires the returned list to outlive the call (a fresh list literal returned
@@ -118,14 +138,42 @@ def _summary(state):
     return scene_state.SUMMARIES.get(name) if name else None
 
 
+def _filter_handle(state):
+    """One open table per list. The streaming tab's places change with the map,
+    so its map is part of the handle -- switching maps opens a different table
+    rather than searching the previous one."""
+    return ("ruri.endfield.scene" if state.KIND == SELF_CONTAINED
+            else f"ruri.endfield.world\x1f{state.world_map}")
+
+
+def _matching_rows(state):
+    """The rows passing the search box AND every enabled rule -- matched by the
+    SAME C# engine the asset-bundle browser uses, over this list published as a
+    table. No matching happens on this side.
+
+    Falls back to the unfiltered list only when there is no bridge to ask (no
+    cabmap loaded yet), which is also the only state in which there are no rows
+    to speak of."""
+    rows = _rows(state)
+    if cabmap_state.BRIDGE is None or not rows:
+        return list(rows)
+    handle = _filter_handle(state)
+    if _published.get(handle) is not rows:
+        cabmap_state.BRIDGE.open_host_table(
+            handle, _FILTER_COLUMNS,
+            [(row["label"], row["id"], row.get("group", "")) for row in rows])
+        _published[handle] = rows
+    ids = cabmap_state.BRIDGE.search_data_table(handle, state.search.strip(),
+                                                state.filter_rules)
+    return [rows[index] for index in ids if 0 <= index < len(rows)]
+
+
 def _rebuild(state):
-    """Rebuild the drawn line list, filtered by the search box. Whole scenes are
-    grouped by the id family the game files them under; a map's places are not --
-    there are a handful and they are all siblings."""
+    """Rebuild the drawn line list, filtered by the search box and rules. Whole
+    scenes are grouped by the id family the game files them under; a map's places
+    are not -- there are a handful and they are all siblings."""
     state.entries.clear()
-    needle = state.search.strip().lower()
-    rows = [row for row in _rows(state)
-            if not needle or needle in row["id"].lower() or needle in row["label"].lower()]
+    rows = _matching_rows(state)
     grouped = state.KIND == SELF_CONTAINED
     rows.sort(key=lambda row: (row["group"] if grouped else "", row["id"]))
 
@@ -205,9 +253,12 @@ class RURI_PG_scene_entry(bpy.types.PropertyGroup):
     is_group: BoolProperty(default=False)
 
 
-class _SceneListMixin:
+class _SceneListMixin(filter_ui.FilterStateMixin):
     """Everything both tabs hold. Blender picks annotations up through the class
-    hierarchy, so this is one declaration rather than two that can drift."""
+    hierarchy, so this is one declaration rather than two that can drift.
+
+    No debounce on ``search``: these lists are dozens of rows, not the browser's
+    260k, so a keystroke is one already-open table's search."""
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_search_edit,
                            description="Filter by displayed name or id")
     entries: CollectionProperty(type=RURI_PG_scene_entry)
@@ -224,10 +275,12 @@ class _SceneListMixin:
 
 class RURI_PG_scene_box(_SceneListMixin, bpy.types.PropertyGroup):
     KIND = SELF_CONTAINED
+    FILTER_SPEC_KEY = SCENE_FILTER_SPEC.key
 
 
 class RURI_PG_scene_world(_SceneListMixin, bpy.types.PropertyGroup):
     KIND = STREAMING
+    FILTER_SPEC_KEY = WORLD_FILTER_SPEC.key
     world_map: EnumProperty(name="Map", items=_map_items, update=_on_map_change,
                             description="Which open-world map's places to list")
     scale: FloatProperty(name="Size", default=1.0, min=0.1, soft_max=3.0,
@@ -392,9 +445,8 @@ def _bridge_asset_db_module():
 
 
 def _draw_list(layout, state):
-    head = layout.row(align=True)
-    head.prop(state, "search", icon="VIEWZOOM", text="")
-    head.operator(RURI_OT_scene_refresh.bl_idname, text="", icon="FILE_REFRESH")
+    filter_ui.draw_search_row(layout, state,
+                              extra_operator=(RURI_OT_scene_refresh.bl_idname, "FILE_REFRESH"))
     layout.template_list(RURI_UL_scenes.bl_idname, "", state, "entries",
                          state, "active_index", rows=10)
     layout.label(text=scene_state.STATUS, icon="INFO")
@@ -490,6 +542,8 @@ _CLASSES = (
 
 
 def register():
+    filter_ui.register_spec(SCENE_FILTER_SPEC)
+    filter_ui.register_spec(WORLD_FILTER_SPEC)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_scene_box = PointerProperty(type=RURI_PG_scene_box)
@@ -501,4 +555,5 @@ def unregister():
     del bpy.types.Scene.ruri_scene_box
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+    _published.clear()
     scene_state.reset()
