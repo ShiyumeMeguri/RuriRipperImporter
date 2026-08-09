@@ -50,6 +50,8 @@ class FilterSpec:
         # list whose columns depend on what was actually loaded (the roster's
         # differ between Characters and NPCs) declares them as they are rather
         # than tabulating a union that is wrong for both.
+        # ORDER MATTERS: the first field is what a new rule starts on, so every
+        # list puts the displayed NAME first. Nobody filters by id from memory.
         self.fields = fields if callable(fields) else tuple(fields)
         self.state_for = state_for      # (context) -> the PropertyGroup holding search/filter_rules
         self.apply = apply              # (context) -> re-run this list

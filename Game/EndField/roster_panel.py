@@ -36,13 +36,19 @@ _FIELD_LABELS = {"key": "Id", "display": "Name", "english": "English", "group": 
 def _filter_fields():
     """The rule vocabulary = the columns the CURRENTLY loaded roster table has.
     Characters and NPCs are different projections, so their filterable fields
-    genuinely differ -- read off the table, never tabulated."""
+    genuinely differ -- read off the table, never tabulated.
+
+    The displayed NAME leads, because the first field is the one a new rule
+    starts on (see filter_ui.FilterSpec). Table order would put the row key
+    first -- column 0 of any projection is its key -- which defaults the filter
+    to an id nobody has memorised."""
     state = getattr(bpy.context.scene, "ruri_roster", None)
     table = _rows(state) if state is not None else None
     if table is None:
         return (("display", "Name"),)
+    names = sorted(table.names, key=lambda name: 0 if name == "display" else 1)
     return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
-                 for name in table.names)
+                 for name in names)
 
 
 ROSTER_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
