@@ -136,15 +136,23 @@ def _clone_uber(part, material_name, images):
         real = images.get(slot)
         if real is None:
             continue
-        # 颜色空间**双向**跟随占位图(生成期按真源 .meta sRGBTexture 定):只单向强制 Non-Color
-        # 会让老会话里被错标过的图(如 _ShadowLutTex)永远弹不回 sRGB。
-        non_color = node.image.colorspace_settings.name == "Non-Color"
-        node.image = real
-        try:
-            real.colorspace_settings.name = "Non-Color" if non_color else "sRGB"
-        except Exception:
-            pass
+        _swap_image(node, real)
     return clone
+
+
+def _swap_image(node, real):
+    """把节点的占位图换成真贴图,色彩空间跟着**占位图**走。
+
+    占位图的色彩空间由生成脚本 _img() 按槽语义定死(真源 .meta 的 sRGBTexture 旗标),
+    是唯一真源;双向赋值是必须的 —— 只单向强制 Non-Color,老会话里被错标过的图
+    (如 _ShadowLutTex)永远弹不回 sRGB。
+    """
+    non_color = node.image is not None and node.image.colorspace_settings.name == "Non-Color"
+    node.image = real
+    try:
+        real.colorspace_settings.name = "Non-Color" if non_color else "sRGB"
+    except Exception:
+        pass
 
 
 def _slot_of(image_name):
@@ -233,15 +241,11 @@ def provider(builder, props):
     for node in mat.node_tree.nodes:
         if node.type != "TEX_IMAGE":
             continue
-        real = images.get(_slot_of(node.label or node.name))
+        slot = _slot_of(node.label or node.name)
+        real = images.get(slot)
         if real is None:
             continue
-        non_color = node.image is not None and node.image.colorspace_settings.name == "Non-Color"
-        node.image = real
-        try:
-            real.colorspace_settings.name = "Non-Color" if non_color else "sRGB"
-        except Exception:
-            pass
+        _swap_image(node, real)
 
     # ── raw direct feed ──────────────────────────────────────────────────────
     filled = 0
