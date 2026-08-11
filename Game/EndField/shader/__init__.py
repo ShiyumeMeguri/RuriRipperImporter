@@ -133,7 +133,7 @@ def _clone_uber(part, material_name, images):
     for node in clone.nodes:
         if node.type != "TEX_IMAGE" or node.image is None:
             continue
-        real = images.get(node.image.name)
+        real = images.get(_slot_of(node.image.name))
         if real is None:
             continue
         # 颜色空间**双向**跟随占位图(生成期按真源 .meta sRGBTexture 定):只单向强制 Non-Color
@@ -145,6 +145,14 @@ def _clone_uber(part, material_name, images):
         except Exception:
             pass
     return clone
+
+
+def _slot_of(image_name):
+    """占位图名 → 逻辑槽名:剥数字后缀(append/重载造出的 .001 等)。"""
+    base, dot, tail = image_name.rpartition(".")
+    if dot and tail.isdigit():
+        return base
+    return image_name
 
 
 # ============================================================================
@@ -180,21 +188,21 @@ def _sync_sun(scene=None, _depsgraph=None):
     col = (sun.data.color[0] * e, sun.data.color[1] * e, sun.data.color[2] * e)
     key = (round(d.x, 5), round(d.y, 5), round(d.z, 5),
            round(col[0], 5), round(col[1], 5), round(col[2], 5))
-    if _last_sun_push[0] == key:   # 无变化零写入(也斩断写 socket → depsgraph 的回环)
+    if _last_sun_push[0] == key:   # 无变化零写入(也斩断写图 → depsgraph 的回环)
         return
     _last_sun_push[0] = key
-    for mat in bpy.data.materials:
-        if mat.get("ruri_uber_part") is None or mat.node_tree is None:
-            continue
-        for node in mat.node_tree.nodes:
-            if node.type != "GROUP":
-                continue
-            sock = node.inputs.get("Sun_Direction")
-            if sock is not None:
-                sock.default_value = (d.x, d.y, d.z)
-            sock = node.inputs.get("Sun_Color")
-            if sock is not None:
-                sock.default_value = col
+    # 显式可见:现在是谁在打光。默认新建 sun 朝正下 = 天顶光,正面全落阴影会显得"全身变暗"。
+    print("[ruri-uber] sun '{0}' -> toLight=({1:.2f},{2:.2f},{3:.2f}) energy×color=({4:.2f},{5:.2f},{6:.2f})".format(
+        sun.name, d.x, d.y, d.z, col[0], col[1], col[2]), flush=True)
+    # 引擎式"全局 cbuffer":所有 uber 组从 _RuriSunState(2×1 float 图)采样太阳态,
+    # 这里只写 6 个 float + 一次微型贴图上传 —— 逐材质写 socket 会触发每棵大树的
+    # 材质级更新(28 材质实测 <10fps),那条路已废除。
+    img = bpy.data.images.get("_RuriSunState")
+    if img is None:
+        img = bpy.data.images.new("_RuriSunState", 2, 1, alpha=True, float_buffer=True)
+        img.colorspace_settings.name = "Non-Color"
+    img.pixels.foreach_set([d.x, d.y, d.z, 1.0, col[0], col[1], col[2], 1.0])
+    img.update()
 
 
 def _standard_view_transform(scene):
