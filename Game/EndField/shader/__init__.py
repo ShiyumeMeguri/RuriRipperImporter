@@ -154,6 +154,7 @@ def _drive_from_sun(node):
     made lights do nothing. Drivers close the gap: the direction components and
     the colour follow the lamp live, and rotating it re-evaluates because each
     driver declares the lamp's own rotation as its variable."""
+    register_drivers()   # 幂等自愈:namespace 缺函数时驱动静默评 0(全黑光),先补上再挂
     sun = next((o for o in bpy.context.scene.objects
                 if o.type == "LIGHT" and o.data.type == "SUN"), None)
     if sun is None:
