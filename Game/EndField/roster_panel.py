@@ -14,6 +14,7 @@ select, and one button reveals where the selection lives over in that browser.
 
 from __future__ import annotations
 
+import json
 import re
 
 import bpy
@@ -795,6 +796,16 @@ class RURI_OT_roster_load(bpy.types.Operator):
 # 动画);锚到 "<标识>/animations/" 则 431 行命中 431 行是本体动画,零噪音。
 _ANIM_ANCHOR = "{0}/animations/"
 _SHARED_ANIM_ANCHOR = "actor/{0}/common/animations/"
+
+
+def _ANIM_RULES(anchor):
+    """按钮装进浏览器的 Include 规则集(全部成立才显示 —— 规则编辑器的 AND 语义)。
+    搜索框刻意留空:规则是这个按钮的查询,搜索框留给使用者在其上再缩小范围
+    (打 "battle" 就只剩战斗动画)。"""
+    return [
+        {"field": "container", "relation": "contains", "value": anchor, "action": "include"},
+        {"field": "type_names", "relation": "contains", "value": "AnimationClip", "action": "include"},
+    ]
 _ACTOR_TREE = "/arts/entity/actor/"
 _PEDESTRIAN_TREE = "/pedestrain/"
 
@@ -876,26 +887,24 @@ class RURI_OT_roster_animations(bpy.types.Operator):
             return {"CANCELLED"}
 
         short = _short_name(entry.key) if state.kind == CHARACTERS else entry.key.lower()
-        own = _ANIM_ANCHOR.format(short)
-        hits = _anim_hits(own)
-        if hits:
-            self.report({"INFO"}, "{0}: {1} animation rows.".format(entry.label, hits))
-            return bpy.ops.ruri.cabmap_reveal(query=own)
+        anchor = _ANIM_ANCHOR.format(short)
+        hits = _anim_hits(anchor)
+        note = "{0}: {1} animation rows.".format(entry.label, hits)
 
-        group = _body_group(state.kind, entry.key, short)
-        if group:
-            shared = _SHARED_ANIM_ANCHOR.format(group)
-            hits = _anim_hits(shared)
-            if hits:
-                self.report({"INFO"},
-                            "'{0}' ships no animations of its own; showing the {1} "
-                            "body-type library it actually plays ({2} rows).".format(
-                                entry.label, group, hits))
-                return bpy.ops.ruri.cabmap_reveal(query=shared)
+        if not hits:
+            group = _body_group(state.kind, entry.key, short)
+            anchor = _SHARED_ANIM_ANCHOR.format(group) if group else ""
+            hits = _anim_hits(anchor) if anchor else 0
+            if not hits:
+                self.report({"WARNING"}, "No animation folder for '{0}' in the loaded cabmap.".format(
+                    entry.label))
+                return {"CANCELLED"}
+            # 换的是**别人的**动画库,必须说出来,不能静默替换。
+            note = ("'{0}' ships no animations of its own; showing the {1} body-type "
+                    "library it actually plays ({2} rows).".format(entry.label, group, hits))
 
-        self.report({"WARNING"},
-                    "No animation folder for '{0}' in the loaded cabmap.".format(entry.label))
-        return bpy.ops.ruri.cabmap_reveal(query=entry.key)
+        self.report({"INFO"}, note)
+        return bpy.ops.ruri.cabmap_show_rules(rules=json.dumps(_ANIM_RULES(anchor)))
 
 
 class RURI_OT_roster_reveal(bpy.types.Operator):

@@ -18,6 +18,7 @@ with bridge-sourced in-memory data from a resolved cabmap selection.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -728,6 +729,58 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
         _redraw_all(context)
         if not matches:
             self.report({"WARNING"}, f"Nothing in the loaded cabmap carries '{self.query}'.")
+        return {"FINISHED"}
+
+
+class RURI_OT_cabmap_show_rules(bpy.types.Operator):
+    """Switch to the browser and show exactly the rows a caller's rule set selects.
+
+    The caller states its query as Include/Exclude RULES in the browser's own
+    field vocabulary -- which is what rules are for, and what the quick-search
+    box is not: the box is left EMPTY on purpose so it stays available as the
+    user's own further narrowing ON TOP of the rules (type "battle" and get that
+    subset, without the button's own query having eaten the box).
+
+    Generic on purpose, like reveal next door: no game module reaches into the
+    browser's state, and the browser stays the only thing that knows how rules
+    are stored and re-applied."""
+    bl_idname = "ruri.cabmap_show_rules"
+    bl_label = "Show Filtered in Browser"
+    bl_description = "Switch to the file browser and filter it to these rows"
+    bl_options = {"INTERNAL"}
+    rules: StringProperty(
+        description="JSON list of {field, relation, value, action} in the browser's own "
+                    "filter vocabulary -- the same shape the rule editor writes")
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded
+
+    def execute(self, context):
+        try:
+            wanted = json.loads(self.rules) if self.rules else []
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Bad rule payload: {exc}")
+            return {"CANCELLED"}
+
+        state = context.scene.ruri_cabmap
+        state.active_tab = BROWSER_TAB_ID
+        # Replace, never accumulate: this is one caller's whole query, and rules
+        # left over from the previous one would silently AND into it.
+        state.filter_rules.clear()
+        state.search = ""
+        for spec in wanted:
+            rule = state.filter_rules.add()
+            # spec_key first: it is what makes the field enum resolve to this
+            # list's vocabulary, so assigning field before it would not stick.
+            rule.spec_key = BROWSER_FILTER_SPEC.key
+            rule.field = spec["field"]
+            rule.relation = spec.get("relation", "contains")
+            rule.value = spec.get("value", "")
+            rule.action = spec.get("action", "include")
+            rule.enabled = True
+        state.filter_rules_active_index = len(state.filter_rules) - 1
+        _reapply_and_refresh(context)
         return {"FINISHED"}
 
 
@@ -2098,6 +2151,7 @@ _CLASSES = (
     RURI_OT_cabmap_enter_dir,
     RURI_OT_cabmap_goto_dir,
     RURI_OT_cabmap_reveal,
+    RURI_OT_cabmap_show_rules,
     RURI_OT_cabmap_goto_row_folder,
     RURI_OT_cabmap_select_all,
     RURI_MT_quick_filter,
