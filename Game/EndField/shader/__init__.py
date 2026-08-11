@@ -28,8 +28,6 @@ at their decision site with the ground truth they came from.
 from __future__ import annotations
 
 import bpy
-from bpy.app.handlers import persistent
-from mathutils import Vector
 
 from .... import material_builder
 from . import ruri_character_uber_endfield as gen
@@ -157,54 +155,8 @@ def _slot_of(image_name):
     return image_name
 
 
-# ============================================================================
-# 世界光源同步 —— Unity 式解耦:shader 不绑任何灯对象。
-#
-# Blender 材质节点图在架构上读不到场景灯(没有"主光方向"节点,灯只进 BSDF 积分器);
-# Unity 的等价物是引擎每帧把 _MainLightPosition 写进全局 cbuffer。这里由插件当"引擎":
-# depsgraph 每次求值后把**当时场景里的 sun**(哪只都行,何时加的都行)推进所有
-# ruri 角色组的 Sun_* socket。加灯/换灯/转灯/调色即时生效,无导入时序耦合。
-#
-# 🔴 禁用 driver:脚本驱动吃 Auto Run Python Scripts 安全门(默认关),被拦时全部
-#   静默评 0 → Sun_Direction=(0,0,0) → NdotL≡0 → 半阶恒亮 + 转灯无效(实锤三症状)。
-#   handler 是插件自身代码,不过安全门。
-# ============================================================================
-_last_sun_push = [None]
-
-
-@persistent
-def _sync_sun(scene=None, _depsgraph=None):
-    # depsgraph_update_post 传 (scene, depsgraph);load_post 传 (filepath) —— 统一兜到 context。
-    if not isinstance(scene, bpy.types.Scene):
-        scene = bpy.context.scene
-    if scene is None:
-        return
-    sun = next((o for o in scene.objects
-                if o.type == "LIGHT" and o.data.type == "SUN"), None)
-    if sun is None:
-        return
-    m = sun.matrix_world
-    # 世界旋转 +Z 列 = toLight(Blender sun 沿自身 -Z 照);normalize 顺带吃掉缩放。
-    d = Vector((m[0][2], m[1][2], m[2][2])).normalized()
-    e = max(sun.data.energy, 0.0)
-    col = (sun.data.color[0] * e, sun.data.color[1] * e, sun.data.color[2] * e)
-    key = (round(d.x, 5), round(d.y, 5), round(d.z, 5),
-           round(col[0], 5), round(col[1], 5), round(col[2], 5))
-    if _last_sun_push[0] == key:   # 无变化零写入(也斩断写图 → depsgraph 的回环)
-        return
-    _last_sun_push[0] = key
-    # 显式可见:现在是谁在打光。默认新建 sun 朝正下 = 天顶光,正面全落阴影会显得"全身变暗"。
-    print("[ruri-uber] sun '{0}' -> toLight=({1:.2f},{2:.2f},{3:.2f}) energy×color=({4:.2f},{5:.2f},{6:.2f})".format(
-        sun.name, d.x, d.y, d.z, col[0], col[1], col[2]), flush=True)
-    # 引擎式"全局 cbuffer":所有 uber 组从 _RuriSunState(2×1 float 图)采样太阳态,
-    # 这里只写 6 个 float + 一次微型贴图上传 —— 逐材质写 socket 会触发每棵大树的
-    # 材质级更新(28 材质实测 <10fps),那条路已废除。
-    img = bpy.data.images.get("_RuriSunState")
-    if img is None:
-        img = bpy.data.images.new("_RuriSunState", 2, 1, alpha=True, float_buffer=True)
-        img.colorspace_settings.name = "Non-Color"
-    img.pixels.foreach_set([d.x, d.y, d.z, 1.0, col[0], col[1], col[2], 1.0])
-    img.update()
+# 世界光源同步已整套撤销:Sun_Direction/Sun_Color 回到组的普通输入 socket,值 = 生成期
+# 烘进去的默认方向光,场景里的灯对角色不起作用(要调就直接改材质上的这两个 socket)。
 
 
 def _standard_view_transform(scene):
@@ -318,10 +270,6 @@ def provider(builder, props):
     except Exception:
         pass
 
-    # 导入即按当前场景 sun 同步一次(之后由 depsgraph handler 持续跟随;见 _sync_sun)。
-    _last_sun_push[0] = None
-    _sync_sun(bpy.context.scene)
-
     mat["ruri_uber_part"] = part_name
     ref = props.shader_ref
     mat["ruri_uber_shader_guid"] = str(ref.get("guid", "")) if isinstance(ref, dict) else ""
@@ -340,15 +288,7 @@ def provider(builder, props):
 
 def register():
     material_builder.register_graph_provider(provider)
-    handlers = bpy.app.handlers.depsgraph_update_post
-    if _sync_sun not in handlers:
-        handlers.append(_sync_sun)
-    if _sync_sun not in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.append(_sync_sun)
 
 
 def unregister():
     material_builder.unregister_graph_provider(provider)
-    for lst in (bpy.app.handlers.depsgraph_update_post, bpy.app.handlers.load_post):
-        if _sync_sun in lst:
-            lst.remove(_sync_sun)
