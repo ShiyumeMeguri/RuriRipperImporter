@@ -136,13 +136,14 @@ def _clone_uber(part, material_name, images):
         real = images.get(node.image.name)
         if real is None:
             continue
+        # 颜色空间**双向**跟随占位图(生成期按真源 .meta sRGBTexture 定):只单向强制 Non-Color
+        # 会让老会话里被错标过的图(如 _ShadowLutTex)永远弹不回 sRGB。
         non_color = node.image.colorspace_settings.name == "Non-Color"
         node.image = real
-        if non_color:
-            try:
-                real.colorspace_settings.name = "Non-Color"
-            except Exception:
-                pass
+        try:
+            real.colorspace_settings.name = "Non-Color" if non_color else "sRGB"
+        except Exception:
+            pass
     return clone
 
 
