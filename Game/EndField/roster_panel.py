@@ -261,24 +261,27 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _prefab_rows(query, model_kind=""):
-    """Every cabmap row whose container path is a .prefab carrying ``query``.
+def _prefab_rows(query, model_kind):
+    """The cabmap rows for the ONE prefab named ``<query>_<model_kind>``.
 
-    ``query`` is the id the GAME keys the row by, matched against the game's own
-    addressable index -- no path convention of ours is involved. ``model_kind``
-    narrows to one of the game's own model families ("postmodel" is the in-world
-    actor, "uimodel" the one menus pose), by the suffix the game names them with.
+    ``query`` is the id the GAME keys the row by, ``model_kind`` one of the
+    game's own model families ("postmodel" = in-world actor, "uimodel" = the one
+    menus pose). Matching is EXACT on the file stem, never a substring:
+
+    a substring match reads as "one character" but resolves to every asset whose
+    path happens to carry the word -- "chr_0004_pelica" also lives inside
+    "abilityentity_chr_0004_pelica_ultimate_skill_postmodel". Each extra hit
+    drags its own dependency closure into the load, and the closures are what
+    make an import eat the whole game instead of one character. Exact stem or
+    nothing; a caller with no ``model_kind`` has no business importing.
 
     One row per distinct path: the same prefab is listed by every bundle that
     carries it, and importing it thirty times is thirty times the work for the
     same result. Returns [(row index, container path)]."""
+    if not model_kind:
+        raise ValueError("_prefab_rows needs a model_kind -- substring import was removed")
     cabmap_state.apply_filter(query)
-    needle = query.lower()
-    # The whole leaf must BE the id (plus the family suffix), not merely contain
-    # it: "chr_0004_pelica" is also a substring of the ability-entity effect
-    # prefab "abilityentity_chr_0004_pelica_ultimate_skill_postmodel", which is
-    # not the character and must not be imported as one.
-    wanted = "{0}_{1}".format(needle, model_kind) if model_kind else None
+    wanted = "{0}_{1}".format(query.lower(), model_kind)
     by_path = {}
     for row in cabmap_state.VISIBLE:
         for path_index in range(cabmap_state.ROWS.container_path_count(row)):
@@ -286,8 +289,7 @@ def _prefab_rows(query, model_kind=""):
             low = path.lower()
             if not low.endswith(".prefab") or low in by_path:
                 continue
-            stem = low.rsplit("/", 1)[-1][:-len(".prefab")]
-            if stem == wanted if wanted else needle in low:
+            if low.rsplit("/", 1)[-1][:-len(".prefab")] == wanted:
                 by_path[low] = (row, path)
     return sorted(by_path.values(), key=lambda hit: hit[1])
 
@@ -669,11 +671,15 @@ class RURI_OT_roster_load(bpy.types.Operator):
 
         hits = _prefab_rows(entry.key, state.model_kind)
         if not hits:
-            any_prefab = _prefab_rows(entry.key)
-            self.report({"WARNING"}, "'{0}' has no _{1} prefab; it does have {2}.".format(
-                entry.label, state.model_kind, ", ".join(path for _row, path in any_prefab[:3]))
-                if any_prefab else
-                "No prefab in the loaded cabmap is named after '{0}'.".format(entry.key))
+            # 只报另一个 model family(同样精确名),不做子串扫描——诊断不值得把闭包炸开。
+            other = "uimodel" if state.model_kind == "postmodel" else "postmodel"
+            alt = _prefab_rows(entry.key, other)
+            self.report({"WARNING"},
+                        "'{0}' has no {1}_{2} prefab; it does have the {3} one.".format(
+                            entry.label, entry.key, state.model_kind, other)
+                        if alt else
+                        "No prefab named '{0}_{1}' in the loaded cabmap.".format(
+                            entry.key, state.model_kind))
             return {"CANCELLED"}
 
         return self._import(context, state, entry, _for_cast(hits, state.kind), "")

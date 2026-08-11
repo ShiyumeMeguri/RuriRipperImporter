@@ -26,16 +26,21 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, roster_panel, scene_panel
+from . import character_panel, roster_panel, scene_panel, shader
 
 
 def _register():
     scene_panel.register()
     roster_panel.register()
     character_panel.register()
+    # CharacterNPR materials build as generated Ruri Uber node groups instead of
+    # the host's Principled fallback -- a graph provider, so the host core stays
+    # game-blind (see shader/__init__ and material_builder.GRAPH_PROVIDERS).
+    shader.register()
 
 
 def _unregister():
+    shader.unregister()
     character_panel.unregister()
     roster_panel.unregister()
     scene_panel.unregister()
