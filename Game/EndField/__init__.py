@@ -27,9 +27,16 @@ from __future__ import annotations
 
 from .. import GameModule, GameTab
 from . import character_panel, roster_panel, scene_panel, shader
+from ...ruri_pybridge.unity import mesh_decoder
+
+# 本作的顶点压法:法线与切线同挤在一个 32-bit word 里(bit30 标志 / 低 20 位八面体法线 /
+# bits20-29 切平面内角 / bit31 手性)。位布局算法是通用的、住在内核;"这批资产用的是它"
+# 只有游戏模块知道,所以在这里显式投票 —— 内核绝不按游戏名猜。
+_VERTEX_PACKING = "oct20_frame"
 
 
 def _register():
+    mesh_decoder.ENABLED_PACKINGS.add(_VERTEX_PACKING)
     scene_panel.register()
     roster_panel.register()
     character_panel.register()
@@ -40,6 +47,7 @@ def _register():
 
 
 def _unregister():
+    mesh_decoder.ENABLED_PACKINGS.discard(_VERTEX_PACKING)
     shader.unregister()
     character_panel.unregister()
     roster_panel.unregister()

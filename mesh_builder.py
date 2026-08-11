@@ -83,6 +83,8 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
     mesh.validate(clean_customdata=False)
     mesh.update()
 
+    _bake_tangents(mesh, decoded, loop_verts)
+
     obj = bpy.data.objects.new(name, mesh)
     context.collection.objects.link(obj)
 
@@ -104,6 +106,36 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
         _apply_blendshapes(obj, decoded)
 
     return obj
+
+
+def _bake_tangents(mesh, decoded, loop_verts):
+    """切线写进 corner 域属性,着色图直读 —— 属性**恒存在**,免去"缺属性静默读到零向量"
+    (实锤:半边脸紫)。有游戏切线用游戏的(w 按 Unity 原值:换轴与图内 b2u 两次反射抵消);
+    没有就退回 Blender 自算的 UV 切线,并翻一次手性(只经 b2u 一次反射)。"""
+    tan_attr = mesh.attributes.new(name="ruri_tangent", type="FLOAT_VECTOR", domain="CORNER")
+    sign_attr = mesh.attributes.new(name="ruri_tangent_sign", type="FLOAT", domain="CORNER")
+
+    if decoded.tangents is not None:
+        per_vertex = coordinate.convert_points(decoded.tangents[:, :3])
+        tan_attr.data.foreach_set("vector", np.ascontiguousarray(
+            per_vertex[loop_verts], dtype=np.float32).reshape(-1))
+        sign_attr.data.foreach_set("value", np.ascontiguousarray(
+            decoded.tangents[loop_verts, 3], dtype=np.float32))
+        return
+
+    try:
+        mesh.calc_tangents()
+    except RuntimeError as exc:
+        print(f"[RuriRipper] {mesh.name}: 无游戏切线且 UV 切线算不出({exc})——"
+              f"法线贴图与各向异性会错,切线属性留零。")
+        return
+    n_loops = len(mesh.loops)
+    tangents = np.empty(n_loops * 3, dtype=np.float32)
+    signs = np.empty(n_loops, dtype=np.float32)
+    mesh.loops.foreach_get("tangent", tangents)
+    mesh.loops.foreach_get("bitangent_sign", signs)
+    tan_attr.data.foreach_set("vector", tangents)
+    sign_attr.data.foreach_set("value", -signs)
 
 
 def _apply_skin(obj, decoded, smr_bones, file_id_to_bone):

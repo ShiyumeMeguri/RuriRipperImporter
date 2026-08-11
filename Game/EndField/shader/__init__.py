@@ -133,7 +133,9 @@ def _clone_uber(part, material_name, images):
     for node in clone.nodes:
         if node.type != "TEX_IMAGE" or node.image is None:
             continue
-        real = images.get(_slot_of(node.image.name))
+        slot = _slot_of(node.image.name)
+        node.label = slot          # 槽名恒留在节点上:换图后占位名消失,绑定错位否则无从审计
+        real = images.get(slot)
         if real is None:
             continue
         # 颜色空间**双向**跟随占位图(生成期按真源 .meta sRGBTexture 定):只单向强制 Non-Color
