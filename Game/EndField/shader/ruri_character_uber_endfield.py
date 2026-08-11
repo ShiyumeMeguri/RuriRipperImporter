@@ -9,9 +9,12 @@
 #  · 贴图按名绑定(gen.IMG_MAP 或全局同名 image;缺席时用 4x4 中性占位);
 #  · 引擎态经根组输入桩:Sun_Direction/Sun_Color(默认已按 Unity Y-up→Blender Z-up 换轴)、
 #    Sun_ShadowAtten;
-#  · IBL:cube 采样 → 同名等距柱状环境图(图名 IBL_*),方向经 g.u2b 换回 Blender 世界系。
-#    绑一张场景 HDRI 到该图名即生效;未绑时全向落引擎灰 0.2159 —— 此时金属只剩 GGX 高光,
-#    整体偏暗属预期。mip 实参丢弃(Blender 图节点无 LOD 口),粗糙面反射未预滤;
+#  · IBL:真源 _CharMaxCubemap 在 space0 = 引擎全局环境探针(非材质槽)→ 这里取**当前在照亮视口的环境**:
+#    Material Preview/Rendered 关着 Scene World 时 = 视口 studiolight(那排 HDRI 小球,连 Rotation/Intensity
+#    一起吃),勾上或无 3D 视图则 = scene.world;方向经 g.u2b 换回 Blender 世界系。
+#    金属的漫反射项恒为 0,整身亮度几乎全来自这条 IBL —— 环境有多亮,金属就有多亮。
+#    组内算的方向出不去(节点图不许成环)→ 只能取建组时的快照:换球/换世界后 ensure(rebuild=True);
+#    mip 实参丢弃(图节点无 LOD 口),粗糙面反射未预滤;同名 image 存在时优先,作手动覆盖。
 #  · **part 变体**:_CharaPartID 生成期折叠,每 part 一套入口 + 独立依赖闭包
 #    (PARTS 表)。消费方按材质 part 选 PARTS[part],只建该闭包 —— 死支零节点;
 #  · keyword 折叠: _ENDFIELD, _RURI_FORWARD_PASS(前向单趟);
@@ -34,6 +37,79 @@ def _tree(name):
     if old is not None:
         bpy.data.node_groups.remove(old)
     return bpy.data.node_groups.new(name, 'ShaderNodeTree')
+
+
+def _viewport_shading():
+    """优先活动窗口的 3D 视图 shading(仅 Material Preview / Rendered 才谈得上环境);没有则 None。"""
+    screen = getattr(bpy.context, 'screen', None)
+    screens = ([screen] if screen is not None else []) + [s for s in bpy.data.screens if s is not screen]
+    for scr in screens:
+        for area in scr.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for space in area.spaces:
+                if space.type == 'VIEW_3D' and space.shading.type in {'MATERIAL', 'RENDERED'}:
+                    return space.shading
+    return None
+
+
+def _studiolight_image(name):
+    """视口 studiolight 名 → HDRI image(自带的在 datafiles/studiolights/world/*.exr)。"""
+    for sl in bpy.context.preferences.studio_lights:
+        if sl.name == name and sl.type == 'WORLD' and sl.path:
+            return bpy.data.images.load(sl.path, check_existing=True)
+    return None
+
+
+def _scene_world_env():
+    """scene.world → (image, projection, mapping_spec, strength, 纯色 rgb)。
+    只认最常见的两种世界:Background(Environment Texture) 与 Background(纯色);
+    读不懂的(如 Sky Texture 驱动 Color)纯色返 None,调用方落引擎灰。"""
+    scene = getattr(bpy.context, 'scene', None)
+    world = getattr(scene, 'world', None) if scene is not None else None
+    if world is None:
+        return None, None, None, 1.0, None
+    if not world.use_nodes or world.node_tree is None:
+        return None, None, None, 1.0, tuple(world.color[:3])
+    nodes = world.node_tree.nodes
+    bg = next((n for n in nodes if n.type == 'BACKGROUND'), None)
+    strength = bg.inputs['Strength'].default_value if bg is not None else 1.0
+    tex = next((n for n in nodes if n.type == 'TEX_ENVIRONMENT' and n.image is not None), None)
+    if tex is not None:
+        links = tex.inputs['Vector'].links
+        src = links[0].from_node if links else None
+        spec = None
+        if src is not None and src.type == 'MAPPING':
+            spec = (src.vector_type, src.inputs['Location'].default_value[:],
+                    src.inputs['Rotation'].default_value[:], src.inputs['Scale'].default_value[:])
+        return tex.image, tex.projection, spec, strength, None
+    if bg is not None and not bg.inputs['Color'].links:
+        c = bg.inputs['Color'].default_value
+        return None, None, None, strength, (c[0] * strength, c[1] * strength, c[2] * strength)
+    return None, None, None, strength, None
+
+
+def _env_source():
+    """**当前真正在照亮视口的那份环境** → (image, projection, mapping_spec, strength, 纯色 rgb)。
+
+    真源的 _CharMaxCubemap 声明在 space0(引擎全局描述符空间,与 _LightCookie/辐照度体同列),
+    characternpr.shader 的 Properties 里零出现 —— 它是场景环境探针而非材质槽,不该让谁手动绑图。
+    取值顺序按 Blender 的实际照明来源:Material Preview / Rendered 关着 Scene World 时,
+    EEVEE 照的是**视口 studiolight**(那排 HDRI 小球)而不是 scene.world —— 只读后者就会
+    "切了球纹丝不动";勾上 Scene World 或没有 3D 视图(headless)才回落 scene.world。"""
+    shading = _viewport_shading()
+    if shading is not None:
+        use_world = (shading.use_scene_world_render if shading.type == 'RENDERED'
+                     else shading.use_scene_world)
+        if not use_world:
+            image = _studiolight_image(shading.studio_light)
+            if image is not None:
+                rot = shading.studiolight_rotate_z
+                # 转角按 Blender 自己 Mapping-on-world 的同一约定作用在方向上;
+                # 万一反射与可见背景反向,要翻的符号只在这一处。
+                spec = None if rot == 0.0 else ('VECTOR', (0.0, 0.0, 0.0), (0.0, 0.0, rot), (1.0, 1.0, 1.0))
+                return image, 'EQUIRECTANGULAR', spec, shading.studiolight_intensity, None
+    return _scene_world_env()
 
 
 class G:
@@ -222,22 +298,39 @@ class G:
         return self.vtrans(self.comb(x, z, y), 'OBJECT', 'WORLD', 'VECTOR')
 
     def env(self, name, direction, default):
-        """等距柱状环境图按方向采样 = cubemap 的 Blender 等价物(图节点无 LOD 口,mip 丢弃)。
-        图名 == 逻辑槽名,同 tex():绑场景 HDRI 即全图生效;未绑时全向落 default(引擎灰)。
-        Environment Texture 只有 Color 一个输出,alpha 恒 1。"""
+        """环境反射按方向采样 = cubemap 的 Blender 等价物。源 = 当前在照亮视口的那份环境
+        (视口 studiolight 或 scene.world,见 _env_source);存在同名 image 时优先,作手动覆盖。
+        取不到图(纯色世界/读不懂)就退成常量色。
+
+        为什么只能走图节点、只能是快照:方向在组内算,而节点图不许成环,组外的 BSDF 拿不到它 ——
+        所以换球/换世界/转 HDRI 之后要重跑 ensure(rebuild=True) 才跟上。
+        图节点无 LOD 口 → mip 丢弃,粗糙面反射未预滤。Environment Texture 只有 Color 一个输出。"""
+        override = bpy.data.images.get(name)
+        if override is not None:
+            image, projection, spec, strength = override, 'EQUIRECTANGULAR', None, 1.0
+        else:
+            image, projection, spec, strength, flat = _env_source()
+            if image is None:
+                return (flat if flat is not None else default), 1.0
+        if spec is not None:
+            # 环境那侧把方向先过一道旋转,这边不跟就会和可见背景错位。
+            vector_type, location, rotation, scale = spec
+            md = self._nd('ShaderNodeMapping')
+            md.vector_type = vector_type
+            md.inputs['Location'].default_value = location
+            md.inputs['Rotation'].default_value = rotation
+            md.inputs['Scale'].default_value = scale
+            self._set(md.inputs['Vector'], direction)
+            direction = md.outputs[0]
         nd = self._nd('ShaderNodeTexEnvironment')
-        img = bpy.data.images.get(name)
-        if img is None:
-            img = bpy.data.images.new(name, 4, 4, float_buffer=True)
-            img.generated_color = (default[0], default[1], default[2], 1.0)
-            # 占位灰是**线性**引擎值,走 sRGB 解码会被压到 0.04;只标自建占位,
-            # 用户绑的 HDRI 保留它自己的色彩空间。
-            img.colorspace_settings.name = 'Non-Color'
-        nd.image = img
-        nd.projection = 'EQUIRECTANGULAR'
+        nd.image = image
+        nd.projection = projection
         nd.interpolation = 'Linear'
         self._set(nd.inputs[0], direction)
-        return nd.outputs[0], 1.0
+        color = nd.outputs[0]
+        if strength != 1.0:
+            color = self.vmath('SCALE', color, s=strength)
+        return color, 1.0
 
     def vtrans(self, v, frm, to, kind='VECTOR'):
         nd = self._nd('ShaderNodeVectorTransform')
