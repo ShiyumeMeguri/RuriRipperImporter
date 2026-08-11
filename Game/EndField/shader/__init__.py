@@ -28,6 +28,8 @@ at their decision site with the ground truth they came from.
 from __future__ import annotations
 
 import bpy
+from bpy.app.handlers import persistent
+from mathutils import Vector
 
 from .... import material_builder
 from . import ruri_character_uber_endfield as gen
@@ -144,72 +146,54 @@ def _clone_uber(part, material_name, images):
     return clone
 
 
-def _drive_from_sun(node):
-    """Drive the uber's Sun_* inputs off the scene's own sun lamp, so adding or
-    rotating a light actually relights the character.
+# ============================================================================
+# 世界光源同步 —— Unity 式解耦:shader 不绑任何灯对象。
+#
+# Blender 材质节点图在架构上读不到场景灯(没有"主光方向"节点,灯只进 BSDF 积分器);
+# Unity 的等价物是引擎每帧把 _MainLightPosition 写进全局 cbuffer。这里由插件当"引擎":
+# depsgraph 每次求值后把**当时场景里的 sun**(哪只都行,何时加的都行)推进所有
+# ruri 角色组的 Sun_* socket。加灯/换灯/转灯/调色即时生效,无导入时序耦合。
+#
+# 🔴 禁用 driver:脚本驱动吃 Auto Run Python Scripts 安全门(默认关),被拦时全部
+#   静默评 0 → Sun_Direction=(0,0,0) → NdotL≡0 → 半阶恒亮 + 转灯无效(实锤三症状)。
+#   handler 是插件自身代码,不过安全门。
+# ============================================================================
+_last_sun_push = [None]
 
-    A shader graph cannot read scene lights (there is no "light direction" node --
-    that information only exists inside the render engine's own loop), so the NPR
-    kernels take the sun as plain inputs. Leaving them at a baked default is what
-    made lights do nothing. Drivers close the gap: the direction components and
-    the colour follow the lamp live, and rotating it re-evaluates because each
-    driver declares the lamp's own rotation as its variable."""
-    register_drivers()   # 幂等自愈:namespace 缺函数时驱动静默评 0(全黑光),先补上再挂
-    sun = next((o for o in bpy.context.scene.objects
+
+@persistent
+def _sync_sun(scene=None, _depsgraph=None):
+    # depsgraph_update_post 传 (scene, depsgraph);load_post 传 (filepath) —— 统一兜到 context。
+    if not isinstance(scene, bpy.types.Scene):
+        scene = bpy.context.scene
+    if scene is None:
+        return
+    sun = next((o for o in scene.objects
                 if o.type == "LIGHT" and o.data.type == "SUN"), None)
     if sun is None:
-        return False
-    direction = node.inputs.get("Sun_Direction")
-    color = node.inputs.get("Sun_Color")
-    if direction is None:
-        return False
-    for index in range(3):
-        fcurve = direction.driver_add("default_value", index)
-        driver = fcurve.driver
-        driver.type = "SCRIPTED"
-        # +Z of the lamp = toward the light (Blender suns shine down their -Z).
-        driver.expression = "ruri_sun_dir({0})".format(index)
-        var = driver.variables.new()
-        var.name = "rot"
-        var.type = "TRANSFORMS"
-        var.targets[0].id = sun
-        var.targets[0].transform_type = "ROT_Z"
-    if color is not None:
-        for index in range(3):
-            fcurve = color.driver_add("default_value", index)
-            driver = fcurve.driver
-            driver.type = "SCRIPTED"
-            driver.expression = "ruri_sun_color({0})".format(index)
-            var = driver.variables.new()
-            var.name = "energy"
-            var.type = "SINGLE_PROP"
-            var.targets[0].id_type = "LIGHT"
-            var.targets[0].id = sun.data
-            var.targets[0].data_path = "energy"
-    return True
-
-
-def _sun_dir(index):
-    sun = next((o for o in bpy.context.scene.objects
-                if o.type == "LIGHT" and o.data.type == "SUN"), None)
-    if sun is None:
-        return (0.0, 0.0, 1.0)[index]
-    return sun.matrix_world.to_3x3().col[2].normalized()[index]
-
-
-def _sun_color(index):
-    sun = next((o for o in bpy.context.scene.objects
-                if o.type == "LIGHT" and o.data.type == "SUN"), None)
-    if sun is None:
-        return 1.0
-    # Sun "Strength" is irradiance in W/m²; the NPR kernels want a plain
-    # multiplier, and the game's own default main light sits at ~1.
-    return sun.data.color[index] * max(sun.data.energy, 0.0)
-
-
-def register_drivers():
-    bpy.app.driver_namespace["ruri_sun_dir"] = _sun_dir
-    bpy.app.driver_namespace["ruri_sun_color"] = _sun_color
+        return
+    m = sun.matrix_world
+    # 世界旋转 +Z 列 = toLight(Blender sun 沿自身 -Z 照);normalize 顺带吃掉缩放。
+    d = Vector((m[0][2], m[1][2], m[2][2])).normalized()
+    e = max(sun.data.energy, 0.0)
+    col = (sun.data.color[0] * e, sun.data.color[1] * e, sun.data.color[2] * e)
+    key = (round(d.x, 5), round(d.y, 5), round(d.z, 5),
+           round(col[0], 5), round(col[1], 5), round(col[2], 5))
+    if _last_sun_push[0] == key:   # 无变化零写入(也斩断写 socket → depsgraph 的回环)
+        return
+    _last_sun_push[0] = key
+    for mat in bpy.data.materials:
+        if mat.get("ruri_uber_part") is None or mat.node_tree is None:
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type != "GROUP":
+                continue
+            sock = node.inputs.get("Sun_Direction")
+            if sock is not None:
+                sock.default_value = (d.x, d.y, d.z)
+            sock = node.inputs.get("Sun_Color")
+            if sock is not None:
+                sock.default_value = col
 
 
 def _standard_view_transform(scene):
@@ -323,7 +307,9 @@ def provider(builder, props):
     except Exception:
         pass
 
-    _drive_from_sun(grp)
+    # 导入即按当前场景 sun 同步一次(之后由 depsgraph handler 持续跟随;见 _sync_sun)。
+    _last_sun_push[0] = None
+    _sync_sun(bpy.context.scene)
 
     mat["ruri_uber_part"] = part_name
     ref = props.shader_ref
@@ -342,9 +328,16 @@ def provider(builder, props):
 
 
 def register():
-    register_drivers()
     material_builder.register_graph_provider(provider)
+    handlers = bpy.app.handlers.depsgraph_update_post
+    if _sync_sun not in handlers:
+        handlers.append(_sync_sun)
+    if _sync_sun not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_sync_sun)
 
 
 def unregister():
     material_builder.unregister_graph_provider(provider)
+    for lst in (bpy.app.handlers.depsgraph_update_post, bpy.app.handlers.load_post):
+        if _sync_sun in lst:
+            lst.remove(_sync_sun)
