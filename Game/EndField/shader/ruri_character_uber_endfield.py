@@ -8375,13 +8375,18 @@ STAMP = '927aed36be6e7885'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
+_BUILT = set()   # 本会话已重建过的 part
+
+
 def ensure(part=None, rebuild=False):
-    """该 part 的模板组(固定名)。首次建、之后复用;指纹变了自动重建换血。
+    """该 part 的模板组(固定名)。
+    本 blend 里首次用到 → 直接换血覆盖同名组(不看指纹,所以插件更新后不会有
+    过时组残留);之后再导入一律复用,零创建。
     Blender 没有贴图 socket ⇒ 组不能跨材质共享,故模板只是克隆源。"""
     part = part or DEFAULT_PART
     group_name, builder = PARTS.get(part, PARTS[DEFAULT_PART])
     existing = bpy.data.node_groups.get(group_name)
-    if existing is not None and not rebuild and existing.get(STAMP_KEY) == STAMP:
+    if existing is not None and part in _BUILT and not rebuild:
         return existing
     stale = existing
     if stale is not None:
@@ -8390,10 +8395,11 @@ def ensure(part=None, rebuild=False):
     builder()
     built = bpy.data.node_groups[group_name]
     built.use_fake_user = True   # 零引用也随 blend 落盘
-    built[STAMP_KEY] = STAMP
+    built[STAMP_KEY] = STAMP     # 只作标记:哪次部署建的,不参与判定
     if stale is not None:
-        stale.user_remap(built)
+        stale.user_remap(built)  # 旧组的用户(上次导入的克隆源)改指新组后删除
         bpy.data.node_groups.remove(stale)
+    _BUILT.add(part)
     return built
 
 
