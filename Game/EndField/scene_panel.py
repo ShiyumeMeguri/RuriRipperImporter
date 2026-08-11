@@ -1,8 +1,8 @@
 """Browse the game's scenes the way the game itself lists them, and import one.
 
-Two tabs, because the game itself ships two kinds of scene (see ``scene_state``
-for how they are told apart -- by the game's own ``isSingleLevel`` flag, never by
-the shape of a name):
+One tab with two halves, because the game itself ships two kinds of scene (see
+``scene_state`` for how they are told apart -- by the game's own ``isSingleLevel``
+flag, never by the shape of a name):
 
 ``Scene``   the self-contained ones -- a dungeon, a station interior. Small
             enough to hold whole, so there is nothing to choose: pick it, import
@@ -19,10 +19,13 @@ Names are the real localized ones, in whichever language Blender is running in -
 ``bpy.app.translations.locale`` picks which text container the C# side joins
 through.
 
-The two draw functions below are what this game's tabs declare (see the package's
-GAME_MODULE) -- NOT their own stacked bl_parent_id sub-panels, so they share the
-core panel's hard gate (nothing here is reachable before a cabmap is loaded) and
-tab bar instead of always being visible below it.
+The kind is picked INSIDE the tab (``ruri_scene_kind``, drawn expanded), the same
+way the Character tab picks its cast -- the tab bar carries one button per topic,
+not one per projection of a topic. The single draw function below is what this
+game's StreamingScene tab declares (see the package's GAME_MODULE) -- NOT its own
+stacked bl_parent_id sub-panel, so it shares the core panel's hard gate (nothing
+here is reachable before a cabmap is loaded) and tab bar instead of always being
+visible below it.
 """
 
 from __future__ import annotations
@@ -493,14 +496,14 @@ def _draw_actions(layout, state, enabled):
     tail.operator(RURI_OT_scene_import.bl_idname, icon="IMPORT").kind = state.KIND
 
 
-def draw_scene_tab(layout, context):
+def _draw_self_contained(layout, context):
     """The self-contained scenes: nothing to window, so nothing to choose."""
     state = context.scene.ruri_scene_box
     _draw_list(layout, state)
     _draw_actions(layout, state, _selected(state) is not None)
 
 
-def draw_world_tab(layout, context):
+def _draw_streaming(layout, context):
     """The open-world maps: pick a map, then one of the places the game itself
     names in it, at the size the game itself gives that place."""
     state = context.scene.ruri_scene_world
@@ -530,6 +533,28 @@ def draw_world_tab(layout, context):
     _draw_actions(layout, state, entry is not None)
 
 
+# The tab's two halves, left to right: the kind's own id, the button's text, its
+# tooltip, and what it draws. One row per kind of scene the game ships -- the
+# selector's items and the dispatch are both views of this, so a third kind would
+# be a third row and nothing else.
+_KINDS = (
+    (SELF_CONTAINED, "Scene",
+     "The self-contained scenes -- small enough to import whole",
+     _draw_self_contained),
+    (STREAMING, "World",
+     "The open-world maps -- import one named place of map01/map02 at a time",
+     _draw_streaming),
+)
+_KIND_ITEMS = tuple(row[:3] for row in _KINDS)
+_KIND_DRAW = {row[0]: row[3] for row in _KINDS}
+
+
+def draw_streaming_scene_tab(layout, context):
+    """Pick which of the game's two kinds of scene to browse, then browse it."""
+    layout.row(align=True).prop(context.scene, "ruri_scene_kind", expand=True)
+    _KIND_DRAW[context.scene.ruri_scene_kind](layout, context)
+
+
 _CLASSES = (
     RURI_PG_scene_entry,
     RURI_PG_scene_box,
@@ -548,9 +573,13 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_scene_box = PointerProperty(type=RURI_PG_scene_box)
     bpy.types.Scene.ruri_scene_world = PointerProperty(type=RURI_PG_scene_world)
+    bpy.types.Scene.ruri_scene_kind = EnumProperty(
+        name="Kind", items=_KIND_ITEMS, default=SELF_CONTAINED,
+        description="Which of the game's two kinds of scene to browse")
 
 
 def unregister():
+    del bpy.types.Scene.ruri_scene_kind
     del bpy.types.Scene.ruri_scene_world
     del bpy.types.Scene.ruri_scene_box
     for cls in reversed(_CLASSES):

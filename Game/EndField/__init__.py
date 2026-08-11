@@ -3,12 +3,13 @@ nothing else, across every hooked version of it.
 
 Two tabs, neither of which means anything for another title:
 
-``Scene``      the self-contained scenes -- pick one from the game's own list and
-               import it whole.
-``World``      the open-world maps -- pick one of the places the game itself names
-               in map01/map02 and import that place, at the size the game gives
-               it, out of the game's own chunk format.
-               (both: ``scene_state`` + ``asset_paths`` + ``scene_importer``)
+``StreamingScene``  the game's own scenes, both kinds it ships, switched inside
+               the tab: ``Scene`` the self-contained ones -- pick one from the
+               game's own list and import it whole; ``World`` the open-world maps
+               -- pick one of the places the game itself names in map01/map02 and
+               import that place, at the size the game gives it, out of the game's
+               own chunk format.
+               (``scene_state`` + ``asset_paths`` + ``scene_importer``)
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
                (``skeletal_morph`` + ``morph_state``)
@@ -56,12 +57,10 @@ GAME_MODULE = GameModule(
     # 1.2.4's class also answers to this id via AlsoCoversVersions.
     default_hook_id="EndField_1.4.4",
     tabs=(
-        GameTab("scene", "Scene",
-                "The self-contained scenes -- small enough to import whole",
-                scene_panel.draw_scene_tab),
-        GameTab("world", "World",
-                "The open-world maps -- import one named place of map01/map02 at a time",
-                scene_panel.draw_world_tab),
+        GameTab("streamingscene", "StreamingScene",
+                "The game's own scenes: the self-contained ones, and one named place "
+                "of an open-world map at a time",
+                scene_panel.draw_streaming_scene_tab),
         GameTab("character", "Character",
                 "Drive an imported character's face: the SkeletalMorph "
                 "emotion/pose/lipsync library and its morph animations",

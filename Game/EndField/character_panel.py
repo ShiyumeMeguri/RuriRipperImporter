@@ -9,7 +9,8 @@ ctrl, constant for a pose, an AnimationCurve for an animation). See
 skeletal_morph.py in this folder for the format.
 
 draw_character_tab() is the draw function this game's "Character" tab declares
-(see the package's GAME_MODULE), exactly like scene_panel.draw_scene_tab -- so it
+(see the package's GAME_MODULE), exactly like
+scene_panel.draw_streaming_scene_tab -- so it
 shares the core panel's cabmap-loaded gate and tab bar instead of being a
 separate always-on sub-panel.
 
