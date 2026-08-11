@@ -228,7 +228,20 @@ def provider(builder, props):
     if mat.node_tree is None:
         mat.use_nodes = True
     grp = gen.build_material(mat, clone.name, opaque=opaque,
-                             multiply_blend=(part_name == "OverlayShadow"))
+                             multiply_blend=(part_name == "OverlayShadow"), part=part_name)
+    # 组外贴图节点(原始 UV 直采的那些,build_material 建在材质树上):换真图,节点名 = 槽名。
+    for node in mat.node_tree.nodes:
+        if node.type != "TEX_IMAGE":
+            continue
+        real = images.get(_slot_of(node.label or node.name))
+        if real is None:
+            continue
+        non_color = node.image is not None and node.image.colorspace_settings.name == "Non-Color"
+        node.image = real
+        try:
+            real.colorspace_settings.name = "Non-Color" if non_color else "sRGB"
+        except Exception:
+            pass
 
     # ── raw direct feed ──────────────────────────────────────────────────────
     filled = 0

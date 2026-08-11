@@ -340,9 +340,11 @@ def build_Ruri_Endfield_Uber_Standard():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -386,13 +388,15 @@ def build_Ruri_Endfield_Uber_Standard():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -417,7 +421,8 @@ def build_Ruri_Endfield_Uber_Standard():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -440,7 +445,8 @@ def build_Ruri_Endfield_Uber_Standard():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -549,7 +555,8 @@ def build_Ruri_Endfield_Uber_Standard():
     v232 = g.vmath('ADD', v230, v231)
     v233 = g.mixv(v225, v217, v232)
     v234 = g.mixf(v225, v218, 1.0)
-    v235, v236 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v235 = g.inp('_BumpMap', True)
+    v236 = g.inp('_BumpMap_alpha', False)
     v237 = g.sep(v235)
     v238 = g.math('MULTIPLY', v237[0], v236)
     v239 = g.math('MULTIPLY', v238, 2)
@@ -590,7 +597,8 @@ def build_Ruri_Endfield_Uber_Standard():
     v274 = g.mixv(v270, v268, v273)
     v275 = g.mixf(v270, v269, 1.0)
     v276 = g.inp('_ClearCoat', False, 0.0)
-    v277, v278 = g.tex('_ClearCoatMask', v0, non_color=True, clamp=False)
+    v277 = g.inp('_ClearCoatMask', True)
+    v278 = g.inp('_ClearCoatMask_alpha', False)
     v279 = g.sep(v277)
     v280 = g.vmath('NORMALIZE', v16)
     v281 = g.bc(v98)
@@ -636,7 +644,8 @@ def build_Ruri_Endfield_Uber_Standard():
     v321 = g.mixv(v302, v82, v319)
     v322 = g.mixv(v302, v233, v320)
     v323 = g.inp('_UseEmission', False, 1.0)
-    v324, v325 = g.tex('_EmissionMap', v0, non_color=False, clamp=False)
+    v324 = g.inp('_EmissionMap', True)
+    v325 = g.inp('_EmissionMap_alpha', False)
     v326 = g.mixv(v323, (0, 0, 0), v324)
     v327 = g.inp('_UseParallax', False, 0.0)
     v328 = g.vmath('NORMALIZE', v16)
@@ -1533,9 +1542,11 @@ def build_Ruri_Endfield_Uber_Face():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -1579,13 +1590,15 @@ def build_Ruri_Endfield_Uber_Face():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -1610,7 +1623,8 @@ def build_Ruri_Endfield_Uber_Face():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -1633,7 +1647,8 @@ def build_Ruri_Endfield_Uber_Face():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -1743,7 +1758,8 @@ def build_Ruri_Endfield_Uber_Face():
     v232 = g.inp('_FaceRight', True, (1.0, 0.0, 0.0))
     v233 = g.inp('_FaceRight_w', False, 0.0)
     v234 = g.vmath('CROSS_PRODUCT', v230, v232)
-    v235, v236 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v235 = g.inp('_BumpMap', True)
+    v236 = g.inp('_BumpMap_alpha', False)
     v237 = g.sep(v235)
     v238 = g.math('MULTIPLY', v237[0], v236)
     v239 = g.math('MULTIPLY', v238, 2)
@@ -1800,7 +1816,8 @@ def build_Ruri_Endfield_Uber_Face():
     v290 = g.math('MULTIPLY', v282, v287)
     v291 = g.comb(v288, v289, v290)
     v292 = g.inp('_UseSDFLightmap', False, 0.0)
-    v293, v294 = g.tex('_SDFMask', v0, non_color=True, clamp=True)
+    v293 = g.inp('_SDFMask', True)
+    v294 = g.inp('_SDFMask_alpha', False)
     v295 = g.mixv(v292, (1, 1, 0), v293)
     v296 = g.mixf(v292, 0, v294)
     v297 = g.vmath('DOT_PRODUCT', v109, v232)
@@ -2533,7 +2550,8 @@ def build_Ruri_Endfield_Uber_Eyes():
     v17 = g.b2u(v3, point=False)
     v18, v19 = g.tex('_BaseMap', v0, non_color=False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -2577,7 +2595,8 @@ def build_Ruri_Endfield_Uber_Eyes():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
@@ -2631,7 +2650,8 @@ def build_Ruri_Endfield_Uber_Eyes():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -3298,9 +3318,11 @@ def build_Ruri_Endfield_Uber_Hair():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -3344,13 +3366,15 @@ def build_Ruri_Endfield_Uber_Hair():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -3375,7 +3399,8 @@ def build_Ruri_Endfield_Uber_Hair():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -3398,7 +3423,8 @@ def build_Ruri_Endfield_Uber_Hair():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -3522,7 +3548,8 @@ def build_Ruri_Endfield_Uber_Hair():
     v247 = g.vmath('MULTIPLY', v245, v246)
     v248 = g.inp('_UseSpecBumpMap', False, 0.0)
     v249 = g.math('MULTIPLY', v248, v20)
-    v250, v251 = g.tex('_SplitNormalMap', v0, non_color=True, clamp=False)
+    v250 = g.inp('_SplitNormalMap', True)
+    v251 = g.inp('_SplitNormalMap_alpha', False)
     v252 = g.sep(v250)
     v253 = g.math('MULTIPLY', v252[0], 2)
     v254 = g.math('SUBTRACT', v253, 1)
@@ -3571,7 +3598,8 @@ def build_Ruri_Endfield_Uber_Hair():
     v297 = g.vmath('MULTIPLY', v296, v243)
     v298 = g.vmath('ADD', v295, v297)
     v299 = g.vmath('NORMALIZE', v298)
-    v300, v301 = g.tex('_SplitNormalMap', v0, non_color=True, clamp=False)
+    v300 = g.inp('_SplitNormalMap', True)
+    v301 = g.inp('_SplitNormalMap_alpha', False)
     v302 = g.sep(v300)
     v303 = g.math('MULTIPLY', v302[0], 2)
     v304 = g.math('SUBTRACT', v303, 1)
@@ -4355,9 +4383,11 @@ def build_Ruri_Endfield_Uber_Fur():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -4401,13 +4431,15 @@ def build_Ruri_Endfield_Uber_Fur():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -4432,7 +4464,8 @@ def build_Ruri_Endfield_Uber_Fur():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -4455,7 +4488,8 @@ def build_Ruri_Endfield_Uber_Fur():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -4600,7 +4634,8 @@ def build_Ruri_Endfield_Uber_Fur():
     v269 = g.vmath('ADD', v267, v268)
     v270 = g.mixv(v262, v254, v269)
     v271 = g.mixf(v262, v255, 1.0)
-    v272, v273 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v272 = g.inp('_BumpMap', True)
+    v273 = g.inp('_BumpMap_alpha', False)
     v274 = g.sep(v272)
     v275 = g.math('MULTIPLY', v274[0], v273)
     v276 = g.math('MULTIPLY', v275, 2)
@@ -4637,7 +4672,8 @@ def build_Ruri_Endfield_Uber_Fur():
     v307 = g.vmath('MULTIPLY', v306, v305)
     v308 = g.mixf(v20, 1, v286)
     v309 = g.mixv(v20, v307, v304)
-    v310, v311 = g.tex('_FurDirMap', v0, non_color=True, clamp=False)
+    v310 = g.inp('_FurDirMap', True)
+    v311 = g.inp('_FurDirMap_alpha', False)
     v312 = g.comb(v173[0], v173[0], 0.0)
     v313 = g.vmath('DOT_PRODUCT', v312, (12.9898, 78.233, 0.0))
     v314 = g.math('SINE', v313, 0.0)
@@ -5397,7 +5433,8 @@ def build_Ruri_Endfield_Uber_Eyebrow():
     v17 = g.b2u(v3, point=False)
     v18, v19 = g.tex('_BaseMap', v0, non_color=False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -5441,7 +5478,8 @@ def build_Ruri_Endfield_Uber_Eyebrow():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
@@ -5495,7 +5533,8 @@ def build_Ruri_Endfield_Uber_Eyebrow():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -6162,9 +6201,11 @@ def build_Ruri_Endfield_Uber_VFX():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -6208,13 +6249,15 @@ def build_Ruri_Endfield_Uber_VFX():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -6239,7 +6282,8 @@ def build_Ruri_Endfield_Uber_VFX():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -6262,7 +6306,8 @@ def build_Ruri_Endfield_Uber_VFX():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -6836,9 +6881,11 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -6882,13 +6929,15 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -6913,7 +6962,8 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -6936,7 +6986,8 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -7082,9 +7133,11 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v15 = g.b2u(v1, point=True)
     v16 = g.b2u(v2, point=False)
     v17 = g.b2u(v3, point=False)
-    v18, v19 = g.tex('_BaseMap', v0, non_color=False)
+    v18 = g.inp('_BaseMap', True)
+    v19 = g.inp('_BaseMap_alpha', False)
     v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21, v22 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v21 = g.inp('_BumpMap', True)
+    v22 = g.inp('_BumpMap_alpha', False)
     v23 = g.sep(v21)
     v24 = g.math('MULTIPLY', v23[0], v22)
     v25 = g.math('MULTIPLY', v24, 2)
@@ -7128,13 +7181,15 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v63 = g.vmath('NORMALIZE', v62)
     v64 = g.texco().outputs['Window']
     v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66, v67 = g.tex('_RMOSMap', v0, non_color=True, clamp=False)
+    v66 = g.inp('_RMOSMap', True)
+    v67 = g.inp('_RMOSMap_alpha', False)
     v68 = g.sep(v66)
     v69 = g.mixf(v65, 0.0, v68[0])
     v70 = g.mixf(v65, 0.0, v68[1])
     v71 = g.mixf(v65, 0.0, v68[2])
     v72 = g.mixf(v65, 0.0, v67)
-    v73, v74 = g.tex('_BaseMap', v0, non_color=False)
+    v73 = g.inp('_BaseMap', True)
+    v74 = g.inp('_BaseMap_alpha', False)
     v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
     v76 = g.inp('_BaseColor_w', False, 1.0)
     v77 = g.vmath('MULTIPLY', v73, v75)
@@ -7159,7 +7214,8 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v96 = g.math('MULTIPLY', v95, 2)
     v97 = g.math('SUBTRACT', v96, 1)
     v98 = g.mixf(v94, v97, 1)
-    v99, v100 = g.tex('_BaseMap', v0, non_color=False, clamp=False)
+    v99 = g.inp('_BaseMap', True)
+    v100 = g.inp('_BaseMap_alpha', False)
     v101 = g.vmath('SUBTRACT', v61, v15)
     v102 = g.vmath('NORMALIZE', v101)
     v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
@@ -7182,7 +7238,8 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v120 = g.sep(v118)
     v121 = g.math('MULTIPLY', v117, v120[0])
     v122 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v123, v124 = g.tex('_MetallicGlossMap', v0, non_color=True, clamp=False)
+    v123 = g.inp('_MetallicGlossMap', True)
+    v124 = g.inp('_MetallicGlossMap_alpha', False)
     v125 = g.math('SUBTRACT', 1, v124)
     v126 = g.sep(v123)
     v127 = g.inp('_Smoothness', False, 0.5)
@@ -7291,7 +7348,8 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v232 = g.vmath('ADD', v230, v231)
     v233 = g.mixv(v225, v217, v232)
     v234 = g.mixf(v225, v218, 1.0)
-    v235, v236 = g.tex('_BumpMap', v0, non_color=True, clamp=False)
+    v235 = g.inp('_BumpMap', True)
+    v236 = g.inp('_BumpMap_alpha', False)
     v237 = g.sep(v235)
     v238 = g.math('MULTIPLY', v237[0], v236)
     v239 = g.math('MULTIPLY', v238, 2)
@@ -7332,7 +7390,8 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v274 = g.mixv(v270, v268, v273)
     v275 = g.mixf(v270, v269, 1.0)
     v276 = g.inp('_ClearCoat', False, 0.0)
-    v277, v278 = g.tex('_ClearCoatMask', v0, non_color=True, clamp=False)
+    v277 = g.inp('_ClearCoatMask', True)
+    v278 = g.inp('_ClearCoatMask_alpha', False)
     v279 = g.sep(v277)
     v280 = g.vmath('NORMALIZE', v16)
     v281 = g.bc(v98)
@@ -7378,7 +7437,8 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v321 = g.mixv(v302, v82, v319)
     v322 = g.mixv(v302, v233, v320)
     v323 = g.inp('_UseEmission', False, 1.0)
-    v324, v325 = g.tex('_EmissionMap', v0, non_color=False, clamp=False)
+    v324 = g.inp('_EmissionMap', True)
+    v325 = g.inp('_EmissionMap_alpha', False)
     v326 = g.mixv(v323, (0, 0, 0), v324)
     v327 = g.inp('_UseParallax', False, 0.0)
     v328 = g.vmath('NORMALIZE', v16)
@@ -8370,8 +8430,20 @@ PARTS = {
     'LiquidAg': ('Ruri Endfield Uber LiquidAg', build_Ruri_Endfield_Uber_LiquidAg),
 }
 
+EXTERNAL_TEXTURES = {
+    'Standard': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap', '_ClearCoatMask', '_EmissionMap'],
+    'Face': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap', '_SDFMask'],
+    'Eyes': ['_BumpMap', '_RMOSMap', '_MetallicGlossMap'],
+    'Hair': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap', '_SplitNormalMap'],
+    'Fur': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap', '_FurDirMap'],
+    'Eyebrow': ['_BumpMap', '_RMOSMap', '_MetallicGlossMap'],
+    'VFX': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap'],
+    'OverlayShadow': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap'],
+    'LiquidAg': ['_BaseMap', '_BumpMap', '_RMOSMap', '_MetallicGlossMap', '_ClearCoatMask', '_EmissionMap'],
+}
+
 DEFAULT_PART = 'Standard'
-STAMP = '927aed36be6e7885'
+STAMP = '6868aa818d2066dd'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
@@ -8403,7 +8475,44 @@ def ensure(part=None, rebuild=False):
     return built
 
 
-def build_material(mat, group_name=None, opaque=True, multiply_blend=False):
+def _external_textures(g, grp, part, uv):
+    """把原始 UV 直采的贴图建在**材质树上**(组外),Color/Alpha 接进组。
+    这样换贴图不用进组:材质节点树上一眼看到,节点标签就是槽名。
+    UV 是算出来的那些(影色 LUT 按 albedo 查、ramp 按 NdotL 查、matcap 按视
+    空间法线查)提不出来 —— 组外拿不到组内中间量,节点图也不许成环。"""
+    y = 320
+    first = None
+    for slot in EXTERNAL_TEXTURES.get(part, ()):
+        color_in = grp.inputs.get(slot)
+        if color_in is None:
+            continue
+        nd = g._nd('ShaderNodeTexImage')
+        nd.label = slot
+        nd.name = slot
+        nd.location = (-620, y)
+        nd.width = 260
+        y -= 300
+        img = bpy.data.images.get(slot)
+        if img is not None:
+            nd.image = img
+            if img.colorspace_settings.name == 'Non-Color':
+                nd.image.colorspace_settings.name = 'Non-Color'
+        g._set(nd.inputs[0], uv)
+        g._set(color_in, nd.outputs['Color'])
+        alpha_in = grp.inputs.get(slot + '_alpha')
+        if alpha_in is not None:
+            g._set(alpha_in, nd.outputs['Alpha'])
+        if slot == '_BaseMap':
+            first = nd
+    # 活动节点决定 Solid/材质预览显示哪张图 —— 只认 _BaseMap(表里已排头)。
+    # 提不出 _BaseMap 的 part(Eyes/Eyebrow 用视差偏移 UV 采样)宁可不设,
+    # 也不能让法线图当活动节点 —— 那会把模型在视口里显示成紫蓝色。
+    if first is not None:
+        g.t.nodes.active = first
+        first.select = True
+
+
+def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part=None):
     # 入口组实例接进材质树;返回组实例节点(调用方按 socket 名填 uniform)。
     # opaque 的真源判据(characternpr_eye Sub0_Pass0_Fragment:1014 逐字):
     #     outColor.w = (_SurfaceType == 1.0) ? computedAlpha : 1.0
@@ -8437,6 +8546,7 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False):
     for s in grp.inputs:
         if s.name in wires:
             g._set(s, wires[s.name])
+    _external_textures(g, grp, part, tc.outputs['UV'])
     # tonemap 已内联在入口组尾(ret_gBuffer0 即显示线性)——材质树零匿名节点,
     # 属性面板直接露出组的命名 socket。
     color_sock = grp.outputs.get('ret_gBuffer0')
@@ -8483,7 +8593,7 @@ def build_root(part=None):
     if mat.node_tree is None:
         mat.use_nodes = True  # 5.2 新材质默认带树;此行仅旧数据兜底。
     group = ensure(part)
-    build_material(mat, group.name)
+    build_material(mat, group.name, part=part)
     print('[ruri-blender] ' + group.name + ':  ' + str(len(group.nodes)) + ' 节点')
     return mat
 
