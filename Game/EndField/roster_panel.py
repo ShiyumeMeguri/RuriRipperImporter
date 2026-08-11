@@ -781,6 +781,123 @@ class RURI_OT_roster_load(bpy.types.Operator):
                         "Model loaded, but no rig was found to bind '{0}'s expressions to.".format(entry.label))
 
 
+# ── 动画:锚点是容器路径,不是名字 ────────────────────────────────────────────
+# 游戏把动画归在与模型完全不同的一棵树下(模型 prefab 在
+# dynamicassets/gameplay/actors/postmodels/,动画在 arts/entity/actor/),所以
+# reveal 那套"取模型所在目录"在这里无效,得另立锚点。EndField_1.4.4 cabmap 实测:
+#   角色本体      arts/entity/actor/<体型组>/<短名>/animations/<类别>/
+#                 类别 = dialog / 3c / battle / customized / ui / interact
+#   行人 NPC      自己没有 animations 目录,跑体型组共享库
+#                 arts/entity/actor/<体型组>/common/animations/
+#   物件/动物 NPC arts/entity/npc/<类>/<模板>/animations/
+# 按名字搜会被对话表情 morph 淹没 —— pelica 名下 2403 条 AnimationClip 里绝大多数是
+# dialog/timeline/dlgtl_*/morphanim/*_npc_chr_0004_pelica_N.anim(嘴型/表情,不是身体
+# 动画);锚到 "<标识>/animations/" 则 431 行命中 431 行是本体动画,零噪音。
+_ANIM_ANCHOR = "{0}/animations/"
+_SHARED_ANIM_ANCHOR = "actor/{0}/common/animations/"
+_ACTOR_TREE = "/arts/entity/actor/"
+_PEDESTRIAN_TREE = "/pedestrain/"
+
+
+def _short_name(key):
+    """角色 id → 动画树用的短名:chr_0004_pelica -> pelica。目录段与片段名都用它,
+    完整 id 只出现在 postmodel prefab 那棵树里。"""
+    return re.sub(r"^chr_\d+_", "", key.lower())
+
+
+def _anim_hits(anchor):
+    """锚点在 cabmap 里的命中行数(走 C# 快搜引擎,全表向量化)。"""
+    cabmap_state.apply_filter(anchor)
+    return len(cabmap_state.VISIBLE)
+
+
+def _segment_after(marker, needle, want_index):
+    """在命中 needle 的行里找出 marker 之后的第 want_index 段 —— 体型组是从这一位
+    自己的资产路径上读出来的,不是从名字猜的(模板名与目录会不一致:npc_fattym_* 的
+    prefab 就住在 pedestrain/fatty/ 下)。"""
+    cabmap_state.apply_filter(needle)
+    for row in cabmap_state.VISIBLE:
+        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+            low = cabmap_state.ROWS.container_path(row, path_index).lower()
+            _head, found, tail = low.partition(marker)
+            if not found:
+                continue
+            segments = tail.split("/")
+            if len(segments) > want_index:
+                return segments[want_index]
+    return ""
+
+
+def _body_group(kind, key, short):
+    """这一位的体型组(girl/lady/gentleman/…),即共享动画库那一段。"""
+    if kind == CHARACTERS:
+        # arts/entity/actor/<组>/<短名>/... —— 只认第二段真是这个角色的那条路径。
+        cabmap_state.apply_filter(short)
+        for row in cabmap_state.VISIBLE:
+            for path_index in range(cabmap_state.ROWS.container_path_count(row)):
+                low = cabmap_state.ROWS.container_path(row, path_index).lower()
+                _head, found, tail = low.partition(_ACTOR_TREE)
+                if not found:
+                    continue
+                segments = tail.split("/")
+                if len(segments) > 1 and segments[1] == short:
+                    return segments[0]
+        return ""
+    group = _segment_after(_PEDESTRIAN_TREE, key, 0)
+    if group:
+        return group
+    parts = key.lower().split("_")
+    return parts[1] if len(parts) > 1 else ""
+
+
+class RURI_OT_roster_animations(bpy.types.Operator):
+    """List this one's animation clips over in the bundle browser.
+
+    Anchored on the container path, not the name: the id also keys thousands of
+    per-line dialogue morph clips, and a name search buries the body animation
+    library under them. Falls back to the body-type group's shared library when
+    this one ships no animation folder of its own -- said out loud in the report
+    rather than substituted silently, because "these are not hers" matters."""
+    bl_idname = "ruri.roster_animations"
+    bl_label = "Find Animations"
+    bl_description = ("Switch to the bundle browser and list this one's animation clips "
+                      "(body animations, not the per-line dialogue morphs)")
+
+    @classmethod
+    def poll(cls, context):
+        return (context.scene.ruri_cabmap.loaded
+                and cabmap_state.BRIDGE is not None
+                and _selected(context.scene.ruri_roster) is not None)
+
+    def execute(self, context):
+        state = context.scene.ruri_roster
+        entry = _selected(state)
+        if entry is None:
+            return {"CANCELLED"}
+
+        short = _short_name(entry.key) if state.kind == CHARACTERS else entry.key.lower()
+        own = _ANIM_ANCHOR.format(short)
+        hits = _anim_hits(own)
+        if hits:
+            self.report({"INFO"}, "{0}: {1} animation rows.".format(entry.label, hits))
+            return bpy.ops.ruri.cabmap_reveal(query=own)
+
+        group = _body_group(state.kind, entry.key, short)
+        if group:
+            shared = _SHARED_ANIM_ANCHOR.format(group)
+            hits = _anim_hits(shared)
+            if hits:
+                self.report({"INFO"},
+                            "'{0}' ships no animations of its own; showing the {1} "
+                            "body-type library it actually plays ({2} rows).".format(
+                                entry.label, group, hits))
+                return bpy.ops.ruri.cabmap_reveal(query=shared)
+
+        self.report({"WARNING"},
+                    "No animation folder for '{0}' in the loaded cabmap.".format(entry.label))
+        return bpy.ops.ruri.cabmap_reveal(query=entry.key)
+
+
 class RURI_OT_roster_reveal(bpy.types.Operator):
     """Open where the selected cast member lives, over in the bundle browser.
 
@@ -835,6 +952,7 @@ def draw_roster(layout, context):
     row.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
     options.operator(RURI_OT_roster_load.bl_idname, icon="IMPORT")
     options.operator(RURI_OT_roster_reveal.bl_idname, icon="FILE_FOLDER")
+    options.operator(RURI_OT_roster_animations.bl_idname, icon="ANIM_DATA")
 
 
 _CLASSES = (
@@ -843,6 +961,7 @@ _CLASSES = (
     RURI_UL_roster,
     RURI_OT_roster_refresh,
     RURI_OT_roster_load,
+    RURI_OT_roster_animations,
     RURI_OT_roster_reveal,
 )
 
