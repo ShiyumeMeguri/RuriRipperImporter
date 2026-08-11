@@ -19,6 +19,24 @@ try:
 except ImportError:  # standalone (non-package) testing
     from ruri_pybridge.unity import material as unity_material
 
+# Game-shader graph providers. This core stays game-blind (see Game/__init__'s
+# charter): a game module registers a callable ``provider(builder, props) ->
+# bpy.Material | None`` and SELF-selects by the material's own property
+# signature, returning None to decline. First claimant wins; no claimant means
+# the Principled BSDF fallback below. Registration order is registration order
+# -- game modules register on their own register() and remove on unregister().
+GRAPH_PROVIDERS = []
+
+
+def register_graph_provider(provider):
+    if provider not in GRAPH_PROVIDERS:
+        GRAPH_PROVIDERS.append(provider)
+
+
+def unregister_graph_provider(provider):
+    if provider in GRAPH_PROVIDERS:
+        GRAPH_PROVIDERS.remove(provider)
+
 
 def _image_from_texture_bytes(data, name):
     """Load an exported texture's raw bytes (produced by AssetRipper's own
@@ -319,7 +337,24 @@ class MaterialBuilder:
         props = unity_material.parse_material(doc)
         name = props.name or "UnityMaterial"
 
-        mat = bpy.data.materials.new(name)
+        # Game-shader providers first (each declines with None); fallback below.
+        for provider in GRAPH_PROVIDERS:
+            try:
+                claimed = provider(self, props)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                # 响亮失败:provider 炸掉 ≠ 无人认领——静默滑进 Principled 会把移植 bug
+                # 伪装成"材质没被认领"(实锤:悬空 gen.PART_DEFAULTS 让全员兜底了一轮)。
+                print("[material] !! provider {0} EXCEPTION on '{1}' -- falling back to Principled, "
+                      "graph is NOT the game shader".format(
+                          getattr(provider, "__module__", provider), name))
+                claimed = None
+            if claimed is not None:
+                return claimed
+
+        # 就地改写同名材质(网格按名字绑材质;另起新料会得 .001 后缀留下双份)。下方整树清空重建,幂等。
+        mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
         mat.use_nodes = True
         nt = mat.node_tree
         nt.nodes.clear()
