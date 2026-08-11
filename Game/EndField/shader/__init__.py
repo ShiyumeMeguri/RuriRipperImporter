@@ -128,16 +128,57 @@ def _clone_uber(part, material_name, images):
         stale.user_remap(clone)
         bpy.data.node_groups.remove(stale)
     clone.name = "Uber " + material_name
-    for node in clone.nodes:
-        if node.type != "TEX_IMAGE" or node.image is None:
-            continue
-        slot = _slot_of(node.image.name)
-        node.label = slot          # 槽名恒留在节点上:换图后占位名消失,绑定错位否则无从审计
-        real = images.get(slot)
-        if real is None:
-            continue
-        _swap_image(node, real)
+    _retexture_tree(clone, images, material_name, cloned={}, memo={})
     return clone
+
+
+def _subtree_has_teximage(tree, memo):
+    """本树或其嵌套 RCE 子组里有没有贴图节点(级联克隆判据;memo 防重防环)。"""
+    hit = memo.get(tree.name)
+    if hit is not None:
+        return hit
+    memo[tree.name] = False   # 先占位防环
+    found = False
+    for node in tree.nodes:
+        if node.type == "TEX_IMAGE" and node.image is not None:
+            found = True
+            break
+        if (node.type == "GROUP" and node.node_tree is not None
+                and node.node_tree.name.startswith("RCE_")
+                and _subtree_has_teximage(node.node_tree, memo)):
+            found = True
+            break
+    memo[tree.name] = found
+    return found
+
+
+def _retexture_tree(tree, images, material_name, cloned, memo):
+    """树上贴图节点指向本材质真图;遇到**含贴图的 RCE 子组**(RCE_T_ 类)先按材质克隆一份
+    再递归换图 —— 模板保持共享,分裂发生在克隆时;纯数学子组不含贴图,全材质共享不动。
+    cloned: 组名 → 本材质的克隆(同组多实例共用同一份)。"""
+    for node in tree.nodes:
+        if node.type == "TEX_IMAGE" and node.image is not None:
+            slot = _slot_of(node.image.name)
+            node.label = slot      # 槽名恒留在节点上:换图后占位名消失,绑定错位否则无从审计
+            real = images.get(slot)
+            if real is not None:
+                _swap_image(node, real)
+        elif (node.type == "GROUP" and node.node_tree is not None
+                and node.node_tree.name.startswith("RCE_")
+                and _subtree_has_teximage(node.node_tree, memo)):
+            src = node.node_tree
+            got = cloned.get(src.name)
+            if got is None:
+                got = src.copy()
+                new_name = "Uber {0}/{1}".format(material_name, src.name)
+                old = bpy.data.node_groups.get(new_name)
+                if old is not None:
+                    old.user_remap(got)
+                    bpy.data.node_groups.remove(old)
+                got.name = new_name
+                cloned[src.name] = got
+                _retexture_tree(got, images, material_name, cloned, memo)
+            node.node_tree = got
 
 
 def _swap_image(node, real):
