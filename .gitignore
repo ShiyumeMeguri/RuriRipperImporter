@@ -179,3 +179,5 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# 模板节点组缓存(按指纹命名,导入时自动重建;二进制,不进仓)
+_template_cache_*.blend
