@@ -210,6 +210,33 @@ class G:
         x, y, z = self.sep(local)
         return self.comb(x, z, y)
 
+    def u2b(self, v):
+        """**Unity 语义**方向 → Blender 世界方向(b2u 的逆:Y/Z 互换自反,故换轴在前、OBJECT→WORLD 在后)。
+
+        环境采样必走这一步:反射向量算在 Unity 语义**对象**空间,而 Environment Texture 按
+        **世界**方向取图 —— 直喂等于绕 X 转 90° 再叠一层对象变换(含导入根的 180° yaw)。"""
+        x, y, z = self.sep(v)
+        return self.vtrans(self.comb(x, z, y), 'OBJECT', 'WORLD', 'VECTOR')
+
+    def env(self, name, direction, default):
+        """等距柱状环境图按方向采样 = cubemap 的 Blender 等价物(图节点无 LOD 口,mip 丢弃)。
+
+        图名 == 逻辑槽名,同 tex():绑场景 HDRI 即全图生效。未绑时落 default(引擎灰),
+        与旧的常量环境色桩逐位同值 —— 金属那身"平的暗灰"正是采不到方向的结果。"""
+        nd = self._nd('ShaderNodeTexEnvironment')
+        img = bpy.data.images.get(name)
+        if img is None:
+            img = bpy.data.images.new(name, 4, 4, float_buffer=True)
+            img.generated_color = (default[0], default[1], default[2], 1.0)
+            # 占位灰是**线性**引擎值,必须零变换进着色器(走 sRGB 解码会被压到 0.04)。
+            # 只标自建的占位:用户绑的 HDRI 保留它自己的色彩空间。
+            img.colorspace_settings.name = 'Non-Color'
+        nd.image = img
+        nd.projection = 'EQUIRECTANGULAR'
+        nd.interpolation = 'Linear'
+        self._set(nd.inputs[0], direction)
+        return nd.outputs[0], nd.outputs[1]
+
     def vtrans(self, v, frm, to, kind='VECTOR'):
         nd = self._nd('ShaderNodeVectorTransform')
         nd.vector_type = kind
@@ -694,7 +721,7 @@ def build_Ruri_Endfield_Uber_Standard():
     v371 = g.math('LESS_THAN', z369i.outputs['pxi'], v370)
     v372 = g.math('MULTIPLY', z369i.outputs['Lloop0'], v371)
     v373 = g.vmath('ADD', v346, z369i.outputs['pxAccum'])
-    v374, v375 = g.tex('_ParallaxTex', v373, non_color=True, clamp=False)
+    v374, v375 = g.tex('_ParallaxTex', v373, non_color=True, clamp=True, interp='Closest')
     v376 = g.sep(v374)
     v377 = g.math('LESS_THAN', z369i.outputs['pxLayerH'], v376[0])
     v378 = g.mixf(v377, z369i.outputs['pxHitH'], v376[0])
@@ -724,7 +751,7 @@ def build_Ruri_Endfield_Uber_Standard():
     v401 = g.vmath('MULTIPLY', v363, v400)
     v402 = g.vmath('ADD', v346, v401)
     v403 = g.vmath('ADD', v402, z369o.outputs['pxPrevOff'])
-    v404, v405 = g.tex('_ParallaxTex', v403, non_color=True, clamp=False)
+    v404, v405 = g.tex('_ParallaxTex', v403, non_color=True, clamp=True, interp='Closest')
     v406 = g.sep(v404)
     v407 = g.mixf(v327, 0, v406[0])
     v408 = g.sep(v15)
@@ -7487,7 +7514,7 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v371 = g.math('LESS_THAN', z369i.outputs['pxi'], v370)
     v372 = g.math('MULTIPLY', z369i.outputs['Lloop0'], v371)
     v373 = g.vmath('ADD', v346, z369i.outputs['pxAccum'])
-    v374, v375 = g.tex('_ParallaxTex', v373, non_color=True, clamp=False)
+    v374, v375 = g.tex('_ParallaxTex', v373, non_color=True, clamp=True, interp='Closest')
     v376 = g.sep(v374)
     v377 = g.math('LESS_THAN', z369i.outputs['pxLayerH'], v376[0])
     v378 = g.mixf(v377, z369i.outputs['pxHitH'], v376[0])
@@ -7517,7 +7544,7 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v401 = g.vmath('MULTIPLY', v363, v400)
     v402 = g.vmath('ADD', v346, v401)
     v403 = g.vmath('ADD', v402, z369o.outputs['pxPrevOff'])
-    v404, v405 = g.tex('_ParallaxTex', v403, non_color=True, clamp=False)
+    v404, v405 = g.tex('_ParallaxTex', v403, non_color=True, clamp=True, interp='Closest')
     v406 = g.sep(v404)
     v407 = g.mixf(v327, 0, v406[0])
     v408 = g.inp('_EnableCharacterVFX', False, 0.0)
@@ -8443,7 +8470,7 @@ EXTERNAL_TEXTURES = {
 }
 
 DEFAULT_PART = 'Standard'
-STAMP = '6868aa818d2066dd'
+STAMP = 'fbd53f39b8670384'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
