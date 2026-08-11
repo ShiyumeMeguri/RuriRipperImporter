@@ -4678,572 +4678,6 @@ def build_Ruri_Endfield_Uber_Fur():
     g.out_('__clip', v233, False)
 
 
-def build_Ruri_Endfield_Uber_Eyebrow():
-    t = _tree('Ruri Endfield Uber Eyebrow')
-    g = G(t)
-    v0 = g.inp('input_uv', True)
-    v1 = g.inp('input_positionWS', True)
-    v2 = g.inp('input_normalWS', True)
-    v3 = g.inp('input_tangentWS', True)
-    v4 = g.inp('input_tangentWS_w', False)
-    v5 = g.inp('input_uv1', True)
-    v6 = g.inp('input_uv1_w', False)
-    v7 = g.inp('input_uv0zw', True)
-    v8 = g.inp('input_positionNDC', True)
-    v9 = g.inp('input_positionNDC_w', False)
-    v10 = g.inp('input_color', True)
-    v11 = g.inp('input_color_w', False)
-    v12 = g.inp('input_positionCS', True)
-    v13 = g.inp('input_positionCS_w', False)
-    v14 = g.inp('facing', False)
-    v15 = g.b2u(v1, point=True)
-    v16 = g.b2u(v2, point=False)
-    v17 = g.b2u(v3, point=False)
-    v18 = g.inp('_BaseMap', True)
-    v19 = g.inp('_BaseMap_alpha', False)
-    v20 = g.inp('_UseBumpMap', False, 0.0)
-    v21 = g.inp('_BumpMap', True)
-    v22 = g.inp('_BumpMap_alpha', False)
-    v23 = g.sep(v21)
-    v24 = g.math('MULTIPLY', v23[0], v22)
-    v25 = g.math('MULTIPLY', v24, 2)
-    v26 = g.math('SUBTRACT', v25, 1)
-    v27 = g.inp('_BumpScale', False, 1.0)
-    v28 = g.math('MULTIPLY', v26, v27)
-    v29 = g.math('MULTIPLY', v23[1], 2)
-    v30 = g.math('SUBTRACT', v29, 1)
-    v31 = g.math('MULTIPLY', v30, v27)
-    v32 = g.math('MULTIPLY', v28, v28)
-    v33 = g.math('MULTIPLY', v31, v31)
-    v34 = g.math('ADD', v32, v33)
-    v35 = g.clampn(v34)
-    v36 = g.math('SUBTRACT', 1, v35)
-    v37 = g.math('SQRT', v36, 0.0)
-    v38 = g.math('MAXIMUM', v37, 1E-16)
-    v39 = g.vmath('NORMALIZE', v16)
-    v40 = g.vmath('NORMALIZE', v17)
-    v41 = g.vmath('CROSS_PRODUCT', v39, v40)
-    v42 = g.bc(v4)
-    v43 = g.vmath('MULTIPLY', v41, v42)
-    v44 = g.bc(v28)
-    v45 = g.vmath('MULTIPLY', v44, v40)
-    v46 = g.bc(v31)
-    v47 = g.vmath('MULTIPLY', v46, v43)
-    v48 = g.vmath('ADD', v45, v47)
-    v49 = g.bc(v38)
-    v50 = g.vmath('MULTIPLY', v49, v39)
-    v51 = g.vmath('ADD', v48, v50)
-    v52 = g.vmath('NORMALIZE', v51)
-    v53 = g.vmath('MULTIPLY', (1.0, 1.0, 1.0), v52)
-    v54 = g.mixv(v20, (0.0, 0.0, 0.0), v53)
-    v55 = g.mixf(v20, 0.0, 1.0)
-    v56 = g.math('SUBTRACT', 1.0, v55)
-    v57 = g.vmath('NORMALIZE', v16)
-    v58 = g.vmath('MULTIPLY', (1.0, 1.0, 1.0), v57)
-    v59 = g.mixv(v56, v54, v58)
-    v60 = g.mixf(v56, v55, 1.0)
-    v61 = g.b2u(g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT'), point=True)
-    v62 = g.vmath('SUBTRACT', v61, v15)
-    v63 = g.vmath('NORMALIZE', v62)
-    v64 = g.texco().outputs['Window']
-    v65 = g.inp('_UseRMOSMap', False, 0.0)
-    v66 = g.inp('_RMOSMap', True)
-    v67 = g.inp('_RMOSMap_alpha', False)
-    v68 = g.sep(v66)
-    v69 = g.mixf(v65, 0.0, v68[0])
-    v70 = g.mixf(v65, 0.0, v68[1])
-    v71 = g.mixf(v65, 0.0, v68[2])
-    v72 = g.mixf(v65, 0.0, v67)
-    v73 = g.inp('_BaseMap', True)
-    v74 = g.inp('_BaseMap_alpha', False)
-    v75 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
-    v76 = g.inp('_BaseColor_w', False, 1.0)
-    v77 = g.vmath('MULTIPLY', v73, v75)
-    v78 = g.inp('_SurfaceType', False, 0.0)
-    v79 = g.math('COMPARE', v78, 1, 1e-05)
-    v80 = g.math('SUBTRACT', 1.0, v79)
-    v81 = g.mixv(v80, v18, v77)
-    v82 = g.vmath('MULTIPLY', v81, v75)
-    v83 = g.math('MULTIPLY', v19, v76)
-    v84 = g.math('SUBTRACT', 1.0, v65)
-    v85 = g.inp('_RoughnessIntensity', False, 1.0)
-    v86 = g.inp('_MetallicIntensity', False, 1.0)
-    v87 = g.inp('_OcclusionIntensity', False, 1.0)
-    v88 = g.inp('_SpecularIntensity', False, 1.0)
-    v89 = g.mixf(v84, v69, v85)
-    v90 = g.mixf(v84, v70, v86)
-    v91 = g.mixf(v84, v71, v87)
-    v92 = g.mixf(v84, v72, v88)
-    v93 = g.math('LESS_THAN', v14, 0)
-    v94 = g.math('SUBTRACT', 1.0, v93)
-    v95 = g.inp('_BackFaceNormalFlip', False, 0.0)
-    v96 = g.math('MULTIPLY', v95, 2)
-    v97 = g.math('SUBTRACT', v96, 1)
-    v98 = g.mixf(v94, v97, 1)
-    v99 = g.inp('_BaseMap', True)
-    v100 = g.inp('_BaseMap_alpha', False)
-    v101 = g.vmath('SUBTRACT', v61, v15)
-    v102 = g.vmath('NORMALIZE', v101)
-    v103 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v104 = g.sep(v103)
-    v105 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v106 = g.sep(v105)
-    v107 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v108 = g.sep(v107)
-    v109 = g.comb(v104[0], v106[1], v108[2])
-    v110 = g.inp('_CharacterParams12', True, (0.0, 0.0, 0.0))
-    v111 = g.inp('_CharacterParams12_w', False, 0.0)
-    v112 = g.inp('_EnvironmentGlobalParams0', True, (1.67, 1.5, 1.0))
-    v113 = g.inp('_EnvironmentGlobalParams0_w', False, 0.0)
-    v114 = g.inp('_ExposureParams', True, (1.0, 0.0, 0.0))
-    v115 = g.inp('_ExposureParams_w', False, 0.0)
-    v116 = g.group_named('RCE_ComputeExposure', [('_CharacterParams12', v110), ('_CharacterParams12_w', v111), ('_EnvironmentGlobalParams0', v112), ('_EnvironmentGlobalParams0_w', v113), ('_ExposureParams', v114), ('_ExposureParams_w', v115)])
-    v117 = g.inp('_UseMetallicGlossMap', False, 0.0)
-    v118 = g.inp('_MetallicGlossMap', True)
-    v119 = g.inp('_MetallicGlossMap_alpha', False)
-    v120 = g.math('SUBTRACT', 1, v119)
-    v121 = g.sep(v118)
-    v122 = g.inp('_Smoothness', False, 0.5)
-    v123 = g.math('SUBTRACT', 1, v122)
-    v124 = g.inp('_Metallic', False, 0.0)
-    v125 = g.inp('_Specular', False, 1.0)
-    v126 = g.mixf(v117, v123, v120)
-    v127 = g.mixf(v117, v124, v121[0])
-    v128 = g.mixf(v117, v87, v121[2])
-    v129 = g.mixf(v117, v125, v121[1])
-    v130 = g.inp('Sun_Direction', True, (0.0247, -0.8220, 0.5690))
-    v131 = g.b2u(v130)
-    v132 = g.inp('Sun_Color', True, (1.0, 0.96, 0.9))
-    v133 = g.inp('Sun_ShadowAtten', False, 1.0)
-    v134 = g.math('MINIMUM', v133, 1)
-    v135 = g.inp('_CharacterParams11', True, (-0.433, 0.5, 0.75))
-    v136 = g.inp('_CharacterParams11_w', False, 0.0)
-    v137 = g.inp('_CharacterParams1', True, (0.0, 0.0, 0.0))
-    v138 = g.inp('_CharacterParams1_w', False, 0.0)
-    v139 = g.group_named('RCE_ResolveAdjustedLight', [('mainLightDir', v131), ('_CharacterParams11', v135), ('_CharacterParams11_w', v136), ('_CharacterParams1', v137), ('_CharacterParams1_w', v138)])
-    v140 = g.group_named('RCE_ComputeCamLightFactors', [('camFwd', v109), ('adjXZ_x', v139[1]), ('adjXZ_z', v139[2])])
-    v141 = g.clampn(v140[0])
-    v142 = g.vmath('DOT_PRODUCT', v16, v16)
-    v143 = g.math('MAXIMUM', v142, 1.175494E-38)
-    v144 = g.math('INVERSE_SQRT', v143, 0.0)
-    v145 = g.bc(v144)
-    v146 = g.vmath('MULTIPLY', v145, v16)
-    v147 = g.bc(v98)
-    v148 = g.vmath('MULTIPLY', v147, v146)
-    v149 = g.vmath('CROSS_PRODUCT', v16, v17)
-    v150 = g.bc(v4)
-    v151 = g.vmath('MULTIPLY', v149, v150)
-    v152 = g.sep(v148)
-    v153 = g.comb(v152[0], 6.103515625e-05, v152[2])
-    v154 = g.vmath('NORMALIZE', v153)
-    v155 = g.inp('_UseMatcap', False, 0.0)
-    v156 = g.vmath('FRACTION', v0)
-    v157 = g.vmath('SUBTRACT', v156, (0.5, 0.5, 0.5))
-    v158 = g.vmath('DOT_PRODUCT', v157, v157)
-    v159 = g.math('LESS_THAN', v158, 0.25)
-    v160 = g.math('SUBTRACT', 1.0, v159)
-    v161 = g.mixf(v160, 0, 1)
-    v162 = g.bc(v144)
-    v163 = g.vmath('MULTIPLY', v162, v17)
-    v164 = g.vmath('DOT_PRODUCT', v163, v102)
-    v165 = g.vmath('CROSS_PRODUCT', v16, v17)
-    v166 = g.bc(v4)
-    v167 = g.vmath('MULTIPLY', v166, v165)
-    v168 = g.bc(v144)
-    v169 = g.vmath('MULTIPLY', v168, v167)
-    v170 = g.vmath('DOT_PRODUCT', v169, v102)
-    v171 = g.bc(v144)
-    v172 = g.vmath('MULTIPLY', v171, v16)
-    v173 = g.vmath('DOT_PRODUCT', v172, v102)
-    v174 = g.math('MULTIPLY', v164, v164)
-    v175 = g.math('MULTIPLY', v170, v170)
-    v176 = g.math('ADD', v174, v175)
-    v177 = g.math('MULTIPLY', v173, v173)
-    v178 = g.math('ADD', v176, v177)
-    v179 = g.math('MAXIMUM', v178, 1.175494E-38)
-    v180 = g.math('INVERSE_SQRT', v179, 0.0)
-    v181 = g.math('SUBTRACT', v158, 0.25)
-    v182 = g.math('MULTIPLY', 5, -1.0)
-    v183 = g.math('MULTIPLY', v181, v182)
-    v184 = g.clampn(v183)
-    v185 = g.math('MULTIPLY', v184, v184)
-    v186 = g.math('MULTIPLY', 2, v184)
-    v187 = g.math('SUBTRACT', 3, v186)
-    v188 = g.math('MULTIPLY', v185, v187)
-    v189 = g.sep(v0)
-    v190 = g.math('MULTIPLY', v180, v164)
-    v191 = g.inp('_ParallaxScale', False, 0.5)
-    v192 = g.math('MULTIPLY', v190, v191)
-    v193 = g.math('MULTIPLY', v192, v188)
-    v194 = g.math('SUBTRACT', v189[0], v193)
-    v195 = g.math('MULTIPLY', v180, v170)
-    v196 = g.math('MULTIPLY', v195, v191)
-    v197 = g.math('MULTIPLY', v196, 0.25)
-    v198 = g.math('MULTIPLY', v197, v188)
-    v199 = g.math('SUBTRACT', v189[1], v198)
-    v200 = g.comb(v194, v199, 0.0)
-    v201 = g.sep(v156)
-    v202 = g.math('MULTIPLY', v201[0], 2)
-    v203 = g.math('SUBTRACT', v202, 1)
-    v204 = g.math('MULTIPLY', v201[1], 2)
-    v205 = g.math('SUBTRACT', v204, 1)
-    v206 = g.comb(v203, v205, 0.0)
-    v207 = g.comb(v203, v205, 0.0)
-    v208 = g.vmath('DOT_PRODUCT', v206, v207)
-    v209 = g.math('SUBTRACT', 1, v208)
-    v210 = g.clampn(v209)
-    v211 = g.math('SQRT', v210, 0.0)
-    v212 = g.math('MAXIMUM', v211, 1E-16)
-    v213 = g.inp('_MatcapNormalScale', False, 1.0)
-    v214 = g.math('MULTIPLY', v213, -1.0)
-    v215 = g.math('MULTIPLY', v203, v214)
-    v216 = g.math('MULTIPLY', v213, -1.0)
-    v217 = g.math('MULTIPLY', v205, v216)
-    v218 = g.math('SUBTRACT', v161, 1)
-    v219 = g.math('MULTIPLY', 0.125, v218)
-    v220 = g.math('MULTIPLY', v215, v219)
-    v221 = g.bc(v220)
-    v222 = g.vmath('MULTIPLY', v17, v221)
-    v223 = g.math('MULTIPLY', v217, v219)
-    v224 = g.bc(v223)
-    v225 = g.vmath('MULTIPLY', v151, v224)
-    v226 = g.vmath('ADD', v222, v225)
-    v227 = g.mixf(v161, v212, 1)
-    v228 = g.bc(v227)
-    v229 = g.vmath('MULTIPLY', v16, v228)
-    v230 = g.vmath('ADD', v226, v229)
-    v231 = g.vmath('NORMALIZE', v230)
-    v232 = g.sep(v231)
-    v233 = g.comb(v232[0], 6.103515625e-05, v232[2])
-    v234 = g.vmath('NORMALIZE', v233)
-    v235 = g.mixf(v155, 0, v161)
-    v236 = g.mixf(v155, 0, v215)
-    v237 = g.mixf(v155, 0, v217)
-    v238 = g.mixf(v155, 1, v212)
-    v239 = g.mixv(v155, v0, v200)
-    v240 = g.mixv(v155, v148, v231)
-    v241 = g.mixv(v155, v154, v234)
-    v242, v243 = g.tex('_BaseMap', v239, non_color=False, clamp=False)
-    v244 = g.vmath('MULTIPLY', v242, v75)
-    v245 = g.math('MULTIPLY', v243, v76)
-    v246 = g.inp('_CharacterParams2', True, (1.0, 1.0, 1.0))
-    v247 = g.inp('_CharacterParams2_w', False, 0.0)
-    v248 = g.inp('_CharacterParams5', True, (1.0, 1.0, 1.0))
-    v249 = g.inp('_CharacterParams5_w', False, 1.0)
-    v250 = g.sep(v110)
-    v251 = g.mixv(v250[1], v132, v248)
-    v252 = g.math('SUBTRACT', 1, v124)
-    v253 = g.math('MULTIPLY', v252, 0.96)
-    v254 = g.bc(v253)
-    v255 = g.vmath('MULTIPLY', v254, v244)
-    v256 = g.inp('_UseShadowLutTex', False, 0.0)
-    v257 = g.inp('_ShadowColorBrightness', False, 0.5)
-    v258 = g.inp('_ShadowColorSaturation', False, 1.0)
-    v259 = g.group_named('RCE_T_ComputeShadowColor', [('albedo', v244), ('_UseShadowLutTex', v256), ('_ShadowColorBrightness', v257), ('_ShadowColorSaturation', v258)])
-    v260 = g.bc(v253)
-    v261 = g.vmath('MULTIPLY', v260, v259[0])
-    v262 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v263 = g.sep(v262)
-    v264 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v265 = g.sep(v264)
-    v266 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v267 = g.sep(v266)
-    v268 = g.comb(v263[0], v265[1], v267[2])
-    v269 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v270 = g.sep(v269)
-    v271 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v272 = g.sep(v271)
-    v273 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v274 = g.sep(v273)
-    v275 = g.comb(v270[0], v272[1], v274[2])
-    v276 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v277 = g.sep(v276)
-    v278 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v279 = g.sep(v278)
-    v280 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'OBJECT', 'WORLD', 'VECTOR'))
-    v281 = g.sep(v280)
-    v282 = g.comb(v277[0], v279[1], v281[2])
-    v283 = g.inp('_FBXRotationFix', False, 0.0)
-    v284 = g.math('GREATER_THAN', v283, 0.5)
-    v285 = g.vmath('SCALE', v268, s=-1.0)
-    v286 = g.mixv(v284, v268, v275)
-    v287 = g.mixv(v284, v275, v285)
-    v288 = g.sep(v286)
-    v289 = g.sep(v287)
-    v290 = g.sep(v282)
-    v291 = g.comb(v288[0], v288[1], v288[2])
-    v292 = g.comb(v289[0], v289[1], v289[2])
-    v293 = g.comb(v290[0], v290[1], v290[2])
-    v294 = g.vmath('DOT_PRODUCT', v139[0], v291)
-    v295 = g.vmath('DOT_PRODUCT', v139[0], v292)
-    v296 = g.vmath('DOT_PRODUCT', v139[0], v293)
-    v297 = g.comb(v294, v295, v296)
-    v298 = g.vmath('DOT_PRODUCT', v297, v297)
-    v299 = g.math('MAXIMUM', v298, 1.175494E-38)
-    v300 = g.math('INVERSE_SQRT', v299, 0.0)
-    v301 = g.bc(v300)
-    v302 = g.vmath('MULTIPLY', v297, v301)
-    v303 = g.sep(v302)
-    v304 = g.comb(v303[0], 0, v303[2])
-    v305 = g.sep(v304)
-    v306 = g.vmath('SCALE', v291, s=v305[0])
-    v307 = g.vmath('SCALE', v292, s=v305[1])
-    v308 = g.vmath('SCALE', v293, s=v305[2])
-    v309 = g.vmath('ADD', v306, v307)
-    v310 = g.vmath('ADD', v309, v308)
-    v311 = g.vmath('DOT_PRODUCT', v310, v310)
-    v312 = g.math('MAXIMUM', v311, 1.175494E-38)
-    v313 = g.math('INVERSE_SQRT', v312, 0.0)
-    v314 = g.bc(v313)
-    v315 = g.vmath('MULTIPLY', v310, v314)
-    v316 = g.math('SUBTRACT', 1, v235)
-    v317 = g.inp('_EyeHighLight', False, 0.0)
-    v318 = g.comb(v316, v316, v316)
-    v319 = g.inp('_EyeHighLightColor', True, (2.0, 2.0, 2.0))
-    v320 = g.inp('_EyeHighLightColor_w', False, 1.0)
-    v321 = g.bc(v235)
-    v322 = g.vmath('MULTIPLY', v319, v321)
-    v323 = g.bc(v316)
-    v324 = g.vmath('ADD', v322, v323)
-    v325 = g.mixv(v317, v318, v324)
-    v326 = g.inp('_EyeScatteringColor', True, (1.0, 1.0, 1.0))
-    v327 = g.inp('_EyeScatteringColor_w', False, 1.0)
-    v328 = g.bc(v245)
-    v329 = g.vmath('MULTIPLY', v326, v328)
-    v330 = g.math('SUBTRACT', 1, v245)
-    v331 = g.bc(v330)
-    v332 = g.vmath('ADD', v329, v331)
-    v333 = g.vmath('MULTIPLY', v325, v332)
-    v334 = g.mixv(v155, (1, 1, 1), v333)
-    v335 = g.inp('_UseDiffRampMap', False, 0.0)
-    v336 = g.vmath('DOT_PRODUCT', v240, v315)
-    v337 = g.math('MULTIPLY', v136, v250[0])
-    v338 = g.math('ADD', v337, v336)
-    v339 = g.math('MULTIPLY', 1, -1.0)
-    v340 = g.clampn(v338, v339, 1)
-    v341 = g.math('MULTIPLY', v340, 0.5)
-    v342 = g.math('ADD', v341, 0.5)
-    v343 = g.comb(v342, 0.5, 0.0)
-    v344, v345 = g.tex('_DiffRampMap', v343, non_color=True, clamp=True)
-    v346 = g.vmath('DOT_PRODUCT', v240, v109)
-    v347 = g.math('MULTIPLY', v346, 0.5)
-    v348 = g.math('ADD', v347, 0.5)
-    v349 = g.comb(v348, 0.5, 0.0)
-    v350, v351 = g.tex('_DiffRampMap', v349, non_color=True, clamp=True)
-    v352 = g.mixv(v335, (1, 1, 1), v344)
-    v353 = g.mixf(v335, 1, v345)
-    v354 = g.mixf(v335, 0, v351)
-    v355 = g.sep(v352)
-    v356 = g.math('MAXIMUM', v355[1], v355[2])
-    v357 = g.math('MAXIMUM', v355[0], v356)
-    v358 = g.math('MINIMUM', v355[1], v355[2])
-    v359 = g.math('MINIMUM', v355[0], v358)
-    v360 = g.math('SUBTRACT', v357, v359)
-    v361 = g.math('SUBTRACT', 1, v360)
-    v362 = g.math('MINIMUM', v353, 1)
-    v363 = g.math('ADD', v353, v354)
-    v364 = g.clampn(v363)
-    v365 = g.inp('_CharacterParams0', True, (0.0, 1.0, 0.7))
-    v366 = g.inp('_CharacterParams0_w', False, 1.0)
-    v367 = g.sep(v365)
-    v368 = g.bc(v367[2])
-    v369 = g.vmath('MULTIPLY', v261, v368)
-    v370 = g.clampn(v116[0], 0, 1.5)
-    v371 = g.clampn(v116[0], 1.25, 1.75)
-    v372 = g.sep(v137)
-    v373 = g.mixf(v372[0], v370, v371)
-    v374 = g.vmath('MULTIPLY', v255, v334)
-    v375 = g.inp('_CharacterParams6', True, (0.0, 1.0, 0.0))
-    v376 = g.inp('_CharacterParams6_w', False, 0.0)
-    v377 = g.inp('_CharacterParams7', True, (0.15, 0.6, 1.0))
-    v378 = g.inp('_CharacterParams7_w', False, 0.0)
-    v379 = g.group_named('RCE_ComputeNPRDiffuse', [('hemisphereN', v241), ('ambCol', v246), ('brightness', v373), ('blendedLightCol', v251), ('blendedLightInt', 1), ('minShadow', v362), ('combWeight', v364), ('albScaled', v369), ('diffColor', v374), ('rampCol', v352), ('rampChroma', v360), ('rampChromaInv', v361), ('_CharacterParams6', v375), ('_CharacterParams6_w', v376), ('_CharacterParams7', v377), ('_CharacterParams7_w', v378), ('_CharacterParams1', v137), ('_CharacterParams1_w', v138), ('_CharacterParams12', v110), ('_CharacterParams12_w', v111), ('_CharacterParams0', v365), ('_CharacterParams0_w', v366)])
-    v380 = g.inp('_AlphaPremultiply', False, 0.0)
-    v381 = g.mixf(v380, 1, v245)
-    v382 = g.math('SUBTRACT', 1, v367[2])
-    v383 = g.math('MULTIPLY', v362, v382)
-    v384 = g.math('ADD', v383, v367[2])
-    v385 = g.math('MULTIPLY', v362, 0.5)
-    v386 = g.math('ADD', v385, 0.5)
-    v387 = g.math('MULTIPLY', v384, v386)
-    v388 = g.bc(v236)
-    v389 = g.vmath('MULTIPLY', v17, v388)
-    v390 = g.bc(v237)
-    v391 = g.vmath('MULTIPLY', v151, v390)
-    v392 = g.vmath('ADD', v389, v391)
-    v393 = g.bc(v238)
-    v394 = g.vmath('MULTIPLY', v16, v393)
-    v395 = g.vmath('ADD', v392, v394)
-    v396 = g.vmath('NORMALIZE', v395)
-    v397 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v398 = g.sep(v397)
-    v399 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v400 = g.sep(v399)
-    v401 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v402 = g.sep(v401)
-    v403 = g.comb(v398[0], v400[0], v402[0])
-    v404 = g.vmath('DOT_PRODUCT', v403, v396)
-    v405 = g.comb(v404, 0.0, 0.0)
-    v406 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v407 = g.sep(v406)
-    v408 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v409 = g.sep(v408)
-    v410 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v411 = g.sep(v410)
-    v412 = g.comb(v407[1], v409[1], v411[1])
-    v413 = g.vmath('DOT_PRODUCT', v412, v396)
-    v414 = g.sep(v405)
-    v415 = g.comb(v414[0], v413, v414[2])
-    v416 = g.b2u(g.vtrans((1.0, 0.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v417 = g.sep(v416)
-    v418 = g.b2u(g.vtrans((0.0, 1.0, 0.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v419 = g.sep(v418)
-    v420 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'WORLD', 'CAMERA', 'VECTOR'))
-    v421 = g.sep(v420)
-    v422 = g.comb(v417[2], v419[2], v421[2])
-    v423 = g.vmath('DOT_PRODUCT', v422, v396)
-    v424 = g.sep(v415)
-    v425 = g.comb(v424[0], v424[1], v423)
-    v426 = g.vmath('DOT_PRODUCT', v425, v425)
-    v427 = g.math('MAXIMUM', v426, 1.175494E-38)
-    v428 = g.math('INVERSE_SQRT', v427, 0.0)
-    v429 = g.sep(v425)
-    v430 = g.math('MULTIPLY', v429[0], v428)
-    v431 = g.math('MULTIPLY', v430, 0.5)
-    v432 = g.math('ADD', v431, 0.5)
-    v433 = g.math('MULTIPLY', v429[1], v428)
-    v434 = g.math('MULTIPLY', v433, 0.5)
-    v435 = g.math('ADD', v434, 0.5)
-    v436 = g.comb(v432, v435, 0.0)
-    v437, v438 = g.tex('_MatcapTex', v436, non_color=False, clamp=True)
-    v439 = g.inp('_MatcapColor', True, (1.0, 1.0, 1.0))
-    v440 = g.inp('_MatcapColor_w', False, 1.0)
-    v441 = g.bc(v440)
-    v442 = g.vmath('MULTIPLY', v437, v441)
-    v443 = g.bc(v438)
-    v444 = g.vmath('MULTIPLY', v443, v439)
-    v445 = g.vmath('ADD', v442, v444)
-    v446 = g.bc(v387)
-    v447 = g.vmath('MULTIPLY', v446, v379[1])
-    v448 = g.vmath('MULTIPLY', v445, v447)
-    v449 = g.mixv(v155, (0, 0, 0), v448)
-    v450 = g.vmath('MULTIPLY', v379[0], v379[1])
-    v451 = g.bc(v381)
-    v452 = g.vmath('MULTIPLY', v450, v451)
-    v453 = g.vmath('ADD', v452, v449)
-    v454 = g.vmath('DOT_PRODUCT', v453, (0.2126729, 0.7151522, 0.072175))
-    v455 = g.math('SUBTRACT', v454, 0.5)
-    v456 = g.clampn(v455, 0, 0.5)
-    v457 = g.math('MULTIPLY', v456, v456)
-    v458 = g.math('ADD', v457, 1)
-    v459 = g.bc(v454)
-    v460 = g.vmath('SUBTRACT', v453, v459)
-    v461 = g.bc(v458)
-    v462 = g.vmath('MULTIPLY', v461, v460)
-    v463 = g.bc(v454)
-    v464 = g.vmath('ADD', v462, v463)
-    v465 = g.math('MULTIPLY', v139[3], 6.103515625e-05)
-    v466 = g.comb(v139[1], v465, v139[2])
-    v467 = g.vmath('DOT_PRODUCT', v466, v240)
-    v468 = g.math('ADD', 0.5, v467)
-    v469 = g.math('MULTIPLY', 0.5, v467)
-    v470 = g.math('MULTIPLY', v469, v467)
-    v471 = g.math('SUBTRACT', v468, v470)
-    v472 = g.clampn(v471)
-    v473 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v474 = g.sep(v473)
-    v475 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v476 = g.sep(v475)
-    v477 = g.math('MULTIPLY', v474[0], v476[0])
-    v478 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v479 = g.sep(v478)
-    v480 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v481 = g.sep(v480)
-    v482 = g.math('MULTIPLY', v479[2], v481[2])
-    v483 = g.math('ADD', v477, v482)
-    v484 = g.math('INVERSE_SQRT', v483, 0.0)
-    v485 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v486 = g.sep(v485)
-    v487 = g.math('MULTIPLY', v484, v486[0])
-    v488 = g.math('MULTIPLY', v139[1], v487)
-    v489 = g.b2u(g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD', 'VECTOR'))
-    v490 = g.sep(v489)
-    v491 = g.math('MULTIPLY', v484, v490[2])
-    v492 = g.math('MULTIPLY', v139[2], v491)
-    v493 = g.math('ADD', v488, v492)
-    v494 = g.math('MULTIPLY', v493, -1.0)
-    v495 = g.math('SUBTRACT', 1, v250[0])
-    v496 = g.clampn(v494)
-    v497 = g.math('MULTIPLY', v495, v496)
-    v498 = g.vmath('DOT_PRODUCT', v102, v240)
-    v499 = g.math('ABSOLUTE', v498, 0.0)
-    v500 = g.math('MULTIPLY', v499, -1.0)
-    v501 = g.math('ADD', v500, 0.4)
-    v502 = g.math('MULTIPLY', v501, 5)
-    v503 = g.clampn(v502)
-    v504 = g.math('MULTIPLY', v503, v503)
-    v505 = g.math('MULTIPLY', 2, v503)
-    v506 = g.math('SUBTRACT', 3, v505)
-    v507 = g.math('MULTIPLY', v504, v506)
-    v508 = g.vmath('DOT_PRODUCT', v255, (0.2126729, 0.7151522, 0.072175))
-    v509 = g.math('SUBTRACT', 0.1, v508)
-    v510 = g.math('MULTIPLY', v509, 16.666)
-    v511 = g.clampn(v510)
-    v512 = g.math('MULTIPLY', v511, v511)
-    v513 = g.math('MULTIPLY', 2, v511)
-    v514 = g.math('SUBTRACT', 3, v513)
-    v515 = g.math('MULTIPLY', v512, v514)
-    v516 = g.math('MULTIPLY', v515, v507)
-    v517 = g.math('MULTIPLY', v516, v497)
-    v518 = g.math('MULTIPLY', v517, v472)
-    v519 = g.vmath('MULTIPLY', v251, (1, 1, 1))
-    v520 = g.bc(v518)
-    v521 = g.vmath('MULTIPLY', v520, v519)
-    v522 = g.vmath('MAXIMUM', v255, (0.15, 0.15, 0.15))
-    v523 = g.vmath('MULTIPLY', v521, v522)
-    v524 = g.bc(v235)
-    v525 = g.vmath('MULTIPLY', v524, v319)
-    v526 = g.mixv(v317, (0, 0, 0), v525)
-    v527 = g.inp('_CharacterParams13', True, (0.0, 0.0, 0.0))
-    v528 = g.inp('_CharacterParams13_w', False, 1.0)
-    v529 = g.sep(v527)
-    v530 = g.bc(v529[0])
-    v531 = g.vmath('MULTIPLY', v244, v530)
-    v532 = g.bc(v529[1])
-    v533 = g.vmath('MULTIPLY', v526, v532)
-    v534 = g.vmath('ADD', v531, v533)
-    v535 = g.bc(v245)
-    v536 = g.vmath('MULTIPLY', v535, v326)
-    v537 = g.bc(v529[2])
-    v538 = g.vmath('MULTIPLY', v536, v537)
-    v539 = g.vmath('ADD', v534, v538)
-    v540 = g.bc(v381)
-    v541 = g.vmath('MULTIPLY', v539, v540)
-    v542 = g.mixv(v155, (0, 0, 0), v541)
-    v543 = g.vmath('ADD', v542, v523)
-    v544 = g.vmath('ADD', v543, v464)
-    v545 = g.sep(v114)
-    v546 = g.bc(v545[0])
-    v547 = g.vmath('DIVIDE', v544, v546)
-    v548 = g.vmath('ADD', v547, (0, 0, 0))
-    v549 = g.sep(v547)
-    v550 = g.sep(v548)
-    v551 = g.comb(v550[0], v550[1], v550[2])
-    v552 = g.group_named('RCE_EndfieldBlenderOutputTransform', [('color', v551)])
-    g.out_('ret_gBuffer0', v552[0], True)
-    g.out_('ret_gBuffer0_w', v83, False)
-    g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
-    g.out_('ret_gBuffer1_w', 0.0, False)
-    g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
-    g.out_('ret_gBuffer2_w', 0.0, False)
-    g.out_('ret_color', v547, True)
-    g.out_('ret_color_w', 1, False)
-    g.out_('ret_depth', 0.0, False)
-    g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
-    g.out_('ret_shadowMask_w', 0.0, False)
-    g.out_('ret_meshRenderingLayers', 0.0, False)
-
-
 def build_Ruri_Endfield_Uber_VFX():
     t = _tree('Ruri Endfield Uber VFX')
     g = G(t)
@@ -6510,7 +5944,7 @@ PARTS = {
     'Eyes': ('Ruri Endfield Uber Eyes', build_Ruri_Endfield_Uber_Eyes),
     'Hair': ('Ruri Endfield Uber Hair', build_Ruri_Endfield_Uber_Hair),
     'Fur': ('Ruri Endfield Uber Fur', build_Ruri_Endfield_Uber_Fur),
-    'Eyebrow': ('Ruri Endfield Uber Eyebrow', build_Ruri_Endfield_Uber_Eyebrow),
+    'Eyebrow': ('Ruri Endfield Uber Eyes', build_Ruri_Endfield_Uber_Eyes),
     'VFX': ('Ruri Endfield Uber VFX', build_Ruri_Endfield_Uber_VFX),
     'OverlayShadow': ('Ruri Endfield Uber OverlayShadow', build_Ruri_Endfield_Uber_OverlayShadow),
     'LiquidAg': ('Ruri Endfield Uber LiquidAg', build_Ruri_Endfield_Uber_LiquidAg),
@@ -6529,7 +5963,7 @@ EXTERNAL_TEXTURES = {
 }
 
 DEFAULT_PART = 'Standard'
-STAMP = '48a12bba1d362deb'
+STAMP = '43a3b8e5beb142d7'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
@@ -6699,6 +6133,263 @@ def build_root(part=None):
     build_material(mat, group.name, part=part)
     print('[ruri-blender] ' + group.name + ':  ' + str(len(group.nodes)) + ' 节点')
     return mat
+
+
+# ============================ 材质 provider ============================
+# 认领判据 = m_Shader 身份(shader 资产文本首行的 Shader "..." 自称名)。
+# 🔴 属性指纹判变体已废除并禁止回退:Unity m_SavedProperties 累积材质历史上用过的
+#   全部键,「键存在」证明不了任何事(实锤:cloth 全带 _SkinRimOffScale,整套布料
+#   被吃成 Face 跑脸部 SDF,全身发暗)。解析不到 = 闭包丢依赖,响亮报错,禁止猜。
+PART_META = {
+    'Standard': {'id': 0, 'transparent': False, 'shader': 'HGRP/CharacterNPR', 'discriminator': None},
+    'Face': {'id': 1, 'transparent': False, 'shader': 'HGRP/CharacterNPR_Skin', 'discriminator': None},
+    'Eyes': {'id': 2, 'transparent': False, 'shader': 'HGRP/CharacterNPR_Eye', 'discriminator': None},
+    'Hair': {'id': 3, 'transparent': False, 'shader': 'HGRP/CharacterNPR_Hair', 'discriminator': None},
+    'Fur': {'id': 4, 'transparent': True, 'shader': 'HGRP/CharacterNPR', 'discriminator': '_UseCharacterFur'},
+    'Eyebrow': {'id': 5, 'transparent': False, 'shader': None, 'discriminator': None},
+    'VFX': {'id': 6, 'transparent': True, 'shader': 'HGRP/CharacterNPR_VFX', 'discriminator': None},
+    'OverlayShadow': {'id': 7, 'transparent': True, 'shader': 'HGRP/CharacterNPR_OverlayShadow', 'discriminator': None},
+    'LiquidAg': {'id': 8, 'transparent': False, 'shader': 'HGRP/CharacterNPR_LiquidAg', 'discriminator': None},
+}
+NON_SHADING_SHADERS = ('HGRP/CharacterNPR_ProxyLod', 'HGRP/CharacterNPR_ShadowReceiver', )
+
+_shader_name_cache = {}
+
+
+def _shader_name(builder, props):
+    """m_Shader 引用的 shader 自称名(闭包内该资产文本的 Shader \"...\" 行)。"""
+    ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
+    guid = (ref or {}).get('guid')
+    if not guid:
+        return None
+    guid = guid.lower()
+    if guid in _shader_name_cache:
+        return _shader_name_cache[guid]
+    name = None
+    text = builder.db._text(guid)
+    if text:
+        head = text.lstrip()
+        if head.startswith('Shader'):
+            first = head.split('\n', 1)[0]
+            q = first.find('"')
+            if q >= 0:
+                name = first[q + 1:first.find('"', q + 1)]
+    _shader_name_cache[guid] = name
+    return name
+
+
+def _variant(builder, props):
+    """(part 名, part id);非本风格/非着色 shader 返回 None(宿主落兜底材质)。
+    同 shader 多 part 时按 discriminator 开关分流(如 Fur 的 _UseCharacterFur)。"""
+    name = _shader_name(builder, props)
+    if name is None:
+        ref = props.shader_ref if isinstance(props.shader_ref, dict) else {}
+        print('[ruri-uber] !! 0DAY: material {0} 的 shader 引用 {1} 在闭包里解析不到 '
+              '—— 闭包丢了 shader 依赖,拒绝按指纹猜'.format(props.name, ref.get('guid')), flush=True)
+        return None
+    if name in NON_SHADING_SHADERS:
+        print('[ruri-uber] {0} 用 {1}(非着色 part),不认领'.format(props.name, name), flush=True)
+        return None
+    fallback = None
+    for part, meta in PART_META.items():
+        if meta['shader'] != name:
+            continue
+        disc = meta['discriminator']
+        if disc is None:
+            fallback = (part, meta['id'])
+        elif props.floats.get(disc):
+            return (part, meta['id'])
+    return fallback
+
+
+def _slot_of(image_name):
+    # 占位图名 → 逻辑槽名:剥数字后缀(同名数据块重载会产生 .001)。
+    base, dot, tail = image_name.rpartition('.')
+    return base if dot and tail.isdigit() else image_name
+
+
+def _swap_image(node, real):
+    """占位图换真图,色彩空间跟着**占位图**走(生成期按真源 .meta sRGBTexture 定死,
+    是唯一真源)。双向赋值必须:只单向强制 Non-Color,老会话里被错标过的图永远弹不回 sRGB。"""
+    non_color = node.image is not None and node.image.colorspace_settings.name == 'Non-Color'
+    node.image = real
+    try:
+        real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+    except Exception:
+        pass
+
+
+def _subtree_has_tex(tree, memo):
+    hit = memo.get(tree.name)
+    if hit is not None:
+        return hit
+    memo[tree.name] = False   # 先占位防环
+    found = False
+    for node in tree.nodes:
+        if node.type == 'TEX_IMAGE' and node.image is not None:
+            found = True
+            break
+        if (node.type == 'GROUP' and node.node_tree is not None
+                and node.node_tree.name.startswith('RCE_')
+                and _subtree_has_tex(node.node_tree, memo)):
+            found = True
+            break
+    memo[tree.name] = found
+    return found
+
+
+def _retexture(tree, images, material_name, cloned, memo):
+    """树上贴图节点指向本材质真图;遇到**含贴图的 RCE 子组**先按材质克隆再递归 ——
+    模板保持共享,分裂只发生在克隆时;纯数学子组不含贴图,全材质共享不动。"""
+    for node in tree.nodes:
+        if node.type == 'TEX_IMAGE' and node.image is not None:
+            slot = _slot_of(node.image.name)
+            node.label = slot   # 槽名恒留节点上:换图后占位名消失,绑定错位否则无从审计
+            real = images.get(slot)
+            if real is not None:
+                _swap_image(node, real)
+        elif (node.type == 'GROUP' and node.node_tree is not None
+                and node.node_tree.name.startswith('RCE_')
+                and _subtree_has_tex(node.node_tree, memo)):
+            src = node.node_tree
+            got = cloned.get(src.name)
+            if got is None:
+                got = src.copy()
+                new_name = 'Uber {0}/{1}'.format(material_name, src.name)
+                old = bpy.data.node_groups.get(new_name)
+                if old is not None:
+                    old.user_remap(got)
+                    bpy.data.node_groups.remove(old)
+                got.name = new_name
+                cloned[src.name] = got
+                _retexture(got, images, material_name, cloned, memo)
+            node.node_tree = got
+
+
+def _clone_uber(part, material_name, images):
+    template = ensure(part)
+    clone = template.copy()
+    # 重导幂等:同名旧克隆换血删除(唯一用户就是本材质旧树,马上整树重建)。
+    stale = bpy.data.node_groups.get('Uber ' + material_name)
+    if stale is not None:
+        stale.user_remap(clone)
+        bpy.data.node_groups.remove(stale)
+    clone.name = 'Uber ' + material_name
+    _retexture(clone, images, material_name, {}, {})
+    return clone
+
+
+def _standard_view_transform(scene):
+    """图尾自带游戏 tonemap(ACES_modified),输出已是显示线性;Blender 默认 AgX 会
+    再映射一次,二次映射把一切压暗去饱和(布料看着像暗金属)。Standard = 直通。"""
+    if scene is None or scene.view_settings.view_transform == 'Standard':
+        return False
+    scene.view_settings.view_transform = 'Standard'
+    try:
+        scene.view_settings.look = 'None'
+    except Exception:
+        pass
+    return True
+
+
+def _load_images(builder, props):
+    """.mat 绑的每张图,按属性名收。色彩空间由占位图承载(生成期定),这里只管取;
+    alpha 重新按数据解释 —— 宿主 loader 为 Principled 关掉了它,而内核吃 .a。"""
+    images = {}
+    for name, guid in props.textures.items():
+        img = builder._load_image(guid)
+        if img is None:
+            # .mat 明确引用却解不出 = 信息丢失,必须大声(静默落占位曾把整脸 SDF 吞成黑)。
+            print('[ruri-uber] !! {0}: texture {1} guid={2} LOAD FAILED'.format(
+                props.name, name, guid), flush=True)
+            continue
+        try:
+            img.alpha_mode = 'CHANNEL_PACKED'
+        except Exception:
+            pass
+        images[name] = img
+    return images
+
+
+def provider(builder, props):
+    """宿主图 provider:按 m_Shader 身份认领,其余返回 None 交给宿主兜底。"""
+    resolved = _variant(builder, props)
+    if resolved is None:
+        return None
+    part_name, part_id = resolved
+    meta = PART_META[part_name]
+    name = props.name or 'Ruri_Endfield_Uber'
+    images = _load_images(builder, props)
+    if _standard_view_transform(bpy.context.scene):
+        print('[ruri-uber] view transform -> Standard(图自带游戏 tonemap)', flush=True)
+    # 不透明与否是**游戏自己的规则**:_SurfaceType==1 才吃 alpha,否则输出 alpha 恒 1
+    #   (真源 characternpr_eye Fragment:1014;skin 更直接 _3324.w = 1.0 硬写)。
+    #   那条 gBuffer0.w 在真管线是 materialFlags 不是不透明度 —— 接成不透明度会让
+    #   皮肤/眼睛整个隐形。透明 part 由 [StylePart(Transparent)] 定,是风格自己的事实。
+    opaque = props.floats.get('_SurfaceType', 0.0) < 0.5 and not meta['transparent']
+    clone = _clone_uber(part_name, name, images)
+    # 就地改写同名材质:网格按名绑材质,另起新料会得 .001 后缀,原名材质带着兜底节点占槽。
+    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    if mat.node_tree is None:
+        mat.use_nodes = True
+    grp = build_material(mat, clone.name, opaque=opaque,
+                         multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
+                         part=part_name)
+    # 组外贴图节点(原始 UV 直采的那些建在材质树上):换真图,节点标签 = 槽名。
+    for node in mat.node_tree.nodes:
+        if node.type != 'TEX_IMAGE':
+            continue
+        real = images.get(_slot_of(node.label or node.name))
+        if real is not None:
+            _swap_image(node, real)
+    filled = [0]
+
+    def put(sock_name, value):
+        sock = grp.inputs.get(sock_name)
+        if sock is None:
+            return
+        if sock.type == 'VECTOR':
+            sock.default_value = value if isinstance(value, tuple) else (value, value, value)
+        else:
+            sock.default_value = value[0] if isinstance(value, tuple) else value
+        filled[0] += 1
+
+    # raw 直灌:socket 名 = 游戏属性名(生成期就是这么命名的),零映射表。
+    for prop, value in props.floats.items():
+        put(prop, float(value))
+    for prop, value in props.colors.items():
+        put(prop, (float(value[0]), float(value[1]), float(value[2])))
+        put(prop + '_w', float(value[3]))
+    for prop, st in props.texture_st.items():
+        put(prop + '_ST', (float(st[0]), float(st[1]), float(st[2])))
+        put(prop + '_ST_w', float(st[3]))
+    put('_CharaPartID', float(part_id))
+    # 透明特效 part 的游戏 shader 靠 pass 状态透明、不声明 _SurfaceType,补上内核开关。
+    if meta['transparent']:
+        put('_SurfaceType', 1.0)
+    try:
+        mat.surface_render_method = 'BLENDED' if meta['transparent'] else 'DITHERED'
+    except Exception:
+        pass
+    mat['ruri_uber_part'] = part_name
+    ref = props.shader_ref
+    mat['ruri_uber_shader_guid'] = str(ref.get('guid', '')) if isinstance(ref, dict) else ''
+    mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
+    print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} nodes={5}'.format(
+        name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(clone.nodes)), flush=True)
+    return mat
+
+
+def register():
+    # 宿主注册表按**绝对路径**导入(配方给的名字):相对导入会绑死部署深度,
+    # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
+    import importlib
+    importlib.import_module('RuriRipperImporter.material_builder').register_graph_provider(provider)
+
+
+def unregister():
+    import importlib
+    importlib.import_module('RuriRipperImporter.material_builder').unregister_graph_provider(provider)
 
 
 if __name__ == '__main__':
