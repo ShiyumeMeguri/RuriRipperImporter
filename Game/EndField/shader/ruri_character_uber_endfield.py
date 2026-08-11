@@ -8375,68 +8375,6 @@ STAMP = '927aed36be6e7885'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
-_CACHE_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '_template_cache_' + STAMP + '.blend')
-
-
-def _dedupe_placeholders():
-    # append 进来的占位图若与现存同名,Blender 会改名成 base.001。组引用副本、
-    # 而换贴图与运行时写入认的是本尊 —— 必须重映射回去,不能靠下游按名兜底。
-    for img in list(bpy.data.images):
-        if img.source != 'GENERATED':
-            continue
-        base, dot, tail = img.name.rpartition('.')
-        if not dot or not tail.isdigit():
-            continue
-        canonical = bpy.data.images.get(base)
-        if canonical is None or canonical is img:
-            continue
-        img.user_remap(canonical)
-        bpy.data.images.remove(img)
-
-
-def _append_cached():
-    if not os.path.exists(_CACHE_BLEND):
-        return False
-    missing = [gn for gn, _b in PARTS.values() if bpy.data.node_groups.get(gn) is None]
-    if not missing:
-        return True
-    try:
-        with bpy.data.libraries.load(_CACHE_BLEND, link=False) as (src, dst):
-            dst.node_groups = [gn for gn in missing if gn in src.node_groups]
-    except Exception as exc:
-        print('[ruri-blender] 模板缓存读失败,改活建:', exc, flush=True)
-        return False
-    _dedupe_placeholders()
-    got = [gn for gn, _b in PARTS.values() if bpy.data.node_groups.get(gn) is not None]
-    for gn in got:
-        g = bpy.data.node_groups[gn]
-        g.use_fake_user = True
-        g[STAMP_KEY] = STAMP
-    return len(got) == len(PARTS)
-
-
-def _write_cache():
-    groups = {bpy.data.node_groups[gn] for gn, _b in PARTS.values()
-              if bpy.data.node_groups.get(gn) is not None}
-    if not groups:
-        return
-    folder = os.path.dirname(_CACHE_BLEND)
-    try:
-        bpy.data.libraries.write(_CACHE_BLEND, groups, fake_user=True)
-    except Exception as exc:
-        print('[ruri-blender] 模板缓存写失败(不影响本次导入):', exc, flush=True)
-        return
-    for name in os.listdir(folder):   # 旧指纹的缓存立刻清掉,不留垃圾
-        if name.startswith('_template_cache_') and name.endswith('.blend') \
-                and name != os.path.basename(_CACHE_BLEND):
-            try:
-                os.remove(os.path.join(folder, name))
-            except OSError:
-                pass
-    print('[ruri-blender] 模板缓存已写入 {0} 组'.format(len(groups)), flush=True)
-
-
 def ensure(part=None, rebuild=False):
     """该 part 的模板组(固定名)。首次建、之后复用;指纹变了自动重建换血。
     Blender 没有贴图 socket ⇒ 组不能跨材质共享,故模板只是克隆源。"""
@@ -8445,25 +8383,18 @@ def ensure(part=None, rebuild=False):
     existing = bpy.data.node_groups.get(group_name)
     if existing is not None and not rebuild and existing.get(STAMP_KEY) == STAMP:
         return existing
-    if not rebuild and _append_cached():
-        return bpy.data.node_groups[group_name]
-    # 未命中:一次把**全部 part** 活建齐并写缓存 —— 之后任何会话任何角色都走 append。
+    stale = existing
+    if stale is not None:
+        stale.name = group_name + '.old'
     _images()
-    for gn, gbuilder in PARTS.values():
-        stale = bpy.data.node_groups.get(gn)
-        if stale is not None and not rebuild and stale.get(STAMP_KEY) == STAMP:
-            continue
-        if stale is not None:
-            stale.name = gn + '.old'
-        gbuilder()
-        built = bpy.data.node_groups[gn]
-        built.use_fake_user = True   # 零引用也随 blend 落盘
-        built[STAMP_KEY] = STAMP
-        if stale is not None:
-            stale.user_remap(built)
-            bpy.data.node_groups.remove(stale)
-    _write_cache()
-    return bpy.data.node_groups[group_name]
+    builder()
+    built = bpy.data.node_groups[group_name]
+    built.use_fake_user = True   # 零引用也随 blend 落盘
+    built[STAMP_KEY] = STAMP
+    if stale is not None:
+        stale.user_remap(built)
+        bpy.data.node_groups.remove(stale)
+    return built
 
 
 def build_material(mat, group_name=None, opaque=True, multiply_blend=False):
