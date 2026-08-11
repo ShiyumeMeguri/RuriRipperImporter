@@ -270,6 +270,24 @@ def _conjugated_pose_arrays(locs, quats_wxyz, scales, l_rest_inv, conv):
             out_scales.astype(np.float32))
 
 
+def _channels_by_path(channels, kind, clip_name):
+    """``{path: channel}`` for one curve kind, saying so out loud when a path
+    carries more than one.
+
+    A second channel on a path the clip already binds is a malformed clip: which
+    one drives the bone is nobody's decision, and keying by path quietly keeps
+    only the last. That is how a whole body's placement can vanish with nothing
+    reported -- the hips' real transform track shadowed by a later duplicate."""
+    by_path = {}
+    for channel in channels:
+        previous = by_path.get(channel.path)
+        if previous is not None:
+            print("[RuriRipper] {0}: {1} curve on '{2}' is bound twice -- the later one wins; "
+                  "the clip is malformed.".format(clip_name, kind, channel.path))
+        by_path[channel.path] = channel
+    return by_path
+
+
 def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=None):
     """Create a Blender action from a clip_curves.ClipCurves (the one clip
     form both the bridge blob and the disk raw-text parser produce)."""
@@ -295,10 +313,10 @@ def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=Non
                 name_to_node[_bone_name] = _n
 
     # Curves keyed by transform path (one Channel per path per kind).
-    rot = {channel.path: channel for channel in clip.rotations}
-    pos = {channel.path: channel for channel in clip.positions}
-    scale = {channel.path: channel for channel in clip.scales}
-    euler = {channel.path: channel for channel in clip.eulers}
+    rot = _channels_by_path(clip.rotations, "rotation", name)
+    pos = _channels_by_path(clip.positions, "position", name)
+    scale = _channels_by_path(clip.scales, "scale", name)
+    euler = _channels_by_path(clip.eulers, "euler", name)
 
     duration = clip.max_time()
     n_frames = max(1, int(round(duration * sample_rate)) + 1)
