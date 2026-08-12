@@ -4757,50 +4757,48 @@ def build_Ruri_Endfield_Uber_Fur():
     v492 = g.bc(v491)
     v493 = g.vmath('MULTIPLY', v492, v295)
     v494 = g.vmath('MULTIPLY', v493, v307)
-    v495 = g.bc(v491)
-    v496 = g.vmath('MULTIPLY', v487, v495)
-    v497 = g.vmath('DOT_PRODUCT', v304, (0.333, 0.333, 0.333))
-    v498 = g.math('MULTIPLY', v490, v497)
-    v499 = g.clampn(v498)
-    v500 = g.mixv(v499, v494, v496)
-    v501 = g.inp('_VFXFresnelColor', True, (1.0, 1.0, 1.0))
-    v502 = g.inp('_VFXFresnelColor_w', False, 1.0)
-    v503 = g.bc(v311)
-    v504 = g.vmath('MULTIPLY', v503, v501)
-    v505 = g.bc(v491)
-    v506 = g.vmath('MULTIPLY', v504, v505)
-    v507 = g.mixv(v311, v500, v506)
-    v508 = g.math('MULTIPLY', v308, v502)
-    v509 = g.clampn(v310)
-    v510 = g.math('MULTIPLY', v509, v309)
-    v511 = g.math('MULTIPLY', v510, v306)
-    v512 = g.clampn(v511)
-    v513 = g.inp('_VFXFresnelAffectOpacity', False, 1.0)
-    v514 = g.mixf(v513, 1, v308)
-    v515 = g.math('MULTIPLY', v512, v514)
-    v516 = g.mixv(v508, v507, v501)
-    v517 = g.bc(v515)
-    v518 = g.vmath('MULTIPLY', v517, v516)
-    v519 = g.bc(v437)
-    v520 = g.vmath('MULTIPLY', v518, v519)
-    v521 = g.vmath('ADD', v484, v520)
-    v522 = g.mixv(v245, v484, v521)
-    v523 = g.sep(v114)
-    v524 = g.bc(v523[0])
-    v525 = g.vmath('DIVIDE', v522, v524)
-    v526 = g.math('MULTIPLY', v83, v237[1])
-    v527 = g.vmath('ADD', v525, (0, 0, 0))
-    v528 = g.sep(v525)
-    v529 = g.sep(v527)
-    v530 = g.comb(v529[0], v529[1], v529[2])
-    v531 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v530)])
-    g.out_('ret_gBuffer0', v531[0], True)
-    g.out_('ret_gBuffer0_w', v526, False)
+    v495 = g.bc(v490)
+    v496 = g.vmath('MULTIPLY', v304, v495)
+    v497 = g.vmath('MULTIPLY', v496, v487)
+    v498 = g.vmath('ADD', v497, v494)
+    v499 = g.inp('_VFXFresnelColor', True, (1.0, 1.0, 1.0))
+    v500 = g.inp('_VFXFresnelColor_w', False, 1.0)
+    v501 = g.bc(v311)
+    v502 = g.vmath('MULTIPLY', v501, v499)
+    v503 = g.bc(v491)
+    v504 = g.vmath('MULTIPLY', v502, v503)
+    v505 = g.mixv(v311, v498, v504)
+    v506 = g.math('MULTIPLY', v308, v500)
+    v507 = g.clampn(v310)
+    v508 = g.math('MULTIPLY', v507, v309)
+    v509 = g.math('MULTIPLY', v508, v306)
+    v510 = g.clampn(v509)
+    v511 = g.inp('_VFXFresnelAffectOpacity', False, 1.0)
+    v512 = g.mixf(v511, 1, v308)
+    v513 = g.math('MULTIPLY', v510, v512)
+    v514 = g.mixv(v506, v505, v499)
+    v515 = g.bc(v513)
+    v516 = g.vmath('MULTIPLY', v515, v514)
+    v517 = g.bc(v437)
+    v518 = g.vmath('MULTIPLY', v516, v517)
+    v519 = g.vmath('ADD', v484, v518)
+    v520 = g.mixv(v245, v484, v519)
+    v521 = g.sep(v114)
+    v522 = g.bc(v521[0])
+    v523 = g.vmath('DIVIDE', v520, v522)
+    v524 = g.math('MULTIPLY', v83, v237[1])
+    v525 = g.vmath('ADD', v523, (0, 0, 0))
+    v526 = g.sep(v523)
+    v527 = g.sep(v525)
+    v528 = g.comb(v527[0], v527[1], v527[2])
+    v529 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v528)])
+    g.out_('ret_gBuffer0', v529[0], True)
+    g.out_('ret_gBuffer0_w', v524, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
     g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer2_w', 0.0, False)
-    g.out_('ret_color', v525, True)
+    g.out_('ret_color', v523, True)
     g.out_('ret_color_w', v237[1], False)
     g.out_('ret_depth', 0.0, False)
     g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
@@ -5996,66 +5994,64 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v574 = g.bc(v573)
     v575 = g.vmath('MULTIPLY', v574, v304)
     v576 = g.vmath('MULTIPLY', v575, v316)
-    v577 = g.bc(v573)
-    v578 = g.vmath('MULTIPLY', v569, v577)
-    v579 = g.vmath('DOT_PRODUCT', v313, (0.333, 0.333, 0.333))
-    v580 = g.math('MULTIPLY', v572, v579)
-    v581 = g.clampn(v580)
-    v582 = g.mixv(v581, v576, v578)
-    v583 = g.inp('_VFXFresnelColor', True, (1.0, 1.0, 1.0))
-    v584 = g.inp('_VFXFresnelColor_w', False, 1.0)
-    v585 = g.bc(v320)
-    v586 = g.vmath('MULTIPLY', v585, v583)
-    v587 = g.bc(v573)
-    v588 = g.vmath('MULTIPLY', v586, v587)
-    v589 = g.mixv(v320, v582, v588)
-    v590 = g.math('MULTIPLY', v317, v584)
-    v591 = g.clampn(v319)
-    v592 = g.math('MULTIPLY', v591, v318)
-    v593 = g.math('MULTIPLY', v592, v315)
-    v594 = g.clampn(v593)
-    v595 = g.inp('_VFXFresnelAffectOpacity', False, 1.0)
-    v596 = g.mixf(v595, 1, v317)
-    v597 = g.math('MULTIPLY', v594, v596)
-    v598 = g.mixv(v590, v589, v583)
-    v599 = g.bc(v597)
-    v600 = g.vmath('MULTIPLY', v599, v598)
-    v601 = g.bc(v426)
-    v602 = g.vmath('MULTIPLY', v600, v601)
-    v603 = g.vmath('ADD', v566, v602)
-    v604 = g.mixv(v253, v566, v603)
-    v605 = g.inp('_EnableVFXColorAdjustment', False, 0.0)
-    v606 = g.math('GREATER_THAN', v605, 0.5)
-    v607 = g.inp('_ColorAdjustmentContrast', False, 1.0)
-    v608 = g.inp('_ColorAdjustmentSaturation', False, 1.0)
-    v609 = g.inp('_ColorAdjustmentRimWidth', False, 0.35)
-    v610 = g.inp('_ColorAdjustmentBrightness', False, 1.0)
-    v611 = g.inp('_ColorAdjustmentColorBlend', True, (1.0, 1.0, 1.0))
-    v612 = g.inp('_ColorAdjustmentColorBlend_w', False, 0.0)
-    v613 = g.inp('_ColorAdjustmentRimColor', True, (1.0, 1.0, 1.0))
-    v614 = g.inp('_ColorAdjustmentRimColor_w', False, 1.0)
-    v615 = g.inp('_ColorAdjustmentRimIntensity', False, 4.0)
-    v616 = g.group_named('RCE_VFXColorAdjust', [('litColor', v604), ('NdotV', v427[2]), ('rimMod', 1), ('_ColorAdjustmentContrast', v607), ('_ColorAdjustmentSaturation', v608), ('_ColorAdjustmentRimWidth', v609), ('_ColorAdjustmentBrightness', v610), ('_ColorAdjustmentColorBlend', v611), ('_ColorAdjustmentColorBlend_w', v612), ('_ColorAdjustmentRimColor', v613), ('_ColorAdjustmentRimColor_w', v614), ('_ColorAdjustmentRimIntensity', v615)])
-    v617 = g.mixv(v606, v604, v616[0])
-    v618 = g.sep(v114)
-    v619 = g.bc(v618[0])
-    v620 = g.vmath('DIVIDE', v617, v619)
-    v621 = g.math('COMPARE', v78, 1, 1e-05)
-    v622 = g.mixf(v621, 1, v100)
-    v623 = g.math('MULTIPLY', v83, v622)
-    v624 = g.vmath('ADD', v620, (0, 0, 0))
-    v625 = g.sep(v620)
-    v626 = g.sep(v624)
-    v627 = g.comb(v626[0], v626[1], v626[2])
-    v628 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v627)])
-    g.out_('ret_gBuffer0', v628[0], True)
-    g.out_('ret_gBuffer0_w', v623, False)
+    v577 = g.bc(v572)
+    v578 = g.vmath('MULTIPLY', v313, v577)
+    v579 = g.vmath('MULTIPLY', v578, v569)
+    v580 = g.vmath('ADD', v579, v576)
+    v581 = g.inp('_VFXFresnelColor', True, (1.0, 1.0, 1.0))
+    v582 = g.inp('_VFXFresnelColor_w', False, 1.0)
+    v583 = g.bc(v320)
+    v584 = g.vmath('MULTIPLY', v583, v581)
+    v585 = g.bc(v573)
+    v586 = g.vmath('MULTIPLY', v584, v585)
+    v587 = g.mixv(v320, v580, v586)
+    v588 = g.math('MULTIPLY', v317, v582)
+    v589 = g.clampn(v319)
+    v590 = g.math('MULTIPLY', v589, v318)
+    v591 = g.math('MULTIPLY', v590, v315)
+    v592 = g.clampn(v591)
+    v593 = g.inp('_VFXFresnelAffectOpacity', False, 1.0)
+    v594 = g.mixf(v593, 1, v317)
+    v595 = g.math('MULTIPLY', v592, v594)
+    v596 = g.mixv(v588, v587, v581)
+    v597 = g.bc(v595)
+    v598 = g.vmath('MULTIPLY', v597, v596)
+    v599 = g.bc(v426)
+    v600 = g.vmath('MULTIPLY', v598, v599)
+    v601 = g.vmath('ADD', v566, v600)
+    v602 = g.mixv(v253, v566, v601)
+    v603 = g.inp('_EnableVFXColorAdjustment', False, 0.0)
+    v604 = g.math('GREATER_THAN', v603, 0.5)
+    v605 = g.inp('_ColorAdjustmentContrast', False, 1.0)
+    v606 = g.inp('_ColorAdjustmentSaturation', False, 1.0)
+    v607 = g.inp('_ColorAdjustmentRimWidth', False, 0.35)
+    v608 = g.inp('_ColorAdjustmentBrightness', False, 1.0)
+    v609 = g.inp('_ColorAdjustmentColorBlend', True, (1.0, 1.0, 1.0))
+    v610 = g.inp('_ColorAdjustmentColorBlend_w', False, 0.0)
+    v611 = g.inp('_ColorAdjustmentRimColor', True, (1.0, 1.0, 1.0))
+    v612 = g.inp('_ColorAdjustmentRimColor_w', False, 1.0)
+    v613 = g.inp('_ColorAdjustmentRimIntensity', False, 4.0)
+    v614 = g.group_named('RCE_VFXColorAdjust', [('litColor', v602), ('NdotV', v427[2]), ('rimMod', 1), ('_ColorAdjustmentContrast', v605), ('_ColorAdjustmentSaturation', v606), ('_ColorAdjustmentRimWidth', v607), ('_ColorAdjustmentBrightness', v608), ('_ColorAdjustmentColorBlend', v609), ('_ColorAdjustmentColorBlend_w', v610), ('_ColorAdjustmentRimColor', v611), ('_ColorAdjustmentRimColor_w', v612), ('_ColorAdjustmentRimIntensity', v613)])
+    v615 = g.mixv(v604, v602, v614[0])
+    v616 = g.sep(v114)
+    v617 = g.bc(v616[0])
+    v618 = g.vmath('DIVIDE', v615, v617)
+    v619 = g.math('COMPARE', v78, 1, 1e-05)
+    v620 = g.mixf(v619, 1, v100)
+    v621 = g.math('MULTIPLY', v83, v620)
+    v622 = g.vmath('ADD', v618, (0, 0, 0))
+    v623 = g.sep(v618)
+    v624 = g.sep(v622)
+    v625 = g.comb(v624[0], v624[1], v624[2])
+    v626 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v625)])
+    g.out_('ret_gBuffer0', v626[0], True)
+    g.out_('ret_gBuffer0_w', v621, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
     g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer2_w', 0.0, False)
-    g.out_('ret_color', v620, True)
-    g.out_('ret_color_w', v623, False)
+    g.out_('ret_color', v618, True)
+    g.out_('ret_color_w', v621, False)
     g.out_('ret_depth', 0.0, False)
     g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
     g.out_('ret_shadowMask_w', 0.0, False)
@@ -6118,7 +6114,7 @@ EXTERNAL_TEXTURES = {
 }
 
 DEFAULT_PART = 'Standard'
-STAMP = '5f39be34398e1859'
+STAMP = '7f2f10167dee52dd'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
@@ -6364,7 +6360,10 @@ def _external_textures(g, grp, part, uv):
         first.select = True
 
 
-def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part=None):
+def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part=None, cull=2.0):
+    # cull = 材质 _Cull 真值(shader `Cull [_Cull]`:0=Off 双面 / 1=Front 渲背面 / 2=Back 渲正面)。
+    # Cycles 无逐材质剔除,等价 = Backfacing→Transparent(实锤:ZWrite=0 的 fur 壳不剔背面时
+    # 视线每层命中两面,alpha 厚度翻倍渲成闷壳)。
     # 入口组实例接进材质树;返回组实例节点(调用方按 socket 名填 uniform)。
     # opaque 的真源判据(characternpr_eye Sub0_Pass0_Fragment:1014 逐字):
     #     outColor.w = (_SurfaceType == 1.0) ? computedAlpha : 1.0
@@ -6385,8 +6384,20 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
     tan_sign = g.attr('ruri_tangent_sign')
     tan_ws = g.vtrans(tan_attr.outputs['Vector'], 'OBJECT', 'WORLD', 'VECTOR')
     col = g.attr('Color')
+    # UV1 varying(Fur 壳层 index 在 .x / 第二套 UV / VFX 粒子 custom data):
+    # 不接线 socket 默认 0 → Fur 的 ceil(shellIdx)=0 → shellAlpha 恒 1,壳层 cutout
+    # 整体失效(实锤:绒毛渲成一块实心岩石)。无 UV1 层的网格该节点输出 0,无害。
+    uv1 = g._nd('ShaderNodeUVMap')
+    uv1.uv_map = 'UV1'
+    # varying uv 的真源语义 = uv0×_BaseMap_ST.xy+zw(顶点里统一变换;fur 的毛簇密度、
+    # dye 的反解除法全指望它)。Mapping POINT = 先乘 Scale 后加 Location,provider 按
+    # label 灌材质真值(实锤:漏变换让 furMap 平铺 4.5 倍降到 0.76,毛簇糊成岩石)。
+    stmap = g._nd('ShaderNodeMapping')
+    stmap.label = 'RuriBaseMapST'
+    g._set(stmap.inputs['Vector'], tc.outputs['UV'])
     wires = {
-        'input_uv': tc.outputs['UV'],
+        'input_uv': stmap.outputs['Vector'],
+        'input_uv1': uv1.outputs['UV'],
         'input_normalWS': geo.outputs['Normal'],
         'input_positionWS': geo.outputs['Position'],
         'input_tangentWS': tan_ws,
@@ -6398,7 +6409,7 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
     for s in grp.inputs:
         if s.name in wires:
             g._set(s, wires[s.name])
-    _external_textures(g, grp, part, tc.outputs['UV'])
+    _external_textures(g, grp, part, stmap.outputs['Vector'])
     # tonemap 已内联在入口组尾(ret_gBuffer0 即显示线性)——材质树零匿名节点,
     # 属性面板直接露出组的命名 socket。
     color_sock = grp.outputs.get('ret_gBuffer0')
@@ -6419,7 +6430,7 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
         g._set(mixsh.inputs[1], tr.outputs[0])
         g._set(mixsh.inputs[2], em.outputs[0])
         outp = g._nd('ShaderNodeOutputMaterial')
-        g._set(outp.inputs[0], mixsh.outputs[0])
+        g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull))
         return grp
     else:
         if color_sock is not None:
@@ -6434,8 +6445,26 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
     g._set(mixsh.inputs[1], tr.outputs[0])
     g._set(mixsh.inputs[2], em.outputs[0])
     outp = g._nd('ShaderNodeOutputMaterial')
-    g._set(outp.inputs[0], mixsh.outputs[0])
+    g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull))
     return grp
+
+
+def _apply_cull(g, shader_sock, cull):
+    # 剔除面 → Transparent(fac=Backfacing:0=正面取 input1,1=背面取 input2)。
+    if cull not in (1.0, 2.0):
+        return shader_sock              # Cull Off:双面
+    cgeo = g._nd('ShaderNodeNewGeometry')
+    ctr = g._nd('ShaderNodeBsdfTransparent')
+    cmix = g._nd('ShaderNodeMixShader')
+    cmix.label = 'RuriCullMix'   # 描边克隆按此标签剥掉本体剔除层
+    g._set(cmix.inputs[0], cgeo.outputs['Backfacing'])
+    if cull == 1.0:                     # Cull Front:渲背面,正面透明
+        g._set(cmix.inputs[1], ctr.outputs[0])
+        g._set(cmix.inputs[2], shader_sock)
+    else:                               # Cull Back(默认):渲正面,背面透明
+        g._set(cmix.inputs[1], shader_sock)
+        g._set(cmix.inputs[2], ctr.outputs[0])
+    return cmix.outputs[0]
 
 
 def build_root(part=None):
@@ -6613,13 +6642,22 @@ def apply_vertex_stage(objects=None, camera=None):
     scene = bpy.context.scene
     cam = camera or scene.camera
     done = 0
-    for obj in (objects if objects is not None else scene.objects):
-        if obj.type != 'MESH' or obj.data is None:
+    for obj in list(objects if objects is not None else scene.objects):
+        # RuriOL* 是本函数自建的描边壳对象(共享本体 data,材质同样带 ruri_uber_part)
+        # —— 不排除会给描边对象再建描边,无限套娃。
+        if obj.type != 'MESH' or obj.data is None or obj.name.startswith('RuriOL '):
             continue
         slots = [(i, m) for i, m in enumerate(obj.data.materials)
-                 if m is not None and m.get('ruri_uber_part')]
+                 if m is not None and m.get('ruri_uber_part')
+                 and not m.get('ruri_outline_clone')]   # 描边克隆继承 id props,不算 uber 槽
         vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in VERTEX_PARTS]
         def _outline_on(mat):
+            # 真判据三连:①材质自禁的 pass 列表(disabledShaderPasses,唯一的
+            # per-材质关描边真值 —— _OutlineWidth 只是历史键,证明不了在用);
+            # ②宽度>0;③_BaseColor.a>0(游戏 RefreshCharaMaterial 的关 pass 条件)。
+            disabled = {str(p).lower() for p in (mat.get('ruri_uber_disabled_passes') or [])}
+            if any('outline' in p for p in disabled):
+                return False
             floats, _s, colors = _mat_meta(mat)
             base_a = colors.get('_BaseColor', [1, 1, 1, 1])[3]
             return float(floats.get('_OutlineWidth', 0.0)) > 0.0 and float(base_a) > 0.0
@@ -6702,36 +6740,98 @@ def apply_vertex_stage(objects=None, camera=None):
             mt.links.new(slot_sel(slot), sp.inputs['Selection'])
             mt.links.new(swap_yz(out_sock), sp.inputs['Position'])
             geo = sp.outputs['Geometry']
-        # ② 反壳描边:位移后的几何复制一份 → **先**删无描边槽的面 → 逐槽外扩 + 换描边
-        #    克隆材质 → 翻面。Delete 必须在任何 SetMaterial 之前:field 在消费节点的几何上
-        #    求值,SetMaterial 改写过 material_index 之后再按原槽比较,选区整体失真
-        #    (实锤:hull 面 drop 恒 1,描边壳整只被删光)。
+        mt.links.new(geo, gout.inputs[0])
+        mod = obj.modifiers.get('Ruri Endfield Vertex')
+        if mod is None:
+            mod = obj.modifiers.new('Ruri Endfield Vertex', 'NODES')
+        mod.node_group = mt
+        # ② 反壳描边 = **独立对象**(共享 mesh data,object 级材质槽覆盖):
+        #    GN 的 Set Material / Set Material Index 在 Cycles 渲染求值下会让 modifier
+        #    输出空几何(实锤两次:视口/Workbench 正常,Cycles 整只消失;删该节点即恢复)。
+        #    描边树因此零材质节点:壳位移 + 逐槽外扩 + 删无描边槽的面;材质换皮走
+        #    slot.link='OBJECT' 的对象槽覆盖。不翻面:游戏 Cull Front = 渲染远侧面,
+        #    剔除由克隆材质里的 Backfacing 混合承担(远侧 backfacing=1 → 本体着色,
+        #    外侧 → 全透明),非轮廓区被本体深度挡住,只剩剪影圈。
+        ol_name = 'RuriOL ' + obj.name
+        stale_ol = bpy.data.objects.get(ol_name)
+        if stale_ol is not None:
+            bpy.data.objects.remove(stale_ol, do_unlink=True)
+        stale_tree = bpy.data.node_groups.get(ol_name)
+        if stale_tree is not None:
+            bpy.data.node_groups.remove(stale_tree)
         if outline_slots:
-            keep = None
-            for slot, _mat in outline_slots:
-                sel = slot_sel(slot)
-                if keep is None:
-                    keep = sel
-                else:
-                    mx = nd('ShaderNodeMath')
-                    mx.operation = 'MAXIMUM'
-                    mt.links.new(keep, mx.inputs[0])
-                    mt.links.new(sel, mx.inputs[1])
-                    keep = mx.outputs[0]
-            drop = nd('ShaderNodeMath')
-            drop.operation = 'SUBTRACT'
-            drop.inputs[0].default_value = 1.0
-            mt.links.new(keep, drop.inputs[1])
-            dg = nd('GeometryNodeDeleteGeometry')
-            dg.domain = 'FACE'
-            mt.links.new(geo, dg.inputs['Geometry'])
-            mt.links.new(drop.outputs[0], dg.inputs['Selection'])
-            dup = dg.outputs['Geometry']
+            oobj = obj.copy()
+            oobj.name = ol_name
+            for coll in obj.users_collection:
+                coll.objects.link(oobj)
+            ot = bpy.data.node_groups.new(ol_name, 'GeometryNodeTree')
+            ot.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+            ot.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+            ogin = ot.nodes.new('NodeGroupInput')
+            ogout = ot.nodes.new('NodeGroupOutput')
+            def ond(t_):
+                return ot.nodes.new(t_)
+            def onattr(name, dtype):
+                a = ond('GeometryNodeInputNamedAttribute')
+                a.data_type = dtype
+                a.inputs['Name'].default_value = name
+                return a.outputs['Attribute']
+            o_matidx = onattr('material_index', 'INT')
+            def oslot_sel(slot):
+                eq = ond('ShaderNodeMath')
+                eq.operation = 'COMPARE'
+                ot.links.new(o_matidx, eq.inputs[0])
+                eq.inputs[1].default_value = float(slot)
+                eq.inputs[2].default_value = 0.5
+                return eq.outputs[0]
+            def oswap(sock):
+                sep = ond('ShaderNodeSeparateXYZ')
+                ot.links.new(sock, sep.inputs[0])
+                comb = ond('ShaderNodeCombineXYZ')
+                ot.links.new(sep.outputs[0], comb.inputs[0])
+                ot.links.new(sep.outputs[2], comb.inputs[1])
+                ot.links.new(sep.outputs[1], comb.inputs[2])
+                return comb.outputs[0]
+            ogeo = ogin.outputs[0]
+            # 壳位移(hull 同样要蓬起来,树与本体同构)。
+            for slot, mat in vert_slots:
+                part = mat['ruri_uber_part']
+                vt_name, vt_builder = VERTEX_PARTS[part]
+                gn = ond('GeometryNodeGroup')
+                gn.node_tree = bpy.data.node_groups['Uber V {0}'.format(mat.name)]
+                floats, st, colors = _mat_meta(mat)
+                _fill_uniform_sockets(gn, floats, st, colors)
+                wires = {'input_positionOS': ond('GeometryNodeInputPosition').outputs['Position'],
+                         'input_normalOS': ond('GeometryNodeInputNormal').outputs['Normal'],
+                         'input_tangentOS': onattr('ruri_tangent', 'FLOAT_VECTOR'),
+                         'input_tangentOS_w': onattr('ruri_tangent_sign', 'FLOAT'),
+                         'input_texcoord': onattr('UVMap', 'FLOAT_VECTOR'),
+                         'input_texcoord1': onattr('UV1', 'FLOAT_VECTOR'),
+                         'input_texcoord2': onattr('UV2', 'FLOAT_VECTOR')}
+                for sock in gn.inputs:
+                    src = wires.get(sock.name)
+                    if src is not None:
+                        ot.links.new(src, sock)
+                    elif sock.name == 'input_color':
+                        sock.default_value = (1.0, 1.0, 1.0)
+                    elif sock.name == 'input_color_w':
+                        sock.default_value = 1.0
+                    elif sock.name == 'input_camPos' and cam_vec:
+                        sock.default_value = tuple(cam_vec['cam_pos'])
+                out_sock = gn.outputs.get('ret_positionWS')
+                if out_sock is None:
+                    continue
+                sp = ond('GeometryNodeSetPosition')
+                ot.links.new(ogeo, sp.inputs['Geometry'])
+                ot.links.new(oslot_sel(slot), sp.inputs['Selection'])
+                ot.links.new(oswap(out_sock), sp.inputs['Position'])
+                ogeo = sp.outputs['Geometry']
+            # 逐槽外扩(描边位移)。
             for slot, mat in outline_slots:
                 floats, st, colors = _mat_meta(mat)
                 oc_tree = _clone_vtx('Ruri Endfield Outline', build_vtx_outline,
                                      'Uber O {0}'.format(mat.name), mat)
-                og = nd('GeometryNodeGroup')
+                og = ond('GeometryNodeGroup')
                 og.node_tree = oc_tree
                 for key, value in cam_vec.items():
                     og.inputs[key].default_value = tuple(value)
@@ -6745,29 +6845,49 @@ def apply_vertex_stage(objects=None, camera=None):
                 mst = st.get('_OutlineMask', [1.0, 1.0, 0.0, 0.0])
                 og.inputs['mask_st_scale'].default_value = (float(mst[0]), float(mst[1]), 0.0)
                 og.inputs['mask_st_offset'].default_value = (float(mst[2]), float(mst[3]), 0.0)
-                sel = slot_sel(slot)
-                sp = nd('GeometryNodeSetPosition')
-                mt.links.new(dup, sp.inputs['Geometry'])
-                mt.links.new(sel, sp.inputs['Selection'])
-                mt.links.new(og.outputs['offset'], sp.inputs['Offset'])
-                dup = sp.outputs['Geometry']
-                sm = nd('GeometryNodeSetMaterial')
-                mt.links.new(dup, sm.inputs['Geometry'])
-                mt.links.new(sel, sm.inputs['Selection'])
-                sm.inputs['Material'].default_value = _outline_clone_material(mat)
-                dup = sm.outputs['Geometry']
-            ff = nd('GeometryNodeFlipFaces')
-            mt.links.new(dup, ff.inputs['Mesh'])
-            dup = ff.outputs['Mesh']
-            jn = nd('GeometryNodeJoinGeometry')
-            mt.links.new(dup, jn.inputs[0])
-            mt.links.new(geo, jn.inputs[0])
-            geo = jn.outputs[0]
-        mt.links.new(geo, gout.inputs[0])
-        mod = obj.modifiers.get('Ruri Endfield Vertex')
-        if mod is None:
-            mod = obj.modifiers.new('Ruri Endfield Vertex', 'NODES')
-        mod.node_group = mt
+                sp = ond('GeometryNodeSetPosition')
+                ot.links.new(ogeo, sp.inputs['Geometry'])
+                ot.links.new(oslot_sel(slot), sp.inputs['Selection'])
+                ot.links.new(og.outputs['offset'], sp.inputs['Offset'])
+                ogeo = sp.outputs['Geometry']
+            # 删无描边槽的面(选区先于一切材质动作,field 惰性求值安全)。
+            keep = None
+            for slot, _mat in outline_slots:
+                sel = oslot_sel(slot)
+                if keep is None:
+                    keep = sel
+                else:
+                    mx = ond('ShaderNodeMath')
+                    mx.operation = 'MAXIMUM'
+                    ot.links.new(keep, mx.inputs[0])
+                    ot.links.new(sel, mx.inputs[1])
+                    keep = mx.outputs[0]
+            drop = ond('ShaderNodeMath')
+            drop.operation = 'SUBTRACT'
+            drop.inputs[0].default_value = 1.0
+            ot.links.new(keep, drop.inputs[1])
+            dg = ond('GeometryNodeDeleteGeometry')
+            dg.domain = 'FACE'
+            ot.links.new(ogeo, dg.inputs['Geometry'])
+            ot.links.new(drop.outputs[0], dg.inputs['Selection'])
+            ot.links.new(dg.outputs['Geometry'], ogout.inputs[0])
+            omod = oobj.modifiers.get('Ruri Endfield Vertex')
+            if omod is None:
+                omod = oobj.modifiers.new('Ruri Endfield Vertex', 'NODES')
+            omod.node_group = ot
+            # 对象槽覆盖:描边对象的每个描边槽换成克隆(共享 mesh data,不碰本体)。
+            for slot, mat in outline_slots:
+                slot_ref = oobj.material_slots[slot]
+                slot_ref.link = 'OBJECT'
+                slot_ref.material = _outline_clone_material(mat)
+        if vert_slots:
+            # 20 层透明壳叠深 > Cycles 默认 transparent_max_bounces=8,穿透壳堆的
+            # 光线会提前截断发黑 —— 只升不降的保底(view_transform 接管的同款先例)。
+            try:
+                if scene.cycles.transparent_max_bounces < 32:
+                    scene.cycles.transparent_max_bounces = 32
+            except AttributeError:
+                pass
         done += 1
         print('[ruri-vertex] {0}: shell x{1} outline x{2}'.format(
             obj.name, len(vert_slots), len(outline_slots)), flush=True)
@@ -6776,7 +6896,9 @@ def apply_vertex_stage(objects=None, camera=None):
 
 def _outline_clone_material(mat):
     """描边壳材质 = 本体克隆 + _RuriOutlineShellGate=1(片元过游戏 outline 调色)+
-    背面剔除(翻面壳只剩剪影,等价游戏 Cull Front)。"""
+    Cull Front 等价剔除:**材质内 Backfacing 混合**(壳不翻面,远侧面 backfacing=1 →
+    本体着色,外侧面 → 全透明;非轮廓区的远侧面被本体深度遮住,只剩剪影圈)。
+    use_backface_culling 不用:EEVEE 属性 Cycles 不认,且不翻面时它剔的还是要渲的那面。"""
     name = mat.name + ' (Outline)'
     clone = mat.copy()
     stale = bpy.data.materials.get(name)
@@ -6784,13 +6906,27 @@ def _outline_clone_material(mat):
         stale.user_remap(clone)
         bpy.data.materials.remove(stale)
     clone.name = name
-    clone.use_backface_culling = True
-    if clone.node_tree is not None:
-        for node in clone.node_tree.nodes:
+    clone['ruri_outline_clone'] = 1
+    clone.use_backface_culling = False
+    nt = clone.node_tree
+    if nt is not None:
+        for node in nt.nodes:
             if node.bl_idname == 'ShaderNodeGroup':
                 gate = node.inputs.get('_RuriOutlineShellGate')
                 if gate is not None:
                     gate.default_value = 1.0
+        outp = next((n for n in nt.nodes if n.bl_idname == 'ShaderNodeOutputMaterial'), None)
+        if outp is not None and outp.inputs['Surface'].links:
+            src = outp.inputs['Surface'].links[0].from_socket
+            if src.node.label == 'RuriCullMix' and src.node.inputs[1].links:
+                src = src.node.inputs[1].links[0].from_socket   # 剥本体剔除层,描边自己管剔除
+            geo = nt.nodes.new('ShaderNodeNewGeometry')
+            tr = nt.nodes.new('ShaderNodeBsdfTransparent')
+            mix = nt.nodes.new('ShaderNodeMixShader')
+            nt.links.new(geo.outputs['Backfacing'], mix.inputs[0])
+            nt.links.new(tr.outputs[0], mix.inputs[1])
+            nt.links.new(src, mix.inputs[2])
+            nt.links.new(mix.outputs[0], outp.inputs['Surface'])
     return clone
 
 
@@ -6876,6 +7012,29 @@ def _swap_image(node, real):
         real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
     except Exception:
         pass
+    if non_color and not real.get('ruri_rg_layout_fixed'):
+        # 双通道压缩纹理(BC5 类)被导成 R恒白/G=B=X/A=Y 的容器,shader 读 .x 只会
+        # 吃到填充白(ardelia _FurMap 实锤:毛噪声全灭成壳石头)——命中判据就地还原 R<-G。
+        real['ruri_rg_layout_fixed'] = 1
+        try:
+            import numpy as _np
+            w, h = real.size
+            if w and h:
+                buf = _np.empty(w * h * 4, dtype=_np.float32)
+                real.pixels.foreach_get(buf)
+                px = buf.reshape(-1, 4)
+                # 统计判据(DXT 块伪影下 min/max 不可靠):R 恒白 + G 有数据 + G≈B
+                if (float(px[:, 0].mean()) > 0.99 and float(px[:, 0].std()) < 0.02
+                        and float(px[:, 1].std()) > 1e-3
+                        and float(_np.abs(px[:, 1] - px[:, 2]).mean()) < 0.01):
+                    px[:, 0] = px[:, 1]
+                    real.pixels.foreach_set(buf)
+                    real.update()
+                    if real.packed_file is not None:
+                        real.pack()   # 重打包当前缓冲,否则 save 后修正回退到原字节
+                    print('[ruri-uber] {0}: 双通道导出布局已恢复 R<-G'.format(real.name), flush=True)
+        except Exception as exc:
+            print('[ruri-uber] {0} 通道布局检测失败: {1}'.format(real.name, exc), flush=True)
 
 
 def _subtree_has_tex(tree, memo):
@@ -6993,7 +7152,7 @@ def provider(builder, props):
         mat.use_nodes = True
     grp = build_material(mat, clone.name, opaque=opaque,
                          multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
-                         part=part_name)
+                         part=part_name, cull=float(props.floats.get('_Cull', 2.0)))
     # 组外贴图节点(原始 UV 直采的那些建在材质树上):换真图,节点标签 = 槽名。
     for node in mat.node_tree.nodes:
         if node.type != 'TEX_IMAGE':
@@ -7002,6 +7161,12 @@ def provider(builder, props):
         if real is not None:
             _swap_image(node, real)
     filled = [0]
+    # varying uv 的 _BaseMap_ST 变换(build_material 里的 Mapping 按 label 灌真值)
+    bst = props.texture_st.get('_BaseMap') or [1.0, 1.0, 0.0, 0.0]
+    for node in mat.node_tree.nodes:
+        if node.label == 'RuriBaseMapST':
+            node.inputs['Scale'].default_value = (float(bst[0]), float(bst[1]), 1.0)
+            node.inputs['Location'].default_value = (float(bst[2]), float(bst[3]), 0.0)
 
     def put(sock_name, value):
         sock = grp.inputs.get(sock_name)
@@ -7036,6 +7201,7 @@ def provider(builder, props):
     mat['ruri_uber_floats'] = {k: float(v) for k, v in props.floats.items()}
     mat['ruri_uber_st'] = {k: [float(x) for x in v] for k, v in props.texture_st.items()}
     mat['ruri_uber_colors'] = {k: [float(x) for x in v] for k, v in props.colors.items()}
+    mat['ruri_uber_disabled_passes'] = list(getattr(props, 'disabled_passes', ()))
     ref = props.shader_ref
     mat['ruri_uber_shader_guid'] = str(ref.get('guid', '')) if isinstance(ref, dict) else ''
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
