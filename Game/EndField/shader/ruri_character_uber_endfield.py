@@ -6395,7 +6395,12 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
     stmap = g._nd('ShaderNodeMapping')
     stmap.label = 'RuriBaseMapST'
     g._set(stmap.inputs['Vector'], tc.outputs['UV'])
+    # 描边虚拟面的路由信号:GN 侧写的 'ruri_outline' 面属性(本体面缺省读 0)。
+    # gate 走它 → 片元过游戏 outline 调色;剔除方向也按它翻(描边 pass 恒 Cull Front)。
+    olattr = g._nd('ShaderNodeAttribute')
+    olattr.attribute_name = 'ruri_outline'
     wires = {
+        '_RuriOutlineShellGate': olattr.outputs['Fac'],
         'input_uv': stmap.outputs['Vector'],
         'input_uv1': uv1.outputs['UV'],
         'input_normalWS': geo.outputs['Normal'],
@@ -6430,7 +6435,7 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
         g._set(mixsh.inputs[1], tr.outputs[0])
         g._set(mixsh.inputs[2], em.outputs[0])
         outp = g._nd('ShaderNodeOutputMaterial')
-        g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull))
+        g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull, olattr.outputs['Fac']))
         return grp
     else:
         if color_sock is not None:
@@ -6445,25 +6450,29 @@ def build_material(mat, group_name=None, opaque=True, multiply_blend=False, part
     g._set(mixsh.inputs[1], tr.outputs[0])
     g._set(mixsh.inputs[2], em.outputs[0])
     outp = g._nd('ShaderNodeOutputMaterial')
-    g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull))
+    g._set(outp.inputs[0], _apply_cull(g, mixsh.outputs[0], cull, olattr.outputs['Fac']))
     return grp
 
 
-def _apply_cull(g, shader_sock, cull):
-    # 剔除面 → Transparent(fac=Backfacing:0=正面取 input1,1=背面取 input2)。
-    if cull not in (1.0, 2.0):
-        return shader_sock              # Cull Off:双面
+def _apply_cull(g, shader_sock, cull, outline_fac):
+    """剔除面 → Transparent。本体面按材质 _Cull(1=Front 渲背面 / 2=Back 渲正面);
+    描边虚拟面(ruri_outline=1)恒 Cull Front(游戏 outline pass 写死)。
+    透明权重:cull=2 → XOR(Backfacing, outline);cull=1 → 1-Backfacing(两类同向);
+    cull=0 → outline×(1-Backfacing)(本体双面,描边仍剔正面)。"""
     cgeo = g._nd('ShaderNodeNewGeometry')
+    bf = cgeo.outputs['Backfacing']
+    if cull == 1.0:
+        tr_fac = g.math('SUBTRACT', 1.0, bf)
+    elif cull == 2.0:
+        tr_fac = g.math('ABSOLUTE', g.math('SUBTRACT', bf, outline_fac))
+    else:
+        tr_fac = g.math('MULTIPLY', outline_fac, g.math('SUBTRACT', 1.0, bf))
     ctr = g._nd('ShaderNodeBsdfTransparent')
     cmix = g._nd('ShaderNodeMixShader')
-    cmix.label = 'RuriCullMix'   # 描边克隆按此标签剥掉本体剔除层
-    g._set(cmix.inputs[0], cgeo.outputs['Backfacing'])
-    if cull == 1.0:                     # Cull Front:渲背面,正面透明
-        g._set(cmix.inputs[1], ctr.outputs[0])
-        g._set(cmix.inputs[2], shader_sock)
-    else:                               # Cull Back(默认):渲正面,背面透明
-        g._set(cmix.inputs[1], shader_sock)
-        g._set(cmix.inputs[2], ctr.outputs[0])
+    cmix.label = 'RuriCullMix'
+    g._set(cmix.inputs[0], tr_fac)
+    g._set(cmix.inputs[1], shader_sock)
+    g._set(cmix.inputs[2], ctr.outputs[0])
     return cmix.outputs[0]
 
 
@@ -6554,8 +6563,11 @@ def build_vtx_outline():
     tan_h = g.math('TANGENT', half_fov)
     dvx = g.math('DIVIDE', g.math('MULTIPLY', offx, tan_h), aspect)
     dvy = g.math('MULTIPLY', offy, tan_h)
-    world = g.vmath('ADD', g.vmath('ADD', g.vmath('SCALE', cam_right, s=dvx),
-        g.vmath('SCALE', cam_up, s=dvy)), g.vmath('SCALE', cam_look, s=g.math('MULTIPLY', 0.1, z_val)))
+    # 真源末段 `clipPos.z = ...(viewZ = -w - 0.1*zOffsetVal)` 只改 clipPos.z、xy/w 全不动 =
+    # **光栅深度测试偏置**,不是几何位移。Cycles 是光线求交、没有可独立偏置的深度值,
+    # 而它买到的「壳的内侧被本体挡住」在光追里由真实几何序天然提供 → 落账目不发射。
+    # (曾按 camLook·0.1·z_val 桥成世界平移:face/cloth 的壳被整体推走 3cm,1px 描边全埋。)
+    world = g.vmath('ADD', g.vmath('SCALE', cam_right, s=dvx), g.vmath('SCALE', cam_up, s=dvy))
     g.out_('offset', world, True)
 
 
@@ -6571,9 +6583,14 @@ def _ensure_vtx(name, builder):
 
 
 def _material_images(mat):
-    """材质树(含 RCE 克隆子组)里 label=槽名的贴图节点 → {槽: 真图}。顶点树换图的真源:
-    provider 换图时把槽名恒留在节点 label 上,这里原路收回。"""
+    """顶点树换图的真源,两路合并:①provider 落的全量图名映射(.mat 绑定的每张图,
+    含 _OutlineMask 这种只有顶点腿消费、材质树上没有节点的);②材质树(含 RCE 克隆
+    子组)里 label=槽名的贴图节点。①在前:它才是 .mat 全集,②只是老场景兜底。"""
     images = {}
+    for slot, img_name in dict(mat.get('ruri_uber_images') or {}).items():
+        img = bpy.data.images.get(img_name)
+        if img is not None:
+            images[slot] = img
     def walk(tree, depth=0):
         if depth > 4 or tree is None:
             return
@@ -6600,7 +6617,15 @@ def _clone_vtx(template_name, builder, clone_name, mat):
         if nd.bl_idname == 'GeometryNodeImageTexture':
             real = images.get(_slot_of(nd.label or ''))
             if real is not None:
+                ph = nd.inputs['Image'].default_value
+                non_color = ph is not None and ph.colorspace_settings.name == 'Non-Color'
                 nd.inputs['Image'].default_value = real
+                try:
+                    real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+                except Exception:
+                    pass
+                if non_color:
+                    _fix_two_channel_layout(real)
     return clone
 
 
@@ -6641,8 +6666,29 @@ def apply_vertex_stage(objects=None, camera=None):
     import mathutils
     scene = bpy.context.scene
     cam = camera or scene.camera
+    if cam is None:
+        print('[ruri-vertex] 场景无活动相机:描边壳照建,视图基(cam_right/up/half_fov)\n'
+              '              留在组默认值 —— 设好 scene.camera 后重跑 apply_vertex_stage() 刷新。', flush=True)
+    # 描边的 halfFov / 屏幕尺寸必须与真源同源:真源取 `-1 / ProjMatrix._m11`(投影矩阵反求
+    # 垂直半 FOV)+ 真实 backbuffer 像素。`cam.data.angle_y` 只在渲染宽高比 == 传感器宽高比
+    # 时才等于它;它同时喂 width / distAtten / minPixel 楼层三处,错一次三处一起错,
+    # 楼层抬高就把全部部件钳到 1px、_OutlineWidth 的差异整体消失。
+    half_fov_val, screen_px, screen_py = 0.2, 1920.0, 1080.0
+    if cam is not None:
+        import math
+        rp = scene.render.resolution_percentage / 100.0
+        screen_px = float(scene.render.resolution_x) * rp
+        screen_py = float(scene.render.resolution_y) * rp
+        proj = cam.calc_matrix_camera(
+            bpy.context.evaluated_depsgraph_get(),
+            x=scene.render.resolution_x, y=scene.render.resolution_y,
+            scale_x=scene.render.pixel_aspect_x, scale_y=scene.render.pixel_aspect_y)
+        half_fov_val = math.atan(1.0 / abs(proj[1][1]))
     done = 0
-    for obj in list(objects if objects is not None else scene.objects):
+    # 快照必须**先剔掉** RuriOL:重跑时本函数会删同名旧描边对象,留在快照里的
+    # 已删对象一旦被后续迭代碰到就是 ReferenceError(StructRNA has been removed)。
+    for obj in [o for o in (objects if objects is not None else scene.objects)
+                if not o.name.startswith('RuriOL ')]:
         # RuriOL* 是本函数自建的描边壳对象(共享本体 data,材质同样带 ruri_uber_part)
         # —— 不排除会给描边对象再建描边,无限套娃。
         if obj.type != 'MESH' or obj.data is None or obj.name.startswith('RuriOL '):
@@ -6661,7 +6707,10 @@ def apply_vertex_stage(objects=None, camera=None):
             floats, _s, colors = _mat_meta(mat)
             base_a = colors.get('_BaseColor', [1, 1, 1, 1])[3]
             return float(floats.get('_OutlineWidth', 0.0)) > 0.0 and float(base_a) > 0.0
-        outline_slots = [(i, m) for i, m in slots if cam is not None and _outline_on(m)]
+        # 描边发不发只看材质真值;相机只提供视图基(组的输入 socket,契约本来就是
+        # 「相机动了重跑本函数」)。曾把 `cam is not None` 并进这个判据 —— 场景没设
+        # 活动相机就一个描边对象都不建,而壳位移照装,静默得毫无痕迹。
+        outline_slots = [(i, m) for i, m in slots if _outline_on(m)]
         if not vert_slots and not outline_slots:
             continue
         tree_name = 'Ruri Vertex ' + obj.name
@@ -6740,146 +6789,76 @@ def apply_vertex_stage(objects=None, camera=None):
             mt.links.new(slot_sel(slot), sp.inputs['Selection'])
             mt.links.new(swap_yz(out_sock), sp.inputs['Position'])
             geo = sp.outputs['Geometry']
+        # ② 反壳描边 = **同一棵树里的虚拟几何**:原始几何分叉一条描边支,逐槽外扩、
+        #    删无描边槽的面、写 'ruri_outline' 面属性,Join 回本体链尾。零场景对象、
+        #    零材质节点(GN SetMaterial/SetMaterialIndex 在 Cycles 渲染求值下输出空
+        #    几何,实锤两次)—— 虚拟面保留原 material_index = 同槽同材质,材质树按
+        #    ruri_outline 面属性路由 gate 调色与剔除方向(描边 pass 恒 Cull Front)。
+        stale_ol = bpy.data.objects.get('RuriOL ' + obj.name)   # 老架构遗留,见即清
+        if stale_ol is not None:
+            bpy.data.objects.remove(stale_ol, do_unlink=True)
+        if outline_slots:
+            branch = gin.outputs[0]
+            for slot, mat in outline_slots:
+                floats, st, colors = _mat_meta(mat)
+                oc_tree = _clone_vtx('Ruri Endfield Outline', build_vtx_outline,
+                                     'Uber O {0}'.format(mat.name), mat)
+                og = nd('GeometryNodeGroup')
+                og.node_tree = oc_tree
+                for key, value in cam_vec.items():
+                    og.inputs[key].default_value = tuple(value)
+                og.inputs['half_fov'].default_value = half_fov_val
+                og.inputs['screen_x'].default_value = screen_px
+                og.inputs['screen_y'].default_value = screen_py
+                og.inputs['_OutlineWidth'].default_value = float(floats.get('_OutlineWidth', 0.0))
+                og.inputs['_OutlineOffsetZ'].default_value = float(floats.get('_OutlineOffsetZ', 0.0))
+                og.inputs['_EnableOutlineMask'].default_value = float(floats.get('_EnableOutlineMask', 0.0))
+                og.inputs['_OutlineAverageNormal'].default_value = float(floats.get('_OutlineAverageNormal', 0.0))
+                # mask 采样 UV = uv0×_BaseMap_ST+zw(真源 b1089:_453 与片元 varying 同源),
+                # 不是 _OutlineMask 自己的 ST(那个恒 (1,1,0,0),历史键)。
+                bst = st.get('_BaseMap', [1.0, 1.0, 0.0, 0.0])
+                og.inputs['mask_st_scale'].default_value = (float(bst[0]), float(bst[1]), 0.0)
+                og.inputs['mask_st_offset'].default_value = (float(bst[2]), float(bst[3]), 0.0)
+                sp = nd('GeometryNodeSetPosition')
+                mt.links.new(branch, sp.inputs['Geometry'])
+                mt.links.new(slot_sel(slot), sp.inputs['Selection'])
+                mt.links.new(og.outputs['offset'], sp.inputs['Offset'])
+                branch = sp.outputs['Geometry']
+            # 删无描边槽的面(选区先于属性写入,field 惰性求值安全)。
+            keep = None
+            for slot, _mat in outline_slots:
+                sel = slot_sel(slot)
+                if keep is None:
+                    keep = sel
+                else:
+                    mx = nd('ShaderNodeMath')
+                    mx.operation = 'MAXIMUM'
+                    mt.links.new(keep, mx.inputs[0])
+                    mt.links.new(sel, mx.inputs[1])
+                    keep = mx.outputs[0]
+            drop = nd('ShaderNodeMath')
+            drop.operation = 'SUBTRACT'
+            drop.inputs[0].default_value = 1.0
+            mt.links.new(keep, drop.inputs[1])
+            dg = nd('GeometryNodeDeleteGeometry')
+            dg.domain = 'FACE'
+            mt.links.new(branch, dg.inputs['Geometry'])
+            mt.links.new(drop.outputs[0], dg.inputs['Selection'])
+            sa = nd('GeometryNodeStoreNamedAttribute')
+            sa.data_type = 'FLOAT'
+            sa.domain = 'FACE'
+            sa.inputs['Name'].default_value = 'ruri_outline'
+            sa.inputs['Value'].default_value = 1.0
+            mt.links.new(dg.outputs['Geometry'], sa.inputs['Geometry'])
+            jn = nd('GeometryNodeJoinGeometry')
+            mt.links.new(geo, jn.inputs[0])
+            mt.links.new(sa.outputs['Geometry'], jn.inputs[0])
+            geo = jn.outputs['Geometry']
         mt.links.new(geo, gout.inputs[0])
         mod = obj.modifiers.get('Ruri Endfield Vertex')
         if mod is None:
             mod = obj.modifiers.new('Ruri Endfield Vertex', 'NODES')
         mod.node_group = mt
-        # ② 反壳描边 = **独立对象**(共享 mesh data,object 级材质槽覆盖):
-        #    GN 的 Set Material / Set Material Index 在 Cycles 渲染求值下会让 modifier
-        #    输出空几何(实锤两次:视口/Workbench 正常,Cycles 整只消失;删该节点即恢复)。
-        #    描边树因此零材质节点:壳位移 + 逐槽外扩 + 删无描边槽的面;材质换皮走
-        #    slot.link='OBJECT' 的对象槽覆盖。不翻面:游戏 Cull Front = 渲染远侧面,
-        #    剔除由克隆材质里的 Backfacing 混合承担(远侧 backfacing=1 → 本体着色,
-        #    外侧 → 全透明),非轮廓区被本体深度挡住,只剩剪影圈。
-        ol_name = 'RuriOL ' + obj.name
-        stale_ol = bpy.data.objects.get(ol_name)
-        if stale_ol is not None:
-            bpy.data.objects.remove(stale_ol, do_unlink=True)
-        stale_tree = bpy.data.node_groups.get(ol_name)
-        if stale_tree is not None:
-            bpy.data.node_groups.remove(stale_tree)
-        if outline_slots:
-            oobj = obj.copy()
-            oobj.name = ol_name
-            for coll in obj.users_collection:
-                coll.objects.link(oobj)
-            ot = bpy.data.node_groups.new(ol_name, 'GeometryNodeTree')
-            ot.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
-            ot.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
-            ogin = ot.nodes.new('NodeGroupInput')
-            ogout = ot.nodes.new('NodeGroupOutput')
-            def ond(t_):
-                return ot.nodes.new(t_)
-            def onattr(name, dtype):
-                a = ond('GeometryNodeInputNamedAttribute')
-                a.data_type = dtype
-                a.inputs['Name'].default_value = name
-                return a.outputs['Attribute']
-            o_matidx = onattr('material_index', 'INT')
-            def oslot_sel(slot):
-                eq = ond('ShaderNodeMath')
-                eq.operation = 'COMPARE'
-                ot.links.new(o_matidx, eq.inputs[0])
-                eq.inputs[1].default_value = float(slot)
-                eq.inputs[2].default_value = 0.5
-                return eq.outputs[0]
-            def oswap(sock):
-                sep = ond('ShaderNodeSeparateXYZ')
-                ot.links.new(sock, sep.inputs[0])
-                comb = ond('ShaderNodeCombineXYZ')
-                ot.links.new(sep.outputs[0], comb.inputs[0])
-                ot.links.new(sep.outputs[2], comb.inputs[1])
-                ot.links.new(sep.outputs[1], comb.inputs[2])
-                return comb.outputs[0]
-            ogeo = ogin.outputs[0]
-            # 壳位移(hull 同样要蓬起来,树与本体同构)。
-            for slot, mat in vert_slots:
-                part = mat['ruri_uber_part']
-                vt_name, vt_builder = VERTEX_PARTS[part]
-                gn = ond('GeometryNodeGroup')
-                gn.node_tree = bpy.data.node_groups['Uber V {0}'.format(mat.name)]
-                floats, st, colors = _mat_meta(mat)
-                _fill_uniform_sockets(gn, floats, st, colors)
-                wires = {'input_positionOS': ond('GeometryNodeInputPosition').outputs['Position'],
-                         'input_normalOS': ond('GeometryNodeInputNormal').outputs['Normal'],
-                         'input_tangentOS': onattr('ruri_tangent', 'FLOAT_VECTOR'),
-                         'input_tangentOS_w': onattr('ruri_tangent_sign', 'FLOAT'),
-                         'input_texcoord': onattr('UVMap', 'FLOAT_VECTOR'),
-                         'input_texcoord1': onattr('UV1', 'FLOAT_VECTOR'),
-                         'input_texcoord2': onattr('UV2', 'FLOAT_VECTOR')}
-                for sock in gn.inputs:
-                    src = wires.get(sock.name)
-                    if src is not None:
-                        ot.links.new(src, sock)
-                    elif sock.name == 'input_color':
-                        sock.default_value = (1.0, 1.0, 1.0)
-                    elif sock.name == 'input_color_w':
-                        sock.default_value = 1.0
-                    elif sock.name == 'input_camPos' and cam_vec:
-                        sock.default_value = tuple(cam_vec['cam_pos'])
-                out_sock = gn.outputs.get('ret_positionWS')
-                if out_sock is None:
-                    continue
-                sp = ond('GeometryNodeSetPosition')
-                ot.links.new(ogeo, sp.inputs['Geometry'])
-                ot.links.new(oslot_sel(slot), sp.inputs['Selection'])
-                ot.links.new(oswap(out_sock), sp.inputs['Position'])
-                ogeo = sp.outputs['Geometry']
-            # 逐槽外扩(描边位移)。
-            for slot, mat in outline_slots:
-                floats, st, colors = _mat_meta(mat)
-                oc_tree = _clone_vtx('Ruri Endfield Outline', build_vtx_outline,
-                                     'Uber O {0}'.format(mat.name), mat)
-                og = ond('GeometryNodeGroup')
-                og.node_tree = oc_tree
-                for key, value in cam_vec.items():
-                    og.inputs[key].default_value = tuple(value)
-                og.inputs['half_fov'].default_value = cam.data.angle_y * 0.5
-                og.inputs['screen_x'].default_value = float(scene.render.resolution_x)
-                og.inputs['screen_y'].default_value = float(scene.render.resolution_y)
-                og.inputs['_OutlineWidth'].default_value = float(floats.get('_OutlineWidth', 0.0))
-                og.inputs['_OutlineOffsetZ'].default_value = float(floats.get('_OutlineOffsetZ', 0.0))
-                og.inputs['_EnableOutlineMask'].default_value = float(floats.get('_EnableOutlineMask', 0.0))
-                og.inputs['_OutlineAverageNormal'].default_value = float(floats.get('_OutlineAverageNormal', 0.0))
-                mst = st.get('_OutlineMask', [1.0, 1.0, 0.0, 0.0])
-                og.inputs['mask_st_scale'].default_value = (float(mst[0]), float(mst[1]), 0.0)
-                og.inputs['mask_st_offset'].default_value = (float(mst[2]), float(mst[3]), 0.0)
-                sp = ond('GeometryNodeSetPosition')
-                ot.links.new(ogeo, sp.inputs['Geometry'])
-                ot.links.new(oslot_sel(slot), sp.inputs['Selection'])
-                ot.links.new(og.outputs['offset'], sp.inputs['Offset'])
-                ogeo = sp.outputs['Geometry']
-            # 删无描边槽的面(选区先于一切材质动作,field 惰性求值安全)。
-            keep = None
-            for slot, _mat in outline_slots:
-                sel = oslot_sel(slot)
-                if keep is None:
-                    keep = sel
-                else:
-                    mx = ond('ShaderNodeMath')
-                    mx.operation = 'MAXIMUM'
-                    ot.links.new(keep, mx.inputs[0])
-                    ot.links.new(sel, mx.inputs[1])
-                    keep = mx.outputs[0]
-            drop = ond('ShaderNodeMath')
-            drop.operation = 'SUBTRACT'
-            drop.inputs[0].default_value = 1.0
-            ot.links.new(keep, drop.inputs[1])
-            dg = ond('GeometryNodeDeleteGeometry')
-            dg.domain = 'FACE'
-            ot.links.new(ogeo, dg.inputs['Geometry'])
-            ot.links.new(drop.outputs[0], dg.inputs['Selection'])
-            ot.links.new(dg.outputs['Geometry'], ogout.inputs[0])
-            omod = oobj.modifiers.get('Ruri Endfield Vertex')
-            if omod is None:
-                omod = oobj.modifiers.new('Ruri Endfield Vertex', 'NODES')
-            omod.node_group = ot
-            # 对象槽覆盖:描边对象的每个描边槽换成克隆(共享 mesh data,不碰本体)。
-            for slot, mat in outline_slots:
-                slot_ref = oobj.material_slots[slot]
-                slot_ref.link = 'OBJECT'
-                slot_ref.material = _outline_clone_material(mat)
         if vert_slots:
             # 20 层透明壳叠深 > Cycles 默认 transparent_max_bounces=8,穿透壳堆的
             # 光线会提前截断发黑 —— 只升不降的保底(view_transform 接管的同款先例)。
@@ -6892,42 +6871,6 @@ def apply_vertex_stage(objects=None, camera=None):
         print('[ruri-vertex] {0}: shell x{1} outline x{2}'.format(
             obj.name, len(vert_slots), len(outline_slots)), flush=True)
     return done
-
-
-def _outline_clone_material(mat):
-    """描边壳材质 = 本体克隆 + _RuriOutlineShellGate=1(片元过游戏 outline 调色)+
-    Cull Front 等价剔除:**材质内 Backfacing 混合**(壳不翻面,远侧面 backfacing=1 →
-    本体着色,外侧面 → 全透明;非轮廓区的远侧面被本体深度遮住,只剩剪影圈)。
-    use_backface_culling 不用:EEVEE 属性 Cycles 不认,且不翻面时它剔的还是要渲的那面。"""
-    name = mat.name + ' (Outline)'
-    clone = mat.copy()
-    stale = bpy.data.materials.get(name)
-    if stale is not None:
-        stale.user_remap(clone)
-        bpy.data.materials.remove(stale)
-    clone.name = name
-    clone['ruri_outline_clone'] = 1
-    clone.use_backface_culling = False
-    nt = clone.node_tree
-    if nt is not None:
-        for node in nt.nodes:
-            if node.bl_idname == 'ShaderNodeGroup':
-                gate = node.inputs.get('_RuriOutlineShellGate')
-                if gate is not None:
-                    gate.default_value = 1.0
-        outp = next((n for n in nt.nodes if n.bl_idname == 'ShaderNodeOutputMaterial'), None)
-        if outp is not None and outp.inputs['Surface'].links:
-            src = outp.inputs['Surface'].links[0].from_socket
-            if src.node.label == 'RuriCullMix' and src.node.inputs[1].links:
-                src = src.node.inputs[1].links[0].from_socket   # 剥本体剔除层,描边自己管剔除
-            geo = nt.nodes.new('ShaderNodeNewGeometry')
-            tr = nt.nodes.new('ShaderNodeBsdfTransparent')
-            mix = nt.nodes.new('ShaderNodeMixShader')
-            nt.links.new(geo.outputs['Backfacing'], mix.inputs[0])
-            nt.links.new(tr.outputs[0], mix.inputs[1])
-            nt.links.new(src, mix.inputs[2])
-            nt.links.new(mix.outputs[0], outp.inputs['Surface'])
-    return clone
 
 
 # ============================ 材质 provider ============================
@@ -7012,29 +6955,36 @@ def _swap_image(node, real):
         real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
     except Exception:
         pass
-    if non_color and not real.get('ruri_rg_layout_fixed'):
-        # 双通道压缩纹理(BC5 类)被导成 R恒白/G=B=X/A=Y 的容器,shader 读 .x 只会
-        # 吃到填充白(ardelia _FurMap 实锤:毛噪声全灭成壳石头)——命中判据就地还原 R<-G。
-        real['ruri_rg_layout_fixed'] = 1
-        try:
-            import numpy as _np
-            w, h = real.size
-            if w and h:
-                buf = _np.empty(w * h * 4, dtype=_np.float32)
-                real.pixels.foreach_get(buf)
-                px = buf.reshape(-1, 4)
-                # 统计判据(DXT 块伪影下 min/max 不可靠):R 恒白 + G 有数据 + G≈B
-                if (float(px[:, 0].mean()) > 0.99 and float(px[:, 0].std()) < 0.02
-                        and float(px[:, 1].std()) > 1e-3
-                        and float(_np.abs(px[:, 1] - px[:, 2]).mean()) < 0.01):
-                    px[:, 0] = px[:, 1]
-                    real.pixels.foreach_set(buf)
-                    real.update()
-                    if real.packed_file is not None:
-                        real.pack()   # 重打包当前缓冲,否则 save 后修正回退到原字节
-                    print('[ruri-uber] {0}: 双通道导出布局已恢复 R<-G'.format(real.name), flush=True)
-        except Exception as exc:
-            print('[ruri-uber] {0} 通道布局检测失败: {1}'.format(real.name, exc), flush=True)
+    if non_color:
+        _fix_two_channel_layout(real)
+
+
+def _fix_two_channel_layout(real):
+    """双通道压缩纹理(BC5 类)被导成 R恒白/G=B=X/A=Y 的容器,shader 读 .x 只会
+    吃到填充白(ardelia _FurMap 实锤:毛噪声全灭成壳石头)——命中判据就地还原 R<-G。
+    只对数据图(Non-Color)调用;材质树与顶点树换图共用;prop 记账防重复。"""
+    if real.get('ruri_rg_layout_fixed'):
+        return
+    real['ruri_rg_layout_fixed'] = 1
+    try:
+        import numpy as _np
+        w, h = real.size
+        if w and h:
+            buf = _np.empty(w * h * 4, dtype=_np.float32)
+            real.pixels.foreach_get(buf)
+            px = buf.reshape(-1, 4)
+            # 统计判据(DXT 块伪影下 min/max 不可靠):R 恒白 + G 有数据 + G≈B
+            if (float(px[:, 0].mean()) > 0.99 and float(px[:, 0].std()) < 0.02
+                    and float(px[:, 1].std()) > 1e-3
+                    and float(_np.abs(px[:, 1] - px[:, 2]).mean()) < 0.01):
+                px[:, 0] = px[:, 1]
+                real.pixels.foreach_set(buf)
+                real.update()
+                if real.packed_file is not None:
+                    real.pack()   # 重打包当前缓冲,否则 save 后修正回退到原字节
+                print('[ruri-uber] {0}: 双通道导出布局已恢复 R<-G'.format(real.name), flush=True)
+    except Exception as exc:
+        print('[ruri-uber] {0} 通道布局检测失败: {1}'.format(real.name, exc), flush=True)
 
 
 def _subtree_has_tex(tree, memo):
@@ -7198,6 +7148,7 @@ def provider(builder, props):
     mat['ruri_uber_part'] = part_name
     # 顶点腿参数真源:只有顶点消费的属性(_FurLengthIntensity/_OutlineWidth…)在着色组上
     # 没有 socket,不落这里就永远丢 —— apply_vertex_stage 按名回收。
+    mat['ruri_uber_images'] = {k: v.name for k, v in images.items()}
     mat['ruri_uber_floats'] = {k: float(v) for k, v in props.floats.items()}
     mat['ruri_uber_st'] = {k: [float(x) for x in v] for k, v in props.texture_st.items()}
     mat['ruri_uber_colors'] = {k: [float(x) for x in v] for k, v in props.colors.items()}

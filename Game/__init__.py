@@ -12,6 +12,18 @@ The join to the upstream hook set is exact rather than conventional. A hook id i
 underscore, and a module's ``game_name`` is that same ``GameType`` member. A
 module's tabs are therefore visible exactly while one of its game's hooks is
 enabled -- every version of it, with no per-version list to maintain.
+
+A hook is not the only way to name a game. A module may also declare
+``project_names``: the identities the BUILD itself carries -- its Unity
+``productName``/``companyName``, read off the install by
+``RuriRipperPyBridge.unity.build_identity``. Pointing the panel at an install IS
+saying which game it is, so that join needs no hook ticked to work.
+
+ONE game is active at a time. A panel has one game root and one loaded cabmap,
+which can only ever be one title, and the upstream refuses two games' hooks for
+the same reason (they patch the same methods with different layouts -- see
+``RuriHook.ApplyHooks``). A ticked hook is the stronger statement of the two, so
+it decides; the build's own identity only speaks when no game hook is ticked.
 """
 
 from __future__ import annotations
@@ -52,14 +64,16 @@ class GameModule:
     """One game's whole contribution: its upstream identity, the tabs it adds,
     and the register/unregister pair for the bpy classes those tabs need."""
 
-    __slots__ = ("game_name", "label", "tabs", "default_hook_id",
-                 "_register", "_unregister")
+    __slots__ = ("game_name", "label", "tabs", "project_names", "_register", "_unregister")
 
-    def __init__(self, game_name, label, tabs, register, unregister, default_hook_id=""):
+    def __init__(self, game_name, label, tabs, register, unregister, project_names=()):
         self.game_name = game_name          # the upstream GameType member, e.g. "EndField"
         self.label = label
         self.tabs = tuple(tabs)
-        self.default_hook_id = default_hook_id
+        # The Unity productName/companyName values this game's players build
+        # under -- one project can ship several (a game, its VR build, its
+        # studio), and any of them identifies it.
+        self.project_names = frozenset(name.lower() for name in project_names)
         self._register = register
         self._unregister = unregister
         for tab in self.tabs:
@@ -77,7 +91,7 @@ class GameModule:
 
 def game_of(hook_id):
     """The game a hook id belongs to -- ``EndField_1.4.4`` -> ``EndField``,
-    ``AR_HumanoidToGeneric_`` -> ``AR_HumanoidToGeneric``. Derived from the same
+    ``AR_ShaderDecompiler_`` -> ``AR_ShaderDecompiler``. Derived from the same
     ``{GameName}_{Version}`` rule the DLL builds its ids with, so no mapping
     table exists to drift away from the ids it actually reports."""
     return (hook_id or "").rsplit("_", 1)[0]
@@ -114,20 +128,47 @@ def tab_by_key(key):
     return next((tab for tab in all_tabs() if tab.key == key), None)
 
 
-def active_modules(hook_ids):
-    """The modules whose game has at least one of its hooks enabled."""
+def active_module(hook_ids, project_names=()):
+    """THE game this session is looking at, or None.
+
+    A ticked hook decides -- it is an explicit "decode this title" -- and the
+    build's own identity is the fallback for when none is ticked. At most one
+    either way: a panel has one game root and one cabmap, and offering two games'
+    tabs over them describes a state that cannot exist.
+
+    Ambiguity is resolved by returning NOTHING rather than a guess: two game
+    hooks ticked at once is a config the upstream itself refuses, and quietly
+    picking one of them would hide that."""
     enabled = {game_of(hook_id).lower() for hook_id in hook_ids}
-    return [game for game in _MODULES if game.game_name.lower() in enabled]
+    hooked = [game for game in _MODULES if game.game_name.lower() in enabled]
+    if hooked:
+        return hooked[0] if len(hooked) == 1 else None
+
+    identities = {str(name).lower() for name in project_names}
+    recognised = [game for game in _MODULES if game.project_names & identities]
+    return recognised[0] if len(recognised) == 1 else None
 
 
-def active_tabs(hook_ids):
-    return [tab for game in active_modules(hook_ids) for tab in game.tabs]
+def active_modules(hook_ids, project_names=()):
+    """``active_module`` as a list -- empty or one long."""
+    game = active_module(hook_ids, project_names)
+    return [game] if game is not None else []
 
 
-def default_hook_ids():
-    """Hook ids the modules ask to be pre-ticked the first time one appears in
-    the DLL's own listing."""
-    return {game.default_hook_id for game in _MODULES if game.default_hook_id}
+def active_tabs(hook_ids, project_names=()):
+    game = active_module(hook_ids, project_names)
+    return list(game.tabs) if game is not None else []
+
+
+def recognised_game(project_names):
+    """The game an install IS, from the identity its own build carries -- or None
+    when nothing matches, or when more than one module claims it.
+
+    This is what selects a game now. Nothing is pre-ticked on a guess: a hook is
+    enabled because the folder in front of the panel is that game."""
+    identities = {str(name).lower() for name in project_names}
+    matched = [game for game in _MODULES if game.project_names & identities]
+    return matched[0] if len(matched) == 1 else None
 
 
 def register():

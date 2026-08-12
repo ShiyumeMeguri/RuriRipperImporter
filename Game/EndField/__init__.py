@@ -56,9 +56,11 @@ def _unregister():
 GAME_MODULE = GameModule(
     game_name="EndField",
     label="Endfield",
-    # Pre-ticked the first time the DLL lists it (see RURI_OT_refresh_hooks);
-    # 1.2.4's class also answers to this id via AlsoCoversVersions.
-    default_hook_id="EndField_1.4.4",
+    # The identity this game's player builds under, as its own app.info states it. Nothing is
+    # pre-ticked any more: pointing the panel at an install is what selects a game, so a hook is
+    # enabled when the folder IS this game and never on a guess. The company name (Gryphline) is
+    # deliberately not listed -- it also ships Ex Astris, and an ambiguous match must not pick one.
+    project_names=("Endfield",),
     tabs=(
         GameTab("streamingscene", "StreamingScene",
                 "The game's own scenes: the self-contained ones, and one named place "

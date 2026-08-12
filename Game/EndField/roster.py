@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import os
 
+from . import datasets
+
 CONTAINER_DIR = "Data/TableCfg"
 
 CHARACTER_TABLE = "CharacterTable"
@@ -144,18 +146,18 @@ def load(bridge, game_root, language, kind):
     joined, deduplicated and searchable there. Nothing is assembled here."""
     roots = vfs_roots(game_root)
     if kind == CHARACTERS:
-        return bridge.query_data_table(roots, container(CHARACTER_TABLE), character_columns(language))
+        return datasets.projected_table(roots, container(CHARACTER_TABLE), character_columns(language))
     # One row per distinct model prefab, keeping the named entry when several
     # npcs share a model -- the collapse the raw table cannot express itself.
-    return bridge.query_data_table(roots, container(NPC_INFO_TABLE), npc_columns(language),
-                                   distinct_by="template", prefer_non_empty="display")
+    return datasets.projected_table(roots, container(NPC_INFO_TABLE), npc_columns(language),
+                                    distinct_by="template", prefer_non_empty="display")
 
 
 def buildable_templates(bridge, game_root):
     """The templates the game actually ships an assembled model for, from its own
     manifest. A roster row outside this set (an enemy, a prop, a cut character)
     has nothing to load, so offering it a Load button would be a lie."""
-    return set(bridge.npc_prefab_manifest(vfs_roots(game_root)))
+    return datasets.npc_manifest(vfs_roots(game_root))
 
 
 def row(table, index, kind):

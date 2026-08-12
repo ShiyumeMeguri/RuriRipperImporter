@@ -23,7 +23,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import asset_paths, roster
+from . import asset_paths, datasets, roster
 
 CHARACTERS = roster.CHARACTERS
 NPCS = roster.NPCS
@@ -317,7 +317,7 @@ def _character_model(character_id):
                 if "gamedata/characterdata/data_chr_" in path and path.endswith(".asset"):
                     cabs.add(cabmap_state.ROWS.cab(row))
         if cabs:
-            _CHARACTER_MODELS.update(cabmap_state.BRIDGE.read_character_models(sorted(cabs)))
+            _CHARACTER_MODELS.update(datasets.character_models(sorted(cabs)))
     return _CHARACTER_MODELS.get(character_id, {}).get("model", "")
 
 
@@ -472,9 +472,9 @@ def _npc_materials(context, info, template_id):
     if not rows:
         return {}
     try:
-        assigned = cabmap_state.BRIDGE.npc_materials(
-            [cabmap_state.ROWS.cab(rows[0][0])],
-            roster.vfs_roots(context.scene.ruri_cabmap.game_root), template_id)
+        assigned = datasets.npc_materials(
+            roster.vfs_roots(context.scene.ruri_cabmap.game_root), template_id,
+            [cabmap_state.ROWS.cab(rows[0][0])])
     except Exception:
         return {}
     return {row["mesh"].lower(): row["materials"] for row in assigned}
@@ -592,7 +592,7 @@ def _model_parts(context, entry):
     SkeletonBinder to rebuild the shared skeleton the loose meshes hash against."""
     roots = roster.vfs_roots(context.scene.ruri_cabmap.game_root)
     try:
-        info = cabmap_state.BRIDGE.npc_prefab_parts(roots, entry.key)
+        info = datasets.npc_parts(roots, entry.key)
     except Exception:
         return None, [], []
     hits = []

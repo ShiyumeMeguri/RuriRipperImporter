@@ -28,7 +28,7 @@ placement count runs into the hundreds of thousands and is only ever read in bul
 
 from __future__ import annotations
 
-from . import roster
+from . import datasets, roster
 
 # Holds the current window's discovered-but-not-yet-imported placements, so a
 # host's script reload skips this module instead of throwing that discovery away.
@@ -126,14 +126,14 @@ def load_scenes(bridge, game_root, language):
 
     names = {}
     for table in (LEVEL_DESC_TABLE, MAP_ID_TABLE):
-        rows = bridge.query_data_table(roots, roster.container(table), name_columns(language))
+        rows = datasets.projected_table(roots, roster.container(table), name_columns(language))
         for index in range(rows.row_count):
             display = rows.cell(index, "display")
             if display:
                 names[rows.cell(index, "key")] = display
 
-    scene_ids = bridge.enumerate_scene_maps(roots)
-    places = bridge.scene_landmarks(roots)
+    scene_ids = datasets.scene_maps(roots)
+    places = datasets.landmarks(roots)
 
     # A place that is not its own level belongs to the streaming map whose id it
     # starts with -- matched against the real scene list, so nothing is inferred
@@ -192,7 +192,7 @@ def load_summary(bridge, game_root, map_name):
     it never changes under a session, and the controls read it on every
     redraw."""
     if map_name not in SUMMARIES:
-        SUMMARIES[map_name] = bridge.scene_chunk_summary(vfs_roots(game_root), map_name)
+        SUMMARIES[map_name] = datasets.chunk_summary(vfs_roots(game_root), map_name)
     return SUMMARIES[map_name]
 
 
@@ -205,9 +205,9 @@ def discover_placements(bridge, game_root, map_name, rect, scene_state_id, lod0_
     global PLACEMENTS, COUNTS, SEED_PATHS, RESOLVED_CABS, CLOSURE_CABS
     global CURRENT_MAP, CURRENT_WINDOW, STATUS
     min_x, min_z, max_x, max_z = rect
-    result = bridge.discover_scene_placements(
+    result = datasets.placements(
         vfs_roots(game_root), map_name, min_x, min_z, max_x, max_z,
-        [scene_state_id], lod0_only)
+        scene_state_id, lod0_only)
     PLACEMENTS = result["placements"]
     SEED_PATHS = result["seed_paths"]
     COUNTS = {key: result[key] for key in ("total", "no_transform", "lod_filtered", "distinct_assets")}

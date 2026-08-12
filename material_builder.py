@@ -28,6 +28,21 @@ except ImportError:  # standalone (non-package) testing
 GRAPH_PROVIDERS = []
 
 
+# Unity's own two built-in resource files, by the guids every project references
+# them under: `unity default resources` and `unity_builtin_extra`. A shader
+# reference into either is a stock Unity shader (Standard, Sprites/Default...),
+# which no game's shader graph can be.
+_BUILTIN_RESOURCE_GUIDS = frozenset((
+    "0000000000000000e000000000000000",
+    "0000000000000000f000000000000000",
+))
+
+
+def _is_builtin_shader(props):
+    ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
+    return str((ref or {}).get("guid") or "").lower() in _BUILTIN_RESOURCE_GUIDS
+
+
 def register_graph_provider(provider):
     if provider not in GRAPH_PROVIDERS:
         GRAPH_PROVIDERS.append(provider)
@@ -338,7 +353,11 @@ class MaterialBuilder:
         name = props.name or "UnityMaterial"
 
         # Game-shader providers first (each declines with None); fallback below.
-        for provider in GRAPH_PROVIDERS:
+        # A material whose shader lives in Unity's own built-in resource files is
+        # by construction a STOCK shader, so no game provider can claim it and
+        # none is asked -- a provider that reported "this shader is not in the
+        # closure" would be right and useless, since that file never is.
+        for provider in ([] if _is_builtin_shader(props) else GRAPH_PROVIDERS):
             try:
                 claimed = provider(self, props)
             except Exception:
