@@ -1,7 +1,7 @@
 """What this game publishes, and the small amount of shape that is genuinely the UI's.
 
-Every list this add-on draws for Koikatsu is a dataset the game's own hook reads
-(``Ruri.RipperHook.Koikatsu``): the customization catalog, the cast, a build plan,
+Every list this add-on draws for Koikatu is a dataset the game's own hook reads
+(``Ruri.RipperHook.Koikatu``): the customization catalog, the cast, a build plan,
 the places, the animation catalog, the named expressions, a head's pattern table.
 None of it is parsed on this side -- the ids below name the tables, and
 ``bridge.game_data(id, *args)`` returns one already columnar, already searchable
@@ -18,14 +18,14 @@ from __future__ import annotations
 from ...RuriRipperPyBridge.session import cabmap_state
 
 # The datasets the hook publishes. Names, not paths: the hook owns where they come from.
-CATALOG = "koikatsu.chara.catalog"
-CAST = "koikatsu.chara.cast"
-PLAN = "koikatsu.chara.plan"
-PLACES = "koikatsu.scene.places"
-ANIMATIONS = "koikatsu.anime.catalog"
-EXPRESSIONS = "koikatsu.face.expressions"
-FACE_PATTERNS = "koikatsu.face.patterns"
-BUNDLE_CABS = "koikatsu.bundle.cabs"
+CATALOG = "koikatu.chara.catalog"
+CAST = "koikatu.chara.cast"
+PLAN = "koikatu.chara.plan"
+PLACES = "koikatu.scene.places"
+ANIMATIONS = "koikatu.anime.catalog"
+EXPRESSIONS = "koikatu.face.expressions"
+FACE_PATTERNS = "koikatu.face.patterns"
+BUNDLE_CABS = "koikatu.bundle.cabs"
 
 # The slot families a build can be narrowed to, as the plan's own ``slot`` column
 # spells them. The skeleton, body and tongue have no toggle: they are what the

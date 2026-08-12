@@ -5,7 +5,7 @@ weight: the pattern's Close key gets ``(1 - openness)`` and its Open key gets
 ``openness``. Unity states those weights on 0..100 and Blender's shape keys run
 0..1, which is the only conversion on this path.
 
-The pattern table itself is the hook's (``koikatsu.face.patterns``), normalized to
+The pattern table itself is the hook's (``koikatu.face.patterns``), normalized to
 one row per (channel, target, pattern) -- so what is left here is setting shape
 key values on the meshes that rig actually has.
 """
@@ -20,7 +20,7 @@ from . import datasets
 
 # Where the rig remembers which head it was built from, so the face can still be
 # driven in a later session without re-resolving that.
-RIG_PROPERTY = "ruri_koikatsu_head"
+RIG_PROPERTY = "ruri_koikatu_head"
 
 CHANNELS = ("eyebrow", "eyes", "mouth")
 
@@ -180,7 +180,7 @@ def resting_openness(ceilings):
 
 
 def expression_patterns(row):
-    """One ``koikatsu.face.expressions`` row split into what ``apply`` takes. The
+    """One ``koikatu.face.expressions`` row split into what ``apply`` takes. The
     row's three open values are the ceilings the command sets, so they become a
     pose through ``resting_openness``. A pattern of -1 is one the expression does
     not touch."""

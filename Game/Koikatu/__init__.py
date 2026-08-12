@@ -1,4 +1,4 @@
-"""Koikatsu -- everything the add-on has for this game and nothing else.
+"""Koikatu -- everything the add-on has for this game and nothing else.
 
 Two tabs, neither of which means anything for another title:
 
@@ -16,7 +16,7 @@ Two tabs, neither of which means anything for another title:
                 ``chara_panel``)
 
 This module is a PANEL and nothing else. Every list it draws is a dataset the
-game's own hook publishes (``Ruri.RipperHook.Koikatsu`` -- see ``datasets``): the
+game's own hook publishes (``Ruri.RipperHook.Koikatu`` -- see ``datasets``): the
 customization catalog, the cast, a build plan, the places, the animations, the
 expressions, a head's pattern table. The MessagePack tables, the character-card
 container and the bundle addressing are all read there, in C#, off the loaded
@@ -47,8 +47,8 @@ def _unregister():
 
 
 GAME_MODULE = GameModule(
-    game_name="Koikatsu",
-    label="Koikatsu",
+    game_name="Koikatu",
+    label="Koikatu",
     # Every player this project ships: the game, its VR build and the character
     # studio, as their own app.info states them.
     project_names=("Koikatu", "KoikatuVR", "CharaStudio", "illusion__Koikatu",

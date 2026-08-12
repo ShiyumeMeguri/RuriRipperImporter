@@ -32,12 +32,12 @@ FACE_SECTION = "face"
 ANIME_SECTION = "anime"
 
 CAST_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatsu:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
+    key="Koikatu:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
     state_for=lambda context: context.scene.ruri_kk_chara,
     apply=lambda context: _rebuild_cast(context.scene.ruri_kk_chara)))
 
 ANIME_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatsu:anime", fields=(("name", "Name"), ("groupName", "Group"), ("bundle", "Bundle")),
+    key="Koikatu:anime", fields=(("name", "Name"), ("groupName", "Group"), ("bundle", "Bundle")),
     state_for=lambda context: context.scene.ruri_kk_anime,
     apply=lambda context: _rebuild_anime(context.scene.ruri_kk_anime)))
 
@@ -277,7 +277,7 @@ class RURI_PG_kk_entry(bpy.types.PropertyGroup):
 
 
 class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "Koikatsu:cast"
+    FILTER_SPEC_KEY = "Koikatu:cast"
 
     section: EnumProperty(
         name="Section",
@@ -313,7 +313,7 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 
 
 class RURI_PG_kk_anime(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "Koikatsu:anime"
+    FILTER_SPEC_KEY = "Koikatu:anime"
 
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_anime_edit,
                            description="Filter by name, group or bundle")

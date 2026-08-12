@@ -1,8 +1,8 @@
 """Assemble one character into the scene from the plan the game's hook produced.
 
-The generic importer knows how to build ONE prefab. A Koikatsu character is a
+The generic importer knows how to build ONE prefab. A Koikatu character is a
 dozen of them sharing a skeleton, and WHICH dozen -- in what order, on which
-bone, rebound how -- is the hook's answer (``koikatsu.chara.plan``). What is left
+bone, rebound how -- is the hook's answer (``koikatu.chara.plan``). What is left
 here is the part that can only happen in Blender:
 
 * the first row IS the skeleton, and every later part is placed at the BONE the
@@ -75,7 +75,7 @@ def _class_ids(options):
 
 
 def build(context, plan, options=None, name="Character"):
-    """Build a plan (the rows of ``koikatsu.chara.plan``). Returns a BuildReport;
+    """Build a plan (the rows of ``koikatu.chara.plan``). Returns a BuildReport;
     the armature it names is the one every later flow binds to."""
     options = dict(prefab_importer.resolve_options(options))
     # A part list only means anything against a skeleton -- the pieces are bound to
