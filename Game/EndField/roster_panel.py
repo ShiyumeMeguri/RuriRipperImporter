@@ -698,12 +698,15 @@ class RURI_OT_roster_load(bpy.types.Operator):
         if "FINISHED" not in result:
             return {"CANCELLED"}
         # 顶点腿(生成物自带):Fur 壳层位移 + 反壳描边的几何节点 modifier。幂等,全场景扫。
-        from . import shader
+        from ... import material_builder
         try:
-            shader.gen.apply_vertex_stage()
-        except Exception:
+            material_builder.apply_vertex_stages()
+        except Exception as vertex_error:
             import traceback
             traceback.print_exc()
+            # 静默吞掉这里等于整条顶点腿消失而画面毫无痕迹(实锤:按名字点模块的老写法
+            # 一改名就 AttributeError 被吞,壳层与描边一起没了还以为是生成器劣化)。
+            self.report({"ERROR"}, "顶点腿失败: {0}".format(vertex_error))
         if level != state.lod:
             self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
                 entry.label, state.lod, level))
