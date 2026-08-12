@@ -17,13 +17,15 @@ and filtered on the shared engine. Nothing on this side reads a byte of the game
 
 from __future__ import annotations
 
+import re
+
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
                        IntProperty, PointerProperty, StringProperty)
 
 from ... import cross_game_retarget, filter_ui, prefab_importer
 from ...RuriRipperPyBridge.session import cabmap_state
-from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry, discovery
+from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
 from . import chara_importer, datasets, face_importer
 
 MODEL_SECTION = "model"
@@ -44,9 +46,6 @@ ANIME_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
     apply=lambda context: _rebuild_anime(context.scene.ruri_kk_anime)))
 
 # The clip classes an animation import serializes.
-_CLIP_CLASSES = ("AnimationClip", "AnimatorController", "AnimatorOverrideController",
-                 "Avatar", "MonoScript")
-
 # ChaFileDefine.CoordinateType, in its own order -- the seven outfits a card carries.
 COORDINATES = ("School01", "School02", "Gym", "Swim", "Club", "Plain", "Pajamas")
 
@@ -64,15 +63,6 @@ def _report_exception(operator, prefix, exc):
     traceback.print_exc()
     operator.report({"ERROR"}, "{0}: {1}: {2} (full traceback in console)".format(
         prefix, type(exc).__name__, exc))
-
-
-def _class_ids(names):
-    resolved = []
-    for name in names:
-        class_id = class_registry.id_for_name(name)
-        if class_id is not None and class_id not in resolved:
-            resolved.append(class_id)
-    return resolved
 
 
 def _selected_entry(state):
@@ -588,21 +578,27 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
                 and _selected_animation(context.scene.ruri_kk_anime) is not None)
 
     def execute(self, context):
-        state = context.scene.ruri_kk_chara
         row = _selected_animation(context.scene.ruri_kk_anime)
         armature = _rig(context)
         if armature is None:
             self.report({"WARNING"}, "Select the character's armature first.")
             return {"CANCELLED"}
-        cabs = datasets.cabs_for([str(row["bundle"])])
+        bundle = str(row.get("overrideBundle") or row["bundle"])
+        controller_name = str(row.get("overrideAsset") or row["asset"])
+        cabs = datasets.cabs_for([bundle])
         if not cabs:
-            self.report({"WARNING"}, "'{0}' is not in the loaded cabmap.".format(row["bundle"]))
+            self.report({"WARNING"}, "'{0}' is not in the loaded cabmap.".format(bundle))
             return {"CANCELLED"}
 
         options = context.scene.ruri_cabmap.as_options()
         try:
+            clip_keys, family_states = _resolve_state_family(
+                cabmap_state.BRIDGE, cabs, controller_name, str(row["clip"]))
             assets, _roots, _seeds, _clips, _scenes = cabmap_state.BRIDGE.import_cabs(
-                cabs, _class_ids(_CLIP_CLASSES))
+                cabs, export_asset_keys=sorted(clip_keys))
+        except LookupError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
         except Exception as exc:
             _report_exception(self, "Animation import (bridge) failed", exc)
             return {"CANCELLED"}
@@ -610,10 +606,7 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
             asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
 
-        wanted = _clip_guids(db, str(row["clip"]))
-        if not wanted:
-            self.report({"WARNING"}, "No clip named '{0}' in {1}.".format(row["clip"], row["bundle"]))
-            return {"CANCELLED"}
+        wanted = sorted(cabmap_state.BRIDGE.clip_guid_by_key.values())
         try:
             built, warnings = cross_game_retarget.load_clips_onto(
                 context, cabmap_state.active_game(), cabs[0], wanted, db, armature,
@@ -626,25 +619,51 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
             return {"CANCELLED"}
         for message in warnings[:5]:
             self.report({"WARNING"}, message)
-        self.report({"INFO"}, "{0}: {1} action(s).".format(row["name"], built))
+        self.report({"INFO"}, "{0}: {1} action(s) ({2}).".format(
+            row["name"], built, ", ".join(family_states)))
         return {"FINISHED"}
 
 
-def _clip_guids(db, clip_name):
-    """The clip the catalog names, by its own m_Name. Exact: a controller bundle
-    holds every clip of its family."""
-    wanted = clip_name.lower()
-    found = []
-    for guid in db.all_guids():
-        text = db.raw_text(guid)
-        if not text:
-            continue
-        class_name, name = discovery.peek_class_and_name(text)
-        if class_name != "AnimationClip":
-            continue
-        if not wanted or (name or "").lower() == wanted:
-            found.append(guid)
-    return found
+def _resolve_state_family(bridge, cabs, controller_name, family):
+    """(clip asset keys, state names) for one catalog row.
+
+    A row names a position's controller (overrideAsset, or the base asset) and a
+    state FAMILY (`clip`): the controller's states are `<prefix>_<family><digit?>`
+    variants (L_/M_/S_ camera-intensity tiers in KK's H controllers). Resolution
+    is pure topology on the scan graph -- controller -> state machines -> states,
+    each family state's motion clips collected through blend trees -- and the
+    returned keys materialize exactly those clips, never the 2000-clip bundle."""
+    graph = bridge.scan_cabs(cabs)
+    controller_id = class_registry.id_for_name("AnimatorController")
+    override_id = class_registry.id_for_name("AnimatorOverrideController")
+    machine_id = class_registry.id_for_name("AnimatorStateMachine")
+    state_id = class_registry.id_for_name("AnimatorState")
+    blend_tree_id = class_registry.id_for_name("BlendTree")
+    clip_id = class_registry.id_for_name("AnimationClip")
+
+    controllers = graph.find(controller_id, controller_name)
+    if len(controllers) != 1:
+        present = sorted(graph.name(i) for i in graph.indices_of_class(controller_id))
+        raise LookupError(
+            "controller {0!r} matches {1} assets in {2} -- controllers present: {3}".format(
+                controller_name, len(controllers), ", ".join(cabs), ", ".join(present)))
+    states = graph.reachable(controllers[0], {controller_id, override_id, machine_id}, state_id)
+    pattern = re.compile(r"^(?:[A-Za-z]+_)?{0}\d*$".format(re.escape(family)))
+    family_states = [i for i in states if pattern.match(graph.name(i))]
+    if not family_states:
+        raise LookupError(
+            "no state of {0!r} matches family {1!r} -- states present: {2}".format(
+                controller_name, family, ", ".join(sorted(graph.name(i) for i in states))))
+    clip_keys = set()
+    for state_index in family_states:
+        clip_keys.update(graph.key(i)
+                         for i in graph.reachable(state_index, {blend_tree_id}, clip_id))
+    if not clip_keys:
+        raise LookupError(
+            "family states {0} reference no AnimationClip -- the controller wires "
+            "these states to something this resolver does not follow yet.".format(
+                sorted(graph.name(i) for i in family_states)))
+    return clip_keys, sorted(graph.name(i) for i in family_states)
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────

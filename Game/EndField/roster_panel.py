@@ -433,10 +433,25 @@ def _templet_skeleton(info):
     rows = _asset_named("data_npc_avatartemplet_" + templet.lower())
     if not rows:
         return {}, [], []
-    from ...RuriRipperPyBridge.unity import bridge_asset_db
+    from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
+    cab = cabmap_state.ROWS.cab(rows[0][0])
     try:
+        graph = cabmap_state.BRIDGE.scan_cabs([cab])
+        mono_behaviour_id = class_registry.id_for_name("MonoBehaviour")
+        avatar_id = class_registry.id_for_name("Avatar")
+        # The templet is the one MonoBehaviour that references an Avatar
+        # (sizeAvatar); materialize exactly that pair, never the whole closure.
+        keys = set()
+        for index in graph.indices_of_class(mono_behaviour_id):
+            avatars = [target for _field, target in graph.out_edges(index)
+                       if graph.class_id(target) == avatar_id]
+            if avatars:
+                keys.add(graph.key(index))
+                keys.update(graph.key(target) for target in avatars)
+        if not keys:
+            return {}, [], []
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
-            [cabmap_state.ROWS.cab(rows[0][0])])
+            [cab], export_asset_keys=sorted(keys))
     except Exception:
         return {}, [], []
     db = bridge_asset_db.BridgeAssetDatabase(
