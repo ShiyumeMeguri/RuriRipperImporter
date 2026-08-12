@@ -1049,7 +1049,8 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             game = state.current_game or None
-            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, game))
+            hooks = _current_game_hooks(state, game)
+            bridge = cabmap_state.ensure_bridge(hooks)
             code = bridge.build_cab_map(root, out)
             if code != 0:
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
@@ -1061,6 +1062,19 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             state.loaded = True
         except Exception as exc:
             _report_exception(self, "Build cabmap failed", exc)
+            return {"CANCELLED"}
+        if not len(cabmap_state.ROWS):
+            # A game's bundles are only readable through that game's OWN decoder, and
+            # the process runs one decoder at a time. Scanning a real game folder
+            # through a FOREIGN game's decoder yields an empty map and a success code,
+            # so the emptiness is the only place that mismatch can still be caught.
+            state.loaded = False
+            self.report({"ERROR"}, (
+                "Built 0 CABs from '{0}'. This build decoded with {1} -- a game's "
+                "bundles are only readable through its own hook. Tick this game's "
+                "hook on this tab, or switch to the tab whose game that folder "
+                "belongs to, then build again.").format(
+                    root, ", ".join(hooks) if hooks else "no game hook"))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Cabmap built: {len(cabmap_state.ROWS)} CABs.")
         return {"FINISHED"}
