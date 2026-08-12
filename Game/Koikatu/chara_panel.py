@@ -606,11 +606,14 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
             asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
 
-        wanted = sorted(cabmap_state.BRIDGE.clip_guid_by_key.values())
+        guid_by_key = cabmap_state.BRIDGE.clip_guid_by_key
+        wanted = sorted(guid_by_key.values())
+        display_names = {guid_by_key[key]: _catalog_label(row, state_name)
+                         for key, state_name in clip_keys.items() if key in guid_by_key}
         try:
             built, warnings = cross_game_retarget.load_clips_onto(
                 context, cabmap_state.active_game(), cabs[0], wanted, db, armature,
-                None, options)
+                None, options, display_names)
         except cross_game_retarget.CrossGameRetargetError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -654,16 +657,36 @@ def _resolve_state_family(bridge, cabs, controller_name, family):
         raise LookupError(
             "no state of {0!r} matches family {1!r} -- states present: {2}".format(
                 controller_name, family, ", ".join(sorted(graph.name(i) for i in states))))
-    clip_keys = set()
+    clip_keys = {}
     for state_index in family_states:
-        clip_keys.update(graph.key(i)
-                         for i in graph.reachable(state_index, {blend_tree_id}, clip_id))
+        for clip_index in graph.reachable(state_index, {blend_tree_id}, clip_id):
+            clip_keys[graph.key(clip_index)] = graph.name(state_index)
     if not clip_keys:
         raise LookupError(
             "family states {0} reference no AnimationClip -- the controller wires "
             "these states to something this resolver does not follow yet.".format(
                 sorted(graph.name(i) for i in family_states)))
     return clip_keys, sorted(graph.name(i) for i in family_states)
+
+
+def _catalog_label(row, state_name):
+    """What the panel row says, as the action's name.
+
+    Koikatu's clips are named after internal controller states (`L_SLoop1`,
+    `M_IN_Loop`) which say nothing about what the animation is; the catalog is
+    where the readable Japanese identity lives, and it is what the user picked
+    from. ``state_name`` only contributes the part that separates one member of
+    a state family from another (the L/M/S camera tier and its index), because
+    the family as a whole IS the catalog row."""
+    variant = ""
+    match = re.match(r"^(?:([A-Za-z]+)_)?{0}(\d*)$".format(re.escape(str(row["clip"]))),
+                     state_name)
+    if match:
+        variant = (match.group(1) or "") + (match.group(2) or "")
+    parts = [str(row["groupName"]), str(row["categoryName"]), str(row["name"])]
+    if variant:
+        parts.append(variant)
+    return "_".join(part for part in parts if part)
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────

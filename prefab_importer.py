@@ -254,7 +254,8 @@ def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
     return clip_files, warnings
 
 
-def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options):
+def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options,
+                              display_names=None):
     """Build Blender actions for exactly the given clip guids -- the checked
     subset from the animation browser. This is the only place that now pays
     the full parse + keyframe-insertion cost per clip; it's deferred until the
@@ -274,7 +275,11 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     animation IS the request to see it, and leaving it as a loose datablock for the user
     to hunt down in the Action editor is not a neutral default. A multi-clip batch keeps
     the don't-clobber guard: which of N would be arbitrary, so it only fills an armature
-    that has no action yet. Returns (built, warnings)."""
+    that has no action yet. Returns (built, warnings).
+
+    ``display_names`` ({guid: name}) renames the products and every warning about them.
+    A clip's m_Name is whatever the game's own controller state was called, which for
+    some games is unreadable; a caller holding the catalog label passes it here."""
     built = 0
     first = None
     warnings = []
@@ -297,14 +302,14 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
             warnings.append(f"clip {guid}: no clip data in the source closure "
                             f"(missing blob or .anim) -- skipped")
             continue
-        clip_name = clip.name or guid
+        clip_name = (display_names or {}).get(guid) or clip.name or guid
         repaired, unmatched = clip_repair.repair_hashed_clip_paths(clip, path_to_bone)
         if unmatched:
             warnings.append(f"{clip_name}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
         _solve_humanoid_curves(clip, avatar_json, path_to_bone, warnings, clip_name)
         action, slot, n_frames = animation_builder.build_action(
-            clip, arm_obj, maps, path_to_meshobjects, options)
+            clip, arm_obj, maps, path_to_meshobjects, options, display_name=clip_name)
 
         built += 1
         if first is None:

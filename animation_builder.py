@@ -288,9 +288,14 @@ def _channels_by_path(channels, kind, clip_name):
     return by_path
 
 
-def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=None):
+def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=None,
+                 display_name=None):
     """Create a Blender action from a clip_curves.ClipCurves (the one clip
-    form both the bridge blob and the disk raw-text parser produce)."""
+    form both the bridge blob and the disk raw-text parser produce).
+
+    ``display_name`` overrides the action's name when the caller holds a better
+    one than the clip's own m_Name -- a game whose catalog carries human-readable
+    labels while its clips are named after internal controller states."""
     options = options or {}
     # Pose bones default to QUATERNION already; the armature OBJECT itself
     # defaults to XYZ Euler, so object-level rotation_quaternion f-curves
@@ -298,7 +303,7 @@ def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=Non
     # without this -- Blender only evaluates the channel matching the
     # current rotation_mode.
     armature_obj.rotation_mode = 'QUATERNION'
-    name = clip.name
+    name = display_name or clip.name
     sample_rate = clip.sample_rate or 60.0
     nodes = maps["nodes"]
     path_to_bone = maps["path_to_bone"]

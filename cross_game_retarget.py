@@ -280,7 +280,8 @@ def _missing_table_prompt(api, source_game, dest_game, source_arm, dest_arm):
              src_cfg=source_config, dst_cfg=dest_config)
 
 
-def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, options):
+def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+                        display_names=None):
     """Import ``clip_guids`` (already resolved into ``db``, a source-game closure) straight
     onto ``dest_arm`` -- a rig stamped with a DIFFERENT game -- without importing the source
     character at all. Picks the source avatar whose TOS best covers the clips' bindings, bakes
@@ -323,7 +324,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
                 "The chosen source avatar built a skeleton with no TOS-named bones.")
         before = set(bpy.data.actions)
         _built, build_warnings = prefab_importer.build_selected_animations(
-            db, temp_arm, temp_maps, None, clip_guids, options)
+            db, temp_arm, temp_maps, None, clip_guids, options, display_names)
         warnings.extend(build_warnings)
         baked_actions = [action for action in bpy.data.actions if action not in before]
         if not baked_actions:
@@ -350,7 +351,8 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
     return products, warnings
 
 
-def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, maps, options):
+def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, maps, options,
+                    display_names=None):
     """THE animation-loading entry point. Every panel calls this and nothing else.
 
     Whether a clip needs a cross-game retarget is one decision, made from one fact --
@@ -360,11 +362,15 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
 
     Returns (built, warnings): ``built`` counts the actions that ended up on
     ``dest_arm``.
+
+    ``display_names`` ({guid: name}) names the products after something the caller
+    knows better than the clip does -- see build_selected_animations. It rides both
+    branches, so a retargeted product is the same name plus the destination suffix.
     """
     dest_game = armature_builder.read_game(dest_arm)
     if session_game and dest_game and dest_game != session_game:
         products, warnings = retarget_clips_onto(
-            context, session_game, clip_cab, clip_guids, db, dest_arm, options)
+            context, session_game, clip_cab, clip_guids, db, dest_arm, options, display_names)
         return len(products), warnings
     if maps is None:
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
@@ -379,7 +385,7 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
             "stamp naming another game to retarget from -- select the right skeleton, or "
             "re-import it so it knows which game it is from.".format(dest_arm.name))
     built, warnings = prefab_importer.build_selected_animations(
-        db, dest_arm, maps, None, clip_guids, options)
+        db, dest_arm, maps, None, clip_guids, options, display_names)
     if checked and ratio < 0.5:
         warnings.insert(0, "Only {0:.0%} of curve paths match armature '{1}' -- "
                            "imported anyway.".format(ratio, dest_arm.name))
