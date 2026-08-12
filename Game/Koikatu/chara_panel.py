@@ -29,7 +29,6 @@ from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
 from . import chara_importer, datasets, face_importer
 
 MODEL_SECTION = "model"
-PARTS_SECTION = "parts"
 FACE_SECTION = "face"
 ANIME_SECTION = "anime"
 HANIME_SECTION = "hanime"
@@ -52,8 +51,6 @@ COORDINATES = ("School01", "School02", "Gym", "Swim", "Club", "Plain", "Pajamas"
 
 # Enum item lists Blender's dynamic-items callbacks must not let go of.
 _coordinate_items_cache = [("0", COORDINATES[0], "")]
-_slot_items_cache = [("0", "(refresh first)", "")]
-_item_items_cache = [("0", "(refresh first)", "")]
 _expression_items_cache = [("", "(none)", "")]
 
 STATUS = "Refresh to read the game's characters."
@@ -139,57 +136,6 @@ def _coordinate_items(self, context):
 
 def _on_cast_edit(self, context):
     _rebuild_cast(self)
-
-
-# ── the customization catalog ───────────────────────────────────────────────
-
-def _catalog():
-    return datasets.table(datasets.CATALOG)
-
-
-def _slot_items(self, context):
-    """Every category the catalog actually carries, under the game's own label."""
-    global _slot_items_cache
-    table = _catalog()
-    listed = []
-    if table is not None:
-        seen = {}
-        for index in range(len(table)):
-            number = datasets.text(table, index, "category")
-            if number not in seen:
-                seen[number] = datasets.text(table, index, "categoryLabel")
-        listed = [(number, label, label) for number, label in seen.items()]
-    _slot_items_cache = listed or [("0", "(refresh first)", "")]
-    return _slot_items_cache
-
-
-def _item_items(self, context):
-    global _item_items_cache
-    table = _catalog()
-    listed = []
-    if table is not None:
-        for index in range(len(table)):
-            if datasets.text(table, index, "category") != self.slot:
-                continue
-            item_id = datasets.text(table, index, "id")
-            name = datasets.text(table, index, "name") or item_id
-            bundle = table.cell(index, "bundle")
-            asset = table.cell(index, "asset")
-            listed.append((item_id, "{0}  ({1})".format(name, item_id),
-                           "{0} -> {1}".format(bundle, asset) if bundle else "empty slot"))
-    _item_items_cache = listed or [("0", "(refresh first)", "")]
-    return _item_items_cache
-
-
-def _catalog_row(state):
-    table = _catalog()
-    if table is None:
-        return None
-    for index in range(len(table)):
-        if (datasets.text(table, index, "category") == state.slot
-                and datasets.text(table, index, "id") == state.item):
-            return {name: table.cell(index, name) for name in table.names}
-    return None
 
 
 # ── the face ────────────────────────────────────────────────────────────────
@@ -365,7 +311,6 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     section: EnumProperty(
         name="Section",
         items=[(MODEL_SECTION, "Model", "Build a character from one of the game's own cards"),
-               (PARTS_SECTION, "Parts", "Build from the customization catalog, slot by slot"),
                (FACE_SECTION, "Face", "Drive the head's blend-shape patterns"),
                (ANIME_SECTION, "Anime", "The studio's ordinary animation catalog"),
                (HANIME_SECTION, "H", "Paired animations -- one per partner, side by side")],
@@ -379,9 +324,6 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     build_hair: BoolProperty(name="Hair", default=True)
     build_clothes: BoolProperty(name="Clothes", default=True)
     build_accessories: BoolProperty(name="Accessories", default=True)
-
-    slot: EnumProperty(name="Slot", items=_slot_items)
-    item: EnumProperty(name="Item", items=_item_items)
 
     personality: IntProperty(name="Personality", default=0, min=-100, max=100,
                              description="Whose named expressions to list -- the character's own "
@@ -443,7 +385,6 @@ class RURI_OT_kk_refresh(bpy.types.Operator):
     def execute(self, context):
         state = context.scene.ruri_kk_chara
         try:
-            datasets.table(datasets.CATALOG, refresh=True)
             datasets.table(datasets.CAST, _game_root(), refresh=True)
         except Exception as exc:
             _report_exception(self, "Character list failed", exc)
@@ -510,70 +451,6 @@ def _personality_of(state):
         if table.cell(index, "path") == card:
             return datasets.number(table, index, "personality")
     return 0
-
-
-class RURI_OT_kk_build_parts(bpy.types.Operator):
-    """Build the default body wearing exactly the one catalog item picked."""
-    bl_idname = "ruri.kk_chara_build_parts"
-    bl_label = "Build This Part"
-    bl_description = ("Assemble the base body and the selected catalog item on it -- "
-                      "the same build a card drives, with one slot chosen by hand")
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        return (context.scene.ruri_cabmap.loaded and cabmap_state.BRIDGE is not None
-                and _catalog() is not None)
-
-    def execute(self, context):
-        state = context.scene.ruri_kk_chara
-        row = _catalog_row(state)
-        if row is None or not row["bundle"]:
-            self.report({"WARNING"}, "That entry is the empty slot -- it loads nothing.")
-            return {"CANCELLED"}
-
-        # The base a part hangs on is the first four rows of any plan, so it is taken
-        # from a real one rather than restated here.
-        table = datasets.table(datasets.CAST, _game_root())
-        if table is None or not len(table):
-            self.report({"WARNING"}, "Refresh first -- the base body comes from a card's own plan.")
-            return {"CANCELLED"}
-        base = [part for part in datasets.rows(datasets.PLAN, table.cell(0, "path"), 0)
-                if part["slot"] in ("armature", "head_armature", "body", "tongue")]
-
-        family = str(row["family"])
-        base.append({
-            "slot": family,
-            "label": str(row["name"]) or str(row["asset"]),
-            "bundle": str(row["bundle"]),
-            "asset": str(row["asset"]),
-            "parent": _parent_for(family, row),
-            "rebind": chara_importer.REBIND_BODY if family in ("clothes", "sub_clothes") else "",
-        })
-        try:
-            report = chara_importer.build(context, base, context.scene.ruri_cabmap.as_options(),
-                                          name=str(row["name"]) or str(row["asset"]))
-        except Exception as exc:
-            _report_exception(self, "Part build failed", exc)
-            return {"CANCELLED"}
-        if report.armature is None:
-            self.report({"WARNING"}, "Nothing built -- {0}".format(report.summary()))
-            return {"CANCELLED"}
-        self.report({"INFO"}, "{0}: {1}".format(row["name"], report.summary()))
-        return {"FINISHED"}
-
-
-def _parent_for(family, row):
-    """Where the game hangs a part of this family: the bone its own row names for an
-    accessory, the head's hair anchor for hair, the head for a head."""
-    if family == datasets.ACCESSORY:
-        parent = str(row.get("parent") or "")
-        return "" if parent in ("", "null", "0") else parent
-    if family == datasets.HAIR:
-        return "cf_J_FaceUp_ty"
-    if family == datasets.HEAD:
-        return "cf_s_head"
-    return ""
 
 
 class RURI_OT_kk_face_apply(bpy.types.Operator):
@@ -854,21 +731,6 @@ def _draw_model(layout, context, state):
     options.operator(RURI_OT_kk_build.bl_idname, icon="IMPORT")
 
 
-def _draw_parts(layout, context, state):
-    if _catalog() is None:
-        layout.label(text="Refresh to read the game's customization catalog.", icon="INFO")
-        layout.operator(RURI_OT_kk_refresh.bl_idname, icon="FILE_REFRESH")
-        return
-    column = layout.column(align=True)
-    column.prop(state, "slot")
-    column.prop(state, "item")
-    row = _catalog_row(state)
-    box = layout.box()
-    box.label(text="{0}  ->  {1}".format(
-        (row or {}).get("bundle") or "-", (row or {}).get("asset") or "-"))
-    layout.operator(RURI_OT_kk_build_parts.bl_idname, icon="IMPORT")
-
-
 def _draw_face(layout, context, state):
     armature = _rig(context)
     head = layout.row(align=True)
@@ -964,9 +826,8 @@ def _draw_hanime(layout, context, state):
                         text="Import " + title, icon="ANIM_DATA").side = side
 
 
-_SECTIONS = {MODEL_SECTION: _draw_model, PARTS_SECTION: _draw_parts,
-             FACE_SECTION: _draw_face, ANIME_SECTION: _draw_anime,
-             HANIME_SECTION: _draw_hanime}
+_SECTIONS = {MODEL_SECTION: _draw_model, FACE_SECTION: _draw_face,
+             ANIME_SECTION: _draw_anime, HANIME_SECTION: _draw_hanime}
 
 
 def draw_character_tab(layout, context):
@@ -984,7 +845,6 @@ _CLASSES = (
     RURI_OT_kk_hanime_import,
     RURI_OT_kk_refresh,
     RURI_OT_kk_build,
-    RURI_OT_kk_build_parts,
     RURI_OT_kk_face_apply,
     RURI_OT_kk_face_clear,
     RURI_OT_kk_anime_refresh,
