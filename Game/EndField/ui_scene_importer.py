@@ -12,7 +12,8 @@ invented here:
                          ``_CharacterParams*`` inputs (see BINDINGS -- which
                          volume field lands in which slot is read off how the
                          game's own shader uses that component).
-``arts/ui/sceneassets``  the stage art, when the game ships any for it.
+``stage prefab``         the stage itself, imported by the shared prefab
+                         importer: floor, sky sphere, cameras, hierarchy 1:1.
 
 Only parameters the volume actually OVERRIDES are pushed: an unticked row in the
 game's inspector contributes nothing, and writing its m_Value anyway would dress

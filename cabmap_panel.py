@@ -525,6 +525,10 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     import_materials: BoolProperty(name="Import Materials", default=True)
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
+    import_empties: BoolProperty(
+        name="Import Empties", default=False,
+        description="Keep every GameObject as an Empty. Off keeps only the "
+                    "empties that hold imported content in the hierarchy")
     import_animations: BoolProperty(
         name="Discover Animations", default=True,
         description="List this character's animation clips in the Animations "
@@ -542,6 +546,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
+            "import_empties": self.import_empties,
         }
 
 
@@ -1888,6 +1893,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_materials")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
+            opts.prop(state, "import_empties")
 
             batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)

@@ -40,6 +40,7 @@ DEFAULT_OPTIONS = {
     "connect_alpha": True,
     "flip_v": False,
     "import_shadow_proxies": False,
+    "import_empties": False,
 }
 
 
@@ -48,6 +49,8 @@ class ImportReport:
         self.armature = None
         self.mesh_objects = []
         self.cameras = []
+        self.lights = []
+        self.root_objects = []
         self.materials = 0
         self.textures = 0
         self.actions = 0
@@ -64,7 +67,7 @@ class ImportReport:
 
     def summary(self):
         return (f"armature_bones={self.bones} meshes={len(self.mesh_objects)} "
-                f"cameras={len(self.cameras)} "
+                f"cameras={len(self.cameras)} lights={len(self.lights)} "
                 f"materials={self.materials} textures={self.textures} "
                 f"actions={self.actions} lod_skipped={self.skipped_lod} "
                 f"shadow_skipped={self.skipped_shadow} "
@@ -307,25 +310,19 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     report = ImportReport()
     start = time.time()
 
-    # Armature from the transform hierarchy. The bones sit in armature space by
-    # pure C; the root yaw rides on the armature OBJECT, so every bone and skinned
-    # mesh under it turns once and stays consistent.
     arm_obj = None
-    maps = None
-    if options["import_skeleton"]:
+    if options["import_skeleton"] and prefab.all("SkinnedMeshRenderer"):
         arm_obj, maps = armature_builder.build_armature(context, prefab, arm_name)
         if top_level:
             arm_obj.matrix_world = coordinate.root_matrix()
         report.armature = arm_obj
         report.bones = len(arm_obj.data.bones)
-        # Bake the rig's Avatar document onto the armature: the humanoid
-        # retarget contract travels with the skeleton from here on.
+        report.root_objects.append(arm_obj)
         _stamp_prefab_avatar(db, prefab, arm_obj, maps, report.warnings)
     else:
-        # Still need the hierarchy maps for naming/skinning resolution.
         try:
             from . import hierarchy
-        except ImportError:  # standalone (non-package) testing
+        except ImportError:
             import hierarchy
         nodes, roots = hierarchy.build_hierarchy(prefab)
         maps = {"nodes": nodes, "roots": roots,
@@ -338,33 +335,42 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     mat_builder = material_builder.MaterialBuilder(db, options) if options["import_materials"] else None
 
     path_to_meshobjects = {}
+    content = {}
 
-    # Which renderers actually draw -- LODGroup levels, ShadowsOnly proxies,
-    # disabled/inactive GameObjects and static-batch windows are all decided by
-    # the shared rules (RuriRipperPyBridge.unity.prefab), so this add-on and the
-    # Painter plugin cannot disagree about what a prefab contains.
     stats = prefab_scan.SkipStats()
     for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats):
-        if renderer.is_skinned:
+        if renderer.is_skinned and arm_obj is not None:
             obj = _import_skinned(context, db, renderer, arm_obj, maps,
                                   mat_builder, options, report)
-            if obj is not None and renderer.node is not None:
-                path_to_meshobjects.setdefault(renderer.node.path, []).append(obj)
         else:
-            obj = _import_static(context, db, renderer, mat_builder, options, report, top_level)
-        if obj is not None:
-            report.mesh_objects.append(obj)
+            obj = _import_static(context, db, renderer, mat_builder, options, report,
+                                 top_level, place=arm_obj is not None)
+        if obj is None:
+            continue
+        report.mesh_objects.append(obj)
+        if renderer.node is not None:
+            path_to_meshobjects.setdefault(renderer.node.path, []).append(obj)
+            if arm_obj is None:
+                content[renderer.node.file_id] = obj
+                if renderer.disabled:
+                    obj.hide_viewport = True
+                    obj.hide_render = True
     report.skipped_lod += stats.lod
     report.skipped_shadow += stats.shadow
     report.skipped_inactive += stats.inactive
 
-    # Cameras are objects in Blender the same way renderers are: a prefab that
-    # defines viewpoints imports them, or the scene arrives with nothing to look
-    # through.
-    for camera in prefab_scan.iter_cameras(prefab, go_to_node, options):
-        obj = _import_camera(context, camera, top_level)
-        if obj is not None:
+    if arm_obj is None:
+        for camera in prefab_scan.iter_cameras(prefab, go_to_node, options):
+            obj = _camera_object(camera)
             report.cameras.append(obj)
+            content.setdefault(camera.node.file_id, obj)
+        for light in prefab_scan.iter_lights(prefab, go_to_node, options):
+            obj = _light_object(light)
+            report.lights.append(obj)
+            content.setdefault(light.node.file_id, obj)
+        _build_object_tree(context, nodes, maps["roots"], content, options, top_level, report)
+    else:
+        report.root_objects.extend(o for o in report.mesh_objects if o.parent is None)
 
     if mat_builder is not None:
         report.materials = len(mat_builder._cache)
@@ -522,17 +528,11 @@ def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, 
         maps["file_id_to_bone"], materials, options)
 
 
-def _import_camera(context, camera, top_level):
-    """One Unity camera as a Blender camera object at its own node's transform.
+_AIM = Matrix.Rotation(math.pi / 2.0, 4, "X")
+_AIM_INV = _AIM.inverted()
 
-    Two conversions, not one. The shared reflection puts the node where it
-    belongs, but it also lands Unity's forward (local +Z) on Blender's local +Y,
-    and a Blender camera looks down its local -Z with +Y up. The extra quarter
-    turn about X is exactly that difference and nothing else.
 
-    Unity's fieldOfView is the VERTICAL angle, so the sensor is fitted
-    vertically -- fit it horizontally and every framing is wrong by the aspect
-    ratio."""
+def _camera_object(camera):
     data = bpy.data.cameras.new(camera.name)
     data.clip_start = camera.near
     data.clip_end = camera.far
@@ -542,26 +542,80 @@ def _import_camera(context, camera, top_level):
     else:
         data.sensor_fit = "VERTICAL"
         data.angle_y = math.radians(camera.fov)
-
     obj = bpy.data.objects.new(camera.name, data)
-    context.collection.objects.link(obj)
-    convert = coordinate.convert_root_matrix if top_level else coordinate.convert_matrix
-    obj.matrix_world = convert(camera.node.world) @ Matrix.Rotation(math.radians(90.0), 4, "X")
-    obj.hide_viewport = camera.disabled
+    obj.hide_viewport = obj.hide_render = camera.disabled
     return obj
 
 
-def _import_static(context, db, renderer, mat_builder, options, report, top_level):
+def _light_object(light):
+    kind = {0: "SPOT", 1: "SUN", 2: "POINT"}.get(light.type, "AREA")
+    data = bpy.data.lights.new(light.name, kind)
+    data.color = light.color
+    data.energy = light.intensity
+    if kind == "SPOT":
+        data.spot_size = math.radians(light.spot_angle)
+        if light.spot_angle > 0.0:
+            data.spot_blend = 1.0 - min(light.inner_spot_angle / light.spot_angle, 1.0)
+    elif kind == "AREA":
+        data.shape = "RECTANGLE"
+        data.size, data.size_y = light.area_size
+    if kind != "SUN":
+        data.use_custom_distance = True
+        data.cutoff_distance = light.range
+    obj = bpy.data.objects.new(light.name, data)
+    obj.hide_viewport = obj.hide_render = light.disabled
+    return obj
+
+
+def _build_object_tree(context, nodes, roots, content, options, top_level, report):
+    keep = set(content)
+    if options["import_empties"]:
+        keep.update(nodes)
+    else:
+        for file_id in list(keep):
+            node = nodes[file_id].parent
+            while node is not None and node.file_id not in keep:
+                keep.add(node.file_id)
+                node = node.parent
+
+    def build(node, parent, parent_aimed):
+        if node.file_id not in keep:
+            return
+        obj = content.get(node.file_id)
+        if obj is None:
+            obj = bpy.data.objects.new(node.name, None)
+        if obj.name not in context.collection.objects:
+            context.collection.objects.link(obj)
+        aimed = obj.type in ("CAMERA", "LIGHT")
+        local = (coordinate.convert_root_matrix(node.local)
+                 if parent is None and top_level else coordinate.convert_matrix(node.local))
+        if parent_aimed:
+            local = _AIM_INV @ local
+        if aimed:
+            local = local @ _AIM
+        obj.parent = parent
+        obj.matrix_basis = local
+        if not node.active:
+            obj.hide_viewport = obj.hide_render = True
+        if parent is None:
+            report.root_objects.append(obj)
+        for child in node.children:
+            build(child, obj, aimed)
+
+    for root in roots:
+        build(root, None, False)
+
+
+def _import_static(context, db, renderer, mat_builder, options, report, top_level, place=True):
     decoded = _decode_renderer_mesh(db, renderer, report)
     if decoded is None:
         return None
     materials = _build_materials(renderer, mat_builder)
     obj = mesh_builder.build_mesh_object(
         context, decoded, renderer.name, None, [], {}, materials, options)
-    # An unparented static mesh is its own top-level object; the root yaw folds
-    # into its world matrix (skipped when a caller re-places the whole prefab).
-    convert = coordinate.convert_root_matrix if top_level else coordinate.convert_matrix
-    obj.matrix_world = convert(renderer.node.world)
+    if place:
+        convert = coordinate.convert_root_matrix if top_level else coordinate.convert_matrix
+        obj.matrix_world = convert(renderer.node.world)
     return obj
 
 

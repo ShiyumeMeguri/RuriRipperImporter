@@ -62,12 +62,7 @@ def _place_prefab_report(context, report, placement):
     the placement's resolved world transform. Only objects with no parent
     need the placement applied -- Blender already propagates parent-to-child
     transforms for anything nested under an armature or another mesh."""
-    top_level = []
-    if report.armature is not None and report.armature.parent is None:
-        top_level.append(report.armature)
-    for obj in report.mesh_objects:
-        if obj.parent is None and obj not in top_level:
-            top_level.append(obj)
+    top_level = [obj for obj in report.root_objects if obj.parent is None]
     if not top_level:
         return None
 

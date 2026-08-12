@@ -33,8 +33,6 @@ HOLDS_PROCESS_STATE = True
 
 # Beyond.PathDef.DYNAMIC_PREFAB_PATH, lowercased the way container paths are.
 PREFAB_ROOT = "assets/beyond/dynamicassets/gameplay/prefabs/"
-# Beyond.PathDef's UI counterpart of SCENE_ASSET_PATH: where a UI stage's art lives.
-UI_SCENE_ART_ROOT = "assets/beyond/arts/ui/sceneassets/"
 
 # The three MonoBehaviour types a display stage is made of, by CLASS NAME --
 # resolved out of the closure's own MonoScript assets, never by guid literal.
@@ -200,9 +198,6 @@ def discover(bridge, container_paths):
             record["components"] = _components(entry["data"], behaviours)
             volumes.append(record)
 
-    art_folders = {p[len(UI_SCENE_ART_ROOT):].split("/", 1)[0]
-                   for p in container_paths if p.startswith(UI_SCENE_ART_ROOT)}
-
     # Which prefab in a folder IS the stage -- the one that carries the floor,
     # the sky sphere and the cameras. Asked of the cabmap's own dependency
     # graph rather than by reading prefabs: the stage is a prefab that DEPENDS
@@ -223,15 +218,9 @@ def discover(bridge, container_paths):
             "group": group,
             "env": env,
             "volumes": own,
-            "other_volumes": [v for v in siblings if v not in own],
             "char_volumes": [c for v in own for c in v["components"]
                              if c["class"] == CHARACTER_VOLUME_CLASS],
             "stage_prefabs": stage_prefabs.get(folder, []),
-            "art_root": (UI_SCENE_ART_ROOT + group + "/") if group in art_folders else "",
-            "lights": sorted(p for p in container_paths
-                             if p.startswith(folder + "additionallights/") and p.endswith(".prefab")),
-            "cameras": sorted(p for p in container_paths
-                              if p.startswith(folder) and p.endswith("cameras.prefab")),
         })
 
     SCENES, DOCUMENTS = rows, documents
