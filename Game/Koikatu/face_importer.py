@@ -196,3 +196,47 @@ def expression_patterns(row):
 
 def default_openness():
     return resting_openness({})
+
+
+# Extra channels an expression row states outside the three pattern channels.
+# They are single scalars rather than pattern indices, so the IR carries them
+# under their own names and a contract maps them (or not) like anything else.
+SCALAR_CHANNELS = ("blush", "tears", "highlight")
+
+
+def expression_ir(row):
+    """One ``koikatu.face.expressions`` row as the cross-game IR (see face_ir).
+
+    Each driven channel contributes its pattern at the openness rate, plus the
+    same pattern's shut end at the complement -- that pair IS what the game
+    blends, so dropping the shut end would quietly lose every half-lidded and
+    half-open expression. Untouched channels (-1) contribute nothing, which is
+    what makes a viseme row a mouth-only statement rather than a whole face.
+    """
+    try:
+        from ... import face_ir
+    except ImportError:
+        import face_ir
+
+    patterns, _resting = expression_patterns(row)
+    ir = {}
+    for channel, pattern in patterns.items():
+        # The row's own ceiling, NOT resting_openness: the resting drive is a
+        # runtime parameter (a mouth is shut until the character speaks, which
+        # is why its drive is 0), so folding it in here would state every
+        # expression as mouth-closed and lose the whole channel.
+        rate = max(0.0, min(1.0, float(row.get(channel + "Open", 1.0))))
+        ir[face_ir.ir_key(channel, pattern)] = rate
+        if rate < 1.0:
+            ir[face_ir.ir_key(channel, pattern, closed=True)] = 1.0 - rate
+    for channel in SCALAR_CHANNELS:
+        value = float(row.get(channel, 0.0) or 0.0)
+        if abs(value) > 1e-6:
+            ir[channel] = value
+    # Gaze is an enumerated direction, not a magnitude, so it is keyed like a
+    # pattern -- a row that states ONLY a gaze (the 視線 entries) is a complete
+    # statement about where the eyes point and says nothing about the face.
+    look = int(float(row.get("eyesLook", -1) or -1))
+    if look >= 0:
+        ir[face_ir.ir_key("eyesLook", look)] = 1.0
+    return ir
