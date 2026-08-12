@@ -3,13 +3,16 @@ nothing else, across every hooked version of it.
 
 Two tabs, neither of which means anything for another title:
 
-``StreamingScene``  the game's own scenes, both kinds it ships, switched inside
+``StreamingScene``  the game's own scenes, every kind it ships, switched inside
                the tab: ``Scene`` the self-contained ones -- pick one from the
                game's own list and import it whole; ``World`` the open-world maps
                -- pick one of the places the game itself names in map01/map02 and
                import that place, at the size the game gives it, out of the game's
-               own chunk format.
-               (``scene_state`` + ``asset_paths`` + ``scene_importer``)
+               own chunk format; ``UI`` the lit little stages an interface stands
+               a model on (CharInfo, CharFormation, WeaponInfo), loaded around a
+               character already in the scene.
+               (``scene_state`` + ``asset_paths`` + ``scene_importer``,
+                ``ui_scene_state`` + ``ui_scene_importer``)
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
                (``skeletal_morph`` + ``morph_state``)

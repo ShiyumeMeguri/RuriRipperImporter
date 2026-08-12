@@ -1,0 +1,256 @@
+"""Put one of the game's UI display stages into the Blender scene.
+
+Three things arrive, each straight out of the stage's own assets and none of them
+invented here:
+
+``HGEnvironmentPhase``   the sun -- direction, colour temperature, and an
+                         intensity that is already pre-exposed the way the game
+                         pre-exposes it (see ``_sun``), plus the sky's own
+                         ambient SH as the world colour.
+``HGCharacterVolume``    the character-lighting overrides, pushed onto every
+                         Endfield uber material in the scene as its
+                         ``_CharacterParams*`` inputs (see BINDINGS -- which
+                         volume field lands in which slot is read off how the
+                         game's own shader uses that component).
+``arts/ui/sceneassets``  the stage art, when the game ships any for it.
+
+Only parameters the volume actually OVERRIDES are pushed: an unticked row in the
+game's inspector contributes nothing, and writing its m_Value anyway would dress
+a stale default up as a setting.
+"""
+
+from __future__ import annotations
+
+import bpy
+import numpy
+from mathutils import Vector
+
+from ... import coordinate, prefab_importer
+from . import ui_scene_state
+
+STAGE_COLLECTION = "Endfield UI Stage"
+
+# HGCharacterVolume field -> (CP slot, which components of it).
+#
+# The slot for each is read off the game shader's own use of that component:
+# the skin path (Face) reads CP3/CP4 where every other part reads CP2/CP5, which
+# is exactly the volume's own "(except skin)"/"skin" pair of colours; CP6/CP7
+# are consumed as the ambient direction and its coefficients, which is what
+# charGlobalAmbientParam0/1 are; CP1.z gates the cast-shadow lerp to 1.
+#
+# Deliberately NOT pushed: the light DIRECTION override (CP1.w) and the light
+# COLOUR override (CP12.y). In-game they carry a camera-follow direction and a
+# white colour -- identity here -- and leaving them at zero is what keeps the
+# scene's own sun driving the shading instead of a frozen vector.
+BINDINGS = (
+    ("charMainLightMultiplier", 0, "y"),
+    ("charEnvShadowMultiplier", 0, "z"),
+    ("charEnvLightMultiplier", 0, "w"),
+    ("charIgnoreMainLightShadow", 1, "z"),
+    ("charShadowTintColor", 2, "rgb"),
+    ("charSkinShadowTintColor", 3, "rgb"),
+    ("charSkinMainLightOverrideColor", 4, "rgb"),
+    ("charMainLightOverrideColor", 5, "rgb"),
+    ("charGlobalAmbientParam0", 6, "xyzw"),
+    ("charGlobalAmbientParam1", 7, "xyzw"),
+    ("charMainLightRangeBias", 11, "w"),
+    ("charMainLightControl", 12, "x"),
+)
+
+_XYZ = {"x": 0, "y": 1, "z": 2}
+
+
+def _vector(value, keys="xyz"):
+    """A {x,y,z}/{r,g,b} dict or a scalar as a list of floats."""
+    if isinstance(value, dict):
+        pick = keys if keys[0] in value else ("rgba" if "r" in value else keys)
+        return [float(value.get(k, 0.0)) for k in pick]
+    return [float(value)]
+
+
+def _scalar(value):
+    if isinstance(value, dict):
+        return float(value.get("x", value.get("r", 0.0)))
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    return float(value)
+
+
+def apply_environment(context, env_data, name="Endfield Sun"):
+    """Build/replace the stage's sun and world from its HGEnvironmentPhase."""
+    light_config = env_data.get("lightConfig") or {}
+    sky_config = env_data.get("skyConfig") or {}
+    sun = _sun(context, light_config, name)
+    _world(context, sky_config)
+    return sun
+
+
+def _sun(context, light_config, name):
+    """The stage's directional light.
+
+    ``forwardDirect`` is the direction the light travels, already resolved by
+    the game from its pitch/yaw; Blender's sun shines down its own -Z, so the
+    object simply tracks that vector. Intensity is ``directIntensity`` -- lux
+    times the frame's pre-exposure -- and it goes into Blender's sun strength
+    unchanged: both sides divide by pi for the Lambert term, so the two agree
+    without a fudge factor.
+    """
+    forward = light_config.get("forwardDirect")
+    if not isinstance(forward, dict):
+        return None
+    unity = numpy.array([[float(forward.get("x", 0.0)),
+                          float(forward.get("y", 0.0)),
+                          float(forward.get("z", 0.0))]], dtype=numpy.float32)
+    converted = coordinate.convert_points(unity)[0]
+    direction = coordinate.root_matrix().to_3x3() @ Vector(
+        (float(converted[0]), float(converted[1]), float(converted[2])))
+
+    data = bpy.data.lights.get(name)
+    if data is None or data.type != "SUN":
+        data = bpy.data.lights.new(name, type="SUN")
+        data.name = name
+    obj = bpy.data.objects.get(name)
+    if obj is None or obj.data is not data:
+        obj = bpy.data.objects.new(name, data)
+        context.collection.objects.link(obj)
+    elif obj.name not in context.scene.objects:
+        context.collection.objects.link(obj)
+
+    if direction.length > 1e-6:
+        obj.rotation_mode = "QUATERNION"
+        obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+    data.energy = float(light_config.get("directIntensity", 1.0))
+    data.angle = 2.0 * float(light_config.get("directSoftSourceRadius", 0.0))
+    colour = light_config.get("directColor")
+    if isinstance(colour, dict):
+        data.color = (float(colour.get("r", 1.0)),
+                      float(colour.get("g", 1.0)),
+                      float(colour.get("b", 1.0)))
+    # directColorMode picks colour vs temperature; Blender carries the same
+    # blackbody knob on the light itself, so the Kelvin travels as Kelvin.
+    temperature = light_config.get("directColorTemperature")
+    if temperature and hasattr(data, "temperature"):
+        data.use_temperature = bool(light_config.get("directColorMode", 0))
+        data.temperature = float(temperature)
+    return obj
+
+
+def _world(context, sky_config):
+    """The stage's ambient, as the DC term of its own baked sky SH.
+
+    Only the constant term is used: the character shader takes its ambient from
+    the character volume rather than the world, so what the world owes the scene
+    is the backdrop level, and that is sh[0] per channel."""
+    ambient = sky_config.get("skyAmbientSH")
+    if not isinstance(ambient, dict):
+        return None
+    channels = []
+    for base in (0, 9, 18):
+        key = "sh[{0:2d}]".format(base).replace(" ", " ")
+        channels.append(float(ambient.get("sh[{0:2d}]".format(base), ambient.get(key, 0.0))))
+    world = context.scene.world
+    if world is None:
+        world = bpy.data.worlds.new("Endfield UI Stage")
+        context.scene.world = world
+    world.use_nodes = True
+    background = world.node_tree.nodes.get("Background")
+    if background is not None:
+        background.inputs[0].default_value = (channels[0], channels[1], channels[2], 1.0)
+    return world
+
+
+def apply_character_params(char_volume_data, materials=None):
+    """Push the stage's HGCharacterVolume onto every Endfield uber material.
+
+    Returns (materials touched, parameters written)."""
+    pushed = [(field, slot, comps, ui_scene_state.overridden(char_volume_data, field))
+              for field, slot, comps in BINDINGS]
+    pushed = [row for row in pushed if row[3] is not None]
+    if not pushed:
+        return 0, 0
+
+    touched = written = 0
+    for material in (materials if materials is not None else bpy.data.materials):
+        if not material.use_nodes or material.node_tree is None:
+            continue
+        hits = 0
+        for node in material.node_tree.nodes:
+            if node.bl_idname != "ShaderNodeGroup" or node.node_tree is None:
+                continue
+            for _field, slot, comps, value in pushed:
+                hits += _write_slot(node, slot, comps, value)
+        if hits:
+            touched += 1
+            written += hits
+    return touched, written
+
+
+def _write_slot(node, slot, comps, value):
+    """Write one volume value into one CP slot of a uber group node. The xyz of
+    a slot is one vector socket and its w a second float socket -- the emitter
+    splits them, so a write does too."""
+    vector_socket = node.inputs.get("_CharacterParams{0}".format(slot))
+    w_socket = node.inputs.get("_CharacterParams{0}_w".format(slot))
+    written = 0
+    if comps in ("rgb", "xyzw"):
+        components = _vector(value)
+        if vector_socket is not None and len(components) >= 3:
+            current = list(vector_socket.default_value)
+            for index in range(3):
+                current[index] = components[index]
+            vector_socket.default_value = current
+            written += 1
+        if comps == "xyzw" and w_socket is not None and len(components) >= 4:
+            w_socket.default_value = components[3]
+            written += 1
+        return written
+    if comps == "w":
+        if w_socket is not None:
+            w_socket.default_value = _scalar(value)
+            written += 1
+        return written
+    index = _XYZ.get(comps)
+    if index is not None and vector_socket is not None:
+        current = list(vector_socket.default_value)
+        current[index] = _scalar(value)
+        vector_socket.default_value = current
+        written += 1
+    return written
+
+
+def import_stage(context, db, roots, options):
+    """Build the stage's own art under one collection, so it can be hidden or
+    deleted without touching whatever character is being looked at."""
+    collection = bpy.data.collections.get(STAGE_COLLECTION)
+    if collection is None:
+        collection = bpy.data.collections.new(STAGE_COLLECTION)
+    if collection.name not in context.scene.collection.children:
+        context.scene.collection.children.link(collection)
+
+    previous = context.view_layer.active_layer_collection
+    layer = _layer_for(context.view_layer.layer_collection, collection)
+    if layer is not None:
+        context.view_layer.active_layer_collection = layer
+    built = 0
+    try:
+        for guid in roots:
+            prefab_file = db.load_guid(guid)
+            if prefab_file is None:
+                continue
+            report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
+            if report.mesh_objects or report.armature is not None:
+                built += 1
+    finally:
+        if previous is not None:
+            context.view_layer.active_layer_collection = previous
+    return built
+
+
+def _layer_for(layer_collection, collection):
+    if layer_collection.collection is collection:
+        return layer_collection
+    for child in layer_collection.children:
+        found = _layer_for(child, collection)
+        if found is not None:
+            return found
+    return None

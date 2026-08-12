@@ -36,7 +36,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...ruri_pybridge.session import cabmap_state
-from . import roster, scene_importer, scene_state
+from . import roster, scene_importer, scene_state, ui_scene_panel
 
 SELF_CONTAINED = scene_state.SELF_CONTAINED
 STREAMING = scene_state.STREAMING
@@ -544,6 +544,10 @@ _KINDS = (
     (STREAMING, "World",
      "The open-world maps -- import one named place of map01/map02 at a time",
      _draw_streaming),
+    (ui_scene_panel.UI_SCENE, "UI",
+     "The lit little stages an interface puts a model on -- CharInfo, "
+     "CharFormation, WeaponInfo. Load one around a character already in the scene",
+     ui_scene_panel.draw_ui_scene_tab),
 )
 _KIND_ITEMS = tuple(row[:3] for row in _KINDS)
 _KIND_DRAW = {row[0]: row[3] for row in _KINDS}
@@ -569,6 +573,7 @@ _CLASSES = (
 def register():
     filter_ui.register_spec(SCENE_FILTER_SPEC)
     filter_ui.register_spec(WORLD_FILTER_SPEC)
+    ui_scene_panel.register()
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.ruri_scene_box = PointerProperty(type=RURI_PG_scene_box)
@@ -584,5 +589,6 @@ def unregister():
     del bpy.types.Scene.ruri_scene_box
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+    ui_scene_panel.unregister()
     _published.clear()
     scene_state.reset()
