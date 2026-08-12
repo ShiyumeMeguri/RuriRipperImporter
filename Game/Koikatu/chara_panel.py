@@ -244,7 +244,7 @@ def _rebuild_anime(state):
     rows = []
     for index in matched:
         rows.append({
-            "name": "动画:{0}".format(table.cell(index, "name")),
+            "name": table.cell(index, "name"),
             "group": "{0} / {1}".format(table.cell(index, "groupName"),
                                         table.cell(index, "categoryName")),
             "row": str(index),
