@@ -29,13 +29,15 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import Game, filter_ui, prefab_importer
+    from . import Game, armature_builder, cross_game_retarget, filter_ui, prefab_importer
     from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from .RuriRipperPyBridge.session import cabmap_state
     from .RuriRipperPyBridge.unity import (bridge_asset_db, build_identity, class_registry,
                                            clip_paths, discovery)
 except ImportError:  # standalone (non-package) testing
     import Game
+    import armature_builder
+    import cross_game_retarget
     import filter_ui
     import prefab_importer
     from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
@@ -233,7 +235,12 @@ def _project_names(state):
 
 
 def _game_tabs(state):
-    return Game.active_tabs(_hook_ids(state), _project_names(state))
+    """The content tabs of the game whose browser tab is current -- one game's, not
+    every enabled game's. Each game has its own browser tab now, so drawing the union
+    would stack both games' Scene/Character tabs into one row."""
+    if state.current_game not in _enabled_game_names(state):
+        return []
+    return Game.tabs_of(state.current_game)
 
 
 def _active_tab(state):
@@ -250,19 +257,281 @@ def _active_tab(state):
 
 
 def _tab_bar(state):
-    """(key, label) for every tab currently offered: the browser, then whatever
-    the recognised games contribute."""
+    """(key, label) for every content tab currently offered: the browser, then the
+    current game's own."""
     entries = [(BROWSER_TAB_ID, BROWSER_TAB_LABEL)]
     entries.extend((tab.key, tab.label) for tab in _game_tabs(state))
     return entries
 
 
 def _active_game_name(state):
-    """THE game this session is looking at, as the upstream GameType member -- a
-    ticked hook first, else the install's own build identity (Game.active_module's
-    own rule). "" when nothing or more than one resolves."""
-    module = Game.active_module(_hook_ids(state), _project_names(state))
-    return module.game_name if module is not None else ""
+    """The game whose cabmap the browser is currently ON, as the upstream GameType
+    member -- read straight off the live cabmap_state session (which the panel keeps
+    pinned to state.current_game), so an import stamps the game it was actually
+    browsed under. "" for the nameless session (a plain un-hooked Unity build)."""
+    return cabmap_state.active_game() or ""
+
+
+# --- persistent per-game memory ----------------------------------------------
+# The scene's ``games`` entries vanish with the .blend; the folder a user picked
+# for a game must not. That memory lives in the addon preferences (persistent,
+# cross-file, cross-restart) as one entry per game, holding only the paths the
+# user chose. A tab reads it on open (so opening EndField's tab comes back with
+# the EndField folder) and writes it on every path change; closing a tab never
+# touches it.
+_ADDON_PACKAGE = __package__ or "RuriRipperImporter"
+
+
+def _prefs():
+    """The addon's AddonPreferences, or None when this module runs outside a
+    registered addon (a bare-import test harness) -- persistence then no-ops, the
+    way _register_keymaps already skips a headless run."""
+    addon = bpy.context.preferences.addons.get(_ADDON_PACKAGE)
+    return addon.preferences if addon is not None else None
+
+
+def _recall_game(prefs, game_name):
+    if prefs is None or not game_name:
+        return None
+    for entry in prefs.remembered_games:
+        if entry.game_name == game_name:
+            return entry
+    return None
+
+
+def _remember_game(prefs, game_name, game_root, cabmap_path, browsed_dir):
+    """Upsert game_name's remembered paths -- the one write into persistent memory.
+    The nameless "" draft has no game identity and is never remembered."""
+    if prefs is None or not game_name:
+        return
+    entry = _recall_game(prefs, game_name)
+    if entry is None:
+        entry = prefs.remembered_games.add()
+        entry.game_name = game_name
+    entry.game_root = game_root
+    entry.cabmap_path = cabmap_path
+    entry.browsed_dir = browsed_dir
+
+
+def _recall_into(config):
+    """Fill a freshly-opened tab's inputs from its game's remembered paths, so the
+    folder is already there instead of blank. Writes the raw config fields, not the
+    get/set view, so it never re-enters the setters or writes memory back. The
+    nameless draft has no memory; a loaded tab is live, not freshly opened."""
+    if not config.game_name or config.loaded:
+        return
+    remembered = _recall_game(_prefs(), config.game_name)
+    if remembered is None:
+        return
+    config.game_root = remembered.game_root
+    config.cabmap_path = remembered.cabmap_path
+    config.browsed_dir = remembered.browsed_dir
+
+
+def _persist_current(state):
+    """Write the current tab's chosen paths into persistent memory, so the folder is
+    remembered across files and restarts. The nameless draft remembers nothing."""
+    config = _active_config(state)
+    if config is not None:
+        _remember_game(_prefs(), config.game_name, config.game_root,
+                       config.cabmap_path, config.browsed_dir)
+
+
+# --- per-game config + current game ------------------------------------------
+# Each enabled game keeps its own game_root/cabmap_path/browse-dir/loaded in a
+# ``games`` CollectionProperty entry; the browser is "on" ONE of them at a time
+# (state.current_game), and the scalar props above are a get/set VIEW onto that
+# entry. current_game "" is the nameless session -- a build with no game hook.
+
+
+def _find_config(state, game_name):
+    for config in state.games:
+        if config.game_name == game_name:
+            return config
+    return None
+
+
+def _active_config(state):
+    """The config entry the browser is currently on, or None -- read-only, so a
+    draw/getter never mutates the collection."""
+    return _find_config(state, state.current_game)
+
+
+def _is_empty_config(config):
+    """A tab with nothing worth preserving: no root typed, no cabmap, not loaded --
+    a missing entry counts as empty too. Ticking a game hook may adopt the current
+    tab in place ONLY when it is empty like this; a tab the user has already typed a
+    root or cabmap into is never silently repurposed out from under them."""
+    return config is None or not (config.game_root or config.cabmap_path or config.loaded)
+
+
+def _ensure_game_config(state, game_name):
+    """The one place a per-game config entry (a browser tab) is created. A brand-new
+    tab is backfilled from persistent memory, so opening a game's tab brings its
+    remembered folder back instead of a blank field."""
+    config = _find_config(state, game_name)
+    if config is None:
+        config = state.games.add()
+        config.game_name = game_name
+        _recall_into(config)
+    return config
+
+
+def _ensure_active_config(state):
+    return _ensure_game_config(state, state.current_game)
+
+
+def _set_current_game(state, game):
+    """Point the browser at ``game`` (a GameType member, or "" for the nameless
+    session) and pin the cabmap_state session to match, so ROWS/search/import all
+    read that game."""
+    state.current_game = game or ""
+    cabmap_state.activate(game or None)
+
+
+def _switch_current_game(state, game, context):
+    changed = state.current_game != (game or "")
+    _set_current_game(state, game)
+    if changed:
+        _reapply_and_refresh(context)
+
+
+def _bind_current_game(state, game):
+    """Recognition just decided the current config's root IS ``game``: make that the
+    current game. When we were on the empty nameless draft, rename it in place and
+    backfill ``game``'s remembered paths; otherwise adopt/create ``game``'s own
+    entry (which _ensure_game_config backfills)."""
+    if state.current_game == game:
+        return
+    existing = _find_config(state, game)
+    source = _active_config(state)
+    if existing is None and source is not None and source.game_name == "":
+        source.game_name = game
+        _recall_into(source)
+    elif existing is None:
+        _ensure_game_config(state, game)
+    _set_current_game(state, game)
+
+
+def _sync_current_game(state):
+    """Reconcile the open tabs and the focused one with the ticked game hooks,
+    WITHOUT ever pulling focus off a tab the user is editing. Ticking/unticking a
+    game hook is exactly opening/closing its tab (the tab bar's + and x do the same
+    through here):
+
+    - A game hook just unticked closes that game's tab -- its config entry and its
+      browser session both go, since a hook nobody ticked leaves no tab behind. The
+      nameless "" draft has no hook and is never touched here.
+    - A game hook just ticked opens that game's tab: an empty nameless draft is
+      renamed to the newly enabled game in place, otherwise a fresh tab is added --
+      never stealing focus from a non-empty tab the user is on. A new tab is
+      backfilled from the game's remembered folder (see _ensure_game_config).
+    - The focused game handing off: unticking the current game hands the browser to a
+      still-open game (or the nameless session when none remains) -- its tab is gone,
+      so staying on it would draw a game that is no longer there."""
+    names = _enabled_game_names(state)
+    for stale in [config.game_name for config in state.games
+                  if config.game_name and config.game_name not in names]:
+        _drop_game_config(state, stale)
+    if state.current_game and state.current_game not in names:
+        _set_current_game(state, names[0] if names else "")
+    elif not state.current_game and names and _is_empty_config(_active_config(state)):
+        _bind_current_game(state, names[0])
+    for name in names:
+        _ensure_game_config(state, name)
+
+
+def _drop_game_config(state, game_name):
+    """Close a game's tab: remove its scene config entry and release its browser
+    session. The user's remembered folder in preferences is deliberately NOT touched
+    -- reopening the tab brings the directory straight back."""
+    for index, config in enumerate(state.games):
+        if config.game_name == game_name:
+            state.games.remove(index)
+            break
+    cabmap_state.drop(game_name or None)
+
+
+def _enabled_games(state):
+    """Every game module this session has enabled (all ticked game hooks, or the
+    recognised game when none is ticked)."""
+    return Game.active_modules(_hook_ids(state), _project_names(state))
+
+
+def _enabled_game_names(state):
+    return [module.game_name for module in _enabled_games(state)]
+
+
+def _open_game_names(state):
+    """Every open browser tab in tab order: one per game config entry, plus the
+    current game when no entry backs it yet (a brand-new session's "" draft). Always
+    at least one, so the tab metaphor is never absent."""
+    names = [config.game_name for config in state.games]
+    if state.current_game not in names:
+        names.append(state.current_game)
+    return names
+
+
+def _openable_games(state):
+    """The games the +tab menu offers: a game that ships a listable hook but has no
+    open tab yet. When every game is already tabbed the menu is just Empty Tab."""
+    open_names = {config.game_name for config in state.games}
+    return [module.game_name for module in Game.modules()
+            if module.game_name not in open_names and _newest_game_hook(state, module.game_name)]
+
+
+def _ticked_game_hooks(state, game_name):
+    """The ticked game-hook item(s) that belong to ``game_name`` -- what closing its
+    tab unticks. Empty for the nameless "" draft (it has no hook)."""
+    games = _game_hook_ids()
+    return [item for item in state.available_hooks
+            if item.selected and item.id.lower() in games
+            and Game.game_of(item.id).lower() == (game_name or "").lower()]
+
+
+def _open_tab(state, game, context):
+    """Open (or focus) ``game``'s tab and switch to it -- the +tab menu's action, and
+    the single place ticking the game's newest hook, ensuring its config, and
+    switching are done together, so the menu lands the same state a hook tick does.
+    ``game`` "" opens the nameless draft."""
+    if game:
+        hook_id = _newest_game_hook(state, game)
+        for item in state.available_hooks:
+            if item.id == hook_id:
+                item.selected = True
+        _ensure_game_config(state, game)
+    else:
+        _ensure_game_config(state, "")
+    _switch_current_game(state, game, context)
+
+
+def _close_tab(state, game, context):
+    """Close ``game``'s tab -- the x's action, the explicit "this one, gone". Untick
+    its game hook(s) so ticking and closing stay in step, then force-drop its config
+    entry and browser session even when the current folder still recognises the game
+    (the user asked for the tab gone; a plain hook untick would keep a still-recognised
+    game -- see _sync_current_game), and hand focus to a remaining tab (or the empty
+    draft when none). Persistent memory is never touched, so reopening restores the
+    folder."""
+    for item in _ticked_game_hooks(state, game):
+        item.selected = False
+    _drop_game_config(state, game)
+    _sync_current_game(state)
+    _reapply_and_refresh(context)
+
+
+def _current_game_hooks(state, game):
+    """The hook ids the bridge should Initialize with for ``game``: that game's own
+    ticked game-hook(s) PLUS every ticked non-game (AR_*) feature hook. NOT every
+    ticked game hook -- the bridge decodes one game at a time, and the others are
+    enabled for their own sessions, not this decode."""
+    games = _game_hook_ids()
+    non_game = [item.id for item in state.available_hooks
+                if item.selected and item.id.lower() not in games]
+    mine = [item.id for item in state.available_hooks
+            if item.selected and item.id.lower() in games
+            and Game.game_of(item.id).lower() == (game or "").lower()]
+    return mine + non_game
 
 
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
@@ -284,13 +553,13 @@ def _auto_default_cabmap_filename(state):
     the next time the user clicks its folder icon (that browser seeds its filename box from the
     property's CURRENT string value, so the default has to already be in the property before the
     popup opens, not just patched in at Build time). A completely empty cabmap_path is left
-    alone here -- there's no folder yet to build a default INTO (see _on_game_root_change, which
+    alone here -- there's no folder yet to build a default INTO (see _on_game_root_set, which
     seeds one first). Called from both that callback and RURI_OT_refresh_hooks (refreshes the
     filename once the real hook selection is known)."""
     raw = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
     if raw and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
         state.cabmap_path = os.path.join(
-            raw, _default_cabmap_filename(_hook_ids(state)))
+            raw, _default_cabmap_filename(_current_game_hooks(state, state.current_game)))
 
 
 def _resolve_build_output_path(state):
@@ -370,57 +639,52 @@ def _hook_version(hook_id):
     return tuple(parts)
 
 
-def _apply_recognised_game(state):
-    """Tick the recognised game's newest hook and untick every other game's.
-
-    Pointing the panel at an install IS the statement of which game this session
-    is about, so the hook follows the folder rather than a checkbox the user has
-    to remember. The newest version is taken: a hook id carries its game AND its
-    version, the folder only says the game, and the newest is the one an
-    up-to-date install wants. Nothing is disabled in the picker -- tick a
-    different one by hand and that choice stands, since this only runs when the
-    root changes or the list is refreshed.
-
-    A root that names a game we have no module for CLEARS the game hooks instead:
-    the previous folder's answer is not this folder's, and leaving it ticked is
-    how a session ends up offering one game's tabs over another game's cabmap.
-    Nothing is locked then, so any hook can still be ticked by hand. An EMPTY
-    root says nothing at all and is left alone."""
+def _newest_game_hook(state, game_name):
+    """The id of ``game_name``'s newest-version game hook among the listed hooks, or
+    "" when the game ships none. The single place "which hook a game wants" is
+    decided -- recognition and the +tab menu both read it, so newest-selection never
+    forks into two rules that could drift apart."""
     games = _game_hook_ids()
+    mine = [item.id for item in state.available_hooks
+            if item.id.lower() in games and Game.game_of(item.id).lower() == game_name.lower()]
+    return max(mine, key=_hook_version) if mine else ""
+
+
+def _apply_recognised_game(state):
+    """Tick the recognised game's newest hook, ENABLING that game.
+
+    Pointing a config's root at an install IS the statement of which game it is, so
+    the hook follows the folder rather than a checkbox the user has to remember. The
+    newest version is taken (see _newest_game_hook): a hook id carries its game AND
+    its version, the folder only says the game, and the newest is the one an
+    up-to-date install wants. Other games stay enabled -- each has its own config and
+    session now, so recognising this folder as one game must not disable another the
+    user set up. An unrecognised or empty root ticks nothing and leaves the picker
+    alone. Returns the newest hook id, or ""."""
     game = _recognised_game(state)
     if game is None:
-        if state.game_root:
-            for item in state.available_hooks:
-                if item.id.lower() in games:
-                    item.selected = False
         return ""
-    mine = [item.id for item in state.available_hooks
-            if item.id.lower() in games and Game.game_of(item.id).lower() == game.game_name.lower()]
-    if not mine:
+    newest = _newest_game_hook(state, game.game_name)
+    if not newest:
         return ""
-    newest = max(mine, key=_hook_version)
     for item in state.available_hooks:
-        if item.id.lower() not in games:
-            continue
-        item.selected = item.id == newest
+        if item.id == newest:
+            item.selected = True
     return newest
 
 
 def _on_hook_tick(self, context):
-    """Ticking a GAME unticks whichever game was ticked before.
-
-    Game hooks are mutually exclusive upstream (RuriHook.ApplyHooks drops the
-    extras), so a picker that lets two be ticked is a picker showing a state the
-    host will not honour -- and it was showing two games' tabs over one cabmap.
-    AR_* feature hooks are about no game and keep combining freely."""
-    games = _game_hook_ids()
-    if not self.selected or self.id.lower() not in games:
-        return
-    game = Game.game_of(self.id).lower()
-    for other in context.scene.ruri_cabmap.available_hooks:
-        if (other.selected and other.id != self.id and other.id.lower() in games
-                and Game.game_of(other.id).lower() != game):
-            other.selected = False
+    """Ticking/unticking a GAME hook opens/closes that game's tab -- several games can
+    be on at once, each with its own cabmap session (see cabmap_state); the upstream
+    still decodes one at a time, which switching the current game handles. All the
+    reconcile (open the newly enabled game's tab, close the unticked one's tab, hand
+    focus off) is _sync_current_game; the browser is only re-run when the focused game
+    actually changed. AR_* feature hooks are about no game and combine freely."""
+    state = context.scene.ruri_cabmap
+    before = state.current_game
+    _sync_current_game(state)
+    if state.current_game != before:
+        _reapply_and_refresh(context)
 
 
 class RURI_PG_hook_entry(bpy.types.PropertyGroup):
@@ -428,8 +692,9 @@ class RURI_PG_hook_entry(bpy.types.PropertyGroup):
     ListAvailableHooks() -- see RURI_OT_refresh_hooks. `selected` drives the checkbox in the
     N-panel's Hooks box, and is also what reveals that game's own tabs (see Game).
 
-    One GAME at a time (see _on_hook_tick), any number of AR_* features alongside it --
-    Initialize() takes the whole set."""
+    Several game hooks may be ticked at once (each enables its own game/session), plus
+    any number of AR_* features -- the bridge Initialize() for a decode takes one game's
+    hooks at a time (see _current_game_hooks)."""
     id: StringProperty()
     selected: BoolProperty(default=False, update=_on_hook_tick)
 
@@ -454,35 +719,176 @@ def _format_size(num_bytes):
     return f"~{size:.1f}GB"
 
 
-def _on_game_root_change(self, context):
-    """Seed Cabmap with a default file path the first time Game Root is set, so Blender's
-    file-browser popup (opened from Cabmap's folder icon) already has a filename pre-filled --
-    that popup seeds its filename box from the property's current string, it can't be told a
-    default separately. Only fires when Cabmap is still empty -- never overwrites a path the
-    user already picked or typed."""
-    if not self.cabmap_path and self.game_root:
-        self.cabmap_path = self.game_root
-        _auto_default_cabmap_filename(self)
-    # A new folder is a new answer to "which game is this", so the hook follows it.
-    _PROJECT_NAMES.pop(self.game_root or "", None)
-    if _apply_recognised_game(self):
-        _auto_default_cabmap_filename(self)
+def _get_game_root(self):
+    config = _active_config(self)
+    return config.game_root if config is not None else ""
+
+
+def _set_game_root(self, value):
+    # Snapshot this tab's values from BEFORE the edit: if the folder turns out to be
+    # a DIFFERENT game than the tab it was typed on, the just-typed value moves to
+    # that game's tab and this one is put back to exactly what it showed (see
+    # _bind_recognised_root), so the input is never stranded on the wrong tab.
+    config = _ensure_active_config(self)
+    prior_root = config.game_root
+    prior_cabmap = config.cabmap_path
+    config.game_root = value
+    _on_game_root_set(self, prior_root, prior_cabmap)
+
+
+def _get_cabmap_path(self):
+    config = _active_config(self)
+    return config.cabmap_path if config is not None else ""
+
+
+def _set_cabmap_path(self, value):
+    _ensure_active_config(self).cabmap_path = value
+    _persist_current(self)
+
+
+def _get_browsed_dir(self):
+    config = _active_config(self)
+    return config.browsed_dir if config is not None else ""
+
+
+def _set_browsed_dir(self, value):
+    _ensure_active_config(self).browsed_dir = value
+    _persist_current(self)
+
+
+def _get_loaded(self):
+    config = _active_config(self)
+    return config.loaded if config is not None else False
+
+
+def _set_loaded(self, value):
+    _ensure_active_config(self).loaded = value
+
+
+def _prune_empty_config(state, game_name):
+    """Drop ``game_name``'s entry when a migration left it empty (no root, no cabmap,
+    not loaded) -- so no ghost tab lingers behind a value that moved away. Safe:
+    _ensure_active_config recreates it the moment the browser lands back on that game."""
+    for index, config in enumerate(state.games):
+        if config.game_name == game_name:
+            if _is_empty_config(config):
+                state.games.remove(index)
+            return
+
+
+def _bind_recognised_root(state, game, prior_root, prior_cabmap):
+    """The just-typed Game Root was recognised as ``game``: land it on game's own tab
+    and switch there, never leaving the value on the tab it was typed into.
+
+    - Typed on the nameless "" draft and game has no tab yet: rename the draft to game
+      in place -- the value is already on it, nothing to move.
+    - Otherwise: carry the typed root over to game's tab (created if needed) and put
+      the source tab back to what it showed before this edit. A tab already marked
+      loaded keeps its own root/cabmap untouched (loaded tabs are frozen).
+
+    The Cabmap default is seeded by the caller AFTER this, on the now-current tab, so
+    its filename is built from the recognised game's own hook(s) rather than whichever
+    tab happened to be current when the keystroke landed."""
+    if state.current_game == game:
+        return
+    source_name = state.current_game
+    existing = _find_config(state, game)
+    if existing is None and source_name == "":
+        _active_config(state).game_name = game
+        _set_current_game(state, game)
+        return
+    # A separate tab: move the typed root there, restore the source, switch. Read the
+    # value BEFORE state.games.add(), which reallocates and invalidates every existing
+    # PropertyGroup reference -- source/target are re-found by name afterwards.
+    new_root = _active_config(state).game_root
+    if existing is None:
+        state.games.add().game_name = game
+    target = _find_config(state, game)
+    source = _find_config(state, source_name)
+    if source is not None:
+        source.game_root = prior_root
+        source.cabmap_path = prior_cabmap
+    if target is not None and not target.loaded:
+        target.game_root = new_root
+    _set_current_game(state, game)
+    _prune_empty_config(state, source_name)
+
+
+def _seed_cabmap_default(state):
+    """Fill the current tab's Cabmap with a default the first time it has a root but no
+    cabmap yet: the folder, then _auto_default_cabmap_filename appends a filename built
+    from the current game's hook(s) -- so Blender's file-browser popup (opened from the
+    Cabmap folder icon) already has a filename pre-filled, since that popup seeds its
+    filename box from the property's current string and cannot be told a default
+    separately. A tab that already carries a cabmap (typed, or a loaded map) is left
+    alone, and a loaded tab is never touched at all."""
+    config = _active_config(state)
+    if config is None or config.loaded:
+        return
+    if not config.cabmap_path and config.game_root:
+        config.cabmap_path = config.game_root
+    _auto_default_cabmap_filename(state)
+
+
+def _on_game_root_set(state, prior_root, prior_cabmap):
+    """Runs at the tail of Game Root's setter (a get/set property gets no separate
+    update callback). Recognise which game the just-typed folder is, put the value on
+    that game's tab, then seed a default Cabmap path on the resulting tab.
+
+    Recognition runs BEFORE any cabmap seeding: a value recognised as a different game
+    moves to that game's tab first (prior_root/prior_cabmap restore the source tab),
+    and the seeded filename is then built from the recognised game's hook(s) rather
+    than whichever tab happened to be current when the folder was typed. All binding
+    and value migration is explicit here -- _apply_recognised_game ticking the hook
+    re-enters _on_hook_tick, which opens the recognised game's tab (an empty config
+    entry) without stealing focus; _bind_recognised_root then adopts that entry and
+    carries the just-typed value onto it. The final tab is persisted so the folder is
+    remembered next session."""
+    config = _active_config(state)
+    _PROJECT_NAMES.pop((config.game_root if config is not None else "") or "", None)
+    hook_id = _apply_recognised_game(state)
+    if hook_id:
+        _bind_recognised_root(state, Game.game_of(hook_id), prior_root, prior_cabmap)
+    _seed_cabmap_default(state)
+    _persist_current(state)
+
+
+class RURI_PG_game_config(bpy.types.PropertyGroup):
+    """One enabled game's own browser inputs. Several games can be set up at once
+    (see RURI_PG_cabmap.games); the scalar game_root/cabmap_path/browsed_dir/loaded
+    on RURI_PG_cabmap are a get/set VIEW onto whichever of these the browser is
+    currently on (state.current_game). game_name is the upstream GameType member, or
+    "" for the nameless session a plain un-hooked Unity build browses under."""
+    game_name: StringProperty()
+    game_root: StringProperty()
+    cabmap_path: StringProperty()
+    browsed_dir: StringProperty()
+    loaded: BoolProperty(default=False)
 
 
 class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     # Which filter spec this state belongs to -- see filter_ui.FilterStateMixin.
     FILTER_SPEC_KEY = BROWSER_TAB_ID
 
+    # Per-game inputs live in `games`, one entry each; the four scalars below
+    # (game_root/cabmap_path/browsed_dir/loaded) are a get/set VIEW onto the entry
+    # for current_game, so every operator that reads state.game_root / state.loaded
+    # keeps working unchanged while each game keeps its own. current_game "" is the
+    # nameless session (see cabmap_state).
+    games: CollectionProperty(type=RURI_PG_game_config)
+    current_game: StringProperty(default="")
+
     game_root: StringProperty(name="Game Root", subtype="DIR_PATH",
                               description="The game's install root directory",
-                              update=_on_game_root_change)
+                              get=_get_game_root, set=_set_game_root)
     cabmap_path: StringProperty(name="Cabmap", subtype="FILE_PATH",
                                 description="Existing cabmap FILE to load, or output path to build one -- "
-                                            "defaults to a filename built from the checked hook(s), editable")
+                                            "defaults to a filename built from the checked hook(s), editable",
+                                get=_get_cabmap_path, set=_set_cabmap_path)
     available_hooks: CollectionProperty(type=RURI_PG_hook_entry)
     available_hooks_active_index: IntProperty()
     hooks_status: StringProperty(default="Click Refresh to list hooks compiled into Ruri.RipperHook.dll.")
-    loaded: BoolProperty(default=False)
+    loaded: BoolProperty(get=_get_loaded, set=_set_loaded)
     # A plain string, not an EnumProperty: the tab set is whatever the enabled
     # games contribute, and Blender's dynamic-enum items callback stores an index
     # into a list that changes the moment a hook is ticked -- the stored value
@@ -494,8 +900,9 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     # The virtual folder the browser is in, as cabmap_state.dir_to_key's flat string.
     # Lives on the Scene (so it survives a .blend save) rather than in cabmap_state,
     # whose CURRENT_DIR is live session state -- reloading a cabmap then lands back on
-    # this folder instead of dumping the user at the root every time.
-    browsed_dir: StringProperty(default="")
+    # this folder instead of dumping the user at the root every time. Per game (a
+    # get/set view onto the active config), so each game reopens where it was left.
+    browsed_dir: StringProperty(get=_get_browsed_dir, set=_set_browsed_dir)
     status: StringProperty(default="No cabmap loaded.")
     window: CollectionProperty(type=RURI_PG_cabmap_row)
     active_index: IntProperty()
@@ -598,6 +1005,9 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
         # _apply_recognised_game) -- so a fresh session starts with nothing
         # ticked and picks up a game the moment Game Root names one.
         selected = _apply_recognised_game(state)
+        if selected:
+            _bind_current_game(state, Game.game_of(selected))
+        _sync_current_game(state)
         state.hooks_status = (
             "No hooks found in Ruri.RipperHook.dll." if not hook_ids
             else f"{len(hook_ids)} hook(s) available · {selected} (from the game folder)."
@@ -638,12 +1048,14 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, f"Can't create output folder '{out_dir}': {exc}")
             return {"CANCELLED"}
         try:
-            bridge = cabmap_state.ensure_bridge(_hook_ids(state))
+            game = state.current_game or None
+            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, game))
             code = bridge.build_cab_map(root, out)
             if code != 0:
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
                 return {"CANCELLED"}
-            bridge.load_cab_map(out)
+            bridge.load_cab_map(out, game=game)
+            cabmap_state.activate(game)
             cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
             state.loaded = True
@@ -671,11 +1083,13 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, "Pick a valid cabmap file first.")
             return {"CANCELLED"}
         try:
-            bridge = cabmap_state.ensure_bridge(_hook_ids(state))
-            bridge.load_cab_map(path)
-            # Land back on the folder the user was browsing (persisted on the scene),
-            # not the root -- browse_dir falls back to the root if this map has no
-            # such folder, so a key left over from a different game is harmless.
+            game = state.current_game or None
+            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, game))
+            bridge.load_cab_map(path, game=game)
+            cabmap_state.activate(game)
+            # Land back on the folder the user was browsing (persisted per game on the
+            # scene), not the root -- browse_dir falls back to the root if this map has
+            # no such folder, so a key left over from a different game is harmless.
             cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
             state.loaded = True
@@ -703,9 +1117,81 @@ class RURI_OT_select_tab(bpy.types.Operator):
         return tab.description if tab is not None else cls.bl_label
 
     def execute(self, context):
-        context.scene.ruri_cabmap.active_tab = self.tab
+        state = context.scene.ruri_cabmap
+        state.active_tab = self.tab
+        # A game tab is ABOUT its game, and it reads the live cabmap_state session
+        # -- so opening one also makes that game the current one, or it would draw
+        # over another game's rows.
+        if self.tab != BROWSER_TAB_ID:
+            tab = Game.tab_by_key(self.tab)
+            if tab is not None and tab.owner is not None:
+                _switch_current_game(state, tab.owner.game_name, context)
         _redraw_all(context)
         return {"FINISHED"}
+
+
+class RURI_OT_select_game(bpy.types.Operator):
+    """Click a game tab in the always-visible tab bar: point the browser (and the
+    cabmap_state session behind it) at that game's cabmap. ``game`` "" is the nameless
+    draft tab. Opening a game's own content tab (StreamingScene/Character) switches
+    game the same way (see RURI_OT_select_tab); this is the tab bar's own switch."""
+    bl_idname = "ruri.select_game"
+    bl_label = "Game"
+    bl_options = {"INTERNAL"}
+    game: StringProperty()
+
+    def execute(self, context):
+        _switch_current_game(context.scene.ruri_cabmap, self.game, context)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_open_tab(bpy.types.Operator):
+    """New-tab menu action: open ``game``'s browser tab (ticking its newest hook,
+    creating its config, backfilling its remembered folder) and switch to it, or open
+    a blank nameless draft when ``game`` is ""."""
+    bl_idname = "ruri.open_tab"
+    bl_label = "Open Tab"
+    bl_options = {"INTERNAL"}
+    game: StringProperty()
+
+    def execute(self, context):
+        _open_tab(context.scene.ruri_cabmap, self.game, context)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_close_tab(bpy.types.Operator):
+    """The tab's x button: close ``game``'s tab -- drop its config entry and browser
+    session, untick its hook, hand focus to a remaining tab (or the empty draft when
+    none). The remembered folder is kept, so reopening the tab restores it."""
+    bl_idname = "ruri.close_tab"
+    bl_label = "Close Tab"
+    bl_options = {"INTERNAL"}
+    game: StringProperty()
+
+    def execute(self, context):
+        _close_tab(context.scene.ruri_cabmap, self.game, context)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_MT_new_tab(bpy.types.Menu):
+    """The + button's menu: every game that ships a hook but has no open tab yet, plus
+    Empty Tab (a blank draft whose folder, once typed, names its own game). When every
+    game already has a tab the menu is just Empty Tab."""
+    bl_idname = "RURI_MT_new_tab"
+    bl_label = "New Tab"
+
+    def draw(self, context):
+        layout = self.layout
+        state = context.scene.ruri_cabmap
+        openable = _openable_games(state)
+        for game_name in openable:
+            layout.operator(RURI_OT_open_tab.bl_idname, text=game_name).game = game_name
+        if openable:
+            layout.separator()
+        layout.operator(RURI_OT_open_tab.bl_idname, text="Empty Tab", icon="FILE_BLANK").game = ""
 
 
 class RURI_OT_cabmap_sort(bpy.types.Operator):
@@ -1026,11 +1512,11 @@ class RURI_OT_cabmap_click(bpy.types.Operator):
                 selection.discard(item.cab)
             else:
                 selection.add(item.cab)
-            cabmap_state.SELECT_ANCHOR = rows_index
+            cabmap_state.set_select_anchor(rows_index)
         else:
             selection.clear()
             selection.add(item.cab)
-            cabmap_state.SELECT_ANCHOR = rows_index
+            cabmap_state.set_select_anchor(rows_index)
 
         state.active_index = self.index
         _sync_window_selection(state)
@@ -1298,43 +1784,18 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         return {"CANCELLED"}
     maps = maps_or_error
 
+
     # A muscle-encoded clip solves inside build_selected_animations, against the avatar
     # document stamped on this very armature -- no export scope, no co-seeding, nothing
     # avatar-related to do here.
 
-    # Compatibility gate: at least one transform curve must resolve to a bone
-    # of the chosen armature (string path or CRC32-of-path match). A clip for
-    # a completely different rig fails loudly instead of importing a no-op.
-    path_to_bone = maps["path_to_bone"]
-    any_ratio = 0.0
-    checked_any = False
-    for guid in clip_guids:
-        # The single clip surface (bridge blob or disk raw-text parser); a
-        # clip with no data can't be checked here and is flagged when built.
-        # A malformed .anim raises -- this is only a heuristic compatibility
-        # gate, so skip it here too; the real per-clip warning fires at build.
-        try:
-            clip = db.clip_curves(guid)
-        except ValueError:
-            continue
-        if clip is None:
-            continue
-        ratio, total = clip_paths.clip_path_match_ratio(clip, path_to_bone)
-        if total:
-            checked_any = True
-            any_ratio = max(any_ratio, ratio)
-    if checked_any and any_ratio == 0.0:
-        op.report({"ERROR"}, f"None of the clip's curve paths match armature "
-                             f"'{arm_obj.name}' (wrong character?) -- select the right "
-                             f"skeleton and retry.")
-        return {"CANCELLED"}
-    if checked_any and any_ratio < 0.5:
-        op.report({"WARNING"}, f"Only {any_ratio:.0%} of curve paths match armature "
-                               f"'{arm_obj.name}' -- importing anyway.")
-
     try:
-        built, warnings = prefab_importer.build_selected_animations(
-            db, arm_obj, maps, None, clip_guids, state.as_options())
+        built, warnings = cross_game_retarget.load_clips_onto(
+            context, cabmap_state.active_game(), clip_cab, clip_guids, db, arm_obj,
+            maps, state.as_options())
+    except cross_game_retarget.CrossGameRetargetError as exc:
+        op.report({"ERROR"}, str(exc))
+        return {"CANCELLED"}
     except Exception as exc:
         _report_exception(op, "Animation import failed", exc)
         return {"CANCELLED"}
@@ -1835,6 +2296,17 @@ class RURI_PT_cabmap(bpy.types.Panel):
         else:
             hooks_box.template_list(RURI_UL_hooks.bl_idname, "", state, "available_hooks",
                                     state, "available_hooks_active_index", rows=6)
+
+        # Above the Game Root/Cabmap fields (which belong to the current tab) and on
+        # `top`, not `gated`, so tabs open/switch/close before any cabmap is loaded.
+        tab_bar = top.row(align=True)
+        for game_name in _open_game_names(state):
+            one_tab = tab_bar.row(align=True)
+            one_tab.operator(RURI_OT_select_game.bl_idname, text=game_name or "New Tab",
+                             depress=(game_name == state.current_game)).game = game_name
+            one_tab.operator(RURI_OT_close_tab.bl_idname, text="", icon="X").game = game_name
+        tab_bar.menu(RURI_MT_new_tab.bl_idname, text="", icon="ADD")
+
         top.prop(state, "game_root")
         top.prop(state, "cabmap_path")
         row = top.row(align=True)
@@ -2106,9 +2578,12 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 return {"CANCELLED"}
 
         try:
-            built, build_warnings = prefab_importer.build_selected_animations(
-                build_state["db"], arm_obj, build_state["maps"],
-                build_state["path_to_meshobjects"], guids, state.as_options())
+            built, build_warnings = cross_game_retarget.load_clips_onto(
+                context, cabmap_state.active_game(), None, guids, build_state["db"],
+                arm_obj, build_state["maps"], state.as_options())
+        except cross_game_retarget.CrossGameRetargetError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
         except Exception as exc:
             _report_exception(self, "Animation import failed", exc)
             return {"CANCELLED"}
@@ -2186,12 +2661,13 @@ class RURI_PT_animation_browser(bpy.types.Panel):
 
 
 _CLASSES = (
-    # PropertyGroups first, and RURI_PG_filter_rule/RURI_PG_cabmap_row specifically
-    # before RURI_PG_cabmap -- Blender requires a CollectionProperty's target type
-    # to already be registered.
+    # PropertyGroups first, and RURI_PG_filter_rule/RURI_PG_cabmap_row/
+    # RURI_PG_game_config specifically before RURI_PG_cabmap -- Blender requires a
+    # CollectionProperty's target type to already be registered.
     RURI_PG_cabmap_row,
     RURI_PG_hook_entry,
     RURI_PG_animation_clip,
+    RURI_PG_game_config,
     RURI_PG_cabmap,
     RURI_UL_hooks,
     RURI_UL_cabmap,
@@ -2210,6 +2686,10 @@ _CLASSES = (
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
     RURI_OT_select_tab,
+    RURI_OT_select_game,
+    RURI_OT_open_tab,
+    RURI_OT_close_tab,
+    RURI_MT_new_tab,
     RURI_OT_cabmap_sort,
     RURI_OT_cabmap_import_with_dependents,
     RURI_OT_import_selected,

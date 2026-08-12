@@ -21,7 +21,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
                        IntProperty, PointerProperty, StringProperty)
 
-from ... import filter_ui, prefab_importer
+from ... import cross_game_retarget, filter_ui, prefab_importer
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry, discovery
 from . import chara_importer, datasets, face_importer
@@ -201,8 +201,11 @@ def _catalog_row(state):
 
 # ── the face ────────────────────────────────────────────────────────────────
 
-def _rig(context, state):
-    return chara_importer.find_armature(context, state.armature_name)
+def _rig(context):
+    """The rig to act on: whatever the user has selected. The armature carries its own
+    identity (rig/avatar/game stamps), so pointing at it IS the whole instruction -- a
+    name field would be a second way to say the same thing."""
+    return prefab_importer.find_target_armature(context)
 
 
 def _expressions(personality):
@@ -299,7 +302,6 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     slot: EnumProperty(name="Slot", items=_slot_items)
     item: EnumProperty(name="Item", items=_item_items)
 
-    armature_name: StringProperty(name="Rig")
     personality: IntProperty(name="Personality", default=0, min=-100, max=100,
                              description="Whose named expressions to list -- the character's own "
                                          "personality number, as her card states it")
@@ -405,7 +407,6 @@ class RURI_OT_kk_build(bpy.types.Operator):
             self.report({"WARNING"}, "Nothing built -- {0}".format(report.summary()))
             return {"CANCELLED"}
 
-        state.armature_name = report.armature.name
         state.personality = int(_personality_of(state))
         for message in report.warnings[:5]:
             self.report({"WARNING"}, message)
@@ -473,7 +474,6 @@ class RURI_OT_kk_build_parts(bpy.types.Operator):
         if report.armature is None:
             self.report({"WARNING"}, "Nothing built -- {0}".format(report.summary()))
             return {"CANCELLED"}
-        state.armature_name = report.armature.name
         self.report({"INFO"}, "{0}: {1}".format(row["name"], report.summary()))
         return {"FINISHED"}
 
@@ -500,11 +500,11 @@ class RURI_OT_kk_face_apply(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return bool(face_importer.head_of(_rig(context, context.scene.ruri_kk_chara))[0])
+        return bool(face_importer.head_of(_rig(context))[0])
 
     def execute(self, context):
         state = context.scene.ruri_kk_chara
-        armature = _rig(context, state)
+        armature = _rig(context)
         table = face_importer.table(armature)
         if not table:
             self.report({"WARNING"}, "No character with a face table is selected.")
@@ -534,10 +534,10 @@ class RURI_OT_kk_face_clear(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return bool(face_importer.head_of(_rig(context, context.scene.ruri_kk_chara))[0])
+        return bool(face_importer.head_of(_rig(context))[0])
 
     def execute(self, context):
-        armature = _rig(context, context.scene.ruri_kk_chara)
+        armature = _rig(context)
         face_importer.clear(armature, face_importer.table(armature))
         return {"FINISHED"}
 
@@ -588,7 +588,7 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
     def execute(self, context):
         state = context.scene.ruri_kk_chara
         row = _selected_animation(context.scene.ruri_kk_anime)
-        armature = _rig(context, state)
+        armature = _rig(context)
         if armature is None:
             self.report({"WARNING"}, "Select the character's armature first.")
             return {"CANCELLED"}
@@ -612,13 +612,16 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
         if not wanted:
             self.report({"WARNING"}, "No clip named '{0}' in {1}.".format(row["clip"], row["bundle"]))
             return {"CANCELLED"}
-        maps = prefab_importer.maps_from_stamped_armature(armature)
-        if maps is None:
-            self.report({"WARNING"}, "'{0}' carries no Unity rig identity -- rebuild the character "
-                                     "with this add-on first.".format(armature.name))
+        try:
+            built, warnings = cross_game_retarget.load_clips_onto(
+                context, cabmap_state.active_game(), cabs[0], wanted, db, armature,
+                None, options)
+        except cross_game_retarget.CrossGameRetargetError as exc:
+            self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        built, warnings = prefab_importer.build_selected_animations(
-            db, armature, maps, {}, wanted, options)
+        except Exception as exc:
+            _report_exception(self, "Animation import failed", exc)
+            return {"CANCELLED"}
         for message in warnings[:5]:
             self.report({"WARNING"}, message)
         self.report({"INFO"}, "{0}: {1} action(s).".format(row["name"], built))
@@ -688,9 +691,8 @@ def _draw_parts(layout, context, state):
 
 
 def _draw_face(layout, context, state):
-    armature = _rig(context, state)
+    armature = _rig(context)
     head = layout.row(align=True)
-    head.prop_search(state, "armature_name", bpy.data, "objects", text="Rig")
 
     table = face_importer.table(armature)
     if not table:
@@ -731,7 +733,6 @@ def _draw_anime(layout, context, state):
         box = actions.box()
         box.label(text="{0}  ->  {1}".format(row["bundle"], row["asset"]))
         box.label(text="clip: {0}".format(row["clip"] or "(every clip in the controller)"))
-    actions.prop_search(state, "armature_name", bpy.data, "objects", text="Rig")
     actions.operator(RURI_OT_kk_anime_import.bl_idname, icon="ANIM_DATA")
 
 
