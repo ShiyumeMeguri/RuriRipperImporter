@@ -53,6 +53,28 @@ def unregister_graph_provider(provider):
         GRAPH_PROVIDERS.remove(provider)
 
 
+# Vertex stages, same contract as GRAPH_PROVIDERS: each generated shader module
+# registers its own ``apply_vertex_stage(objects=None, camera=None) -> int`` on
+# register() and removes it on unregister(). Every stage only touches materials
+# and modifiers it owns, so running all of them is order-independent. Consumers
+# call apply_vertex_stages() -- never a module by name.
+VERTEX_STAGES = []
+
+
+def register_vertex_stage(stage):
+    if stage not in VERTEX_STAGES:
+        VERTEX_STAGES.append(stage)
+
+
+def unregister_vertex_stage(stage):
+    if stage in VERTEX_STAGES:
+        VERTEX_STAGES.remove(stage)
+
+
+def apply_vertex_stages(objects=None, camera=None):
+    return sum(stage(objects=objects, camera=camera) for stage in VERTEX_STAGES)
+
+
 def _image_from_texture_bytes(data, name):
     """Load an exported texture's raw bytes (produced by AssetRipper's own
     TextureConverter, so no compressed/mipmap formats ever reach here) into a
