@@ -37,7 +37,9 @@ CAST_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
     apply=lambda context: _rebuild_cast(context.scene.ruri_kk_chara)))
 
 ANIME_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatu:anime", fields=(("name", "Name"), ("groupName", "Group"), ("bundle", "Bundle")),
+    key="Koikatu:anime",
+    fields=(("name", "Name"), ("groupName", "Group"), ("categoryName", "Position"),
+            ("clip", "Clip"), ("bundle", "Bundle")),
     state_for=lambda context: context.scene.ruri_kk_anime,
     apply=lambda context: _rebuild_anime(context.scene.ruri_kk_anime)))
 
@@ -242,13 +244,13 @@ def _rebuild_anime(state):
     rows = []
     for index in matched:
         rows.append({
-            "name": table.cell(index, "name"),
+            "name": "动画:{0}".format(table.cell(index, "name")),
             "group": "{0} / {1}".format(table.cell(index, "groupName"),
                                         table.cell(index, "categoryName")),
             "row": str(index),
-            "bundle": table.cell(index, "bundle"),
+            "clip": table.cell(index, "clip"),
         })
-    _grouped(state, rows, "name", "group", "row", "bundle")
+    _grouped(state, rows, "name", "group", "row", "clip")
 
 
 def _on_anime_edit(self, context):
@@ -719,10 +721,25 @@ def _draw_face(layout, context, state):
     actions.operator(RURI_OT_kk_face_clear.bl_idname, icon="LOOP_BACK")
 
 
+class RURI_MT_kk_anime_filter(bpy.types.Menu):
+    bl_idname = "RURI_MT_kk_anime_filter"
+    bl_label = "Filter By Selected Row"
+
+    def draw(self, context):
+        layout = self.layout
+        row = _selected_animation(context.scene.ruri_kk_anime)
+        if row is None:
+            layout.label(text="No animation selected", icon="INFO")
+            return
+        filter_ui.draw_quick_filter_menu(layout, ANIME_FILTER_SPEC,
+                                         lambda field: str(row.get(field, "")))
+
+
 def _draw_anime(layout, context, state):
     anime = context.scene.ruri_kk_anime
-    filter_ui.draw_search_row(layout, anime,
-                              extra_operator=(RURI_OT_kk_anime_refresh.bl_idname, "FILE_REFRESH"))
+    search = filter_ui.draw_search_row(
+        layout, anime, extra_operator=(RURI_OT_kk_anime_refresh.bl_idname, "FILE_REFRESH"))
+    search.menu(RURI_MT_kk_anime_filter.bl_idname, text="", icon="COLLAPSEMENU")
     layout.template_list(RURI_UL_kk_list.bl_idname, "anime", anime, "entries",
                          anime, "active_index", rows=10)
 
@@ -747,6 +764,7 @@ def draw_character_tab(layout, context):
 
 
 _CLASSES = (
+    RURI_MT_kk_anime_filter,
     RURI_PG_kk_entry,
     RURI_PG_kk_chara,
     RURI_PG_kk_anime,
