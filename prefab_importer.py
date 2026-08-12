@@ -13,7 +13,7 @@ import bpy
 try:
     from . import (armature_builder, coordinate, animation_builder,
                    material_builder, mesh_builder)
-    from .ruri_pybridge.unity import (asset_db, clip_curves,
+    from .RuriRipperPyBridge.unity import (asset_db, clip_curves,
                                       clip_paths as clip_repair, discovery,
                                       mesh_decoder, prefab as prefab_scan, skinning)
 except ImportError:  # standalone (non-package) testing
@@ -22,7 +22,7 @@ except ImportError:  # standalone (non-package) testing
     import animation_builder
     import material_builder
     import mesh_builder
-    from ruri_pybridge.unity import (asset_db, clip_curves,
+    from RuriRipperPyBridge.unity import (asset_db, clip_curves,
                                      clip_paths as clip_repair, discovery,
                                      mesh_decoder, prefab as prefab_scan, skinning)
 
@@ -259,7 +259,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
 
     # Which renderers actually draw -- LODGroup levels, ShadowsOnly proxies,
     # disabled/inactive GameObjects and static-batch windows are all decided by
-    # the shared rules (ruri_pybridge.unity.prefab), so this add-on and the
+    # the shared rules (RuriRipperPyBridge.unity.prefab), so this add-on and the
     # Painter plugin cannot disagree about what a prefab contains.
     stats = prefab_scan.SkipStats()
     for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats):

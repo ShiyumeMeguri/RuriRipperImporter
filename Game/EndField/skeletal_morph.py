@@ -19,7 +19,7 @@ Channel names are NOT enumerated here.  Whatever ``_*Curve*`` / ``_*Value*``
 keys an asset carries become its channels, so a game update that adds one
 arrives as data.  ``channel_label`` derives the display name from the key.
 
-Host-agnostic on purpose (same rule as the rest of ruri_pybridge): no bpy, no
+Host-agnostic on purpose (same rule as the rest of RuriRipperPyBridge): no bpy, no
 Qt.  Curves are ``clip_curves.Channel`` objects, so a host samples morph
 weights through exactly the same vectorized Hermite evaluator it already uses
 for transform curves.
@@ -32,7 +32,7 @@ import zlib
 
 import numpy as np
 
-from ...ruri_pybridge.unity import clip_curves
+from ...RuriRipperPyBridge.unity import clip_curves
 
 CTRL_KEY = "_ctrlName"
 CURVE_KEY = "_curve"

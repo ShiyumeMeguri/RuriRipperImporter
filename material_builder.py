@@ -3,7 +3,7 @@
 READING the .mat -- Unity's three property-table serialisations, and the
 prioritised candidate names that locate a logical slot (base colour, normal,
 packed PBR, emission) across wildly different game shaders -- is shared with the
-Painter plugin (``ruri_pybridge.unity.material``), because it is a fact about
+Painter plugin (``RuriRipperPyBridge.unity.material``), because it is a fact about
 Unity and the HGRP shader family rather than about Blender. This module is what
 Blender does with the answer: a Principled BSDF node graph.
 """
@@ -15,9 +15,9 @@ import os
 import bpy
 
 try:
-    from .ruri_pybridge.unity import material as unity_material
+    from .RuriRipperPyBridge.unity import material as unity_material
 except ImportError:  # standalone (non-package) testing
-    from ruri_pybridge.unity import material as unity_material
+    from RuriRipperPyBridge.unity import material as unity_material
 
 # Game-shader graph providers. This core stays game-blind (see Game/__init__'s
 # charter): a game module registers a callable ``provider(builder, props) ->

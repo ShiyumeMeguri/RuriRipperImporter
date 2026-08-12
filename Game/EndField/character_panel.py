@@ -42,7 +42,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
 from ... import animation_builder, coordinate
-from ...ruri_pybridge.session import cabmap_state
+from ...RuriRipperPyBridge.session import cabmap_state
 from . import morph_state, roster_panel, skeletal_morph
 
 # The game bakes a ctrl driver onto a mesh as a shape key named after the DCC
@@ -845,7 +845,7 @@ class RURI_OT_character_load_library(bpy.types.Operator):
 def _bridge_asset_db_module():
     """Imported lazily -- only the bridge path needs it, and this tab draws long
     before any bridge session exists."""
-    from ...ruri_pybridge.unity import bridge_asset_db
+    from ...RuriRipperPyBridge.unity import bridge_asset_db
     return bridge_asset_db
 
 

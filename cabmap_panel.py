@@ -30,17 +30,17 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
 
 try:
     from . import Game, armature_builder, filter_ui, prefab_importer
-    from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
-    from .ruri_pybridge.session import cabmap_state
-    from .ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
+    from .RuriRipperPyBridge.session import cabmap_state
+    from .RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
     import Game
     import armature_builder
     import filter_ui
     import prefab_importer
-    from ruri_pybridge.runtime import bootstrap, pythonnet_bridge
-    from ruri_pybridge.session import cabmap_state
-    from ruri_pybridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
+    from RuriRipperPyBridge.session import cabmap_state
+    from RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 
 # The only tab this module owns, because it is the only one that is not about a
 # game: the cabmap itself. Every other tab is contributed by a game module (see

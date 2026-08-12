@@ -26,7 +26,7 @@ import sys
 from . import (Game, coordinate, hierarchy, armature_builder,
                mesh_builder, material_builder, animation_builder,
                prefab_importer, cabmap_panel)
-from .ruri_pybridge.runtime import bootstrap, pythonnet_bridge
+from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
 # ones that say they hold real, expensive-to-rebuild process state. A reload
@@ -44,7 +44,7 @@ def _holds_process_state(module):
 # Shared package first (in sys.modules order, i.e. parents before children), so
 # the add-on modules reloaded after it pick up the new objects rather than
 # holding references to the previous generation.
-_shared_prefix = __package__ + ".ruri_pybridge."
+_shared_prefix = __package__ + ".RuriRipperPyBridge."
 for _name, _mod in list(sys.modules.items()):
     if _name.startswith(_shared_prefix) and not _holds_process_state(_mod):
         importlib.reload(_mod)

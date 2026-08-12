@@ -4,7 +4,7 @@ the shared numpy one.
 The conversion ITSELF -- swap Y and Z, which is a reflection (determinant -1)
 that fixes the up-axis and the handedness at once, plus everything that follows
 from being a reflection (winding, tangent handedness) -- lives in
-``ruri_pybridge.math3d.coordinate`` as ``BLENDER``, where it is testable with no
+``RuriRipperPyBridge.math3d.coordinate`` as ``BLENDER``, where it is testable with no
 Blender running and cannot drift apart from the glTF space beside it.
 
 What is Blender-specific, and all that stays here, is the TYPE: ``eb.matrix``
@@ -21,9 +21,9 @@ from __future__ import annotations
 from mathutils import Matrix
 
 try:
-    from .ruri_pybridge.math3d import coordinate as _shared
+    from .RuriRipperPyBridge.math3d import coordinate as _shared
 except ImportError:  # standalone (non-package) testing
-    from ruri_pybridge.math3d import coordinate as _shared
+    from RuriRipperPyBridge.math3d import coordinate as _shared
 
 SPACE = _shared.BLENDER
 

@@ -24,9 +24,9 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
 try:
-    from .ruri_pybridge.session import cabmap_state
+    from .RuriRipperPyBridge.session import cabmap_state
 except ImportError:  # standalone (non-package) testing
-    from ruri_pybridge.session import cabmap_state
+    from RuriRipperPyBridge.session import cabmap_state
 
 # Relations and actions are the same everywhere: they are the RULE grammar, not a
 # property of any one list. Only the FIELDS differ per list, which is what a spec

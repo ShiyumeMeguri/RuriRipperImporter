@@ -20,7 +20,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from ...ruri_pybridge.session import cabmap_state
+from ...RuriRipperPyBridge.session import cabmap_state
 from . import ui_scene_importer, ui_scene_state
 
 UI_SCENE = "ui"
@@ -33,7 +33,7 @@ def _report_exception(op, prefix, exc):
 
 
 def _bridge_asset_db_module():
-    from ...ruri_pybridge.unity import bridge_asset_db
+    from ...RuriRipperPyBridge.unity import bridge_asset_db
     return bridge_asset_db
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import bpy
 
 from ... import coordinate, material_builder, prefab_importer
-from ...ruri_pybridge.unity import discovery
+from ...RuriRipperPyBridge.unity import discovery
 from . import asset_paths
 
 

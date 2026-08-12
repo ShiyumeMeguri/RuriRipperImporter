@@ -337,7 +337,7 @@ class G:
         直接喂进去 SDF 的脸朝向、各向异性切线、半球光照方向会全错(SDF 丢失/高光错位/过白)。
         1:1 移植纪律下内核不许改,于是在**边界**换轴。
 
-        换轴 = 导入侧约定的逆(ruri_pybridge/math3d/coordinate.BLENDER:`p' = (x, z, y)`,
+        换轴 = 导入侧约定的逆(RuriRipperPyBridge/math3d/coordinate.BLENDER:`p' = (x, z, y)`,
         自反),故此处同为一次 Y/Z 互换。先转 OBJECT 空间再换轴:顶层导入对象带一次 180° yaw
         (coordinate._ROOT_YAW_180),对象空间里没有它,且角色被摆放/旋转后依然成立。"""
         local = self.vtrans(v, 'WORLD', 'OBJECT', 'POINT' if point else 'VECTOR')

@@ -144,7 +144,7 @@ hook 是针对具体游戏写的,面板也该是。所以**一个游戏一个文
 目前 `Game/EndField/` 提供 Scene(流式场景整图导入)与 Character(SkeletalMorph 表情
 系统)两个 tab,覆盖 Endfield 全部已 hook 的版本。
 
-**游戏专属代码一律留在插件里,不许进 `ruri_pybridge`。** 共用层是和 Substance Painter
+**游戏专属代码一律留在插件里,不许进 `RuriRipperPyBridge`。** 共用层是和 Substance Painter
 插件共享的那一半,它只描述 Unity 和 RipperHook 桥本身;Scene / Character 是 Blender
 独有的功能,连其中不碰 bpy 的纯数据部分(寻址路径规则、SkeletalMorph schema)也属于
 「某一个游戏的事实」,放进共用层就是让另一个宿主背不属于它的东西。
@@ -168,7 +168,7 @@ RuriRipperImporter/            ← 插件本体(装这个)
       scene_state.py asset_paths.py       ← 场景 placement / 寻址路径 + LOD 规则
       character_panel.py                  表情 tab
       skeletal_morph.py morph_state.py    ← SkeletalMorph 资产解析与库模型
-  ruri_pybridge/               ← git submodule:与 Painter 插件共用的那一半
+  RuriRipperPyBridge/               ← git submodule:与 Painter 插件共用的那一半
     unity/    Unity YAML 解析、class id 表、GUID 解析、网格解码、
               Renderer 发现、材质属性、clip 曲线与重锚、Avatar 骨架
     runtime/  依赖 bootstrap、CoreCLR + RipperHook 桥、列式行表、设置/工作区
@@ -185,13 +185,13 @@ git clone --recurse-submodules https://github.com/ShiyumeMeguri/RuriRipperImport
 git submodule update --init --recursive
 ```
 
-`ruri_pybridge` 里**不许出现 bpy/mathutils**(它同时要在 Substance Painter 里跑,那边
+`RuriRipperPyBridge` 里**不许出现 bpy/mathutils**(它同时要在 Substance Painter 里跑,那边
 没有这两个东西)。所以 `coordinate.py` / `hierarchy.py` 留在插件里,只做一件事:把共用层
 的 numpy 4x4 在边界上转成 `mathutils.Matrix`。这条规矩由自测本身把关(`test_no_host_imports`
 按 AST 扫全包);共用层自带 106 个自测:
 
 ```bash
-python ruri_pybridge/run_tests.py
+python RuriRipperPyBridge/run_tests.py
 ```
 
 ---

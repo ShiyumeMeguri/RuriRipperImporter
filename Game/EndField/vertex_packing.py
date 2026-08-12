@@ -1,4 +1,4 @@
-"""本作自研的顶点打包布局 —— 一个游戏的事实,所以住在这里,不进 ruri_pybridge。
+"""本作自研的顶点打包布局 —— 一个游戏的事实,所以住在这里,不进 RuriRipperPyBridge。
 
 内核只内置**真正标准**的格式(R10G10B10A2 的 snorm/unorm 读法),并开了注入点
 ``mesh_decoder.register_packed_channel_decoder``;私有布局由这里注册进去。
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ...ruri_pybridge.unity import mesh_decoder
+from ...RuriRipperPyBridge.unity import mesh_decoder
 
 NORMAL = 1   # Unity VertexAttribute.Normal
 TANGENT = 2  # Unity VertexAttribute.Tangent

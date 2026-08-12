@@ -19,7 +19,7 @@ Two tabs, neither of which means anything for another title:
 
 All of it lives here, including the parts that touch no bpy: the game's
 addressable-path conventions and its studio-written MonoBehaviour schemas are
-still ONE GAME'S facts, and ``ruri_pybridge`` -- shared with a host that has no
+still ONE GAME'S facts, and ``RuriRipperPyBridge`` -- shared with a host that has no
 such feature -- may not carry them.
 
 Declared as one GAME_MODULE row (see ``Game``), so the core panel reveals both

@@ -35,7 +35,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
 from ... import filter_ui
-from ...ruri_pybridge.session import cabmap_state
+from ...RuriRipperPyBridge.session import cabmap_state
 from . import roster, scene_importer, scene_state, ui_scene_panel
 
 SELF_CONTAINED = scene_state.SELF_CONTAINED
@@ -443,7 +443,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
 def _bridge_asset_db_module():
     """Imported lazily: only the bridge path needs it, and the scene tabs draw
     long before any bridge session exists."""
-    from ...ruri_pybridge.unity import bridge_asset_db
+    from ...RuriRipperPyBridge.unity import bridge_asset_db
     return bridge_asset_db
 
 

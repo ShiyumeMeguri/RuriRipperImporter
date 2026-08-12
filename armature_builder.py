@@ -20,11 +20,11 @@ import numpy as np
 
 try:
     from . import coordinate, hierarchy
-    from .ruri_pybridge.unity import skinning
+    from .RuriRipperPyBridge.unity import skinning
 except ImportError:  # standalone (non-package) testing
     import coordinate
     import hierarchy
-    from ruri_pybridge.unity import skinning
+    from RuriRipperPyBridge.unity import skinning
 
 import bpy
 from mathutils import Matrix, Vector
@@ -178,9 +178,9 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     Returns the armature object; the caller stamps the avatar YAML onto it so
     a later standalone AnimationClip import can find the mapping."""
     try:
-        from .ruri_pybridge.unity import avatar as avatar_module
+        from .RuriRipperPyBridge.unity import avatar as avatar_module
     except ImportError:
-        from ruri_pybridge.unity import avatar as avatar_module
+        from RuriRipperPyBridge.unity import avatar as avatar_module
     from mathutils import Quaternion
 
     avatar_doc = avatar_file.first("Avatar")

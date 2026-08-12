@@ -25,7 +25,7 @@ is visible rather than silently dropped.
 
 from __future__ import annotations
 
-from ...ruri_pybridge.unity import unity_yaml
+from ...RuriRipperPyBridge.unity import unity_yaml
 
 # Discovery holds no bpy data, and re-running it costs a bridge import -- keep it
 # across a script reload like the other scene state does.

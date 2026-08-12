@@ -22,7 +22,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
 from ... import filter_ui
-from ...ruri_pybridge.session import cabmap_state
+from ...RuriRipperPyBridge.session import cabmap_state
 from . import asset_paths, roster
 
 CHARACTERS = roster.CHARACTERS
@@ -411,7 +411,7 @@ def _asset_named(stem):
 def _avatar_skeleton(db, avatar_file):
     """``(world_rests, paths)`` from an Avatar UnityFile in ``db`` -- the standing
     rest a shared-skeleton part mesh bakes against, plus its transform paths."""
-    from ...ruri_pybridge.unity import avatar
+    from ...RuriRipperPyBridge.unity import avatar
     avatar_doc = avatar_file.first("Avatar") if avatar_file is not None else None
     if avatar_doc is None:
         return {}, []
@@ -433,7 +433,7 @@ def _templet_skeleton(info):
     rows = _asset_named("data_npc_avatartemplet_" + templet.lower())
     if not rows:
         return {}, [], []
-    from ...ruri_pybridge.unity import bridge_asset_db
+    from ...RuriRipperPyBridge.unity import bridge_asset_db
     try:
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
             [cabmap_state.ROWS.cab(rows[0][0])])
@@ -491,7 +491,7 @@ def _import_part(context, cab, binder, options, level, materials_by_mesh=None):
     own CABs, so they are co-seeded into this part's closure rather than looked
     for inside it."""
     from ... import material_builder, prefab_importer
-    from ...ruri_pybridge.unity import bridge_asset_db, discovery
+    from ...RuriRipperPyBridge.unity import bridge_asset_db, discovery
     material_paths = sorted({path for paths in (materials_by_mesh or {}).values() for path in paths})
     seeds = [cab]
     if material_paths:
@@ -555,7 +555,7 @@ def _loose_part_mesh_guids(db, level):
     """The Mesh guids to import from a loose part's closure: the best-ranked LOD
     per mesh family, so one detail level lands rather than the lod0..lod3 the
     closure ships all stacked at the origin."""
-    from ...ruri_pybridge.unity import discovery
+    from ...RuriRipperPyBridge.unity import discovery
     families = {}
     for guid in db.all_guids():
         text = db.raw_text(guid)
