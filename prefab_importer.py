@@ -41,6 +41,9 @@ DEFAULT_OPTIONS = {
     "flip_v": False,
     "import_shadow_proxies": False,
     "import_empties": False,
+    # Which game this import is of (the upstream GameType member). The host knows it;
+    # the importer only stamps what it is told, so nothing here names a game.
+    "source_game": "",
 }
 
 
@@ -319,6 +322,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
         report.bones = len(arm_obj.data.bones)
         report.root_objects.append(arm_obj)
         _stamp_prefab_avatar(db, prefab, arm_obj, maps, report.warnings)
+        armature_builder.stamp_game(arm_obj, options.get("source_game"))
     else:
         try:
             from . import hierarchy
@@ -698,6 +702,7 @@ def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
     except Exception as exc:
         report.warnings.append(f"Avatar skeleton parse failed: {type(exc).__name__}: {exc}")
         return report
+    armature_builder.stamp_game(arm_obj, options.get("source_game"))
     report.armature = arm_obj
     report.bones = len(arm_obj.data.bones)
     report.seconds = time.time() - start

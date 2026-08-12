@@ -25,7 +25,7 @@ import sys
 
 from . import (Game, coordinate, hierarchy, armature_builder,
                mesh_builder, material_builder, animation_builder,
-               prefab_importer, cabmap_panel)
+               prefab_importer, cabmap_panel, cross_game_retarget)
 from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
@@ -50,7 +50,7 @@ for _name, _mod in list(sys.modules.items()):
         importlib.reload(_mod)
 for _mod in (coordinate, hierarchy, armature_builder,
              mesh_builder, material_builder, animation_builder, prefab_importer,
-             cabmap_panel):
+             cabmap_panel, cross_game_retarget):
     importlib.reload(_mod)
 # The game subtree goes registry-first then DEEPEST-first: a game package's
 # GAME_MODULE captures both the registry's GameTab/GameModule classes and its own
@@ -159,6 +159,9 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
+    # Registered unconditionally; its own poll hides it whenever the
+    # AnimationRetarget add-on (which owns the retarget maths) is absent.
+    cross_game_retarget.register()
     # Every game folder under Game/ registers itself; the panel above names none
     # of them and simply draws whatever tabs the enabled hooks turn on.
     Game.register()
@@ -197,6 +200,7 @@ def register():
 def unregister():
     animation_builder.unregister_slot_autofix()
     Game.unregister()
+    cross_game_retarget.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
     for cls in reversed(_CLASSES):

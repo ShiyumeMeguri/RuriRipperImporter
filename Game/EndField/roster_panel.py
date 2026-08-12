@@ -749,6 +749,9 @@ class RURI_OT_roster_load(bpy.types.Operator):
                 if _import_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod,
                                 materials_by_mesh):
                     imported_any = True
+            # The binder builds its rig itself rather than through the prefab
+            # importer, so the game identity is stamped at this call site.
+            armature_builder.stamp_game(binder.armature, options.get("source_game"))
         else:
             # Named actor: one complete standing prefab (no shared-skeleton
             # template) -- the browser's own hierarchy import, grafting any extra

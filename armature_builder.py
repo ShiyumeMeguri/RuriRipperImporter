@@ -49,11 +49,32 @@ UNITY_RIG_PROP = "ruri_unity_rig"
 UNITY_AVATAR_PROP = "ruri_unity_avatar"
 
 
+# Custom-property key under which an import records WHICH GAME this skeleton came from (the
+# upstream GameType member, e.g. "EndField"/"Koikatu"). Two rigs' stamps are what select a
+# cross-game retarget table by identity instead of by guessing at bone-name shapes -- see
+# cross_game_retarget.
+UNITY_GAME_PROP = "ruri_source_game"
+
+
 def stamp_avatar(arm_obj, avatar_data):
     """Bake an Avatar document tree (a parsed Avatar object's ``.data``) onto the armature."""
     if arm_obj is None or not avatar_data:
         return
     arm_obj[UNITY_AVATAR_PROP] = json.dumps(avatar_data, separators=(",", ":"))
+
+
+def stamp_game(arm_obj, game_name):
+    """Record the game this skeleton was imported from (see UNITY_GAME_PROP)."""
+    if arm_obj is None or not game_name:
+        return
+    arm_obj[UNITY_GAME_PROP] = str(game_name)
+
+
+def read_game(arm_obj):
+    """The game stamped on an armature, or "" when it carries none."""
+    if arm_obj is None:
+        return ""
+    return str(arm_obj.get(UNITY_GAME_PROP) or "")
 
 
 def read_avatar_json(arm_obj):

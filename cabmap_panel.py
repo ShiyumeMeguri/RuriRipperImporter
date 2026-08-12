@@ -257,6 +257,14 @@ def _tab_bar(state):
     return entries
 
 
+def _active_game_name(state):
+    """THE game this session is looking at, as the upstream GameType member -- a
+    ticked hook first, else the install's own build identity (Game.active_module's
+    own rule). "" when nothing or more than one resolves."""
+    module = Game.active_module(_hook_ids(state), _project_names(state))
+    return module.game_name if module is not None else ""
+
+
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
 
@@ -547,6 +555,10 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
             "import_empties": self.import_empties,
+            # THE game this session is looking at, resolved exactly once here and
+            # stamped onto every armature the import builds -- what a later
+            # cross-game retarget selects its table by.
+            "source_game": _active_game_name(self),
         }
 
 
