@@ -140,6 +140,19 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None,
     return report
 
 
+def _needs_armature(prefab):
+    """Whether this prefab's transform hierarchy is worth an armature: something
+    skins to it, or the hierarchy IS the asset. A rig-only prefab (a character
+    assembly's skeleton row -- Koikatu's p_cf_body_bone is 580 transforms and zero
+    renderers) carries no SkinnedMeshRenderer yet is nothing BUT a skeleton, so
+    keying on skinning alone silently produced no rig and the assembly built
+    nothing. A static prop -- MeshRenderer/MeshFilter and no skinning -- still
+    gets none."""
+    if prefab.all("SkinnedMeshRenderer"):
+        return True
+    return not prefab.all("MeshRenderer") and not prefab.all("MeshFilter")
+
+
 def _root_animator(prefab, maps):
     """The prefab's OWN Animator: the one on a hierarchy ROOT GameObject (a prefab
     routinely carries more -- weapon sub-rigs), else the first in document order."""
@@ -314,7 +327,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     start = time.time()
 
     arm_obj = None
-    if options["import_skeleton"] and prefab.all("SkinnedMeshRenderer"):
+    if options["import_skeleton"] and _needs_armature(prefab):
         arm_obj, maps = armature_builder.build_armature(context, prefab, arm_name)
         if top_level:
             arm_obj.matrix_world = coordinate.root_matrix()
