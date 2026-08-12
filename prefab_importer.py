@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 
 import bpy
+from mathutils import Matrix
 
 # `clip_paths` is aliased to clip_repair and `prefab` to prefab_scan: both names
 # are already taken here by local variables (a list of .anim paths, a parsed
@@ -45,6 +47,7 @@ class ImportReport:
     def __init__(self):
         self.armature = None
         self.mesh_objects = []
+        self.cameras = []
         self.materials = 0
         self.textures = 0
         self.actions = 0
@@ -61,6 +64,7 @@ class ImportReport:
 
     def summary(self):
         return (f"armature_bones={self.bones} meshes={len(self.mesh_objects)} "
+                f"cameras={len(self.cameras)} "
                 f"materials={self.materials} textures={self.textures} "
                 f"actions={self.actions} lod_skipped={self.skipped_lod} "
                 f"shadow_skipped={self.skipped_shadow} "
@@ -276,6 +280,14 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     report.skipped_shadow += stats.shadow
     report.skipped_inactive += stats.inactive
 
+    # Cameras are objects in Blender the same way renderers are: a prefab that
+    # defines viewpoints imports them, or the scene arrives with nothing to look
+    # through.
+    for camera in prefab_scan.iter_cameras(prefab, go_to_node, options):
+        obj = _import_camera(context, camera, top_level)
+        if obj is not None:
+            report.cameras.append(obj)
+
     if mat_builder is not None:
         report.materials = len(mat_builder._cache)
         report.textures = len(mat_builder._image_cache)
@@ -433,6 +445,35 @@ def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, 
     return mesh_builder.build_mesh_object(
         context, decoded, renderer.name, arm_obj, renderer.bones,
         maps["file_id_to_bone"], materials, options)
+
+
+def _import_camera(context, camera, top_level):
+    """One Unity camera as a Blender camera object at its own node's transform.
+
+    Two conversions, not one. The shared reflection puts the node where it
+    belongs, but it also lands Unity's forward (local +Z) on Blender's local +Y,
+    and a Blender camera looks down its local -Z with +Y up. The extra quarter
+    turn about X is exactly that difference and nothing else.
+
+    Unity's fieldOfView is the VERTICAL angle, so the sensor is fitted
+    vertically -- fit it horizontally and every framing is wrong by the aspect
+    ratio."""
+    data = bpy.data.cameras.new(camera.name)
+    data.clip_start = camera.near
+    data.clip_end = camera.far
+    if camera.orthographic:
+        data.type = "ORTHO"
+        data.ortho_scale = camera.orthographic_size * 2.0
+    else:
+        data.sensor_fit = "VERTICAL"
+        data.angle_y = math.radians(camera.fov)
+
+    obj = bpy.data.objects.new(camera.name, data)
+    context.collection.objects.link(obj)
+    convert = coordinate.convert_root_matrix if top_level else coordinate.convert_matrix
+    obj.matrix_world = convert(camera.node.world) @ Matrix.Rotation(math.radians(90.0), 4, "X")
+    obj.hide_viewport = camera.disabled
+    return obj
 
 
 def _import_static(context, db, renderer, mat_builder, options, report, top_level):

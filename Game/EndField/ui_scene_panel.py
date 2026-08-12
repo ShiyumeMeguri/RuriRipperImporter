@@ -96,9 +96,10 @@ class RURI_PG_ui_scene(bpy.types.PropertyGroup):
                            description="Filter by stage or folder name")
     entries: CollectionProperty(type=RURI_PG_ui_scene_entry)
     active_index: IntProperty()
-    import_art: BoolProperty(name="Stage Art", default=True,
-                             description="Import the stage's own geometry, when the game ships any "
-                                         "for it, into its own collection")
+    import_art: BoolProperty(name="Stage Prefab", default=True,
+                             description="Import the stage's own prefab -- its floor, sky sphere, "
+                                         "shadow plane and cameras -- into its own collection, and "
+                                         "look through the camera the game looks through")
     apply_environment: BoolProperty(name="Sun + Ambient", default=True,
                                     description="Build the stage's directional light and set the "
                                                 "world colour from its own sky SH")
@@ -174,26 +175,29 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
                 touched, written = ui_scene_importer.apply_character_params(char_volume["data"])
                 done.append("{0} param(s) onto {1} material(s)".format(written, touched))
 
-        if state.import_art and row["art_root"]:
+        if state.import_art and row["stage_prefabs"]:
             try:
-                built = self._import_art(context, row)
+                reports = self._import_stage(context, row)
             except Exception as exc:
-                _report_exception(self, "Stage art import failed", exc)
+                _report_exception(self, "Stage import failed", exc)
                 return {"CANCELLED"}
-            done.append("{0} art root(s)".format(built))
+            meshes = sum(len(report.mesh_objects) for report in reports)
+            cameras = [obj for report in reports for obj in report.cameras]
+            done.append("{0} mesh(es), {1} camera(s)".format(meshes, len(cameras)))
+            chosen = ui_scene_importer.adopt_camera(context, cameras)
+            if chosen is not None:
+                done.append("looking through " + chosen.name)
 
         self.report({"INFO"}, "{0}: {1}".format(row["label"], "; ".join(done) or "nothing selected to apply"))
         return {"FINISHED"}
 
-    def _import_art(self, context, row):
-        paths = [p for p in _container_paths() if p.startswith(row["art_root"])
-                 and p.endswith((".fbx", ".prefab"))]
-        if not paths:
-            return 0
+    def _import_stage(self, context, row):
+        """Import the stage prefab the ordinary way -- one closure, the shared
+        prefab importer, whatever hierarchy the game authored."""
         bridge = cabmap_state.BRIDGE
-        cabs = list(bridge.resolve_cabs_for_paths(paths))
+        cabs = list(bridge.resolve_cabs_for_paths(row["stage_prefabs"]))
         if not cabs:
-            return 0
+            return []
         assets, roots, _seed_roots, _clips, _scene_roots = bridge.import_cabs(cabs)
         db = _bridge_asset_db_module().BridgeAssetDatabase(
             assets, clip_curve_blobs=bridge.clip_curves_by_guid,
@@ -229,7 +233,10 @@ def draw_ui_scene_tab(layout, context):
                       icon="MODIFIER")
         for char_volume in row["char_volumes"]:
             box.label(text=char_volume["name"], icon="OUTLINER_OB_ARMATURE")
-        box.label(text=row["art_root"] or "(this stage ships no art of its own)", icon="MESH_DATA")
+        for prefab_path in row["stage_prefabs"]:
+            box.label(text=prefab_path.rsplit("/", 1)[-1], icon="OUTLINER_OB_GROUP_INSTANCE")
+        if not row["stage_prefabs"]:
+            box.label(text="(no prefab in this folder depends on its config)", icon="MESH_DATA")
 
     options = layout.column(align=True)
     options.enabled = row is not None

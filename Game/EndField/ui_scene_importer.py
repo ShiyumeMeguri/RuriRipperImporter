@@ -219,8 +219,12 @@ def _write_slot(node, slot, comps, value):
 
 
 def import_stage(context, db, roots, options):
-    """Build the stage's own art under one collection, so it can be hidden or
-    deleted without touching whatever character is being looked at."""
+    """Build the stage prefab exactly as any other prefab is built -- the shared
+    importer turns its hierarchy into objects, its renderers into meshes and its
+    cameras into cameras -- inside its own collection, so it can be hidden or
+    deleted without touching whatever character is being looked at.
+
+    Returns (report, ...) per root built."""
     collection = bpy.data.collections.get(STAGE_COLLECTION)
     if collection is None:
         collection = bpy.data.collections.new(STAGE_COLLECTION)
@@ -231,19 +235,32 @@ def import_stage(context, db, roots, options):
     layer = _layer_for(context.view_layer.layer_collection, collection)
     if layer is not None:
         context.view_layer.active_layer_collection = layer
-    built = 0
+    reports = []
     try:
         for guid in roots:
             prefab_file = db.load_guid(guid)
             if prefab_file is None:
                 continue
-            report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
-            if report.mesh_objects or report.armature is not None:
-                built += 1
+            reports.append(prefab_importer.import_prefab_from_db(context, db, prefab_file, options))
     finally:
         if previous is not None:
             context.view_layer.active_layer_collection = previous
-    return built
+    return reports
+
+
+def adopt_camera(context, cameras):
+    """Make the stage's own camera the scene camera, so numpad-0 looks through
+    what the game looks through. The render aspect follows: a vertical FOV only
+    frames the same picture at the same aspect ratio."""
+    if not cameras:
+        return None
+    visible = [obj for obj in cameras if not obj.hide_viewport] or list(cameras)
+    chosen = visible[0]
+    context.scene.camera = chosen
+    render = context.scene.render
+    if render.resolution_x * 9 != render.resolution_y * 16:
+        render.resolution_x, render.resolution_y = 1920, 1080
+    return chosen
 
 
 def _layer_for(layer_collection, collection):

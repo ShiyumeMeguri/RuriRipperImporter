@@ -73,11 +73,8 @@ def _class_of_script(exported_path):
     return tail[: -len(_SCRIPT_SUFFIX)]
 
 
-def _mono_behaviour(text):
-    """(m_Name, script guid, data) for a MonoBehaviour asset's YAML, or None."""
-    if not text.lstrip().startswith("%YAML"):
-        return None
-    unity_file = unity_yaml.UnityFile(None, unity_yaml.parse_text(text))
+def _mono_behaviour_doc(unity_file):
+    """(m_Name, script guid, data) for a MonoBehaviour asset, or None."""
     doc = unity_file.first("MonoBehaviour")
     if doc is None:
         return None
@@ -93,6 +90,22 @@ def candidate_paths(container_paths):
     discovery has to look at, and small (17 in 1.4.4)."""
     return sorted(p for p in container_paths
                   if p.startswith(PREFAB_ROOT) and p.endswith(".asset"))
+
+
+def candidate_prefabs(container_paths):
+    """The prefabs sitting directly in a stage folder -- one of them IS the
+    stage (CharInfoChar carries the floor, the sky sphere, the shadow plane and
+    the cameras). Subfolders are excluded: a folder's additionallights/ and
+    cameratracks/ hold one prefab PER CHARACTER, which is a different axis and
+    dozens of closures wide."""
+    out = []
+    for path in container_paths:
+        if not path.startswith(PREFAB_ROOT) or not path.endswith(".prefab"):
+            continue
+        rest = path[len(PREFAB_ROOT):]
+        if rest.count("/") == 1:          # <stage folder>/<name>.prefab
+            out.append(path)
+    return sorted(out)
 
 
 def discover(bridge, container_paths):
@@ -147,7 +160,8 @@ def discover(bridge, container_paths):
             path_of_guid[guid] = path
     path_of_stem = {}
     for path in candidates:
-        path_of_stem.setdefault(path.rsplit("/", 1)[-1][: -len(".asset")].lower(), []).append(path)
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        path_of_stem.setdefault(stem.lower(), []).append(path)
 
     # Every MonoBehaviour in the closure, by guid -- a VolumeProfile's own
     # components have no container path of their own, so they are reachable
@@ -159,7 +173,10 @@ def discover(bridge, container_paths):
             text = blob.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        parsed = _mono_behaviour(text)
+        if not text.lstrip().startswith("%YAML"):
+            continue
+        unity_file = unity_yaml.UnityFile(None, unity_yaml.parse_text(text))
+        parsed = _mono_behaviour_doc(unity_file)
         if parsed is None:
             continue
         name, script_guid, data = parsed
@@ -186,6 +203,13 @@ def discover(bridge, container_paths):
     art_folders = {p[len(UI_SCENE_ART_ROOT):].split("/", 1)[0]
                    for p in container_paths if p.startswith(UI_SCENE_ART_ROOT)}
 
+    # Which prefab in a folder IS the stage -- the one that carries the floor,
+    # the sky sphere and the cameras. Asked of the cabmap's own dependency
+    # graph rather than by reading prefabs: the stage is a prefab that DEPENDS
+    # on the stage's config assets, which is the same link the game wrote when
+    # its Volume was pointed at that profile.
+    stage_prefabs = _stage_prefabs(bridge, container_paths, cab_of_path)
+
     rows = []
     for env in sorted(environments, key=lambda r: (r["folder"], r["name"])):
         folder = env["folder"]
@@ -202,6 +226,7 @@ def discover(bridge, container_paths):
             "other_volumes": [v for v in siblings if v not in own],
             "char_volumes": [c for v in own for c in v["components"]
                              if c["class"] == CHARACTER_VOLUME_CLASS],
+            "stage_prefabs": stage_prefabs.get(folder, []),
             "art_root": (UI_SCENE_ART_ROOT + group + "/") if group in art_folders else "",
             "lights": sorted(p for p in container_paths
                              if p.startswith(folder + "additionallights/") and p.endswith(".prefab")),
@@ -217,6 +242,32 @@ def discover(bridge, container_paths):
 
 MONO_BEHAVIOUR_CLASS_ID = 114
 MONO_SCRIPT_CLASS_ID = 115
+
+
+def _stage_prefabs(bridge, container_paths, cab_of_config):
+    """folder -> the prefabs in it that depend on that folder's config assets.
+
+    The stage prefab is imported like any other prefab: the generic importer
+    builds its hierarchy 1:1, so all that is needed here is WHICH prefab, and
+    the cabmap's dependency graph answers that without reading one."""
+    prefab_paths = candidate_prefabs(container_paths)
+    if not prefab_paths or not cab_of_config:
+        return {}
+    cab_of_prefab = {}
+    for path in prefab_paths:
+        for cab in bridge.resolve_cabs_for_paths([path]):
+            cab_of_prefab[str(cab).lower()] = path
+            break
+    try:
+        dependents = {str(cab).lower()
+                      for cab in bridge.find_direct_dependents(sorted(set(cab_of_config.values())))}
+    except Exception:  # noqa: BLE001 -- a graph the hook cannot answer is not fatal
+        return {}
+    found = {}
+    for cab, path in cab_of_prefab.items():
+        if cab in dependents:
+            found.setdefault(_folder(path), []).append(path)
+    return {folder: sorted(paths) for folder, paths in found.items()}
 
 
 def _components(profile_data, behaviours):

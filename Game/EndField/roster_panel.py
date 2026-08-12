@@ -697,6 +697,13 @@ class RURI_OT_roster_load(bpy.types.Operator):
         result = bpy.ops.ruri.import_selected()
         if "FINISHED" not in result:
             return {"CANCELLED"}
+        # 顶点腿(生成物自带):Fur 壳层位移 + 反壳描边的几何节点 modifier。幂等,全场景扫。
+        from . import shader
+        try:
+            shader.gen.apply_vertex_stage()
+        except Exception:
+            import traceback
+            traceback.print_exc()
         if level != state.lod:
             self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
                 entry.label, state.lod, level))
