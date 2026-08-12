@@ -1,15 +1,16 @@
 """The Character tab: build one, then drive her face and her animations.
 
-Four sections, which are the four things this game keeps separate itself:
+Three sections, which are the three things this game keeps separate itself:
 
 ``Model``  the cast -- every character card the install ships, under the name
            written inside the card -- plus which of her seven outfits to wear.
-``Parts``  the same build from the customization catalog directly: pick an item
-           per slot out of the game's own lists.
 ``Face``   the head's own blend-shape patterns, and the expressions the game
            names out of them per personality.
 ``Anime``  the studio's animation catalog, imported onto whichever rig is in the
-           scene through the browser's own clip flow.
+           scene through the browser's own clip flow. Split again by the kind
+           the catalog itself distinguishes: ordinary animations are one per row
+           and listed flat, while an H act is a pair -- one animation for each
+           partner -- so that kind is drawn as two index-aligned lists instead.
 
 Every list here is a dataset the game's hook publishes (see ``datasets``), drawn
 and filtered on the shared engine. Nothing on this side reads a byte of the game.
@@ -31,7 +32,10 @@ from . import chara_importer, datasets, face_importer
 MODEL_SECTION = "model"
 FACE_SECTION = "face"
 ANIME_SECTION = "anime"
-HANIME_SECTION = "hanime"
+# The two kinds of animation the catalog's `family` column already separates,
+# drawn as sub-tabs inside the Anime section.
+ANIME_NORMAL = "normal"
+ANIME_SEX = "sex"
 
 CAST_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
     key="Koikatu:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
@@ -312,8 +316,7 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         name="Section",
         items=[(MODEL_SECTION, "Model", "Build a character from one of the game's own cards"),
                (FACE_SECTION, "Face", "Drive the head's blend-shape patterns"),
-               (ANIME_SECTION, "Anime", "The studio's ordinary animation catalog"),
-               (HANIME_SECTION, "H", "Paired animations -- one per partner, side by side")],
+               (ANIME_SECTION, "Anime", "The studio's animation catalog")],
         default=MODEL_SECTION)
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_cast_edit,
                            description="Filter by name, file or folder")
@@ -340,6 +343,11 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 class RURI_PG_kk_anime(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     FILTER_SPEC_KEY = "Koikatu:anime"
 
+    section: EnumProperty(
+        name="Kind",
+        items=[(ANIME_NORMAL, "Normal", "Poses, locomotion -- everything outside an H act"),
+               (ANIME_SEX, "Sex", "H acts -- one animation per partner, side by side")],
+        default=ANIME_NORMAL)
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_anime_edit,
                            description="Filter by name, group or bundle")
     entries: CollectionProperty(type=RURI_PG_kk_entry)
@@ -775,22 +783,34 @@ class RURI_MT_kk_anime_filter(bpy.types.Menu):
 
 
 def _current_anime_row(context):
-    """Whichever row the tab the user is looking at has selected -- the quick
-    filter builds its rules from this, so it must follow the visible list."""
+    """Whichever row the visible list has selected -- the quick filter builds its
+    rules from this, so it must follow the kind the user is looking at."""
     anime = context.scene.ruri_kk_anime
-    if context.scene.ruri_kk_chara.section != HANIME_SECTION:
+    if anime.section != ANIME_SEX:
         return _selected_animation(anime)
     return _selected_side(anime, "male") or _selected_side(anime, "female")
 
 
 def _draw_anime(layout, context, state):
+    """The animation section: pick a kind, then the list shape that kind needs.
+
+    An ordinary animation is one per row, so those are listed flat. An H act is
+    two animations -- one per partner -- so flattening would scatter halves of
+    the same act down the list; that kind gets the paired side-by-side view."""
     anime = context.scene.ruri_kk_anime
+    layout.row(align=True).prop(anime, "section", expand=True)
     search = filter_ui.draw_search_row(
         layout, anime, extra_operator=(RURI_OT_kk_anime_refresh.bl_idname, "FILE_REFRESH"))
     search.menu(RURI_MT_kk_anime_filter.bl_idname, text="", icon="COLLAPSEMENU")
-    layout.template_list(RURI_UL_kk_list.bl_idname, "anime", anime, "entries",
-                         anime, "active_index", rows=10)
+    if anime.section == ANIME_SEX:
+        _draw_anime_sex(layout, anime)
+    else:
+        _draw_anime_normal(layout, anime)
 
+
+def _draw_anime_normal(layout, anime):
+    layout.template_list(RURI_UL_kk_list.bl_idname, "anime", anime, "entries",
+                         anime, "active_index", rows=12)
     row = _selected_animation(anime)
     actions = layout.column(align=True)
     actions.enabled = row is not None
@@ -801,12 +821,7 @@ def _draw_anime(layout, context, state):
     actions.operator(RURI_OT_kk_anime_import.bl_idname, icon="ANIM_DATA")
 
 
-def _draw_hanime(layout, context, state):
-    anime = context.scene.ruri_kk_anime
-    search = filter_ui.draw_search_row(
-        layout, anime, extra_operator=(RURI_OT_kk_anime_refresh.bl_idname, "FILE_REFRESH"))
-    search.menu(RURI_MT_kk_anime_filter.bl_idname, text="", icon="COLLAPSEMENU")
-
+def _draw_anime_sex(layout, anime):
     split = layout.split(factor=0.5)
     for side, title, entries_prop, index_prop in (
             ("male", "Male", "male_entries", "male_index"),
@@ -827,7 +842,7 @@ def _draw_hanime(layout, context, state):
 
 
 _SECTIONS = {MODEL_SECTION: _draw_model, FACE_SECTION: _draw_face,
-             ANIME_SECTION: _draw_anime, HANIME_SECTION: _draw_hanime}
+             ANIME_SECTION: _draw_anime}
 
 
 def draw_character_tab(layout, context):
