@@ -29,18 +29,19 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import Game, armature_builder, filter_ui, prefab_importer
+    from . import Game, filter_ui, prefab_importer
     from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from .RuriRipperPyBridge.session import cabmap_state
-    from .RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from .RuriRipperPyBridge.unity import (bridge_asset_db, build_identity, class_registry,
+                                           clip_paths, discovery)
 except ImportError:  # standalone (non-package) testing
     import Game
-    import armature_builder
     import filter_ui
     import prefab_importer
     from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from RuriRipperPyBridge.session import cabmap_state
-    from RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from RuriRipperPyBridge.unity import (bridge_asset_db, build_identity, class_registry,
+                                          clip_paths, discovery)
 
 # The only tab this module owns, because it is the only one that is not about a
 # game: the cabmap itself. Every other tab is contributed by a game module (see
@@ -50,13 +51,6 @@ BROWSER_TAB_ID = "assetbundle"
 BROWSER_TAB_LABEL = "VirtualAssetBundle"
 BROWSER_TAB_DESCRIPTION = "Browse/search the loaded cabmap's rows and import individual assets"
 # Enabled for every session regardless of what is ticked -- see _hook_ids.
-# Only what THIS host needs. Hooks every AssetRipper host needs (currently
-# AR_SerializeReference_) are not listed here: they live in the one place that
-# knows them, Bootstrap.AlwaysOnHookIds on the C# side, and Bootstrap.ApplyHooks
-# folds them in for the CLI, the GUI and this bridge alike. Re-listing one here
-# would recreate exactly the per-host drift that left this bridge running
-# without AR_SerializeReference_ in the first place.
-_REQUIRED_HOOK_IDS = ("AR_HumanoidToGeneric_",)
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
 
 # What the browser's rows can be filtered by, straight off cabmap_state's own field
@@ -204,31 +198,52 @@ def _on_search_edit(self, context):
 
 
 def _hook_ids(state):
-    """The ticked hooks, plus the ones this importer cannot function without.
+    """The ticked hooks -- exactly those, nothing appended.
 
-    AR_HumanoidToGeneric is not optional: it is what resolves a humanoid clip's muscle encoding
-    into ordinary per-bone transform curves, on the C# side, before anything reaches here. Without
-    it a humanoid clip arrives as ~95 unreadable float curves and every body bone stays at rest --
-    so it is appended unconditionally rather than left to a checkbox the user has no way to know
-    they must tick.
+    Hooks that EVERY AssetRipper host needs (currently AR_SerializeReference_) are
+    deliberately absent: they live in the one place that knows them,
+    Bootstrap.AlwaysOnHookIds on the C# side, and Bootstrap.ApplyHooks folds them in
+    for the CLI, the GUI and this bridge alike. Re-listing one here would recreate
+    exactly the per-host drift that left this bridge running without
+    AR_SerializeReference_ in the first place -- and did leave a dead
+    "AR_HumanoidToGeneric_" appended here long after that hook was replaced by a
+    per-call solve this host makes for itself (RipperBlenderBridge.SolveHumanoidClip,
+    see prefab_importer._solve_humanoid_curves). Nothing global resolves muscle
+    curves any more, which is why a Unity-bound export still gets its humanoid
+    clips intact: the only destructive rewrite left is inside the GLB exporter."""
+    return [item.id for item in state.available_hooks if item.selected]
 
-    Hooks that EVERY AssetRipper host needs are deliberately absent from this list -- see
-    _REQUIRED_HOOK_IDS. The C# side adds them inside Bootstrap.ApplyHooks, which is the one call
-    all three hosts go through."""
-    ids = [item.id for item in state.available_hooks if item.selected]
-    for required in _REQUIRED_HOOK_IDS:
-        if required not in ids:
-            ids.append(required)
-    return ids
+
+# game root -> the Unity identities that install carries. Cached: a redraw asks
+# for it, and an install does not rename itself mid-session.
+_PROJECT_NAMES = {}
+
+
+def _project_names(state):
+    """Which game the picked folder IS, read off the build itself (its players'
+    Unity productName/companyName). The second way a game module can be
+    recognised, and the only one a game with no upstream hook has."""
+    root = state.game_root or ""
+    if root not in _PROJECT_NAMES:
+        try:
+            _PROJECT_NAMES[root] = build_identity.names(root) if root else set()
+        except Exception:
+            _PROJECT_NAMES[root] = set()
+    return _PROJECT_NAMES[root]
+
+
+def _game_tabs(state):
+    return Game.active_tabs(_hook_ids(state), _project_names(state))
 
 
 def _active_tab(state):
     """The game tab actually being shown, or None for the browser.
 
-    The stored tab only counts while its own game still has a hook ticked --
-    unticking one must take its tabs away rather than leave the panel drawing a
-    game that is no longer enabled. Read-only, so a draw callback can call it."""
-    for tab in Game.active_tabs(_hook_ids(state)):
+    The stored tab only counts while its own game is still recognised -- unticking
+    its hook, or pointing the panel at a different install, must take its tabs away
+    rather than leave the panel drawing a game that is no longer there. Read-only,
+    so a draw callback can call it."""
+    for tab in _game_tabs(state):
         if tab.key == state.active_tab:
             return tab
     return None
@@ -236,27 +251,13 @@ def _active_tab(state):
 
 def _tab_bar(state):
     """(key, label) for every tab currently offered: the browser, then whatever
-    the enabled games contribute."""
+    the recognised games contribute."""
     entries = [(BROWSER_TAB_ID, BROWSER_TAB_LABEL)]
-    entries.extend((tab.key, tab.label) for tab in Game.active_tabs(_hook_ids(state)))
+    entries.extend((tab.key, tab.label) for tab in _game_tabs(state))
     return entries
 
 
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
-
-
-def _cabmap_identity_hook_ids(state):
-    """The hooks that identify a cabmap's CONTENT, i.e. the ticked GAME hooks only.
-
-    Not the same set as _hook_ids: that one is "what to enable for this session" and
-    appends _REQUIRED_HOOK_IDS unconditionally. Those are export-time processors
-    (AR_HumanoidToGeneric_ resolves a clip's muscle encoding at export) with zero
-    influence on what a cabmap scan produces, so naming a cabmap after them claims a
-    distinction that does not exist -- and gave every fresh map a
-    "<game>+AR_HumanoidToGeneric_.cabmap" name that no longer matched the maps already
-    on disk."""
-    return [item.id for item in state.available_hooks
-            if item.selected and item.id not in _REQUIRED_HOOK_IDS]
 
 
 def _default_cabmap_filename(hook_ids):
@@ -281,7 +282,7 @@ def _auto_default_cabmap_filename(state):
     raw = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
     if raw and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
         state.cabmap_path = os.path.join(
-            raw, _default_cabmap_filename(_cabmap_identity_hook_ids(state)))
+            raw, _default_cabmap_filename(_hook_ids(state)))
 
 
 def _resolve_build_output_path(state):
@@ -328,14 +329,101 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
     selected: BoolProperty(default=False)
 
 
+# The ids that name a game, straight from the DLL (see pythonnet_bridge.list_game_hooks).
+# Read once per session: the set is compiled into the loaded DLL and cannot change under it.
+_GAME_HOOK_IDS = None
+
+
+def _game_hook_ids():
+    global _GAME_HOOK_IDS
+    if _GAME_HOOK_IDS is not None:
+        return _GAME_HOOK_IDS
+    try:
+        # Not cached on failure: the DLL is simply not up yet (no bin dir, install
+        # still running), and one early miss must not disable the rule for the session.
+        _GAME_HOOK_IDS = {str(hook_id).lower() for hook_id in pythonnet_bridge.list_game_hooks()}
+    except Exception:
+        return set()
+    return _GAME_HOOK_IDS
+
+
+def _recognised_game(state):
+    """The game module the picked Game Root IS, or None."""
+    return Game.recognised_game(_project_names(state))
+
+
+def _hook_version(hook_id):
+    """A hook id's version as comparable numbers -- "EndField_1.4.4" -> (1, 4, 4).
+    Non-numeric pieces sort first, so a plain id never outranks a real version."""
+    _game, _, version = (hook_id or "").rpartition("_")
+    parts = []
+    for piece in version.split("."):
+        parts.append(int(piece) if piece.isdigit() else -1)
+    return tuple(parts)
+
+
+def _apply_recognised_game(state):
+    """Tick the recognised game's newest hook and untick every other game's.
+
+    Pointing the panel at an install IS the statement of which game this session
+    is about, so the hook follows the folder rather than a checkbox the user has
+    to remember. The newest version is taken: a hook id carries its game AND its
+    version, the folder only says the game, and the newest is the one an
+    up-to-date install wants. Nothing is disabled in the picker -- tick a
+    different one by hand and that choice stands, since this only runs when the
+    root changes or the list is refreshed.
+
+    A root that names a game we have no module for CLEARS the game hooks instead:
+    the previous folder's answer is not this folder's, and leaving it ticked is
+    how a session ends up offering one game's tabs over another game's cabmap.
+    Nothing is locked then, so any hook can still be ticked by hand. An EMPTY
+    root says nothing at all and is left alone."""
+    games = _game_hook_ids()
+    game = _recognised_game(state)
+    if game is None:
+        if state.game_root:
+            for item in state.available_hooks:
+                if item.id.lower() in games:
+                    item.selected = False
+        return ""
+    mine = [item.id for item in state.available_hooks
+            if item.id.lower() in games and Game.game_of(item.id).lower() == game.game_name.lower()]
+    if not mine:
+        return ""
+    newest = max(mine, key=_hook_version)
+    for item in state.available_hooks:
+        if item.id.lower() not in games:
+            continue
+        item.selected = item.id == newest
+    return newest
+
+
+def _on_hook_tick(self, context):
+    """Ticking a GAME unticks whichever game was ticked before.
+
+    Game hooks are mutually exclusive upstream (RuriHook.ApplyHooks drops the
+    extras), so a picker that lets two be ticked is a picker showing a state the
+    host will not honour -- and it was showing two games' tabs over one cabmap.
+    AR_* feature hooks are about no game and keep combining freely."""
+    games = _game_hook_ids()
+    if not self.selected or self.id.lower() not in games:
+        return
+    game = Game.game_of(self.id).lower()
+    for other in context.scene.ruri_cabmap.available_hooks:
+        if (other.selected and other.id != self.id and other.id.lower() in games
+                and Game.game_of(other.id).lower() != game):
+            other.selected = False
+
+
 class RURI_PG_hook_entry(bpy.types.PropertyGroup):
     """One hook id ("<GameName>_<Version>") as reported live by RipperBlenderBridge.
     ListAvailableHooks() -- see RURI_OT_refresh_hooks. `selected` drives the checkbox in the
-    N-panel's Hooks box, and is also what reveals that game's own tabs (see Game); multiple can
-    be ticked at once, since Initialize() accepts more than one hook id (a VFS-game hook plus an
-    AR_* export-side one)."""
+    N-panel's Hooks box, and is also what reveals that game's own tabs (see Game).
+
+    One GAME at a time (see _on_hook_tick), any number of AR_* features alongside it --
+    Initialize() takes the whole set."""
     id: StringProperty()
-    selected: BoolProperty(default=False)
+    selected: BoolProperty(default=False, update=_on_hook_tick)
 
 
 class RURI_PG_animation_clip(bpy.types.PropertyGroup):
@@ -366,6 +454,10 @@ def _on_game_root_change(self, context):
     user already picked or typed."""
     if not self.cabmap_path and self.game_root:
         self.cabmap_path = self.game_root
+        _auto_default_cabmap_filename(self)
+    # A new folder is a new answer to "which game is this", so the hook follows it.
+    _PROJECT_NAMES.pop(self.game_root or "", None)
+    if _apply_recognised_game(self):
         _auto_default_cabmap_filename(self)
 
 
@@ -457,13 +549,11 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
     """Populate the Hooks checklist straight from RipperBlenderBridge.ListAvailableHooks() --
     the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll.
 
-    Ticked state survives a re-refresh for any id still listed. A game module's declared
-    default id (Game.default_hook_ids) auto-ticks PER ID, on the first refresh that id appears
-    in the listing at all, and only while the user has ticked nothing of their own -- so a
-    default that only becomes available later (a rebuilt DLL, a new alias id) still gets
-    selected, and an explicit choice is never overridden. This list lives on the Scene and
-    survives a script reload, so a one-shot "first refresh ever" gate would miss that case
-    permanently and leave the session with no game hook at all.
+    Ticked state survives a re-refresh for any id still listed. Nothing at all is pre-ticked:
+    WHICH GAME is answered by Game Root, not by a default, so a fresh session starts empty and
+    the game's own hook is enabled the moment that folder names one -- see
+    _apply_recognised_game. A default game hook used to be ticked on sight, which meant a
+    session pointed at some other title still had it on.
     """
     bl_idname = "ruri.refresh_hooks"
     bl_label = "Refresh Hooks"
@@ -482,19 +572,19 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
             return {"CANCELLED"}
 
         previously_selected = {item.id for item in state.available_hooks if item.selected}
-        previously_listed = {item.id for item in state.available_hooks}
-        default_ids = Game.default_hook_ids()
         state.available_hooks.clear()
         for hook_id in hook_ids:
             item = state.available_hooks.add()
             item.id = hook_id
-            item.selected = (hook_id in _REQUIRED_HOOK_IDS
-                             or hook_id in previously_selected
-                             or (hook_id in default_ids
-                                 and hook_id not in previously_listed
-                                 and not previously_selected))
-        state.hooks_status = (f"{len(hook_ids)} hook(s) available." if hook_ids
-                              else "No hooks found in Ruri.RipperHook.dll.")
+            item.selected = hook_id in previously_selected
+        # Which GAME is decided by the folder, not by a default (see
+        # _apply_recognised_game) -- so a fresh session starts with nothing
+        # ticked and picks up a game the moment Game Root names one.
+        selected = _apply_recognised_game(state)
+        state.hooks_status = (
+            "No hooks found in Ruri.RipperHook.dll." if not hook_ids
+            else f"{len(hook_ids)} hook(s) available · {selected} (from the game folder)."
+            if selected else f"{len(hook_ids)} hook(s) available.")
         _auto_default_cabmap_filename(state)
         self.report({"INFO"}, state.hooks_status)
         return {"FINISHED"}
@@ -1152,44 +1242,19 @@ def _import_loose_closure_assets(op, context, state, db):
     return imported
 
 
-def _target_character_cabs(context):
-    """The CABs stamped on the armature a standalone clip import will drive (see
-    armature_builder.CHARACTER_CABS_PROP). Empty when no armature resolves yet, when it carries
-    no stamp (imported before this existed), or when the choice is ambiguous -- co-seeding is an
-    enrichment, so an unresolved target simply adds nothing rather than failing the import here;
-    _resolve_target_armature reports the real error later."""
-    active = context.active_object
-    if active is not None and active.type == "ARMATURE":
-        return armature_builder.read_character_cabs(active)
-    scene_arms = [o for o in context.scene.objects if o.type == "ARMATURE"]
-    if len(scene_arms) == 1:
-        return armature_builder.read_character_cabs(scene_arms[0])
-    return []
-
-
 def _resolve_target_armature(context):
     """The armature a standalone clip import should drive, plus its rebuilt
-    maps: the user's ACTIVE armature first (their explicit choice), else the
-    scene's only armature (unambiguous). maps come from the Unity rig identity
+    maps. The object comes from prefab_importer.find_target_armature: the
+    user's explicit choice first -- the active armature, or the rig the active
+    mesh is BOUND to (its Armature modifier) -- then the selection's single
+    rig, then the scene's only armature. maps come from the Unity rig identity
     stamped on the armature at import time (any session), falling back to the
     live import-session state when the stamp predates the feature. Returns
     (arm_obj, maps) or (None, error_message)."""
-    candidates = []
-    active = context.active_object
-    if active is not None and active.type == "ARMATURE":
-        candidates.append(active)
-    else:
-        scene_arms = [o for o in context.scene.objects if o.type == "ARMATURE"]
-        if len(scene_arms) == 1:
-            candidates.append(scene_arms[0])
-        elif not scene_arms:
-            return None, ("No armature in the scene -- import the character first, or "
-                          "select the skeleton the animation should drive.")
-        else:
-            return None, ("Multiple armatures in the scene -- select the one the "
-                          "animation should drive, then retry.")
-
-    arm_obj = candidates[0]
+    arm_obj = prefab_importer.find_target_armature(context)
+    if arm_obj is None:
+        return None, ("No unambiguous target skeleton -- select the armature (or a mesh "
+                      "bound to the one) the animation should drive, then retry.")
     maps = prefab_importer.maps_from_stamped_armature(arm_obj)
     if maps is None:
         build_state = cabmap_state.ANIMATION_BUILD_STATE
@@ -1216,9 +1281,9 @@ def _import_clips_standalone(op, context, state, clip_cab, clip_guids, db):
         return {"CANCELLED"}
     maps = maps_or_error
 
-    # Humanoid clips arrive already generic: the C# AR_HumanoidToGeneric pass (forced on for
-    # every session -- see _hook_ids) resolved their muscle encoding before export, so there is
-    # nothing avatar-related to do here.
+    # A muscle-encoded clip solves inside build_selected_animations, against the avatar
+    # document stamped on this very armature -- no export scope, no co-seeding, nothing
+    # avatar-related to do here.
 
     # Compatibility gate: at least one transform curve must resolve to a bone
     # of the chosen armature (string path or CRC32-of-path match). A clip for
@@ -1380,25 +1445,21 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
     def _resolve_union_closure(self, context, other_rows, clip_rows):
         """One bridge resolve covering a mixed selection: the hierarchy rows plus the
-        clip rows' full seed set (each clip's associated rig/avatar CABs). Returns the
-        shared closure pieces both flows consume, with the hierarchy import's root set
-        already restricted to ITS OWN sub-closure -- a root is dropped only when its
-        CAB attribution places it POSITIVELY outside the hierarchy rows' closure (the
-        co-seeded rig FBX prefab); an unattributed root stays, exactly as inclusive as
-        the separate-resolve flow was. None on bridge failure (already reported)."""
+        clip rows. Returns the shared closure pieces both flows consume, with the
+        hierarchy import's root set already restricted to ITS OWN sub-closure -- a
+        root is dropped only when its CAB attribution places it POSITIVELY outside
+        the hierarchy rows' closure; an unattributed root stays, exactly as inclusive
+        as the separate-resolve flow was. None on bridge failure (already reported).
+
+        Clips need no avatar/rig co-seeding: a muscle-encoded clip solves at build
+        time against the armature's own stamped avatar, and hashed curve paths
+        re-anchor through the suffix-CRC join -- the closure is exactly the rows."""
         hierarchy_cabs = [row["cab"] for row in other_rows]
         seeds = list(hierarchy_cabs)
         try:
             for row in clip_rows:
                 if row["cab"] not in seeds:
                     seeds.append(row["cab"])
-            for row in clip_rows:
-                for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
-                    if avatar_cab not in seeds:
-                        seeds.append(avatar_cab)
-            # The sequential flow co-seeded the just-imported character's stamped CABs;
-            # in a mixed selection that character IS the hierarchy rows being imported,
-            # already in `seeds` -- the union call needs no armature to read them from.
             assets, roots, seed_roots, clips_by_cab, scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(seeds)
             union_closure = {c.lower() for c in
@@ -1529,11 +1590,6 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 continue
             report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
             imported += 1
-            # Record which CABs this character came from, so a later standalone clip import can
-            # put its Avatar back in the export closure -- the C# muscle solve runs at export
-            # time and can only use an Avatar that is in scope then. See
-            # armature_builder.CHARACTER_CABS_PROP.
-            armature_builder.stamp_character_cabs(report.armature, cabs)
             for warning in report.warnings[:5]:
                 self.report({"WARNING"}, warning)
             if root_guid == primary_of_single:
@@ -1546,12 +1602,14 @@ class RURI_OT_import_selected(bpy.types.Operator):
         return ok, imported
 
     def _import_clip_rows(self, context, state, clip_rows, preresolved=None):
-        """One shared closure resolve for every selected clip-only row (each
-        co-seeding its associated rig-FBX CAB so AssetRipper restores hashed
-        curve paths and a real Avatar is in scope), then a single standalone
-        build of the union clip set onto the target armature. A mixed selection
-        hands the already-resolved union closure in via ``preresolved`` and no
-        second bridge resolve happens at all. Returns success."""
+        """One shared closure resolve for every selected clip-only row, then a
+        single standalone build of the union clip set onto the target armature.
+        The closure is exactly the clip rows -- no avatar/rig co-seeding: a
+        muscle-encoded clip solves at build time against the armature's own
+        stamped avatar, and hashed curve paths re-anchor through the suffix-CRC
+        join. A mixed selection hands the already-resolved union closure in via
+        ``preresolved`` and no second bridge resolve happens at all. Returns
+        success."""
         if preresolved is not None:
             return self._build_clip_rows(context, state, clip_rows,
                                          preresolved["clips_by_cab"], preresolved["db"])
@@ -1560,20 +1618,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
             for row in clip_rows:
                 if row["cab"] not in seeds:
                     seeds.append(row["cab"])
-            for row in clip_rows:
-                for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(row["cab"]):
-                    if avatar_cab not in seeds:
-                        seeds.append(avatar_cab)
-            # The neighbourhood search above can only reach what the clip actually depends on, and
-            # for a battle clip that is its controller alone -- whose only Avatar is a weapon stub.
-            # The character the user selected knows its own CABs, so re-seed those too and the real
-            # rig Avatar is in scope for the C# muscle solve no matter how the clip was authored.
-            for cab in _target_character_cabs(context):
-                if cab not in seeds:
-                    seeds.append(cab)
-            # Export-side allowlist: this flow reads nothing but the exported clips (blob +
-            # YAML fallback); the co-seeded character/avatar CABs only need to be LOADED for
-            # the muscle solve and hashed-path restore, not re-serialized.
+            # Export-side allowlist: this flow reads nothing but the exported clips.
             assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
                 cabmap_state.BRIDGE.import_cabs(
                     seeds, export_class_ids=[class_registry.id_for_name("AnimationClip")])
@@ -1952,23 +1997,9 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             # identity -- a clip CAB's fbx display name and its clips'
             # m_Names genuinely differ, so there is nothing to join by name.
             seed_cabs = list(build_state["seed_cabs"] or [])
-            seeds = list(seed_cabs)
-            rows_by_cab = cabmap_state.rows_by_cab()
             try:
-                for seed_cab in seed_cabs:
-                    seed_row = rows_by_cab.get(seed_cab)
-                    if (seed_row is not None
-                            and "AnimationClip" in seed_row["type_names"]
-                            and "GameObject" not in seed_row["type_names"]):
-                        # A bare clip CAB's closure carries no rig; co-seed the
-                        # associated rig-FBX CAB(s) so AssetRipper restores the
-                        # clips' hashed curve paths to real strings and the real
-                        # Avatar (not a stub) is in scope for humanoid retargeting.
-                        for avatar_cab in cabmap_state.BRIDGE.find_associated_avatar_cabs(seed_cab):
-                            if avatar_cab not in seeds:
-                                seeds.append(avatar_cab)
                 assets, roots, seed_roots, clips_by_cab, _scene_roots = \
-                    cabmap_state.BRIDGE.import_cabs(seeds)
+                    cabmap_state.BRIDGE.import_cabs(seed_cabs)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return {"CANCELLED"}
@@ -2229,3 +2260,6 @@ def unregister():
     filter_ui.ACTIVE_SPEC_KEY = None
     filter_ui.unregister()
     cabmap_state.reset()
+    _PROJECT_NAMES.clear()
+    global _GAME_HOOK_IDS
+    _GAME_HOOK_IDS = None

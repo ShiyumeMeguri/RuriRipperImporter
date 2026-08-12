@@ -39,44 +39,29 @@ _DEFAULT_BONE_LENGTH = 0.03
 # prefab_importer.maps_from_stamped_armature.
 UNITY_RIG_PROP = "ruri_unity_rig"
 
-# Custom-property key under which a character import records the cabmap CABs its closure was
-# seeded from. The humanoid muscle solve happens on the C# side, at export time, and it can only
-# use an Avatar that is IN the exported closure -- so a later standalone clip import re-seeds these
-# CABs to put this character's own Avatar back in scope.
-#
-# That matters because a clip's own dependency neighbourhood does not reliably contain the
-# character rig at all: battle AnimatorControllers are routinely attached by game code rather than
-# through bundle dependencies, so a battle clip's closure reaches only its controller, whose sole
-# Avatar is a weapon stub. The rig identity therefore travels with the skeleton the user selects,
-# exactly as the retired Python retargeter's avatar-YAML stamp did -- but carrying the CAB identity
-# instead of the parsed avatar, so the C# pass gets the real asset rather than a re-parse.
-CHARACTER_CABS_PROP = "ruri_character_cabs"
+# Custom-property key under which a character import bakes the rig's WHOLE Avatar document
+# (Unity's own m_Avatar/m_Human/m_AxesArray/m_TOS field tree, JSON-encoded) onto the armature
+# OBJECT. This is the humanoid retarget contract: the skeleton carries everything the muscle
+# solve needs, so ANY muscle-encoded .anim -- this project's or another's -- solves against the
+# selected armature by handing this stamp plus the clip's float channels to the C# Animator
+# (RipperBlenderBridge.SolveHumanoidClip). Nothing is looked up at import time and no avatar has
+# to be in any export scope: the identity travels with the skeleton, in the .blend.
+UNITY_AVATAR_PROP = "ruri_unity_avatar"
 
 
-def stamp_character_cabs(arm_obj, cab_names):
-    """Record the CABs this character was imported from (see CHARACTER_CABS_PROP)."""
-    if arm_obj is None or not cab_names:
+def stamp_avatar(arm_obj, avatar_data):
+    """Bake an Avatar document tree (a parsed Avatar object's ``.data``) onto the armature."""
+    if arm_obj is None or not avatar_data:
         return
-    existing = read_character_cabs(arm_obj)
-    merged = list(existing)
-    for cab in cab_names:
-        if cab and cab not in merged:
-            merged.append(cab)
-    arm_obj[CHARACTER_CABS_PROP] = json.dumps(merged, separators=(",", ":"))
+    arm_obj[UNITY_AVATAR_PROP] = json.dumps(avatar_data, separators=(",", ":"))
 
 
-def read_character_cabs(arm_obj):
-    """The CABs stamped by stamp_character_cabs, or [] when the armature carries none."""
+def read_avatar_json(arm_obj):
+    """The armature's stamped Avatar document JSON, or None when it carries no stamp."""
     if arm_obj is None:
-        return []
-    raw = arm_obj.get(CHARACTER_CABS_PROP)
-    if not raw:
-        return []
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return [str(c) for c in value] if isinstance(value, list) else []
+        return None
+    raw = arm_obj.get(UNITY_AVATAR_PROP)
+    return str(raw) if raw else None
 
 
 def _bone_length(node):
@@ -169,14 +154,16 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     """Build a Blender armature straight from an Avatar asset's OWN embedded
     skeleton (bone hierarchy + rest pose) -- unlike build_armature, this needs
     no accompanying rig FBX/prefab transform hierarchy at all, since Unity's
-    Avatar format already carries one (see HumanoidRetargeter.skeleton_nodes,
-    which does the actual parsing; this only turns those already-resolved
-    nodes into edit-bones, mirroring build_armature's own bone-creation loop
-    above). Works for Generic avatars too, not just Humanoid ones -- the raw
-    skeleton is populated either way.
+    Avatar format already carries one (avatar.skeleton_nodes does the actual
+    parsing; this only turns those already-resolved nodes into edit-bones,
+    mirroring build_armature's own bone-creation loop above). Works for
+    Generic avatars too, not just Humanoid ones -- the raw skeleton is
+    populated either way.
 
-    Returns the armature object; the caller stamps the avatar YAML onto it so
-    a later standalone AnimationClip import can find the mapping."""
+    The result is a complete retarget target on its own: the rig identity
+    (UNITY_RIG_PROP, TOS paths + SkeletonPose local rests) and the whole
+    avatar document (UNITY_AVATAR_PROP) are both stamped here, so any clip --
+    generic or muscle-encoded -- binds to it standalone."""
     try:
         from .RuriRipperPyBridge.unity import avatar as avatar_module
     except ImportError:
@@ -186,23 +173,24 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     avatar_doc = avatar_file.first("Avatar")
     if avatar_doc is None:
         raise ValueError("file has no Avatar object")
-    raw_nodes = [(name, parent, Vector(t), Quaternion(q))
-                 for name, parent, t, q in avatar_module.skeleton_nodes(avatar_doc.data)]
+    raw_nodes = [(name, parent, Vector(t), Quaternion(q), path)
+                 for name, parent, t, q, path in avatar_module.skeleton_nodes(avatar_doc.data)]
 
-    # World matrix per node, parent-before-child via memoized recursion --
-    # same composition _provisional_fk uses for posed data, applied here to
-    # the avatar's REST data instead.
+    # Local rest per node (Unity space), and world matrices composed from them
+    # parent-before-child via memoized recursion -- same composition
+    # _provisional_fk uses for posed data, applied here to the REST data.
+    locals_ = [Matrix.Translation(t) @ q.to_matrix().to_4x4()
+               for _name, _parent, t, q, _path in raw_nodes]
     worlds = [None] * len(raw_nodes)
 
     def world_of(index):
         if worlds[index] is not None:
             return worlds[index]
-        bone_name, parent, t, q = raw_nodes[index]
-        local = Matrix.Translation(t) @ q.to_matrix().to_4x4()
+        parent = raw_nodes[index][1]
         if parent < 0 or parent >= len(raw_nodes):
-            worlds[index] = local
+            worlds[index] = locals_[index]
         else:
-            worlds[index] = world_of(parent) @ local
+            worlds[index] = world_of(parent) @ locals_[index]
         return worlds[index]
 
     for index in range(len(raw_nodes)):
@@ -224,7 +212,7 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     # same shape build_armature uses from hierarchy.build_hierarchy's nodes.
     children_of = {}
     roots = []
-    for index, (_bone_name, parent, _t, _q) in enumerate(raw_nodes):
+    for index, (_bone_name, parent, _t, _q, _path) in enumerate(raw_nodes):
         if parent < 0 or parent >= len(raw_nodes):
             roots.append(index)
         else:
@@ -238,7 +226,7 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
 
     node_positions = [world_of(i).translation for i in range(len(raw_nodes))]
     for index in ordered:
-        bone_name, parent, _t, _q = raw_nodes[index]
+        bone_name = raw_nodes[index][0]
         eb = edit_bones.new(bone_name)
         length = _DEFAULT_BONE_LENGTH
         for child_index in children_of.get(index, ()):
@@ -253,14 +241,29 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
         index_to_editbone[index] = eb
 
     for index in ordered:
-        _bone_name, parent, _t, _q = raw_nodes[index]
+        parent = raw_nodes[index][1]
         if parent in index_to_editbone:
             index_to_editbone[index].parent = index_to_editbone[parent]
 
+    # Bone names may have been uniquified; capture them while edit-bones live.
+    index_to_bone_name = {index: eb.name for index, eb in index_to_editbone.items()}
     bpy.ops.object.mode_set(mode="OBJECT")
     # A standalone avatar import is always top-level: the root yaw rides on the
     # armature object, leaving every bone in pure-C armature space.
     arm_obj.matrix_world = coordinate.root_matrix()
+
+    # The same rig identity build_armature stamps, sourced from the avatar's
+    # own tables: TOS full path -> (bone, SkeletonPose local rest). A node TOS
+    # does not name gets no entry (its hash-named bone can't anchor a curve).
+    stamped = {}
+    for index, (_bone_name, _parent, _t, _q, path) in enumerate(raw_nodes):
+        bone_name = index_to_bone_name.get(index)
+        if not bone_name or not path:
+            continue
+        stamped[path] = {"bone": bone_name,
+                         "local": [v for row in locals_[index] for v in row]}
+    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": stamped}, separators=(",", ":"))
+    stamp_avatar(arm_obj, avatar_doc.data)
     return arm_obj
 
 

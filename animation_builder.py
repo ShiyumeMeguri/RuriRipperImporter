@@ -334,9 +334,10 @@ def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=Non
     animated_paths = set(rot) | set(pos) | set(scale) | set(euler)
     conv = coordinate.conversion_matrix()
 
-    # Every clip reaching here is generic: a humanoid clip's muscle encoding was already resolved
-    # into these same per-bone transform curves on the C# side (HumanoidToGenericProcessor), so
-    # there is one kind of curve to bake and no muscle solver in this importer at all.
+    # Every clip reaching here is generic: any muscle encoding was already resolved into these
+    # same per-bone transform curves by the C# solver, against the target armature's own stamped
+    # avatar (prefab_importer._solve_humanoid_curves), so there is one kind of curve to bake and
+    # no muscle solver in this importer at all.
     frames = times * sample_rate
     for path in animated_paths:
         bone_name = path_to_bone.get(path)

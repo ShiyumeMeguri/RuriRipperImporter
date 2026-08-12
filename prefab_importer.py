@@ -134,6 +134,82 @@ def import_prefab_from_db(context, db, prefab_file, options=None, name=None,
     return report
 
 
+def _root_animator(prefab, maps):
+    """The prefab's OWN Animator: the one on a hierarchy ROOT GameObject (a prefab
+    routinely carries more -- weapon sub-rigs), else the first in document order."""
+    root_go_ids = {node.go_id for node in maps.get("roots") or ()}
+    first = None
+    for doc in prefab.documents:
+        if doc.class_name != "Animator":
+            continue
+        if first is None:
+            first = doc
+        go_ref = doc.data.get("m_GameObject")
+        if isinstance(go_ref, dict) and go_ref.get("fileID") in root_go_ids:
+            return doc
+    return first
+
+
+def _stamp_prefab_avatar(db, prefab, arm_obj, maps, warnings):
+    """Bake the rig's whole Avatar document onto the armature (armature_builder.
+    UNITY_AVATAR_PROP) -- the humanoid retarget contract. Resolved by IDENTITY:
+    the root Animator's m_Avatar guid, never a name match. A prefab with no
+    animator or no avatar reference simply carries no stamp (a static prop, a
+    generic rig dump); a reference that fails to resolve is a real gap and says
+    so."""
+    animator = _root_animator(prefab, maps)
+    if animator is None:
+        return
+    avatar_ref = animator.data.get("m_Avatar")
+    guid = avatar_ref.get("guid") if isinstance(avatar_ref, dict) else None
+    if not guid:
+        return
+    avatar_file = db.load_guid(str(guid))
+    avatar_doc = avatar_file.first("Avatar") if avatar_file is not None else None
+    if avatar_doc is None:
+        warnings.append(f"Animator references Avatar {guid} but the closure does not carry it "
+                        f"-- muscle-encoded clips will not solve on this rig.")
+        return
+    armature_builder.stamp_avatar(arm_obj, avatar_doc.data)
+
+
+def _solve_humanoid_curves(clip, avatar_json, path_to_bone, warnings, clip_name):
+    """Resolve a clip's muscle encoding (if any) into per-bone transform curves,
+    in place, against the target armature's stamped avatar: the clip's float
+    channels cross to the C# Animator (pythonnet_bridge.solve_humanoid_clip) and
+    the solved curves fold back in with replace-by-path semantics. Which clips
+    ARE muscle-encoded is solely the solver's knowledge -- a generic clip comes
+    back untouched (None); a muscle clip with no/unsuitable stamp warns loudly
+    and imports without its muscle-encoded body motion.
+
+    Call AFTER repair_hashed_clip_paths: the solved curves arrive on the
+    avatar's own transform paths and are re-anchored here through the same
+    suffix-CRC join, so the replace-by-path merge compares both sides in the
+    ARMATURE's canonical path space -- bone identity, not string luck."""
+    if not any(channel.attribute and not channel.attribute.startswith("blendShape.")
+               for channel in clip.floats):
+        return
+    try:
+        from .RuriRipperPyBridge.runtime import pythonnet_bridge
+    except ImportError:
+        from RuriRipperPyBridge.runtime import pythonnet_bridge
+    meta_json, payload = clip_curves.humanoid_float_blob(clip)
+    try:
+        result = pythonnet_bridge.solve_humanoid_clip(avatar_json, meta_json, payload)
+    except Exception as exc:
+        warnings.append(f"{clip_name}: humanoid solve failed -- {exc}")
+        return
+    if result is None:
+        return
+    solved_meta, solved_bytes, consumed, _count = result
+    solved = clip_curves.ClipCurves.from_blob(solved_meta, solved_bytes)
+    _repaired, unmatched = clip_repair.repair_hashed_clip_paths(solved, path_to_bone)
+    if unmatched:
+        warnings.append(f"{clip_name}: {unmatched} solved humanoid bone path(s) matched no "
+                        f"bone of the target skeleton")
+    clip_curves.merge_solved(clip, solved, consumed)
+
+
 def _load_clip(clip_path):
     """The one disk clip loader: run the raw-text parser
     (clip_curves.ClipCurves.from_yaml_text -- validated bitwise-identical to
@@ -170,7 +246,10 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     target armature: clips exported without their rig in scope carry
     "path_0x<CRC32>_" placeholder paths, and the armature's own bone paths
     are the hash preimages -- so a standalone-imported clip binds to the
-    user's selected skeleton exactly when the hashes match.
+    user's selected skeleton exactly when the hashes match. A muscle-encoded
+    clip then solves against the armature's own stamped avatar
+    (_solve_humanoid_curves) -- any .anim from any project, no export scope
+    involved.
 
     Assignment: importing ONE clip always puts it on the armature -- picking a single
     animation IS the request to see it, and leaving it as a loose datablock for the user
@@ -184,6 +263,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     assign_always = len(guids) == 1
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
     path_to_bone = maps.get("path_to_bone") or {}
+    avatar_json = armature_builder.read_avatar_json(arm_obj)
     for guid in guids:
         # The single clip surface: the bridge blob (zero-parse) or the disk
         # raw-text parser (asset_db.clip_curves) -- same API, no YAML fallback.
@@ -203,12 +283,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         if unmatched:
             warnings.append(f"{clip_name}: {unmatched} hashed curve "
                             f"path(s) matched no bone of '{arm_obj.name}' (skipped)")
-        if clip_repair.clip_is_humanoid(clip):
-            # The muscle encoding is resolved on the C# side before export
-            # (HumanoidToGenericProcessor); seeing it here means that hook was not enabled, and
-            # this importer has no muscle solver of its own otherwise.
-            warnings.append(f"{clip_name}: still carries muscle curves -- enable the "
-                            f"AR_HumanoidToGeneric hook, or the body will not move")
+        _solve_humanoid_curves(clip, avatar_json, path_to_bone, warnings, clip_name)
         action, slot, n_frames = animation_builder.build_action(
             clip, arm_obj, maps, path_to_meshobjects, options)
 
@@ -243,6 +318,9 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
             arm_obj.matrix_world = coordinate.root_matrix()
         report.armature = arm_obj
         report.bones = len(arm_obj.data.bones)
+        # Bake the rig's Avatar document onto the armature: the humanoid
+        # retarget contract travels with the skeleton from here on.
+        _stamp_prefab_avatar(db, prefab, arm_obj, maps, report.warnings)
     else:
         # Still need the hierarchy maps for naming/skinning resolution.
         try:
@@ -295,14 +373,11 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     # Animations: every gathered clip (source differs disk vs. bridge mode) as actions.
     if options["import_animations"] and arm_obj is not None:
         actions = []
+        avatar_json = armature_builder.read_avatar_json(arm_obj)
+        clip_path_to_bone = maps.get("path_to_bone") or {}
         for clip in clip_files:
-            if clip_repair.clip_is_humanoid(clip):
-                # Muscle curves are resolved to per-bone transform curves on the C# side before
-                # export; a clip still carrying them means that pass did not run, and there is no
-                # muscle solver here to compensate.
-                report.warnings.append(
-                    f"{clip.name}: still carries muscle curves -- enable the AR_HumanoidToGeneric "
-                    f"hook, or this clip's body motion will be absent.")
+            _solve_humanoid_curves(clip, avatar_json, clip_path_to_bone,
+                                   report.warnings, clip.name)
             action, slot, _frames = animation_builder.build_action(
                 clip, arm_obj, maps, path_to_meshobjects, options)
             actions.append((action, slot))
@@ -667,14 +742,39 @@ def import_asset(context, path, options=None):
     return import_prefab(context, path, options)
 
 
-def _active_armature(context):
-    obj = getattr(context, "active_object", None)
-    if obj is not None and obj.type == "ARMATURE":
+def _armature_of(obj):
+    """The armature ``obj`` stands for: itself, or -- for a mesh -- the rig that
+    actually drives it (its Armature modifier's object first, the binding truth;
+    an armature parent as the structural fallback)."""
+    if obj is None:
+        return None
+    if obj.type == "ARMATURE":
         return obj
-    for o in context.scene.objects:
-        if o.type == "ARMATURE":
-            return o
+    if obj.type == "MESH":
+        for modifier in obj.modifiers:
+            if modifier.type == "ARMATURE" and modifier.object is not None:
+                return modifier.object
+        if obj.parent is not None and obj.parent.type == "ARMATURE":
+            return obj.parent
     return None
+
+
+def find_target_armature(context):
+    """The armature a clip import should drive: the active object's rig (an
+    armature, or the armature a selected mesh is bound to), else the single
+    rig the selection resolves to, else the scene's single armature. None when
+    nothing resolves or the choice is ambiguous -- the caller words the error."""
+    active = _armature_of(getattr(context, "active_object", None))
+    if active is not None:
+        return active
+    selected = {_armature_of(obj) for obj in getattr(context, "selected_objects", ())}
+    selected.discard(None)
+    if len(selected) == 1:
+        return next(iter(selected))
+    if selected:
+        return None
+    scene_armatures = [obj for obj in context.scene.objects if obj.type == "ARMATURE"]
+    return scene_armatures[0] if len(scene_armatures) == 1 else None
 
 
 def _maps_from_armature(arm_obj):
@@ -716,18 +816,27 @@ def _maps_from_armature(arm_obj):
 
 
 def _apply_clip_paths(context, clip_paths, options):
-    """Build actions from clip paths onto the active armature."""
+    """Build actions from disk clip paths (any project's .anim) onto the active
+    armature: hashed/foreign curve paths re-anchor through the suffix-CRC join,
+    and a muscle-encoded clip solves against the armature's stamped avatar --
+    the same treatment the bridge flow gives its clips."""
     report = ImportReport()
     start = time.time()
-    arm = _active_armature(context)
+    arm = find_target_armature(context)
     if arm is None:
-        report.warnings.append("No armature in the scene to apply clips to. "
-                               "Import the model first, then the clips.")
+        report.warnings.append("No armature resolves from the selection or scene to apply "
+                               "clips to. Import the model first, or select the skeleton "
+                               "(or a mesh bound to it).")
         report.seconds = time.time() - start
         return report
     report.armature = arm
     report.bones = len(arm.data.bones)
-    maps = _maps_from_armature(arm)
+    # The stamped rig identity is the truth when present (Unity-space rest,
+    # original paths); deriving from live bones is for armatures built by
+    # something else entirely.
+    maps = maps_from_stamped_armature(arm) or _maps_from_armature(arm)
+    path_to_bone = maps.get("path_to_bone") or {}
+    avatar_json = armature_builder.read_avatar_json(arm)
     first = None
     for clip_path in clip_paths:
         try:
@@ -735,6 +844,12 @@ def _apply_clip_paths(context, clip_paths, options):
         except (OSError, ValueError) as exc:
             report.warnings.append(f"clip {os.path.basename(clip_path)} skipped: {exc}")
             continue
+        clip_name = clip.name or os.path.basename(clip_path)
+        _repaired, unmatched = clip_repair.repair_hashed_clip_paths(clip, path_to_bone)
+        if unmatched:
+            report.warnings.append(f"{clip_name}: {unmatched} hashed curve path(s) matched "
+                                   f"no bone of '{arm.name}' (skipped)")
+        _solve_humanoid_curves(clip, avatar_json, path_to_bone, report.warnings, clip_name)
         action, slot, _frames = animation_builder.build_action(
             clip, arm, maps, None, resolve_options(options))
         report.actions += 1
