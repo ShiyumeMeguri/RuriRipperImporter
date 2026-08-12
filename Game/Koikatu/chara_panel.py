@@ -32,6 +32,7 @@ MODEL_SECTION = "model"
 PARTS_SECTION = "parts"
 FACE_SECTION = "face"
 ANIME_SECTION = "anime"
+HANIME_SECTION = "hanime"
 
 CAST_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
     key="Koikatu:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
@@ -225,32 +226,102 @@ def _expression_items(self, context):
 
 # ── the animation catalog ───────────────────────────────────────────────────
 
+def _side_of(bundle):
+    """Which partner an H animation belongs to -- the game files them under
+    h/anim/male/ and h/anim/female/, which is the only statement of it."""
+    lowered = str(bundle).lower()
+    if "/male/" in lowered:
+        return "male"
+    if "/female/" in lowered:
+        return "female"
+    return None
+
+
 def _rebuild_anime(state):
     matched, table = datasets.search(datasets.ANIMATIONS, (),
                                      state.search.strip(), state.filter_rules)
     if table is None:
         state.entries.clear()
+        state.male_entries.clear()
+        state.female_entries.clear()
         return
-    rows = []
+    normal = []
+    sides = {"male": {}, "female": {}}
+    order = []
+    seen = set()
     for index in matched:
-        rows.append({
-            "name": table.cell(index, "name"),
-            "group": "{0} / {1}".format(table.cell(index, "groupName"),
-                                        table.cell(index, "categoryName")),
-            "row": str(index),
-            "clip": table.cell(index, "clip"),
-        })
-    _grouped(state, rows, "name", "group", "row", "clip")
+        family = str(table.cell(index, "family"))
+        name = table.cell(index, "name")
+        category = table.cell(index, "categoryName")
+        row = {"name": name,
+               "group": "{0} / {1}".format(table.cell(index, "groupName"), category),
+               "row": str(index),
+               "clip": table.cell(index, "clip")}
+        if family != "h":
+            normal.append(row)
+            continue
+        side = _side_of(table.cell(index, "bundle"))
+        if side is None:
+            normal.append(row)
+            continue
+        # A position (category) is the pair: the same act has one animation for
+        # each partner, so the two lists are built from ONE key set and stay
+        # index-aligned -- row N on the left is row N's partner on the right.
+        key = (str(category), str(name), str(table.cell(index, "clip")))
+        if key not in sides[side]:
+            sides[side][key] = row
+            if key not in seen:
+                seen.add(key)
+                order.append(key)
+    _grouped(state, normal, "name", "group", "row", "clip")
+    _grouped_pairs(state, order, sides)
+
+
+def _grouped_pairs(state, order, sides):
+    """Fill the male and female lists so their indices correspond.
+
+    Both collections get the same headers and the same number of rows in the
+    same order; a position only one partner has gets a blank placeholder on the
+    other side rather than shifting every later row out of alignment."""
+    state.male_entries.clear()
+    state.female_entries.clear()
+    order.sort(key=lambda key: (key[0], key[1], key[2]))
+    counts = {}
+    for key in order:
+        counts[key[0]] = counts.get(key[0], 0) + 1
+
+    current = None
+    for key in order:
+        if key[0] != current:
+            current = key[0]
+            for entries in (state.male_entries, state.female_entries):
+                header = entries.add()
+                header.label = "{0}  ({1})".format(current, counts[current])
+                header.is_group = True
+        for side, entries in (("male", state.male_entries),
+                              ("female", state.female_entries)):
+            row = sides[side].get(key)
+            entry = entries.add()
+            if row is None:
+                entry.label = "--"
+                entry.key = ""
+                entry.detail = ""
+            else:
+                entry.label = str(row["name"])
+                entry.key = str(row["row"])
+                entry.detail = str(row["clip"])
+    for index_prop in ("male_index", "female_index"):
+        if getattr(state, index_prop) >= len(state.male_entries):
+            setattr(state, index_prop, 0)
 
 
 def _on_anime_edit(self, context):
     _rebuild_anime(self)
 
 
-def _selected_animation(state):
-    entry = _selected_entry(state)
+def _row_of_entry(entry):
     table = datasets.table(datasets.ANIMATIONS)
-    if entry is None or table is None:
+    if entry is None or table is None or not entry.key:
         return None
     try:
         index = int(entry.key)
@@ -259,6 +330,23 @@ def _selected_animation(state):
     if not 0 <= index < len(table):
         return None
     return {name: table.cell(index, name) for name in table.names}
+
+
+def _selected_animation(state):
+    return _row_of_entry(_selected_entry(state))
+
+
+def _selected_side(state, side):
+    """The catalog row selected in one of the paired lists, or None -- a header
+    or a placeholder (the partner this position lacks) selects nothing."""
+    entries = state.male_entries if side == "male" else state.female_entries
+    index = state.male_index if side == "male" else state.female_index
+    if not 0 <= index < len(entries):
+        return None
+    entry = entries[index]
+    if entry.is_group:
+        return None
+    return _row_of_entry(entry)
 
 
 # ── property groups ─────────────────────────────────────────────────────────
@@ -279,7 +367,8 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         items=[(MODEL_SECTION, "Model", "Build a character from one of the game's own cards"),
                (PARTS_SECTION, "Parts", "Build from the customization catalog, slot by slot"),
                (FACE_SECTION, "Face", "Drive the head's blend-shape patterns"),
-               (ANIME_SECTION, "Anime", "The studio's animation catalog")],
+               (ANIME_SECTION, "Anime", "The studio's ordinary animation catalog"),
+               (HANIME_SECTION, "H", "Paired animations -- one per partner, side by side")],
         default=MODEL_SECTION)
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_cast_edit,
                            description="Filter by name, file or folder")
@@ -313,6 +402,10 @@ class RURI_PG_kk_anime(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                            description="Filter by name, group or bundle")
     entries: CollectionProperty(type=RURI_PG_kk_entry)
     active_index: IntProperty()
+    male_entries: CollectionProperty(type=RURI_PG_kk_entry)
+    male_index: IntProperty()
+    female_entries: CollectionProperty(type=RURI_PG_kk_entry)
+    female_index: IntProperty()
 
 
 class RURI_UL_kk_list(bpy.types.UIList):
@@ -578,29 +671,68 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
                 and _selected_animation(context.scene.ruri_kk_anime) is not None)
 
     def execute(self, context):
-        row = _selected_animation(context.scene.ruri_kk_anime)
         armature = _rig(context)
         if armature is None:
             self.report({"WARNING"}, "Select the character's armature first.")
             return {"CANCELLED"}
+        return _import_rows(self, context, [_selected_animation(context.scene.ruri_kk_anime)],
+                            armature)
+
+
+class RURI_OT_kk_hanime_import(bpy.types.Operator):
+    """Import one partner's selected animation onto the character in the scene."""
+    bl_idname = "ruri.kk_hanime_import"
+    bl_label = "Import"
+    bl_description = "Build this partner's selected animation as an action on the selected rig"
+    bl_options = {"REGISTER", "UNDO"}
+
+    side: EnumProperty(
+        name="Partner",
+        items=[("male", "Male", "The male partner's animation"),
+               ("female", "Female", "The female partner's animation")],
+        default="male")
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded and cabmap_state.BRIDGE is not None
+
+    def execute(self, context):
+        row = _selected_side(context.scene.ruri_kk_anime, self.side)
+        if row is None:
+            self.report({"WARNING"}, "Nothing selected on that side.")
+            return {"CANCELLED"}
+        armature = _rig(context)
+        if armature is None:
+            self.report({"WARNING"}, "Select the character's armature first.")
+            return {"CANCELLED"}
+        return _import_rows(self, context, [row], armature)
+
+
+def _import_rows(operator, context, rows, armature):
+    """Build every catalog row in ``rows`` onto ``armature``. The one import body;
+    both the flat list and the paired male/female lists call exactly this."""
+    options = context.scene.ruri_cabmap.as_options()
+    total = 0
+    labels = []
+    for row in rows:
+        if row is None:
+            continue
         bundle = str(row.get("overrideBundle") or row["bundle"])
         controller_name = str(row.get("overrideAsset") or row["asset"])
         cabs = datasets.cabs_for([bundle])
         if not cabs:
-            self.report({"WARNING"}, "'{0}' is not in the loaded cabmap.".format(bundle))
-            return {"CANCELLED"}
-
-        options = context.scene.ruri_cabmap.as_options()
+            operator.report({"WARNING"}, "'{0}' is not in the loaded cabmap.".format(bundle))
+            continue
         try:
             clip_keys, family_states = _resolve_state_family(
                 cabmap_state.BRIDGE, cabs, controller_name, str(row["clip"]))
             assets, _roots, _seeds, _clips, _scenes = cabmap_state.BRIDGE.import_cabs(
                 cabs, export_asset_keys=sorted(clip_keys))
         except LookupError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
+            operator.report({"ERROR"}, str(exc))
+            continue
         except Exception as exc:
-            _report_exception(self, "Animation import (bridge) failed", exc)
+            _report_exception(operator, "Animation import (bridge) failed", exc)
             return {"CANCELLED"}
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
@@ -615,16 +747,19 @@ class RURI_OT_kk_anime_import(bpy.types.Operator):
                 context, cabmap_state.active_game(), cabs[0], wanted, db, armature,
                 None, options, display_names)
         except cross_game_retarget.CrossGameRetargetError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
+            operator.report({"ERROR"}, str(exc))
+            continue
         except Exception as exc:
-            _report_exception(self, "Animation import failed", exc)
+            _report_exception(operator, "Animation import failed", exc)
             return {"CANCELLED"}
-        for message in warnings[:5]:
-            self.report({"WARNING"}, message)
-        self.report({"INFO"}, "{0}: {1} action(s) ({2}).".format(
-            row["name"], built, ", ".join(family_states)))
-        return {"FINISHED"}
+        for message in warnings[:3]:
+            operator.report({"WARNING"}, message)
+        total += built
+        labels.append("{0} ({1})".format(row["name"], ", ".join(family_states)))
+    if not total:
+        return {"CANCELLED"}
+    operator.report({"INFO"}, "{0} action(s): {1}".format(total, " | ".join(labels)))
+    return {"FINISHED"}
 
 
 def _resolve_state_family(bridge, cabs, controller_name, family):
@@ -769,12 +904,21 @@ class RURI_MT_kk_anime_filter(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
-        row = _selected_animation(context.scene.ruri_kk_anime)
+        row = _current_anime_row(context)
         if row is None:
             layout.label(text="No animation selected", icon="INFO")
             return
         filter_ui.draw_quick_filter_menu(layout, ANIME_FILTER_SPEC,
                                          lambda field: str(row.get(field, "")))
+
+
+def _current_anime_row(context):
+    """Whichever row the tab the user is looking at has selected -- the quick
+    filter builds its rules from this, so it must follow the visible list."""
+    anime = context.scene.ruri_kk_anime
+    if context.scene.ruri_kk_chara.section != HANIME_SECTION:
+        return _selected_animation(anime)
+    return _selected_side(anime, "male") or _selected_side(anime, "female")
 
 
 def _draw_anime(layout, context, state):
@@ -795,8 +939,34 @@ def _draw_anime(layout, context, state):
     actions.operator(RURI_OT_kk_anime_import.bl_idname, icon="ANIM_DATA")
 
 
+def _draw_hanime(layout, context, state):
+    anime = context.scene.ruri_kk_anime
+    search = filter_ui.draw_search_row(
+        layout, anime, extra_operator=(RURI_OT_kk_anime_refresh.bl_idname, "FILE_REFRESH"))
+    search.menu(RURI_MT_kk_anime_filter.bl_idname, text="", icon="COLLAPSEMENU")
+
+    split = layout.split(factor=0.5)
+    for side, title, entries_prop, index_prop in (
+            ("male", "Male", "male_entries", "male_index"),
+            ("female", "Female", "female_entries", "female_index")):
+        row = _selected_side(anime, side)
+        column = split.column(align=True)
+        column.label(text=title, icon="OUTLINER_OB_ARMATURE")
+        column.template_list(RURI_UL_kk_list.bl_idname, "kk_h_" + side,
+                             anime, entries_prop, anime, index_prop, rows=12)
+        caption = column.box()
+        caption.enabled = row is not None
+        caption.label(text=(str(row["name"]) if row is not None else "(nothing selected)"))
+        caption.label(text=("clip: {0}".format(row["clip"]) if row is not None else " "))
+        button = column.row(align=True)
+        button.enabled = row is not None
+        button.operator(RURI_OT_kk_hanime_import.bl_idname,
+                        text="Import " + title, icon="ANIM_DATA").side = side
+
+
 _SECTIONS = {MODEL_SECTION: _draw_model, PARTS_SECTION: _draw_parts,
-             FACE_SECTION: _draw_face, ANIME_SECTION: _draw_anime}
+             FACE_SECTION: _draw_face, ANIME_SECTION: _draw_anime,
+             HANIME_SECTION: _draw_hanime}
 
 
 def draw_character_tab(layout, context):
@@ -811,6 +981,7 @@ _CLASSES = (
     RURI_PG_kk_chara,
     RURI_PG_kk_anime,
     RURI_UL_kk_list,
+    RURI_OT_kk_hanime_import,
     RURI_OT_kk_refresh,
     RURI_OT_kk_build,
     RURI_OT_kk_build_parts,
