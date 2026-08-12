@@ -64,7 +64,7 @@ for _name, _mod in sorted(_game_modules, key=lambda entry: -entry[0].count("."))
     importlib.reload(_mod)
 
 import bpy
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 
@@ -77,6 +77,18 @@ def _on_ripperhook_repo_change(self, context):
     pythonnet_bridge.set_bin_dir(self.ripperhook_repo)
 
 
+class RURI_PG_remembered_game(bpy.types.PropertyGroup):
+    """One game's remembered browser inputs, kept in the addon preferences so the
+    folder a game was last pointed at survives across .blend files and Blender
+    restarts -- what the scene's own per-game config (RURI_PG_game_config, gone the
+    moment a file closes) cannot do. Only the paths the user chose per game live
+    here; loaded/session state stays on the scene."""
+    game_name: StringProperty()
+    game_root: StringProperty()
+    cabmap_path: StringProperty()
+    browsed_dir: StringProperty()
+
+
 class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     """Edit > Preferences > Add-ons > RuriRipperImporter. Holds the one path that differs per
     machine (this workspace is synced across machines that check the Ruri-RipperHook repo out
@@ -84,6 +96,10 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     Blender persists this in the user's saved preferences, so it only needs setting once per
     machine."""
     bl_idname = __package__
+
+    # One entry per game the user has ever pointed the panel at -- the persistent
+    # memory the per-game browser tabs read on open and write on every path change.
+    remembered_games: CollectionProperty(type=RURI_PG_remembered_game)
 
     ripperhook_repo: StringProperty(
         name="Ruri-RipperHook Bin Dir",
@@ -151,7 +167,7 @@ def _menu_asset(self, context):
                          text="Unity Asset (.prefab / .asset / .anim / .controller)")
 
 
-_CLASSES = (RuriRipperImporterPreferences, IMPORT_OT_unity_asset)
+_CLASSES = (RURI_PG_remembered_game, RuriRipperImporterPreferences, IMPORT_OT_unity_asset)
 
 
 def register():
@@ -159,9 +175,6 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_asset)
     cabmap_panel.register()
-    # Registered unconditionally; its own poll hides it whenever the
-    # AnimationRetarget add-on (which owns the retarget maths) is absent.
-    cross_game_retarget.register()
     # Every game folder under Game/ registers itself; the panel above names none
     # of them and simply draws whatever tabs the enabled hooks turn on.
     Game.register()
@@ -200,7 +213,6 @@ def register():
 def unregister():
     animation_builder.unregister_slot_autofix()
     Game.unregister()
-    cross_game_retarget.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
     for cls in reversed(_CLASSES):

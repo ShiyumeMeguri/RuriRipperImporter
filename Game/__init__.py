@@ -19,11 +19,15 @@ A hook is not the only way to name a game. A module may also declare
 ``RuriRipperPyBridge.unity.build_identity``. Pointing the panel at an install IS
 saying which game it is, so that join needs no hook ticked to work.
 
-ONE game is active at a time. A panel has one game root and one loaded cabmap,
-which can only ever be one title, and the upstream refuses two games' hooks for
-the same reason (they patch the same methods with different layouts -- see
-``RuriHook.ApplyHooks``). A ticked hook is the stronger statement of the two, so
-it decides; the build's own identity only speaks when no game hook is ticked.
+SEVERAL games can be enabled at once. Each ticked game hook enables that game;
+the panel keeps a game root, a cabmap and a browser session PER game (see
+``cabmap_state``) and lets the user pick which one the browser is currently on.
+The upstream still decodes ONE game at a time -- game hooks are mutually exclusive
+there (they patch the same methods with different layouts, see
+``RuriHook.ApplyHooks``) -- so switching the current game re-selects the decoder
+(``pythonnet_bridge.use_game``); enabling a game is not the same as decoding it. A
+ticked hook is the stronger statement of what a game is; the build's own identity
+only speaks when no game hook is ticked.
 """
 
 from __future__ import annotations
@@ -128,36 +132,33 @@ def tab_by_key(key):
     return next((tab for tab in all_tabs() if tab.key == key), None)
 
 
-def active_module(hook_ids, project_names=()):
-    """THE game this session is looking at, or None.
+def active_modules(hook_ids, project_names=()):
+    """Every game this session has enabled -- ALL of them, not one.
 
-    A ticked hook decides -- it is an explicit "decode this title" -- and the
-    build's own identity is the fallback for when none is ticked. At most one
-    either way: a panel has one game root and one cabmap, and offering two games'
-    tabs over them describes a state that cannot exist.
-
-    Ambiguity is resolved by returning NOTHING rather than a guess: two game
-    hooks ticked at once is a config the upstream itself refuses, and quietly
-    picking one of them would hide that."""
+    A ticked game hook enables that game, and several can be ticked at once: the
+    panel keeps a session and a cabmap PER game and lets the user switch which
+    one's cabmap the browser is on. When no game hook is ticked, the build's own
+    identity (project_names) speaks instead -- the fallback for an install with no
+    upstream hook. The upstream still decodes one game at a time (game hooks are
+    mutually exclusive there); enabling a game is not the same as decoding it, and
+    switching the current game re-selects the decoder (pythonnet_bridge.use_game)."""
     enabled = {game_of(hook_id).lower() for hook_id in hook_ids}
     hooked = [game for game in _MODULES if game.game_name.lower() in enabled]
     if hooked:
-        return hooked[0] if len(hooked) == 1 else None
+        return hooked
 
     identities = {str(name).lower() for name in project_names}
-    recognised = [game for game in _MODULES if game.project_names & identities]
-    return recognised[0] if len(recognised) == 1 else None
+    return [game for game in _MODULES if game.project_names & identities]
 
 
-def active_modules(hook_ids, project_names=()):
-    """``active_module`` as a list -- empty or one long."""
-    game = active_module(hook_ids, project_names)
-    return [game] if game is not None else []
-
-
-def active_tabs(hook_ids, project_names=()):
-    game = active_module(hook_ids, project_names)
-    return list(game.tabs) if game is not None else []
+def tabs_of(game_name):
+    """The tabs ONE game contributes. Several games are enabled at once now, each
+    with its own browser tab, so a panel draws the tabs of the game it is currently
+    on -- never the union, which would show two games' content tabs side by side."""
+    for game in _MODULES:
+        if game.game_name == game_name:
+            return list(game.tabs)
+    return []
 
 
 def recognised_game(project_names):
