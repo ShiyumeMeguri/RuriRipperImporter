@@ -6278,6 +6278,13 @@ VERTEX_PARTS = {
     'VFX': ('Ruri Endfield Uber Vertex VFX', build_Ruri_Endfield_Uber_Vertex_VFX),
 }
 
+KNOWN_PARTS = {'Standard', 'Face', 'Eyes', 'Hair', 'Fur', 'Eyebrow', 'VFX', 'OverlayShadow', 'LiquidAg'}
+VTX_MODIFIER = 'Ruri Endfield Uber Vertex'
+VTX_TREE_PREFIX = 'Ruri Endfield Uber Vertex '
+OUTLINE_TEMPLATE = 'Ruri Endfield Uber Outline'
+CLONE_V_PREFIX = 'Ruri Endfield Uber V '
+CLONE_O_PREFIX = 'Ruri Endfield Uber O '
+
 _BUILT = set()   # 本会话已重建过的 part
 _SHARED_READY = False
 
@@ -6493,7 +6500,7 @@ _VTX_BUILT = set()
 
 
 def build_vtx_outline():
-    t = _gntree('Ruri Endfield Outline')
+    t = _gntree(OUTLINE_TEMPLATE)
     g = GV(t)
     def nattr(name, dtype):
         nd = g._nd('GeometryNodeInputNamedAttribute')
@@ -6694,7 +6701,7 @@ def apply_vertex_stage(objects=None, camera=None):
         if obj.type != 'MESH' or obj.data is None or obj.name.startswith('RuriOL '):
             continue
         slots = [(i, m) for i, m in enumerate(obj.data.materials)
-                 if m is not None and m.get('ruri_uber_part')
+                 if m is not None and m.get('ruri_uber_part') in KNOWN_PARTS
                  and not m.get('ruri_outline_clone')]   # 描边克隆继承 id props,不算 uber 槽
         vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in VERTEX_PARTS]
         def _outline_on(mat):
@@ -6713,7 +6720,7 @@ def apply_vertex_stage(objects=None, camera=None):
         outline_slots = [(i, m) for i, m in slots if _outline_on(m)]
         if not vert_slots and not outline_slots:
             continue
-        tree_name = 'Ruri Vertex ' + obj.name
+        tree_name = VTX_TREE_PREFIX + obj.name
         old = bpy.data.node_groups.get(tree_name)
         if old is not None:
             bpy.data.node_groups.remove(old)
@@ -6758,7 +6765,7 @@ def apply_vertex_stage(objects=None, camera=None):
         for slot, mat in vert_slots:
             part = mat['ruri_uber_part']
             vt_name, vt_builder = VERTEX_PARTS[part]
-            clone = _clone_vtx(vt_name, vt_builder, 'Uber V {0}'.format(mat.name), mat)
+            clone = _clone_vtx(vt_name, vt_builder, CLONE_V_PREFIX + mat.name, mat)
             gn = nd('GeometryNodeGroup')
             gn.node_tree = clone
             floats, st, colors = _mat_meta(mat)
@@ -6801,8 +6808,8 @@ def apply_vertex_stage(objects=None, camera=None):
             branch = gin.outputs[0]
             for slot, mat in outline_slots:
                 floats, st, colors = _mat_meta(mat)
-                oc_tree = _clone_vtx('Ruri Endfield Outline', build_vtx_outline,
-                                     'Uber O {0}'.format(mat.name), mat)
+                oc_tree = _clone_vtx(OUTLINE_TEMPLATE, build_vtx_outline,
+                                     CLONE_O_PREFIX + mat.name, mat)
                 og = nd('GeometryNodeGroup')
                 og.node_tree = oc_tree
                 for key, value in cam_vec.items():
@@ -6855,9 +6862,9 @@ def apply_vertex_stage(objects=None, camera=None):
             mt.links.new(sa.outputs['Geometry'], jn.inputs[0])
             geo = jn.outputs['Geometry']
         mt.links.new(geo, gout.inputs[0])
-        mod = obj.modifiers.get('Ruri Endfield Vertex')
+        mod = obj.modifiers.get(VTX_MODIFIER)
         if mod is None:
-            mod = obj.modifiers.new('Ruri Endfield Vertex', 'NODES')
+            mod = obj.modifiers.new(VTX_MODIFIER, 'NODES')
         mod.node_group = mt
         if vert_slots:
             # 20 层透明壳叠深 > Cycles 默认 transparent_max_bounces=8,穿透壳堆的
@@ -7164,13 +7171,18 @@ def provider(builder, props):
 def register():
     # 宿主注册表按**绝对路径**导入(配方给的名字):相对导入会绑死部署深度,
     # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
+    # 材质图与顶点腿都在这里自注册 —— 消费方只调宿主注册表,门面不写一行逻辑。
     import importlib
-    importlib.import_module('RuriRipperImporter.material_builder').register_graph_provider(provider)
+    host = importlib.import_module('RuriRipperImporter.material_builder')
+    host.register_graph_provider(provider)
+    host.register_vertex_stage(apply_vertex_stage)
 
 
 def unregister():
     import importlib
-    importlib.import_module('RuriRipperImporter.material_builder').unregister_graph_provider(provider)
+    host = importlib.import_module('RuriRipperImporter.material_builder')
+    host.unregister_graph_provider(provider)
+    host.unregister_vertex_stage(apply_vertex_stage)
 
 
 if __name__ == '__main__':
