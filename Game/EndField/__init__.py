@@ -30,12 +30,10 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, roster_panel, scene_panel, shader, vertex_packing
+from . import character_panel, roster_panel, scene_panel, shader
 
 
 def _register():
-    # 本作自研的顶点打包(见 vertex_packing):内核只内置标准格式,私有布局注册进去。
-    vertex_packing.register()
     scene_panel.register()
     roster_panel.register()
     character_panel.register()
@@ -46,7 +44,6 @@ def _register():
 
 
 def _unregister():
-    vertex_packing.unregister()
     shader.unregister()
     character_panel.unregister()
     roster_panel.unregister()
