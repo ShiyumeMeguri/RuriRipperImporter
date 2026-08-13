@@ -31,6 +31,8 @@ from . import datasets, ui_scene_state
 
 STAGE_COLLECTION = "Endfield UI Stage"
 
+MAIN_CAMERA_TAG = "MainCamera"
+
 # Which field of which asset drives which host target is the game's own answer
 # (``endfield.ui.bindings``); what is left here is the writing -- a Blender light,
 # a world colour, one input of a shader group.
@@ -262,11 +264,18 @@ def import_stage(context, db, roots, options):
 def adopt_camera(context, cameras):
     """Make the stage's own camera the scene camera, so numpad-0 looks through
     what the game looks through. The render aspect follows: a vertical FOV only
-    frames the same picture at the same aspect ratio."""
+    frames the same picture at the same aspect ratio.
+
+    Which of a stage's cameras that is comes off Unity's own ``MainCamera`` tag,
+    which the prefab states on exactly the one the game renders through; the
+    rest are cinemachine rigs and per-body-type framing helpers. Falling back to
+    "the first visible one" would be a guess, so it only happens when the prefab
+    tags nothing."""
     if not cameras:
         return None
+    tagged = [obj for obj in cameras if obj.get(prefab_importer.UNITY_TAG) == MAIN_CAMERA_TAG]
     visible = [obj for obj in cameras if not obj.hide_viewport] or list(cameras)
-    chosen = visible[0]
+    chosen = tagged[0] if tagged else visible[0]
     context.scene.camera = chosen
     render = context.scene.render
     if render.resolution_x * 9 != render.resolution_y * 16:

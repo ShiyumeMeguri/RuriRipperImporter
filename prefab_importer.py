@@ -28,6 +28,8 @@ except ImportError:  # standalone (non-package) testing
                                      clip_paths as clip_repair, discovery,
                                      mesh_decoder, prefab as prefab_scan, skinning)
 
+UNITY_TAG = "unity_tag"
+
 DEFAULT_OPTIONS = {
     "lod0_only": True,
     "import_materials": True,
@@ -572,6 +574,7 @@ def _camera_object(camera):
         data.angle_y = math.radians(camera.fov)
     obj = bpy.data.objects.new(camera.name, data)
     obj.hide_viewport = obj.hide_render = camera.disabled
+    obj[UNITY_TAG] = camera.tag
     return obj
 
 
