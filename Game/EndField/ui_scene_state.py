@@ -26,19 +26,11 @@ is visible rather than silently dropped.
 from __future__ import annotations
 
 from ...RuriRipperPyBridge.unity import unity_yaml
+from . import datasets
 
 # Discovery holds no bpy data, and re-running it costs a bridge import -- keep it
 # across a script reload like the other scene state does.
 HOLDS_PROCESS_STATE = True
-
-# Beyond.PathDef.DYNAMIC_PREFAB_PATH, lowercased the way container paths are.
-PREFAB_ROOT = "assets/beyond/dynamicassets/gameplay/prefabs/"
-
-# The three MonoBehaviour types a display stage is made of, by CLASS NAME --
-# resolved out of the closure's own MonoScript assets, never by guid literal.
-ENVIRONMENT_CLASS = "HGEnvironmentPhase"
-VOLUME_PROFILE_CLASS = "VolumeProfile"
-CHARACTER_VOLUME_CLASS = "HGCharacterVolume"
 
 # AssetRipper writes a MonoScript as a .cs under its own Scripts tree; the file's
 # stem is the class. That is how a guid becomes a type here.
@@ -54,10 +46,6 @@ def reset():
     SCENES = []
     DOCUMENTS = {}
     STATUS = "Refresh to read the game's UI display scenes."
-
-
-def _folder(container_path):
-    return container_path.rsplit("/", 1)[0] + "/"
 
 
 def _class_of_script(exported_path):
@@ -83,57 +71,40 @@ def _mono_behaviour_doc(unity_file):
     return str(doc.data.get("m_Name") or ""), str(guid).lower(), doc.data
 
 
-def candidate_paths(container_paths):
-    """Every .asset the game files under its own prefab root -- the set a
-    discovery has to look at, and small (17 in 1.4.4)."""
-    return sorted(p for p in container_paths
-                  if p.startswith(PREFAB_ROOT) and p.endswith(".asset"))
-
-
-def candidate_prefabs(container_paths):
-    """The prefabs sitting directly in a stage folder -- one of them IS the
-    stage (CharInfoChar carries the floor, the sky sphere, the shadow plane and
-    the cameras). Subfolders are excluded: a folder's additionallights/ and
-    cameratracks/ hold one prefab PER CHARACTER, which is a different axis and
-    dozens of closures wide."""
-    out = []
-    for path in container_paths:
-        if not path.startswith(PREFAB_ROOT) or not path.endswith(".prefab"):
-            continue
-        rest = path[len(PREFAB_ROOT):]
-        if rest.count("/") == 1:          # <stage folder>/<name>.prefab
-            out.append(path)
-    return sorted(out)
-
-
-def discover(bridge, container_paths):
+def discover(bridge):
     """Read the game's UI display stages out of its own assets.
 
-    One bridge import for the whole candidate set (MonoBehaviour + MonoScript
-    only -- no meshes, no textures), then every asset is classified by the class
-    its m_Script names."""
+    Where those assets live, which prefab IS the stage, which classes a stage is
+    made of and how it names the two halves of one are the game's own answers
+    (``endfield.ui.candidates`` / ``endfield.ui.schema``). One bridge import for
+    the whole candidate set (MonoBehaviour + MonoScript only -- no meshes, no
+    textures), then every asset is classified by the class its m_Script names."""
     global SCENES, DOCUMENTS, STATUS
-    candidates = candidate_paths(container_paths)
-    if not candidates:
+    published = datasets.ui_candidates()
+    configs = [row for row in published if row["kind"] == "config"]
+    if not configs:
         SCENES, DOCUMENTS = [], {}
-        STATUS = "No config assets under {0}.".format(PREFAB_ROOT)
+        STATUS = "The game ships no display-stage config assets in this cabmap."
         return SCENES
 
-    # path -> cab, resolved one at a time: the bulk call answers with a deduped
-    # SET, which cannot say which cab carries which path, and that mapping is
-    # what turns an imported asset back into the folder the game filed it in.
-    cab_of_path = {}
-    for path in candidates:
-        for cab in bridge.resolve_cabs_for_paths([path]):
-            cab_of_path[path] = str(cab)
-            break
+    schema = datasets.ui_schema()
+    environment_class = (schema.get("environmentClass") or [""])[0]
+    volume_profile_class = (schema.get("volumeProfileClass") or [""])[0]
+    character_volume_class = (schema.get("characterVolumeClass") or [""])[0]
+    stem_suffixes = schema.get("stemSuffix") or []
+
+    cab_of_path = {row["path"]: row["cab"] for row in configs}
+    folder_of_path = {row["path"]: row["folder"] for row in configs}
+    group_of_folder = {row["folder"]: row["group"] for row in published}
+    candidates = sorted(cab_of_path)
+    stage_prefabs = {}
+    for row in published:
+        if row["kind"] == "stage":
+            stage_prefabs.setdefault(row["folder"], []).append(row["path"])
+    for paths in stage_prefabs.values():
+        paths.sort()
 
     cabs = sorted(set(cab_of_path.values()))
-    if not cabs:
-        SCENES, DOCUMENTS = [], {}
-        STATUS = "None of the {0} candidate asset(s) resolved to a CAB.".format(len(candidates))
-        return SCENES
-
     assets, _roots, seed_roots, _clips, _scene_roots = bridge.import_cabs(
         cabs, [MONO_BEHAVIOUR_CLASS_ID, MONO_SCRIPT_CLASS_ID])
     exported = dict(bridge.asset_paths_by_guid)
@@ -191,27 +162,21 @@ def discover(bridge, container_paths):
         if path is None:
             continue
         documents[path] = entry["data"]
-        record = dict(entry, path=path, folder=_folder(path))
-        if entry["class"] == ENVIRONMENT_CLASS:
+        record = dict(entry, path=path, folder=folder_of_path.get(path, ""))
+        if entry["class"] == environment_class:
             environments.append(record)
-        elif entry["class"] == VOLUME_PROFILE_CLASS:
+        elif entry["class"] == volume_profile_class:
             record["components"] = _components(entry["data"], behaviours)
             volumes.append(record)
-
-    # Which prefab in a folder IS the stage -- the one that carries the floor,
-    # the sky sphere and the cameras. Asked of the cabmap's own dependency
-    # graph rather than by reading prefabs: the stage is a prefab that DEPENDS
-    # on the stage's config assets, which is the same link the game wrote when
-    # its Volume was pointed at that profile.
-    stage_prefabs = _stage_prefabs(bridge, container_paths, cab_of_path)
 
     rows = []
     for env in sorted(environments, key=lambda r: (r["folder"], r["name"])):
         folder = env["folder"]
-        group = folder[len(PREFAB_ROOT):].strip("/").split("/")[0]
-        stem = _stem(env["name"])
+        group = group_of_folder.get(folder, "")
+        stem = _stem(env["name"], stem_suffixes)
         siblings = [v for v in volumes if v["folder"] == folder]
-        own = [v for v in siblings if _stem(v["name"]).lower().startswith(stem.lower())] or siblings
+        own = [v for v in siblings
+               if _stem(v["name"], stem_suffixes).lower().startswith(stem.lower())] or siblings
         rows.append({
             "id": "{0}/{1}".format(group, env["name"]),
             "label": env["name"],
@@ -219,7 +184,7 @@ def discover(bridge, container_paths):
             "env": env,
             "volumes": own,
             "char_volumes": [c for v in own for c in v["components"]
-                             if c["class"] == CHARACTER_VOLUME_CLASS],
+                             if c["class"] == character_volume_class],
             "stage_prefabs": stage_prefabs.get(folder, []),
         })
 
@@ -231,32 +196,6 @@ def discover(bridge, container_paths):
 
 MONO_BEHAVIOUR_CLASS_ID = 114
 MONO_SCRIPT_CLASS_ID = 115
-
-
-def _stage_prefabs(bridge, container_paths, cab_of_config):
-    """folder -> the prefabs in it that depend on that folder's config assets.
-
-    The stage prefab is imported like any other prefab: the generic importer
-    builds its hierarchy 1:1, so all that is needed here is WHICH prefab, and
-    the cabmap's dependency graph answers that without reading one."""
-    prefab_paths = candidate_prefabs(container_paths)
-    if not prefab_paths or not cab_of_config:
-        return {}
-    cab_of_prefab = {}
-    for path in prefab_paths:
-        for cab in bridge.resolve_cabs_for_paths([path]):
-            cab_of_prefab[str(cab).lower()] = path
-            break
-    try:
-        dependents = {str(cab).lower()
-                      for cab in bridge.find_direct_dependents(sorted(set(cab_of_config.values())))}
-    except Exception:  # noqa: BLE001 -- a graph the hook cannot answer is not fatal
-        return {}
-    found = {}
-    for cab, path in cab_of_prefab.items():
-        if cab in dependents:
-            found.setdefault(_folder(path), []).append(path)
-    return {folder: sorted(paths) for folder, paths in found.items()}
 
 
 def _components(profile_data, behaviours):
@@ -273,11 +212,12 @@ def _components(profile_data, behaviours):
     return resolved
 
 
-def _stem(name):
+def _stem(name, suffixes):
     """``CharInfo_Env`` -> ``CharInfo`` -- the game's own naming of the two
-    halves of one stage. Only ever used to pair inside a single folder."""
-    for suffix in ("_Env", "_Volume", "_env", "_volume"):
-        if name.endswith(suffix):
+    halves of one stage, by the suffixes the hook publishes. Only ever used to
+    pair inside a single folder."""
+    for suffix in suffixes:
+        if name.lower().endswith(suffix.lower()):
             return name[: -len(suffix)]
     return name
 

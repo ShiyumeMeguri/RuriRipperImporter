@@ -41,6 +41,9 @@ NAMED = "endfield.asset.named"
 RANK = "endfield.asset.rank"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
+UI_CANDIDATES = "endfield.ui.candidates"
+UI_SCHEMA = "endfield.ui.schema"
+UI_BINDINGS = "endfield.ui.bindings"
 
 
 def _table(dataset_id, **args):
@@ -205,6 +208,32 @@ def animation_anchor(name, cast):
         return None
     row = rows[0]
     return {"anchor": row["anchor"], "hits": _int(row["hits"]), "group": row["group"]}
+
+
+# ── ui display stages ───────────────────────────────────────────────────────
+
+def ui_candidates():
+    """The assets a display stage is made of, and the stage prefab of each folder.
+    Where they live and which prefab IS the stage are the game's own filing."""
+    return _rows(UI_CANDIDATES)
+
+
+def ui_schema():
+    """{role: [value]} -- what a stage is made of in the game's own class names,
+    and how it names the two halves of one stage."""
+    schema = {}
+    for row in _rows(UI_SCHEMA):
+        schema.setdefault(row["role"], []).append(row["value"])
+    return schema
+
+
+def ui_bindings():
+    """Where a stage's own values land in the host: one row per (source field,
+    host target). ``gate`` is 'override' for a value that only counts when the
+    volume actually overrides it."""
+    return [{"source": row["source"], "target": row["target"], "slot": _int(row["slot"]),
+             "components": row["components"], "gate": row["gate"]}
+            for row in _rows(UI_BINDINGS)]
 
 
 # ── npcs and characters ─────────────────────────────────────────────────────

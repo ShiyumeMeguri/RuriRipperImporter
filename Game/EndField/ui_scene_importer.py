@@ -27,38 +27,34 @@ import numpy
 from mathutils import Vector
 
 from ... import coordinate, prefab_importer
-from . import ui_scene_state
+from . import datasets, ui_scene_state
 
 STAGE_COLLECTION = "Endfield UI Stage"
 
-# HGCharacterVolume field -> (CP slot, which components of it).
-#
-# The slot for each is read off the game shader's own use of that component:
-# the skin path (Face) reads CP3/CP4 where every other part reads CP2/CP5, which
-# is exactly the volume's own "(except skin)"/"skin" pair of colours; CP6/CP7
-# are consumed as the ambient direction and its coefficients, which is what
-# charGlobalAmbientParam0/1 are; CP1.z gates the cast-shadow lerp to 1.
-#
-# Deliberately NOT pushed: the light DIRECTION override (CP1.w) and the light
-# COLOUR override (CP12.y). In-game they carry a camera-follow direction and a
-# white colour -- identity here -- and leaving them at zero is what keeps the
-# scene's own sun driving the shading instead of a frozen vector.
-BINDINGS = (
-    ("charMainLightMultiplier", 0, "y"),
-    ("charEnvShadowMultiplier", 0, "z"),
-    ("charEnvLightMultiplier", 0, "w"),
-    ("charIgnoreMainLightShadow", 1, "z"),
-    ("charShadowTintColor", 2, "rgb"),
-    ("charSkinShadowTintColor", 3, "rgb"),
-    ("charSkinMainLightOverrideColor", 4, "rgb"),
-    ("charMainLightOverrideColor", 5, "rgb"),
-    ("charGlobalAmbientParam0", 6, "xyzw"),
-    ("charGlobalAmbientParam1", 7, "xyzw"),
-    ("charMainLightRangeBias", 11, "w"),
-    ("charMainLightControl", 12, "x"),
-)
+# Which field of which asset drives which host target is the game's own answer
+# (``endfield.ui.bindings``); what is left here is the writing -- a Blender light,
+# a world colour, one input of a shader group.
+LIGHT_DIRECTION = "light.direction"
+LIGHT_ENERGY = "light.energy"
+LIGHT_ANGLE = "light.angle"
+LIGHT_COLOR = "light.color"
+LIGHT_TEMPERATURE = "light.temperature"
+LIGHT_USE_TEMPERATURE = "light.useTemperature"
+WORLD_COLOR = "world.color"
+CHARACTER_PARAMS = "material.characterParams"
 
 _XYZ = {"x": 0, "y": 1, "z": 2}
+
+
+def _resolve(data, source):
+    """One binding's source value, addressed the way the binding states it
+    (``lightConfig.forwardDirect``). None when the asset does not carry it."""
+    value = data
+    for step in source.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(step)
+    return value
 
 
 def _vector(value, keys="xyz"):
@@ -78,34 +74,27 @@ def _scalar(value):
 
 
 def apply_environment(context, env_data, name="Endfield Sun"):
-    """Build/replace the stage's sun and world from its HGEnvironmentPhase."""
-    light_config = env_data.get("lightConfig") or {}
-    sky_config = env_data.get("skyConfig") or {}
-    sun = _sun(context, light_config, name)
-    _world(context, sky_config)
+    """Build/replace the stage's sun and world from its own environment asset,
+    one published binding at a time. Nothing here knows which field of the
+    asset means what -- only how to write a Blender light and a world."""
+    sun = None
+    for binding in datasets.ui_bindings():
+        target = binding["target"]
+        if not (target.startswith("light.") or target.startswith("world.")):
+            continue
+        value = _resolve(env_data, binding["source"])
+        if value is None:
+            continue
+        if target == WORLD_COLOR:
+            _world(context, value)
+            continue
+        sun = sun or _sun(context, name)
+        _write_light(sun, target, value)
     return sun
 
 
-def _sun(context, light_config, name):
-    """The stage's directional light.
-
-    ``forwardDirect`` is the direction the light travels, already resolved by
-    the game from its pitch/yaw; Blender's sun shines down its own -Z, so the
-    object simply tracks that vector. Intensity is ``directIntensity`` -- lux
-    times the frame's pre-exposure -- and it goes into Blender's sun strength
-    unchanged: both sides divide by pi for the Lambert term, so the two agree
-    without a fudge factor.
-    """
-    forward = light_config.get("forwardDirect")
-    if not isinstance(forward, dict):
-        return None
-    unity = numpy.array([[float(forward.get("x", 0.0)),
-                          float(forward.get("y", 0.0)),
-                          float(forward.get("z", 0.0))]], dtype=numpy.float32)
-    converted = coordinate.convert_points(unity)[0]
-    direction = coordinate.root_matrix().to_3x3() @ Vector(
-        (float(converted[0]), float(converted[1]), float(converted[2])))
-
+def _sun(context, name):
+    """The stage's directional light, built once and reused."""
     data = bpy.data.lights.get(name)
     if data is None or data.type != "SUN":
         data = bpy.data.lights.new(name, type="SUN")
@@ -116,39 +105,54 @@ def _sun(context, light_config, name):
         context.collection.objects.link(obj)
     elif obj.name not in context.scene.objects:
         context.collection.objects.link(obj)
-
-    if direction.length > 1e-6:
-        obj.rotation_mode = "QUATERNION"
-        obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
-    data.energy = float(light_config.get("directIntensity", 1.0))
-    data.angle = 2.0 * float(light_config.get("directSoftSourceRadius", 0.0))
-    colour = light_config.get("directColor")
-    if isinstance(colour, dict):
-        data.color = (float(colour.get("r", 1.0)),
-                      float(colour.get("g", 1.0)),
-                      float(colour.get("b", 1.0)))
-    # directColorMode picks colour vs temperature; Blender carries the same
-    # blackbody knob on the light itself, so the Kelvin travels as Kelvin.
-    temperature = light_config.get("directColorTemperature")
-    if temperature and hasattr(data, "temperature"):
-        data.use_temperature = bool(light_config.get("directColorMode", 0))
-        data.temperature = float(temperature)
     return obj
 
 
-def _world(context, sky_config):
+def _write_light(obj, target, value):
+    """One binding onto the sun.
+
+    A direction is the direction the light TRAVELS, already resolved by the game
+    from its pitch/yaw; Blender's sun shines down its own -Z, so the object
+    simply tracks that vector. Energy goes in unchanged: both sides divide by pi
+    for the Lambert term, so the two agree without a fudge factor. A colour
+    temperature travels as Kelvin, which Blender carries on the light itself."""
+    data = obj.data
+    if target == LIGHT_DIRECTION:
+        if not isinstance(value, dict):
+            return
+        unity = numpy.array([[float(value.get("x", 0.0)), float(value.get("y", 0.0)),
+                              float(value.get("z", 0.0))]], dtype=numpy.float32)
+        converted = coordinate.convert_points(unity)[0]
+        direction = coordinate.root_matrix().to_3x3() @ Vector(
+            (float(converted[0]), float(converted[1]), float(converted[2])))
+        if direction.length > 1e-6:
+            obj.rotation_mode = "QUATERNION"
+            obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+    elif target == LIGHT_ENERGY:
+        data.energy = _scalar(value)
+    elif target == LIGHT_ANGLE:
+        data.angle = 2.0 * _scalar(value)
+    elif target == LIGHT_COLOR:
+        components = _vector(value, "rgb")
+        if len(components) >= 3:
+            data.color = (components[0], components[1], components[2])
+    elif target == LIGHT_USE_TEMPERATURE:
+        if hasattr(data, "use_temperature"):
+            data.use_temperature = bool(_scalar(value))
+    elif target == LIGHT_TEMPERATURE:
+        if _scalar(value) and hasattr(data, "temperature"):
+            data.temperature = _scalar(value)
+
+
+def _world(context, ambient):
     """The stage's ambient, as the DC term of its own baked sky SH.
 
     Only the constant term is used: the character shader takes its ambient from
     the character volume rather than the world, so what the world owes the scene
     is the backdrop level, and that is sh[0] per channel."""
-    ambient = sky_config.get("skyAmbientSH")
     if not isinstance(ambient, dict):
         return None
-    channels = []
-    for base in (0, 9, 18):
-        key = "sh[{0:2d}]".format(base).replace(" ", " ")
-        channels.append(float(ambient.get("sh[{0:2d}]".format(base), ambient.get(key, 0.0))))
+    channels = [float(ambient.get("sh[{0:2d}]".format(base), 0.0)) for base in (0, 9, 18)]
     world = context.scene.world
     if world is None:
         world = bpy.data.worlds.new("Endfield UI Stage")
@@ -164,9 +168,15 @@ def apply_character_params(char_volume_data, materials=None):
     """Push the stage's HGCharacterVolume onto every Endfield uber material.
 
     Returns (materials touched, parameters written)."""
-    pushed = [(field, slot, comps, ui_scene_state.overridden(char_volume_data, field))
-              for field, slot, comps in BINDINGS]
-    pushed = [row for row in pushed if row[3] is not None]
+    pushed = []
+    for binding in datasets.ui_bindings():
+        if binding["target"] != CHARACTER_PARAMS:
+            continue
+        value = (ui_scene_state.overridden(char_volume_data, binding["source"])
+                 if binding["gate"] == "override"
+                 else char_volume_data.get(binding["source"]))
+        if value is not None:
+            pushed.append((binding["slot"], binding["components"], value))
     if not pushed:
         return 0, 0
 
@@ -178,7 +188,7 @@ def apply_character_params(char_volume_data, materials=None):
         for node in material.node_tree.nodes:
             if node.bl_idname != "ShaderNodeGroup" or node.node_tree is None:
                 continue
-            for _field, slot, comps, value in pushed:
+            for slot, comps, value in pushed:
                 hits += _write_slot(node, slot, comps, value)
         if hits:
             touched += 1

@@ -37,21 +37,6 @@ def _bridge_asset_db_module():
     return bridge_asset_db
 
 
-def _container_paths():
-    """Every container path the loaded cabmap knows -- the input discovery reads
-    the game's filing out of."""
-    rows = cabmap_state.ROWS
-    if rows is None:
-        return []
-    paths = set()
-    for index in range(rows.count):
-        for slot in range(rows.container_path_count(index)):
-            path = rows.container_path(index, slot)
-            if path:
-                paths.add(path)
-    return paths
-
-
 def _rebuild(state):
     """Refill the drawn list from what discovery found, grouped by the folder
     the game itself filed each stage in."""
@@ -134,7 +119,7 @@ class RURI_OT_ui_scene_refresh(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            ui_scene_state.discover(cabmap_state.BRIDGE, _container_paths())
+            ui_scene_state.discover(cabmap_state.BRIDGE)
         except Exception as exc:
             _report_exception(self, "UI stage discovery failed", exc)
             return {"CANCELLED"}
