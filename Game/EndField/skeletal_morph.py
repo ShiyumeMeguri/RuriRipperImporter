@@ -40,11 +40,6 @@ VALUE_KEY = "_value"
 POSE_KEY = "_pose"
 LIPSYNC_KEY = "_lipSyncMap"
 
-# The one anchor into the game's own asset layout: every asset of this family
-# lives under this VFS folder. Everything else (which kinds exist, which
-# channels, which ctrls) is derived from what is actually there.
-VFS_MARKER = "/skeletalmorph/"
-
 _CURVE_CHANNEL_RE = re.compile(r"^_.*Curve.*$")
 _VALUE_CHANNEL_RE = re.compile(r"^_.*Value.*$")
 # The game's Hungarian boolean prefix is "_b" followed by a capitalised word
@@ -487,25 +482,6 @@ def parse_document(document, guid=""):
     if document is None:
         return None
     return parse(getattr(document, "data", None), guid=guid)
-
-
-def kind_from_container_path(path):
-    """The asset's kind as the GAME files it: the folder segment directly
-    under the family root. ``.../skeletalmorphanim/emotion/x.asset`` -> the
-    ``emotion`` bucket, ``.../skeletalmorphcfg/girl/x.asset`` -> ``cfg``.
-
-    Used for the cheap, no-import discovery pass (the row table only knows
-    container paths); ``parse`` re-derives the real kind from the fields once
-    an asset is actually loaded. Returns "" for a path outside the family."""
-    lowered = (path or "").lower()
-    marker = lowered.find(VFS_MARKER)
-    if marker < 0:
-        return ""
-    segments = [s for s in lowered[marker + len(VFS_MARKER):].split("/") if s]
-    if len(segments) < 2:
-        return ""
-    root = segments[0]
-    return "cfg" if root.endswith("cfg") else segments[1]
 
 
 def sample_weights(asset, time):

@@ -41,6 +41,7 @@ NAMED = "endfield.asset.named"
 RANK = "endfield.asset.rank"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
+MORPH_LIBRARY = "endfield.morph.library"
 UI_CANDIDATES = "endfield.ui.candidates"
 UI_SCHEMA = "endfield.ui.schema"
 UI_BINDINGS = "endfield.ui.bindings"
@@ -208,6 +209,15 @@ def animation_anchor(name, cast):
         return None
     row = rows[0]
     return {"anchor": row["anchor"], "hits": _int(row["hits"]), "group": row["group"]}
+
+
+# ── the facial morph library ────────────────────────────────────────────────
+
+def morph_library():
+    """Every SkeletalMorph asset the loaded map carries, bucketed by the kind the
+    game files it under. Where that family lives and how its folders name a kind
+    are the game's own filing."""
+    return _rows(MORPH_LIBRARY)
 
 
 # ── ui display stages ───────────────────────────────────────────────────────

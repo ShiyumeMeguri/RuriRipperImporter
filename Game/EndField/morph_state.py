@@ -10,7 +10,7 @@ imports bpy: a host materializes whatever subset its UI shows.
 
 from __future__ import annotations
 
-from . import skeletal_morph
+from . import datasets, skeletal_morph
 
 # Holds the parsed morph library (one export + parse per asset), so a host's
 # script reload skips this module instead of paying for it again.
@@ -41,29 +41,24 @@ def reset():
     CHARACTER_TOKEN = ""
 
 
-def discover(rows, character_token=""):
-    """Bucket every SkeletalMorph row of the loaded cabmap by the kind the GAME
-    files it under (skeletal_morph.kind_from_container_path). Pure row-table
-    work -- no bridge call at all, so this is instant even at 260k rows.
+def discover(character_token=""):
+    """Bucket every SkeletalMorph asset of the loaded cabmap by the kind the GAME
+    files it under. Where that family lives and how a folder names a kind are the
+    hook's answer (``endfield.morph.library``); the bucketing is over the whole
+    map at once, so this is one crossing rather than a scan of 260k rows.
 
     ``character_token`` is just remembered here; it filters at read time
     (entries_for) so a host can re-scope without re-scanning."""
     global CHARACTER_TOKEN
     LIBRARY.clear()
     CHARACTER_TOKEN = (character_token or "").strip().lower()
-    for index in range(len(rows)):
-        for path_index in range(rows.container_path_count(index)):
-            path = rows.container_path(index, path_index)
-            kind = skeletal_morph.kind_from_container_path(path)
-            if not kind:
-                continue
-            LIBRARY.setdefault(kind, []).append({
-                "cab": rows.cab(index),
-                "name": rows.name(index),
-                "path": path,
-                "kind": kind,
-            })
-            break
+    for row in datasets.morph_library():
+        LIBRARY.setdefault(row["kind"], []).append({
+            "cab": row["cab"],
+            "name": row["name"],
+            "path": row["path"],
+            "kind": row["kind"],
+        })
     for entries in LIBRARY.values():
         entries.sort(key=lambda entry: entry["name"].lower())
     return LIBRARY

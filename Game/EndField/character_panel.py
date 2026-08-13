@@ -732,7 +732,7 @@ class RURI_OT_character_scan(bpy.types.Operator):
 
         state.armature_name = armature_obj.name
         token = state.character_token.strip() or _suggest_token(armature_obj.name)
-        morph_state.discover(cabmap_state.ROWS, token)
+        morph_state.discover(token)
         state.character_token = token
         # Bound AFTER discovery: the bone table comes from this character's
         # avatar, which only exists once Load Library has run, so a first scan
@@ -757,7 +757,7 @@ def _suggest_token(armature_name):
     some assets but not most of them is the character's. Derived, not tabulated
     -- a rig naming convention this importer has never seen still resolves."""
     if not morph_state.LIBRARY:
-        morph_state.discover(cabmap_state.ROWS, "")
+        morph_state.discover("")
     names = [entry["name"].lower()
              for entries in morph_state.LIBRARY.values() for entry in entries]
     if not names:
