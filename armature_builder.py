@@ -158,10 +158,25 @@ def _bone_length(node):
     return max(min(best, 0.3), 0.005)
 
 
+DISPLAY_TYPE = "STICK"
+
+
+def new_armature_data(name):
+    """The one place an armature datablock is born, so every rig this add-on
+    builds looks the same in the viewport.
+
+    Stick, because a game rig routinely carries a few hundred bones whose lengths
+    are cosmetic (see this module's header): octahedral bodies at those lengths
+    bury the mesh they drive, while sticks stay readable at any bone count."""
+    data = bpy.data.armatures.new(name)
+    data.display_type = DISPLAY_TYPE
+    return data
+
+
 def build_armature(context, unity_file, name="UnityArmature"):
     nodes, roots = hierarchy.build_hierarchy(unity_file)
 
-    arm_data = bpy.data.armatures.new(name)
+    arm_data = new_armature_data(name)
     arm_obj = bpy.data.objects.new(name, arm_data)
     context.collection.objects.link(arm_obj)
 
@@ -277,7 +292,7 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     for index in range(len(raw_nodes)):
         world_of(index)
 
-    arm_data = bpy.data.armatures.new(name)
+    arm_data = new_armature_data(name)
     arm_obj = bpy.data.objects.new(name, arm_data)
     context.collection.objects.link(arm_obj)
 
@@ -484,7 +499,7 @@ class SkeletonBinder:
             return
 
         if self.armature is None:
-            data = bpy.data.armatures.new(self.name)
+            data = new_armature_data(self.name)
             self.armature = bpy.data.objects.new(self.name, data)
             context.scene.collection.objects.link(self.armature)
             # A rebuilt skeleton is a top-level import object: the root yaw rides
