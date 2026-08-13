@@ -255,7 +255,7 @@ def _gather_clip_files_disk(db, prefab, prefab_path, assets_dir):
 
 
 def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, options,
-                              display_names=None):
+                              display_names=None, activate=False):
     """Build Blender actions for exactly the given clip guids -- the checked
     subset from the animation browser. This is the only place that now pays
     the full parse + keyframe-insertion cost per clip; it's deferred until the
@@ -277,6 +277,12 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     the don't-clobber guard: which of N would be arbitrary, so it only fills an armature
     that has no action yet. Returns (built, warnings).
 
+    ``activate`` overrides that guard: the count alone cannot tell "N clips the user
+    ticked one by one" apart from "ONE thing the user picked that happens to be stored
+    as N clips" (a game whose catalog row expands to a family of camera/intensity
+    variants). Only the caller knows which it is, and for the latter staying silent is
+    the wrong default -- the user asked to see this animation.
+
     ``display_names`` ({guid: name}) renames the products and every warning about them.
     A clip's m_Name is whatever the game's own controller state was called, which for
     some games is unreadable; a caller holding the catalog label passes it here."""
@@ -284,7 +290,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
     first = None
     warnings = []
     guids = list(guids)
-    assign_always = len(guids) == 1
+    assign_always = activate or len(guids) == 1
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
     path_to_bone = maps.get("path_to_bone") or {}
     avatar_json = armature_builder.read_avatar_json(arm_obj)

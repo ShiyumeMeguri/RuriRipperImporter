@@ -281,7 +281,7 @@ def _missing_table_prompt(api, source_game, dest_game, source_arm, dest_arm):
 
 
 def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, options,
-                        display_names=None):
+                        display_names=None, activate=False):
     """Import ``clip_guids`` (already resolved into ``db``, a source-game closure) straight
     onto ``dest_arm`` -- a rig stamped with a DIFFERENT game -- without importing the source
     character at all. Picks the source avatar whose TOS best covers the clips' bindings, bakes
@@ -344,7 +344,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
             raise CrossGameRetargetError(
                 "Nothing retargeted from {0} to {1} -- the bone table matched no shared bone.".format(
                     session_game, dest_game))
-        if len(clip_guids) == 1 or not _has_action(dest_arm):
+        if activate or len(clip_guids) == 1 or not _has_action(dest_arm):
             core.assign_action(dest_arm, products[0])
     finally:
         _discard_scaffold(temp_arm, baked_actions)
@@ -352,7 +352,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
 
 
 def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, maps, options,
-                    display_names=None):
+                    display_names=None, activate=False):
     """THE animation-loading entry point. Every panel calls this and nothing else.
 
     Whether a clip needs a cross-game retarget is one decision, made from one fact --
@@ -366,11 +366,16 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
     ``display_names`` ({guid: name}) names the products after something the caller
     knows better than the clip does -- see build_selected_animations. It rides both
     branches, so a retargeted product is the same name plus the destination suffix.
+
+    ``activate`` makes the first product the armature's active action even when the
+    batch holds several clips -- for a caller whose N clips are one user pick, not N.
+    Rides both branches too, so which one it is never changes what the user sees.
     """
     dest_game = armature_builder.read_game(dest_arm)
     if session_game and dest_game and dest_game != session_game:
         products, warnings = retarget_clips_onto(
-            context, session_game, clip_cab, clip_guids, db, dest_arm, options, display_names)
+            context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+            display_names, activate)
         return len(products), warnings
     if maps is None:
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
@@ -385,7 +390,7 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
             "stamp naming another game to retarget from -- select the right skeleton, or "
             "re-import it so it knows which game it is from.".format(dest_arm.name))
     built, warnings = prefab_importer.build_selected_animations(
-        db, dest_arm, maps, None, clip_guids, options, display_names)
+        db, dest_arm, maps, None, clip_guids, options, display_names, activate)
     if checked and ratio < 0.5:
         warnings.insert(0, "Only {0:.0%} of curve paths match armature '{1}' -- "
                            "imported anyway.".format(ratio, dest_arm.name))
