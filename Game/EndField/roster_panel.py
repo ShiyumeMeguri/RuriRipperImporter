@@ -144,6 +144,14 @@ def _rebuild(state):
     buffers this table was built from (one ASCII fold per column, then a parallel
     vectorized sweep, then the shared rule evaluator). This side receives row ids
     and reads cells."""
+    with filter_ui.rebuilding():
+        _fill(state)
+
+
+def _fill(state):
+    # The selection is the cast member, not the row number: refilling this list
+    # (a keystroke, a rule edit) must not hand the Load button a different one.
+    chosen = filter_ui.selected_key(state)
     state.entries.clear()
     table = _rows(state)
     if table is None:
@@ -202,8 +210,7 @@ def _rebuild(state):
         matched_count, table.row_count, state.kind, _language(state),
         "" if matched_count == len(rows) else
         " · showing {0}, narrow your search to see the rest".format(len(rows)))
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
+    filter_ui.restore_selection(state, chosen)
 
 
 def _selected(state):

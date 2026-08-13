@@ -155,6 +155,74 @@ class FilterStateMixin:
     new_rule_action: EnumProperty(name="Action", items=ACTION_ITEMS)
 
 
+# ── selection across a refill ─────────────────────────────────────────────────
+#
+# A drawn list is a WINDOW onto a filtered result set, and Blender tracks its
+# selection as an INDEX INTO THAT WINDOW. Refill the window -- a keystroke in the
+# search box, a rule edit, a folder change -- and the same index now points at a
+# different row: the selection silently becomes something else, and any update
+# callback on it fires as though the user had clicked that row.
+#
+# So a selection's identity is its KEY, never its position. Every list here
+# captures its key before refilling, refills inside `rebuilding()` (which makes
+# selection callbacks stand down), and restores the highlight by that key
+# afterwards. A key the filter now hides simply stays selected off-screen, which
+# is what the user meant when they picked it.
+
+_REBUILDING = 0
+
+
+class _Rebuilding:
+    def __enter__(self):
+        global _REBUILDING
+        _REBUILDING += 1
+        return self
+
+    def __exit__(self, kind, value, trace):
+        global _REBUILDING
+        _REBUILDING -= 1
+        return False
+
+
+def rebuilding():
+    """Refill a drawn list inside this. Re-entrant, so a rebuild that triggers
+    another one still ends with callbacks re-armed exactly once."""
+    return _Rebuilding()
+
+
+def is_rebuilding():
+    """True while a list is being refilled. Every selection-changed callback
+    starts with this: a refill is not a click."""
+    return _REBUILDING > 0
+
+
+def selected_key(state, entries="entries", index="active_index", key="key"):
+    """The key of whatever is selected right now, or "" -- captured BEFORE a
+    refill so it can be restored after one."""
+    rows = getattr(state, entries, None)
+    position = getattr(state, index, -1)
+    if rows is None or not (0 <= position < len(rows)):
+        return ""
+    return getattr(rows[position], key, "") or ""
+
+
+def restore_selection(state, wanted, entries="entries", index="active_index", key="key"):
+    """Put the highlight back on the row carrying ``wanted``. True when it is
+    still in the list; False when the current filter hides it (the caller keeps
+    whatever it opened -- the selection is the key, not the row on screen)."""
+    rows = getattr(state, entries, None)
+    if rows is None:
+        return False
+    if wanted:
+        for position, row in enumerate(rows):
+            if getattr(row, key, "") == wanted and not getattr(row, "is_group", False):
+                setattr(state, index, position)
+                return True
+    if getattr(state, index, 0) >= len(rows):
+        setattr(state, index, 0)
+    return False
+
+
 def enabled_rules(state):
     return [rule for rule in state.filter_rules if rule.enabled]
 

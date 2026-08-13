@@ -41,7 +41,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
-from ... import animation_builder, coordinate
+from ... import animation_builder, coordinate, filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import morph_state, roster_panel, skeletal_morph
 
@@ -611,7 +611,17 @@ def _character_only(state):
 
 
 def _populate_items(state):
-    """Refill the visible list for the current section from the parsed library."""
+    """Refill the visible list for the current section from the parsed library.
+
+    Refilling is not a click: the highlight is restored by the asset it was on
+    (see filter_ui.restore_selection), so switching section or reloading the
+    library cannot silently pose the face with whatever inherited the index."""
+    with filter_ui.rebuilding():
+        _fill_items(state)
+
+
+def _fill_items(state):
+    chosen = filter_ui.selected_key(state, "items", "items_active_index", "asset")
     state.items.clear()
     if state.section == DRIVER_SECTION:
         return
@@ -626,7 +636,7 @@ def _populate_items(state):
         ctrls = asset.ctrl_names()
         item.ctrl_count = len(ctrls)
         item.bound_count = sum(1 for ctrl in ctrls if ctrl in bindings)
-    state.items_active_index = min(state.items_active_index, max(len(state.items) - 1, 0))
+    filter_ui.restore_selection(state, chosen, "items", "items_active_index", "asset")
     _populate_drivers(state)
 
 
@@ -663,6 +673,8 @@ def _on_item_activated(context):
     """Highlighting a STATIC entry poses the face; an animated one is a clip to
     be built, not a pose to snap to, so it stays inert. Decided per item, not
     per section."""
+    if filter_ui.is_rebuilding():
+        return
     state = context.scene.ruri_character
     index = state.items_active_index
     if not state.apply_on_click or not (0 <= index < len(state.items)):

@@ -174,7 +174,16 @@ def _matching_rows(state):
 def _rebuild(state):
     """Rebuild the drawn line list, filtered by the search box and rules. Whole
     scenes are grouped by the id family the game files them under; a map's places
-    are not -- there are a handful and they are all siblings."""
+    are not -- there are a handful and they are all siblings.
+
+    What is selected survives the refill: the selection is the scene/place, not
+    the row number (see filter_ui.restore_selection)."""
+    with filter_ui.rebuilding():
+        _fill(state)
+
+
+def _fill(state):
+    chosen = filter_ui.selected_key(state)
     state.entries.clear()
     rows = _matching_rows(state)
     grouped = state.KIND == SELF_CONTAINED
@@ -194,8 +203,7 @@ def _rebuild(state):
         entry = state.entries.add()
         entry.label = row["label"]
         entry.key = row["id"]
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
+    filter_ui.restore_selection(state, chosen)
 
 
 def _read_summary(state, context, map_name):
@@ -237,6 +245,8 @@ def _on_selection_change(self, context):
     """Selecting a whole scene IS the intent to look at it, so its inventory is
     read then. A place inside a map needs nothing: its map's inventory was read
     when the map was picked."""
+    if filter_ui.is_rebuilding():
+        return
     if self.KIND == SELF_CONTAINED:
         entry = _selected(self)
         if entry is not None:

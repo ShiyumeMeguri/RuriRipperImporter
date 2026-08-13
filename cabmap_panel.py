@@ -88,7 +88,17 @@ def _rebuild_window(state):
     this is the folder browser: CURRENT_SUBFOLDERS first (folders always
     sort before files, like a real file browser), then CURRENT_DIR's own
     files -- both share ONE DISPLAY_CAP budget so state.window never grows
-    past the size the original flat-only list was already tuned for."""
+    past the size the original flat-only list was already tuned for.
+
+    The highlighted row is restored by its CAB afterwards (see
+    filter_ui.restore_selection): the active index is a position into this
+    window, and a search edit or a folder change would otherwise leave it
+    pointing at whatever asset happened to land there."""
+    with filter_ui.rebuilding():
+        _fill_window(state)
+
+
+def _fill_window(state):
     state.window.clear()
     selected = cabmap_state.SELECTED_CABS
     # The one funnel every navigation path already runs through (enter dir, breadcrumb
@@ -104,6 +114,7 @@ def _rebuild_window(state):
         cap_note = (f" (capped at {cabmap_state.DISPLAY_CAP} -- narrow your search to see the rest)"
                     if total > shown else "")
         state.status = f"Showing {shown} / {total} matching virtual files{cap_note}."
+        filter_ui.restore_selection(state, state.cursor_cab, "window", "active_index", "cab")
         return
 
     folders = cabmap_state.CURRENT_SUBFOLDERS
@@ -126,6 +137,7 @@ def _rebuild_window(state):
                 if total_items > shown_items else "")
     path_label = "/" + "/".join(cabmap_state.CURRENT_DIR)
     state.status = f"{path_label}  --  {len(folders)} folder(s), {len(files)} file(s){cap_note}"
+    filter_ui.restore_selection(state, state.cursor_cab, "window", "active_index", "cab")
 
 
 def _sync_window_selection(state):
@@ -954,6 +966,11 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     status: StringProperty(default="No cabmap loaded.")
     window: CollectionProperty(type=RURI_PG_cabmap_row)
     active_index: IntProperty()
+    # WHICH row the cursor is on, by identity. active_index is a position into a
+    # filtered, capped window, so a search edit or a folder change moves what sits
+    # under it; this is what the window is re-pointed at afterwards, and it
+    # survives the row being filtered out and coming back.
+    cursor_cab: StringProperty()
 
     # Row column widths (RURI_UL_cabmap.draw_item), freely draggable like any
     # Blender slider -- template_list has no native drag-resizable column
@@ -1369,6 +1386,7 @@ class RURI_OT_cabmap_reveal(bpy.types.Operator):
                 for position, item in enumerate(state.window):
                     if not item.is_folder and item.cab == self.cab:
                         state.active_index = position
+                        state.cursor_cab = item.cab
                         cabmap_state.clear_selection()
                         cabmap_state.SELECTED_CABS.add(item.cab)
                         break
@@ -1585,6 +1603,7 @@ class RURI_OT_cabmap_click(bpy.types.Operator):
             cabmap_state.set_select_anchor(rows_index)
 
         state.active_index = self.index
+        state.cursor_cab = item.cab
         _sync_window_selection(state)
         _redraw_all(context)
         return {"FINISHED"}

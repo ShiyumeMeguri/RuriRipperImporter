@@ -174,6 +174,8 @@ def _on_entry_pick(self, context):
     """Clicking a row opens it. Both clip reads are cabmap reads cached by
     (id, args) on the C# side, so walking the list with the arrow keys re-reads
     nothing already seen."""
+    if filter_ui.is_rebuilding():
+        return
     entry = _selected_entry(self)
     if entry is None or entry.key == (self.unit if self.mode == BY_STORY else self.actor):
         return
@@ -262,7 +264,17 @@ def _rebuild_top(state):
     """Rebuild the drawn list on top -- units or actors, whichever mode is on. The
     search text and the Include/Exclude rules go to the same C# engine the bundle
     browser searches with, over the very buffers this table was built from; this
-    side receives row ids and reads cells."""
+    side receives row ids and reads cells.
+
+    What is OPEN survives this: the selection's identity is its key, not its
+    position, so the highlight is re-pointed at the same unit/actor afterwards --
+    and a filter that hides it leaves it open rather than swapping it for
+    whichever row inherited the index."""
+    with filter_ui.rebuilding():
+        _fill_top(state)
+
+
+def _fill_top(state):
     state.entries.clear()
     table = _top_table(state)
     if table is None:
@@ -307,13 +319,15 @@ def _rebuild_top(state):
         entry.key = entry.label
         entry.group = row["group"]
         entry.detail = _unit_detail(row) if by_story else _actor_detail(row)
-    state.status = "{0} of {1} {2}{3}".format(
+    opened = _opened(state)
+    shown = filter_ui.restore_selection(state, opened)
+    hidden = "" if shown or not opened else " · {0} still open (filtered out)".format(opened)
+    state.status = "{0} of {1} {2}{3}{4}".format(
         len(order), len(table),
         "{0} unit(s)".format(state.channel) if by_story else "actor(s)",
         "" if len(order) == len(rows) else
-        " · showing {0}, narrow the filter to see the rest".format(len(rows)))
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
+        " · showing {0}, narrow the filter to see the rest".format(len(rows)),
+        hidden)
 
 
 def _unit_detail(row):
@@ -378,6 +392,12 @@ def _open_entry(state, key):
 
 def _rebuild_clips(state):
     table = _clips_table(state)
+    with filter_ui.rebuilding():
+        _fill_clips(state, table)
+
+
+def _fill_clips(state, table):
+    highlighted = filter_ui.selected_key(state, "clips", "clips_active_index", "container")
     state.clips.clear()
     if table is None:
         return
@@ -418,12 +438,11 @@ def _rebuild_clips(state):
         # By story the actor is the useful half of the name; by actor it is the
         # constant, so the name (which for a library clip says what it DOES) is.
         item.label = (row["actor"] or row["name"]) if by_story else row["name"]
+    filter_ui.restore_selection(state, highlighted, "clips", "clips_active_index", "container")
     state.clip_status = "{0} of {1} row(s){2}{3}".format(
         len(order), len(table),
         "" if len(order) == len(rows) else " · showing {0}".format(len(rows)),
         " · {0} checked".format(len(checked)) if checked else "")
-    if state.clips_active_index >= len(state.clips):
-        state.clips_active_index = 0
 
 
 def _bucket(row, by_story):
