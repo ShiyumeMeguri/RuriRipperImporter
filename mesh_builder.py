@@ -55,10 +55,19 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
             per_loop[:, 1] = 1.0 - per_loop[:, 1]
         uv_layer.data.foreach_set("uv", per_loop.reshape(-1))
 
-    # Vertex colours.
-    if decoded.colors is not None and options.get("import_colors", True):
+    # Vertex colours. A mesh that carries no COLOR channel still feeds one to any
+    # shader that declares COLOR0: the GPU supplies the unbound stream's default,
+    # which Unity binds as opaque white. Leaving the attribute out instead makes
+    # Blender's Attribute node read zero, and every shader that multiplies by
+    # vertex colour collapses to black -- measured on this game's own display
+    # stage, whose backdrop is `_TintColor(0.917) * COLOR0` and renders white in
+    # game while every one of its meshes reports `Color dimension=0`.
+    if options.get("import_colors", True):
         color_attr = mesh.color_attributes.new(name="Color", type="FLOAT_COLOR", domain="CORNER")
-        color_attr.data.foreach_set("color", decoded.colors[loop_verts].reshape(-1))
+        if decoded.colors is not None:
+            color_attr.data.foreach_set("color", decoded.colors[loop_verts].reshape(-1))
+        else:
+            color_attr.data.foreach_set("color", [1.0] * (len(mesh.loops) * 4))
 
     # Custom split normals if the stored normals decoded sanely. Blender keeps
     # these in an INT16_2D corner attribute, so a round trip is lossy by ~0.15
