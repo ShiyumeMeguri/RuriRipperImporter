@@ -81,11 +81,13 @@ def apply_vertex_stages(objects=None, camera=None):
     return sum(stage(objects=objects, camera=camera) for stage in VERTEX_STAGES)
 
 
-# Post stages, same contract again: a generated module that carries a game's
-# post-processing registers its own ``install(scene)`` here. Post-processing is
-# a whole-frame operation done ONCE after compositing -- putting it in the
-# materials would run it again per overlapping transparent layer -- so a stage
-# owns the scene's compositor tree rather than any material.
+# Post stages, same contract again, except that a stage is the generated MODULE
+# rather than one function: post-processing owns scene-level state (the
+# compositor tree, the view transform), so it has to be able to hand that state
+# back as well as take it -- install / uninstall / installed / stage_node.
+# Post-processing is a whole-frame operation done ONCE after compositing;
+# putting it in the materials would run it again per overlapping transparent
+# layer, so a stage owns the scene's compositor tree, never a material.
 POST_STAGES = []
 
 
@@ -106,7 +108,18 @@ def apply_post_stages(scene):
     if len(POST_STAGES) > 1:
         print("[material] !! {0} post stages registered; a scene has ONE compositor tree, "
               "the last installed wins".format(len(POST_STAGES)))
-    return [stage(scene) for stage in POST_STAGES]
+    return [stage.install(scene) for stage in POST_STAGES]
+
+
+def remove_post_stages(scene):
+    """Hand the scene back the compositor state it had before any stage was
+    installed. Without this a load is one-way: the user's own compositor tree
+    and view transform are gone with no way to say what they were."""
+    return [stage.uninstall(scene) for stage in POST_STAGES]
+
+
+def post_stages_installed(scene):
+    return [stage for stage in POST_STAGES if stage.installed(scene)]
 
 
 def _image_from_texture_bytes(data, name):

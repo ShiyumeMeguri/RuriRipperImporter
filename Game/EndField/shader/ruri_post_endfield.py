@@ -663,7 +663,63 @@ def ensure_group():
     return built
 
 
+SAVED_KEY = 'ruri_post_saved_state'
+
+
+def _remember(scene):
+    """什么被这一级改掉了,在改之前记下来。不记 = 用户装了就回不去,
+    只能手动猜 view transform 原来是什么。已记过就不覆盖(重复安装是幂等的)。"""
+    if SAVED_KEY in scene:
+        return
+    previous = scene.compositing_node_group
+    scene[SAVED_KEY] = {
+        'group': previous.name if previous is not None else '',
+        'use_compositing': scene.render.use_compositing,
+        'view_transform': scene.view_settings.view_transform,
+        'look': scene.view_settings.look,
+    }
+
+
+def uninstall(scene):
+    """把这一级装上之前的场景状态放回去,并删掉它自己建的树。"""
+    saved = scene.get(SAVED_KEY)
+    scene_tree = bpy.data.node_groups.get(SCENE_TREE_NAME)
+    if scene.compositing_node_group is scene_tree:
+        scene.compositing_node_group = None
+    if scene_tree is not None:
+        bpy.data.node_groups.remove(scene_tree)
+    if saved is None:
+        return False
+    restored = bpy.data.node_groups.get(saved.get('group') or '')
+    if restored is not None:
+        scene.compositing_node_group = restored
+    scene.render.use_compositing = bool(saved.get('use_compositing', True))
+    scene.view_settings.view_transform = saved.get('view_transform', 'Standard')
+    scene.view_settings.look = saved.get('look', 'None')
+    del scene[SAVED_KEY]
+    return True
+
+
+def installed(scene):
+    tree = bpy.data.node_groups.get(SCENE_TREE_NAME)
+    return tree is not None and scene.compositing_node_group is tree
+
+
+def stage_node(scene):
+    """装在场景树里的那个组实例 —— 它的输入 socket 就是这条链的可调参数,
+    面板照着画即可,不必知道链里有什么。"""
+    tree = scene.compositing_node_group
+    if tree is None:
+        return None
+    for node in tree.nodes:
+        if node.bl_idname == 'CompositorNodeGroup' and node.node_tree is not None \
+                and node.node_tree.name == GROUP_NAME:
+            return node
+    return None
+
+
 def install(scene):
+    _remember(scene)
     group = ensure_group()
     stale = bpy.data.node_groups.get(SCENE_TREE_NAME)
     if stale is not None:
@@ -702,16 +758,17 @@ def install(scene):
 
 
 import importlib
+import sys
 
 _host = importlib.import_module('RuriRipperImporter.material_builder')
 
 
 def register():
-    _host.register_post_stage(install)
+    _host.register_post_stage(sys.modules[__name__])
 
 
 def unregister():
-    _host.unregister_post_stage(install)
+    _host.unregister_post_stage(sys.modules[__name__])
 
 
 if __name__ == '__main__':

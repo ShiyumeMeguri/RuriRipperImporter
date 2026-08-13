@@ -25,7 +25,7 @@ import sys
 
 from . import (Game, coordinate, hierarchy, armature_builder,
                mesh_builder, material_builder, animation_builder,
-               prefab_importer, cabmap_panel, cross_game_retarget)
+               prefab_importer, cabmap_panel, cross_game_retarget, post_panel)
 from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
 
 # Reload submodules on addon re-registration during development -- EXCEPT the
@@ -196,6 +196,9 @@ def register():
     # Every game folder under Game/ registers itself; the panel above names none
     # of them and simply draws whatever tabs the enabled hooks turn on.
     Game.register()
+    # Drawn after Game so a stage registered by a game's shader package is
+    # already there to be listed.
+    post_panel.register()
     # Repairs "action assigned but no slot picked" states after any UI-driven
     # action assignment -- see animation_builder's slotted-action notes (the
     # imported data plays only through its slot, and most UI surfaces outside
@@ -230,6 +233,7 @@ def register():
 
 def unregister():
     animation_builder.unregister_slot_autofix()
+    post_panel.unregister()
     Game.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)
