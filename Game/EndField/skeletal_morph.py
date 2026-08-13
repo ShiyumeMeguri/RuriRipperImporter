@@ -31,20 +31,6 @@ import re
 
 import numpy as np
 
-from ...RuriRipperPyBridge.unity import clip_curves
-
-CTRL_KEY = "_ctrlName"
-CURVE_KEY = "_curve"
-VALUE_KEY = "_value"
-POSE_KEY = "_pose"
-LIPSYNC_KEY = "_lipSyncMap"
-
-_CURVE_CHANNEL_RE = re.compile(r"^_.*Curve.*$")
-_VALUE_CHANNEL_RE = re.compile(r"^_.*Value.*$")
-# The game's Hungarian boolean prefix is "_b" followed by a capitalised word
-# ("_bIsAdditiveClip"). Matching a bare "_b" would swallow "_blinkAnim" and
-# "_blinkInterval", which are a reference and a number.
-_FLAG_RE = re.compile(r"^_b[A-Z]")
 _LABEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -124,167 +110,6 @@ class MorphAsset:
                 f"{len(self.channels)} channel(s), {len(self.ctrl_names())} ctrl(s))")
 
 
-def _curve_from_entry(entry):
-    """One ``_curve`` block -> a 1-D clip_curves.Channel, or None when it holds
-    no keyframes at all (the game ships plenty of empty ctrl slots)."""
-    keys = ((entry or {}).get(CURVE_KEY) or {}).get("m_Curve") or []
-    if not keys:
-        return None
-    times = np.empty(len(keys), dtype=np.float64)
-    values = np.empty((len(keys), 1), dtype=np.float64)
-    in_slopes = np.empty((len(keys), 1), dtype=np.float64)
-    out_slopes = np.empty((len(keys), 1), dtype=np.float64)
-    for index, key in enumerate(keys):
-        times[index] = _number(key.get("time"))
-        values[index, 0] = _number(key.get("value"))
-        in_slopes[index, 0] = _number(key.get("inSlope"))
-        out_slopes[index, 0] = _number(key.get("outSlope"))
-    # Channel.sample assumes ascending times (searchsorted); the game writes
-    # them in order, but a sort here costs nothing and removes the assumption.
-    order = np.argsort(times, kind="stable")
-    return clip_curves.Channel(entry.get(CTRL_KEY, ""), times[order], values[order],
-                               in_slopes[order], out_slopes[order],
-                               attribute=entry.get(CTRL_KEY, ""))
-
-
-def _number(token):
-    try:
-        return float(token)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _driver_list(entries, channel_key):
-    """A ``_browCurveL``/``_browValueL``-shaped list -> [MorphDriver]. Entries
-    without a ctrl name are skipped: an unnamed driver binds to nothing."""
-    drivers = []
-    for entry in entries or ():
-        if not isinstance(entry, dict):
-            continue
-        ctrl = entry.get(CTRL_KEY)
-        if not ctrl:
-            continue
-        value = entry.get(VALUE_KEY)
-        drivers.append(MorphDriver(ctrl, channel_key,
-                                   value=_number(value) if value is not None else None,
-                                   curve=_curve_from_entry(entry)))
-    return drivers
-
-
-def _looks_like_driver_list(value):
-    """An EMPTY list still counts: the game ships every channel on every asset
-    and simply leaves the unused ones empty, so dropping them would lose the
-    difference between "this channel is unused here" and "this asset has no
-    such channel" -- which is exactly what a host's channel grouping shows."""
-    if not isinstance(value, list):
-        return False
-    return not value or (isinstance(value[0], dict) and CTRL_KEY in value[0])
-
-
-def _reference_guid(ref):
-    if isinstance(ref, dict):
-        guid = ref.get("guid")
-        return guid.lower() if isinstance(guid, str) and guid else None
-    return None
-
-
-def parse(data, guid="", name=""):
-    """Parse one MonoBehaviour body (the dict ``unity_yaml`` produced) into a
-    MorphAsset, or None when it is not a SkeletalMorph asset at all.
-
-    Kind comes from the fields present, so the four shapes are told apart
-    without a script-guid table:
-      - ``_lipSyncMap``                     -> lipsync
-      - any ``_*Curve*`` driver list        -> anim
-      - ``_pose`` + ``_microExpressionPoses`` -> emotion
-      - ``_pose`` alone                     -> pose
-    """
-    if not isinstance(data, dict):
-        return None
-    name = name or (data.get("m_Name") or "")
-
-    if LIPSYNC_KEY in data:
-        asset = MorphAsset(guid, name, "lipsync")
-        _parse_lipsync(asset, data.get(LIPSYNC_KEY))
-        return asset
-
-    curve_channels = {key: value for key, value in data.items()
-                      if _CURVE_CHANNEL_RE.match(key) and _looks_like_driver_list(value)}
-    pose = data.get(POSE_KEY)
-    has_pose = isinstance(pose, dict)
-    # Empty channels are kept (see _looks_like_driver_list) but cannot by
-    # themselves identify an asset: a MonoBehaviour of some other type with a
-    # field merely NAMED like a channel and holding an empty list would
-    # otherwise be claimed as a morph animation.
-    if not has_pose and not any(entries for entries in curve_channels.values()):
-        return None
-
-    kind = "anim" if curve_channels else ("emotion" if "_microExpressionPoses" in data else "pose")
-    asset = MorphAsset(guid, name, kind)
-    asset.duration = _number(data.get("_duration"))
-
-    for key, value in curve_channels.items():
-        asset.channels[key] = _driver_list(value, key)
-    if has_pose:
-        for key, value in pose.items():
-            if _VALUE_CHANNEL_RE.match(key) and _looks_like_driver_list(value):
-                asset.channels.setdefault(key, []).extend(_driver_list(value, key))
-            elif _FLAG_RE.match(key):
-                asset.flags[key] = bool(_number(value))
-
-    for key, value in data.items():
-        if _FLAG_RE.match(key):
-            asset.flags[key] = bool(_number(value))
-        elif isinstance(value, dict) and _reference_guid(value):
-            asset.references[key] = _reference_guid(value)
-        elif isinstance(value, list) and value and isinstance(value[0], dict) and "guid" in value[0]:
-            asset.references[key] = [_reference_guid(item) for item in value]
-
-    if not asset.duration and asset.is_animated():
-        asset.duration = max((driver.curve.last_time() for driver in asset.drivers()
-                              if driver.curve is not None), default=0.0)
-    return asset
-
-
-def _parse_lipsync(asset, lipsync_map):
-    """``_lipSyncMap`` is Unity's serialized dictionary: parallel ``_keyData``
-    (a hex blob of little-endian int32 keys) and ``_valueData`` (one ``_poses``
-    list per key). The keys are the phoneme-set ids an emotion selects with
-    ``_phonemePoseLipsType``."""
-    if not isinstance(lipsync_map, dict):
-        return
-    keys = _int32_blob(lipsync_map.get("_keyData"))
-    values = lipsync_map.get("_valueData") or []
-    for index, entry in enumerate(values):
-        set_id = keys[index] if index < len(keys) else index
-        poses = (entry or {}).get("_poses") or []
-        asset.phoneme_sets[set_id] = [_reference_guid(ref) for ref in poses]
-
-
-def _int32_blob(hex_text):
-    """``0100000002000000`` -> [1, 2]. Unity writes serialized-dictionary key
-    blobs as a flat hex string of little-endian int32s.
-
-    An all-digit blob parses as a NUMBER on the way in (the YAML scalar
-    converter cannot know it is meant as hex), which silently eats its leading
-    zeros -- 0100000002000000 arrives as 100000002000000. Re-padding to the
-    next multiple of 8 hex digits restores them exactly, because every entry is
-    one int32 = 8 digits wide."""
-    if not isinstance(hex_text, str):
-        if isinstance(hex_text, int) and not isinstance(hex_text, bool):
-            digits = "%d" % hex_text
-            hex_text = digits.rjust(-(-len(digits) // 8) * 8, "0")
-        else:
-            return []
-    stripped = "".join(hex_text.split())
-    try:
-        raw = bytes.fromhex(stripped)
-    except ValueError:
-        return []
-    usable = len(raw) - (len(raw) % 4)
-    return np.frombuffer(raw[:usable], dtype="<i4").tolist()
-
-
 # ── the avatar: what a ctrl actually MOVES on one character ───────────────────
 #
 # The tables themselves are read by the hook off the game's own typed asset
@@ -338,14 +163,6 @@ class MorphAvatar:
     def __repr__(self):
         return (f"MorphAvatar({self.name!r}, {len(self.bone_names)} bone(s), "
                 f"{len(self.mappings)} ctrl(s))")
-
-
-def parse_document(document, guid=""):
-    """Parse a ``unity_yaml.UnityDocument`` (a MonoBehaviour) -- the shape a
-    host gets back from ``asset_db.load_guid(guid).first("MonoBehaviour")``."""
-    if document is None:
-        return None
-    return parse(getattr(document, "data", None), guid=guid)
 
 
 def sample_weights(asset, time):

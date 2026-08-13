@@ -42,6 +42,11 @@ RANK = "endfield.asset.rank"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
 MORPH_LIBRARY = "endfield.morph.library"
+MORPH_ASSETS = "endfield.morph.assets"
+MORPH_DRIVERS = "endfield.morph.drivers"
+MORPH_FLAGS = "endfield.morph.flags"
+MORPH_REFERENCES = "endfield.morph.references"
+MORPH_LIPSYNC = "endfield.morph.lipsync"
 MORPH_AVATARS = "endfield.morph.avatars"
 MORPH_CTRLS = "endfield.morph.ctrls"
 MORPH_BONES = "endfield.morph.bones"
@@ -222,6 +227,58 @@ def morph_library():
     game files it under. Where that family lives and how its folders name a kind
     are the game's own filing."""
     return _rows(MORPH_LIBRARY)
+
+
+def morph_assets(cabs):
+    """The pose/emotion/animation/lipsync assets these CABs carry. Which of the
+    four an asset IS comes from the fields it carries, which is the hook's read."""
+    return [{"name": row["name"], "kind": row["kind"], "duration": row["duration"],
+             "animated": bool(_int(row["animated"]))}
+            for row in _rows(MORPH_ASSETS, cab=list(cabs))]
+
+
+def morph_drivers(cabs):
+    """One ctrl inside one channel. ``curve`` is a clip_curves.Channel rebuilt
+    from the keyframes the hook handed over as raw float32 -- the same channel
+    object the transform curves use, so a host samples both through one
+    vectorized evaluator."""
+    from ...RuriRipperPyBridge.unity import clip_curves
+    import numpy
+
+    built = []
+    for row in _rows(MORPH_DRIVERS, cab=list(cabs)):
+        keys = _int(row["keys"])
+        curve = None
+        if keys:
+            frames = numpy.frombuffer(row["curve"], dtype="<f4").reshape((keys, 4)).astype(numpy.float64)
+            curve = clip_curves.Channel(row["ctrl"], frames[:, 0].copy(),
+                                        frames[:, 1:2].copy(), frames[:, 2:3].copy(),
+                                        frames[:, 3:4].copy(), attribute=row["ctrl"])
+        built.append({"asset": row["asset"], "channel": row["channel"], "ctrl": row["ctrl"],
+                      "has_value": bool(_int(row["hasValue"])), "value": row["value"],
+                      "curve": curve})
+    return built
+
+
+def morph_flags(cabs):
+    """The boolean switches an asset carries, by the game's own field names."""
+    return [{"asset": row["asset"], "flag": row["flag"], "value": bool(_int(row["value"]))}
+            for row in _rows(MORPH_FLAGS, cab=list(cabs))]
+
+
+def morph_references(cabs):
+    """What one asset points at, by the pointed-at asset's own name. ``index`` is
+    -1 for a single reference and the slot for a list."""
+    return [{"asset": row["asset"], "field": row["field"], "index": _int(row["index"]),
+             "target": row["target"]}
+            for row in _rows(MORPH_REFERENCES, cab=list(cabs))]
+
+
+def morph_lipsync(cabs):
+    """A lipsync config's phoneme sets: which pose fills which slot of which set."""
+    return [{"asset": row["asset"], "set": _int(row["set"]), "slot": _int(row["slot"]),
+             "target": row["target"]}
+            for row in _rows(MORPH_LIPSYNC, cab=list(cabs))]
 
 
 def morph_avatars(cabs):

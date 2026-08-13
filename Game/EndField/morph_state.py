@@ -18,9 +18,8 @@ HOLDS_PROCESS_STATE = True
 
 LIBRARY = {}          # kind -> [entry dict]; entry = {cab, name, path, kind}
 CHARACTER_TOKEN = ""  # the name fragment that marks a character's own assets ("pelica")
-ASSETS = {}           # guid -> skeletal_morph.MorphAsset, for whatever has been loaded
-ASSETS_BY_NAME = {}   # m_Name -> MorphAsset (the identity a host's lists show)
-AVATARS = {}          # guid -> skeletal_morph.MorphAvatar (the ctrl -> bone-delta tables)
+ASSETS = {}           # asset name -> skeletal_morph.MorphAsset, for whatever has been loaded
+AVATARS = {}          # avatar name -> skeletal_morph.MorphAvatar (the ctrl -> bone-delta tables)
 SCOPED_KINDS = set()  # kinds the last load narrowed to CHARACTER_TOKEN, see plan_load
 
 # A kind bigger than this is narrowed to the character rather than loaded whole:
@@ -35,7 +34,6 @@ def reset():
     global CHARACTER_TOKEN
     LIBRARY.clear()
     ASSETS.clear()
-    ASSETS_BY_NAME.clear()
     AVATARS.clear()
     SCOPED_KINDS.clear()
     CHARACTER_TOKEN = ""
@@ -105,30 +103,54 @@ def plan_load():
     return entries, dropped
 
 
-def load_from_db(db, guids=None):
-    """Parse every SkeletalMorph pose/animation asset in an already-resolved
-    closure into ASSETS/ASSETS_BY_NAME. Sniffs the raw text first (one substring
-    test) so a closure full of meshes and textures costs one failed sniff each
-    rather than a full YAML parse each -- the same cheap-sniff shape the clip
-    discovery uses. Returns the number of assets newly parsed."""
+def load(cabs):
+    """Read everything these CABs carry into ASSETS and AVATARS: the poses,
+    emotions, animations and lipsync configs, and the ctrl-to-bone tables. Every
+    field shape is the hook's answer off the game's own typed assets; what is
+    rebuilt here is the object a host samples through. Returns how many were
+    added."""
+    return load_assets(cabs) + load_avatars(cabs)
+
+
+def load_assets(cabs):
+    """The pose/emotion/animation/lipsync assets, keyed by the game's own name --
+    the identity every list here already draws and the lipsync config points
+    with."""
     added = 0
-    for guid in (guids if guids is not None else list(db.all_guids())):
-        guid = guid.lower()
-        if guid in ASSETS:
+    curves = {}
+    for row in datasets.morph_drivers(cabs):
+        curves.setdefault(row["asset"], []).append(row)
+    flags = {}
+    for row in datasets.morph_flags(cabs):
+        flags.setdefault(row["asset"], {})[row["flag"]] = row["value"]
+    references = {}
+    for row in datasets.morph_references(cabs):
+        entry = references.setdefault(row["asset"], {})
+        if row["index"] < 0:
+            entry[row["field"]] = row["target"]
+        else:
+            entry.setdefault(row["field"], []).append(row["target"])
+    phonemes = {}
+    for row in datasets.morph_lipsync(cabs):
+        phonemes.setdefault(row["asset"], {}).setdefault(row["set"], []).append(
+            (row["slot"], row["target"]))
+
+    for row in datasets.morph_assets(cabs):
+        name = row["name"]
+        if name in ASSETS:
             continue
-        text = db.raw_text(guid) if hasattr(db, "raw_text") else None
-        if not text:
-            continue
-        if skeletal_morph.CTRL_KEY not in text and skeletal_morph.LIPSYNC_KEY not in text:
-            continue
-        unity_file = db.load_guid(guid)
-        document = unity_file.first("MonoBehaviour") if unity_file is not None else None
-        asset = skeletal_morph.parse_document(document, guid=guid)
-        if asset is None:
-            continue
-        ASSETS[guid] = asset
-        if asset.name:
-            ASSETS_BY_NAME[asset.name] = asset
+        asset = skeletal_morph.MorphAsset(name, name, row["kind"])
+        asset.duration = row["duration"]
+        asset.flags = flags.get(name, {})
+        asset.references = references.get(name, {})
+        asset.phoneme_sets = {set_id: [target for _slot, target in sorted(slots)]
+                              for set_id, slots in phonemes.get(name, {}).items()}
+        for driver in curves.get(name, ()):
+            asset.channels.setdefault(driver["channel"], []).append(
+                skeletal_morph.MorphDriver(driver["ctrl"], driver["channel"],
+                                           value=driver["value"] if driver["has_value"] else None,
+                                           curve=driver["curve"]))
+        ASSETS[name] = asset
         added += 1
     return added
 
@@ -206,7 +228,7 @@ def loaded_of_kind(kind, character_only=False):
     """Parsed assets of one kind, in the discovered order, so a host's list
     keeps the same ordering before and after loading."""
     wanted = {entry["name"] for entry in entries_for(kind, character_only)}
-    assets = [asset for name, asset in ASSETS_BY_NAME.items() if name in wanted]
+    assets = [asset for name, asset in ASSETS.items() if name in wanted]
     assets.sort(key=lambda asset: asset.name.lower())
     return assets
 

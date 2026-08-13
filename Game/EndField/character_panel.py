@@ -543,11 +543,12 @@ def _on_driver_weight(self, context):
 # ── property groups ───────────────────────────────────────────────────────────
 
 class RURI_PG_morph_item(bpy.types.PropertyGroup):
-    """One library entry as the UI shows it. ``guid`` is the closure key; the
-    parsed asset itself lives in morph_state (never mirrored into RNA -- 634
-    animations with full curves have no business in the .blend)."""
+    """One library entry as the UI shows it. ``asset`` is the game's own name for
+    it, which is the identity the whole morph library is keyed by; the asset
+    itself lives in morph_state (never mirrored into RNA -- 634 animations with
+    full curves have no business in the .blend)."""
     name: StringProperty()
-    guid: StringProperty()
+    asset: StringProperty()
     kind: StringProperty()
     duration: FloatProperty()
     ctrl_count: IntProperty()
@@ -618,7 +619,7 @@ def _populate_items(state):
     for asset in morph_state.loaded_of_kind(state.section, _character_only(state)):
         item = state.items.add()
         item.name = asset.name
-        item.guid = asset.guid
+        item.asset = asset.name
         item.kind = asset.kind
         item.duration = asset.duration
         item.animated = asset.is_animated()
@@ -674,7 +675,7 @@ def _on_item_activated(context):
 def _apply_item(state, index):
     if not (0 <= index < len(state.items)):
         return False
-    asset = morph_state.ASSETS.get(state.items[index].guid)
+    asset = morph_state.ASSETS.get(state.items[index].asset)
     if asset is None:
         return False
     apply_weights(state, skeletal_morph.sample_weights(asset, 0.0))
@@ -800,13 +801,7 @@ class RURI_OT_character_load_library(bpy.types.Operator):
                                   f"'{morph_state.CHARACTER_TOKEN}'.")
 
         try:
-            assets, _roots, _seed_roots, _clips, _scene_roots = \
-                cabmap_state.BRIDGE.import_cabs(cabs)
-            db = _bridge_asset_db_module().BridgeAssetDatabase(
-                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-                asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-            parsed = morph_state.load_from_db(db) + morph_state.load_avatars(cabs)
+            parsed = morph_state.load(cabs)
         except Exception as exc:
             _report_exception(self, "Morph library load failed", exc)
             return {"CANCELLED"}
@@ -954,7 +949,7 @@ class RURI_OT_character_build_actions(bpy.types.Operator):
         for item in state.items:
             if not item.selected:
                 continue
-            asset = morph_state.ASSETS.get(item.guid)
+            asset = morph_state.ASSETS.get(item.asset)
             if asset is None or not asset.is_animated():
                 skipped += 1
                 continue
@@ -1218,8 +1213,8 @@ def _draw_phonemes(layout, state):
     # Only where the mouth shapes themselves are: the keyboard is a shortcut
     # INTO the listed poses, so it appears exactly when the list contains some
     # of the poses the lipsync config points at.
-    referenced = {guid for poses in lipsync.phoneme_sets.values() for guid in poses if guid}
-    if not any(item.guid in referenced for item in state.items):
+    referenced = {name for poses in lipsync.phoneme_sets.values() for name in poses if name}
+    if not any(item.asset in referenced for item in state.items):
         return
     box = layout.box()
     header = box.row(align=True)
@@ -1230,8 +1225,8 @@ def _draw_phonemes(layout, state):
     except (TypeError, ValueError):
         return
     keys = box.row(align=True)
-    for slot, guid in enumerate(poses):
-        asset = morph_state.ASSETS.get(guid) if guid else None
+    for slot, pose in enumerate(poses):
+        asset = morph_state.ASSETS.get(pose) if pose else None
         cell = keys.row(align=True)
         cell.enabled = asset is not None
         # The pose's own name tail is the phoneme ("..._normal_a" -> "A"); an
