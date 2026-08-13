@@ -81,6 +81,34 @@ def apply_vertex_stages(objects=None, camera=None):
     return sum(stage(objects=objects, camera=camera) for stage in VERTEX_STAGES)
 
 
+# Post stages, same contract again: a generated module that carries a game's
+# post-processing registers its own ``install(scene)`` here. Post-processing is
+# a whole-frame operation done ONCE after compositing -- putting it in the
+# materials would run it again per overlapping transparent layer -- so a stage
+# owns the scene's compositor tree rather than any material.
+POST_STAGES = []
+
+
+def register_post_stage(stage):
+    if stage not in POST_STAGES:
+        POST_STAGES.append(stage)
+
+
+def unregister_post_stage(stage):
+    if stage in POST_STAGES:
+        POST_STAGES.remove(stage)
+
+
+def apply_post_stages(scene):
+    """Install every registered post stage onto a scene. More than one stage
+    would mean two owners of one compositor tree, so that is reported rather
+    than silently letting the last one win."""
+    if len(POST_STAGES) > 1:
+        print("[material] !! {0} post stages registered; a scene has ONE compositor tree, "
+              "the last installed wins".format(len(POST_STAGES)))
+    return [stage(scene) for stage in POST_STAGES]
+
+
 def _image_from_texture_bytes(data, name):
     """Load an exported texture's raw bytes (produced by AssetRipper's own
     TextureConverter, so no compressed/mipmap formats ever reach here) into a

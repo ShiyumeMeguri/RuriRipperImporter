@@ -32,12 +32,14 @@ if bpy.app.version < (5, 2, 0):
     print('[Ruri] 本脚本按 Blender 5.2 基准生成(shader 树原生 repeat zone);当前 %d.%d 更旧,'
           '循环相关的节点可能建不出来。' % bpy.app.version[:2])
 
+TREE_KIND = 'ShaderNodeTree'
+
+
 def _tree(name):
-    # 模板组恒固定名:同名旧组先删(ensure 已把在用的那份改名 .old 并在建成后 user_remap)。
     old = bpy.data.node_groups.get(name)
     if old is not None:
         bpy.data.node_groups.remove(old)
-    return bpy.data.node_groups.new(name, 'ShaderNodeTree')
+    return bpy.data.node_groups.new(name, TREE_KIND)
 
 
 def _viewport_shading():

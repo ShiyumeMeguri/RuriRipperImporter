@@ -32,12 +32,14 @@ if bpy.app.version < (5, 2, 0):
     print('[Ruri] 本脚本按 Blender 5.2 基准生成(shader 树原生 repeat zone);当前 %d.%d 更旧,'
           '循环相关的节点可能建不出来。' % bpy.app.version[:2])
 
+TREE_KIND = 'ShaderNodeTree'
+
+
 def _tree(name):
-    # 模板组恒固定名:同名旧组先删(ensure 已把在用的那份改名 .old 并在建成后 user_remap)。
     old = bpy.data.node_groups.get(name)
     if old is not None:
         bpy.data.node_groups.remove(old)
-    return bpy.data.node_groups.new(name, 'ShaderNodeTree')
+    return bpy.data.node_groups.new(name, TREE_KIND)
 
 
 def _viewport_shading():
@@ -764,59 +766,6 @@ def build_RCE_BRDF_ClearCoat_Direct_Burley():
     g.out_('ret', v39, True)
     g.out_('ccBaseScale', v18, True)
     g.out_('ccDiffScale', v21, True)
-
-
-def build_RCE_BlenderTonemap_Endfield():
-    t = _tree('RCE_BlenderTonemap_Endfield')
-    g = G(t)
-    v0 = g.inp('color', True)
-    v1 = g.vmath('DOT_PRODUCT', v0, (0.6130973255536435, 0.3395228813214228, 0.0473793330068586))
-    v2 = g.vmath('DOT_PRODUCT', v0, (0.0701942176296659, 0.9163555605787149, 0.013452343829894))
-    v3 = g.vmath('DOT_PRODUCT', v0, (0.0206156004863253, 0.1095698373575739, 0.8698151534347436))
-    v4 = g.comb(v1, v2, v3)
-    v5 = g.vmath('DOT_PRODUCT', v4, (0.2722289860248566, 0.6740819811820984, 0.05368949845433235))
-    v6 = g.math('SUBTRACT', v5, 0.5)
-    v7 = g.math('MULTIPLY', v6, 0.6666666865348816)
-    v8 = g.clampn(v7)
-    v9 = g.vmath('MULTIPLY', v4, (2.7850849628448486, 2.7850849628448486, 2.7850849628448486))
-    v10 = g.vmath('ADD', v9, (0.10777200013399124, 0.10777200013399124, 0.10777200013399124))
-    v11 = g.vmath('MULTIPLY', v4, v10)
-    v12 = g.vmath('MULTIPLY', v4, (2.936044931411743, 2.936044931411743, 2.936044931411743))
-    v13 = g.vmath('ADD', v12, (0.8871219754219055, 0.8871219754219055, 0.8871219754219055))
-    v14 = g.vmath('MULTIPLY', v4, v13)
-    v15 = g.vmath('ADD', v14, (0.806888997554779, 0.806888997554779, 0.806888997554779))
-    v16 = g.vmath('DIVIDE', (1, 1, 1), v15)
-    v17 = g.vmath('MAXIMUM', v16, (9.999999747378752E-05, 9.999999747378752E-05, 9.999999747378752E-05))
-    v18 = g.vmath('MULTIPLY', v17, v11)
-    v19 = g.vmath('MINIMUM', v18, (1, 1, 1))
-    v20 = g.vmath('DOT_PRODUCT', v19, (0.2722289860248566, 0.6740819811820984, 0.05368949845433235))
-    v21 = g.comb(v20, v20, v20)
-    v22 = g.mixv(0.9300000071525574, v21, v19)
-    v23 = g.math('MULTIPLY', 0.6217907071113586, -1.0)
-    v24 = g.math('MULTIPLY', 0.083258680999279, -1.0)
-    v25 = g.comb(1.7050515413284302, v23, v24)
-    v26 = g.vmath('DOT_PRODUCT', v22, v25)
-    v27 = g.math('MULTIPLY', 0.1302571445703506, -1.0)
-    v28 = g.math('MULTIPLY', 0.0105481902137399, -1.0)
-    v29 = g.comb(v27, 1.1408028602600098, v28)
-    v30 = g.vmath('DOT_PRODUCT', v22, v29)
-    v31 = g.math('MULTIPLY', 0.0240032691508532, -1.0)
-    v32 = g.math('MULTIPLY', 0.1289687752723694, -1.0)
-    v33 = g.comb(v31, v32, 1.152971625328064)
-    v34 = g.vmath('DOT_PRODUCT', v22, v33)
-    v35 = g.comb(v26, v30, v34)
-    v36 = g.sep(v35)
-    v37 = g.math('MAXIMUM', v36[1], v36[2])
-    v38 = g.math('MAXIMUM', v36[0], v37)
-    v39 = g.math('MAXIMUM', v38, 9.999999747378752E-06)
-    v40 = g.bc(v39)
-    v41 = g.vmath('DIVIDE', v35, v40)
-    v42 = g.vmath('MAXIMUM', v41, (0, 0, 0))
-    v43 = g.vmath('MINIMUM', v42, (1, 1, 1))
-    v44 = g.mixv(v8, v35, v43)
-    v45 = g.vmath('MAXIMUM', v44, (0, 0, 0))
-    v46 = g.vmath('MINIMUM', v45, (1, 1, 1))
-    g.out_('ret', v46, True)
 
 
 def build_RCE_ComputeCamLightFactors():
@@ -2459,8 +2408,7 @@ def build_Ruri_Endfield_Uber_Standard():
     v528 = g.sep(v523)
     v529 = g.sep(v527)
     v530 = g.comb(v529[0], v529[1], v529[2])
-    v531 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v530)])
-    g.out_('ret_gBuffer0', v531[0], True)
+    g.out_('ret_gBuffer0', v530, True)
     g.out_('ret_gBuffer0_w', v526, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -3098,8 +3046,7 @@ def build_Ruri_Endfield_Uber_Face():
     v622 = g.sep(v620)
     v623 = g.sep(v621)
     v624 = g.comb(v623[0], v623[1], v623[2])
-    v625 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v624)])
-    g.out_('ret_gBuffer0', v625[0], True)
+    g.out_('ret_gBuffer0', v624, True)
     g.out_('ret_gBuffer0_w', v83, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -3672,8 +3619,7 @@ def build_Ruri_Endfield_Uber_Eyes():
     v557 = g.sep(v555)
     v558 = g.sep(v556)
     v559 = g.comb(v558[0], v558[1], v558[2])
-    v560 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v559)])
-    g.out_('ret_gBuffer0', v560[0], True)
+    g.out_('ret_gBuffer0', v559, True)
     g.out_('ret_gBuffer0_w', v83, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -4412,8 +4358,7 @@ def build_Ruri_Endfield_Uber_Hair():
     v724 = g.sep(v719)
     v725 = g.sep(v723)
     v726 = g.comb(v725[0], v725[1], v725[2])
-    v727 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v726)])
-    g.out_('ret_gBuffer0', v727[0], True)
+    g.out_('ret_gBuffer0', v726, True)
     g.out_('ret_gBuffer0_w', v722, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -4954,8 +4899,7 @@ def build_Ruri_Endfield_Uber_Fur():
     v526 = g.sep(v523)
     v527 = g.sep(v525)
     v528 = g.comb(v527[0], v527[1], v527[2])
-    v529 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v528)])
-    g.out_('ret_gBuffer0', v529[0], True)
+    g.out_('ret_gBuffer0', v528, True)
     g.out_('ret_gBuffer0_w', v524, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -5383,8 +5327,7 @@ def build_Ruri_Endfield_Uber_VFX():
     v412 = g.sep(v410)
     v413 = g.sep(v411)
     v414 = g.comb(v413[0], v413[1], v413[2])
-    v415 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v414)])
-    g.out_('ret_gBuffer0', v415[0], True)
+    g.out_('ret_gBuffer0', v414, True)
     g.out_('ret_gBuffer0_w', v406, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -5567,8 +5510,7 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v163 = g.sep(v160)
     v164 = g.sep(v162)
     v165 = g.comb(v164[0], v164[1], v164[2])
-    v166 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v165)])
-    g.out_('ret_gBuffer0', v166[0], True)
+    g.out_('ret_gBuffer0', v165, True)
     g.out_('ret_gBuffer0_w', v154, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -6215,8 +6157,7 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v632 = g.sep(v627)
     v633 = g.sep(v631)
     v634 = g.comb(v633[0], v633[1], v633[2])
-    v635 = g.group_named('RCE_BlenderTonemap_Endfield', [('color', v634)])
-    g.out_('ret_gBuffer0', v635[0], True)
+    g.out_('ret_gBuffer0', v634, True)
     g.out_('ret_gBuffer0_w', v630, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -6234,7 +6175,6 @@ SHARED_GROUPS = [
     ('RCE_ApplyEndfieldOutlineAlbedo', build_RCE_ApplyEndfieldOutlineAlbedo),
     ('RCE_BRDF_AnisotropicNDF_SilkStockings_Endfield', build_RCE_BRDF_AnisotropicNDF_SilkStockings_Endfield),
     ('RCE_BRDF_ClearCoat_Direct_Burley', build_RCE_BRDF_ClearCoat_Direct_Burley),
-    ('RCE_BlenderTonemap_Endfield', build_RCE_BlenderTonemap_Endfield),
     ('RCE_ComputeCamLightFactors', build_RCE_ComputeCamLightFactors),
     ('RCE_ComputeExposure', build_RCE_ComputeExposure),
     ('RCE_ComputeNPRDiffuse', build_RCE_ComputeNPRDiffuse),
@@ -6289,7 +6229,7 @@ EXTERNAL_TEXTURES = {
 }
 
 DEFAULT_PART = 'Standard'
-STAMP = '06282745ef204d76'
+STAMP = '227f4029d7debbe0'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
@@ -7230,16 +7170,9 @@ def _clone_uber(part, material_name, images):
 
 
 def _standard_view_transform(scene):
-    """图尾自带游戏 tonemap(ACES_modified),输出已是显示线性;Blender 默认 AgX 会
-    再映射一次,二次映射把一切压暗去饱和(布料看着像暗金属)。Standard = 直通。"""
-    if scene is None or scene.view_settings.view_transform == 'Standard':
-        return False
-    scene.view_settings.view_transform = 'Standard'
-    try:
-        scene.view_settings.look = 'None'
-    except Exception:
-        pass
-    return True
+    # 本次生成**未内联** tonemap:组输出是场景线性 HDR,显示变换归用户
+    #(Color Management 的 View Transform / 合成器)。这里不越界改场景设置。
+    return False
 
 
 def _load_images(builder, props):
