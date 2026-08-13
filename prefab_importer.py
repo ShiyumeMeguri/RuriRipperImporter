@@ -688,12 +688,17 @@ def import_mesh_from_db(context, db, mesh_file, options=None, materials=None, sk
     if mesh_doc is None:
         report.warnings.append("No Mesh object in file")
         return report
-    name = str(mesh_doc.data.get("m_Name") or "Mesh")
-    decoded = mesh_decoder.decode_mesh(mesh_doc)
-    if decoded.positions is None or len(decoded.positions) == 0:
-        # Say WHICH of Unity's three vertex-data storages holds it instead.
-        report.warnings.append(mesh_decoder.diagnose_empty(mesh_doc, name))
+    # Same resolution the prefab path uses -- the closure's raw geometry blob
+    # first, the YAML document only when this database carries no blob for it.
+    # A second decode call here is what let a standalone mesh silently miss the
+    # fast path every prefab mesh already took.
+    loaded = prefab_scan.load_mesh(db, {"guid": mesh_file.path},
+                                   str(mesh_doc.data.get("m_Name") or "Mesh"))
+    if not loaded.ok:
+        report.warnings.append(loaded.detail or f"'{loaded.name}' decoded to zero vertices.")
         return report
+    decoded = loaded.decoded
+    name = loaded.name or "Mesh"
     smr_bones, file_id_to_bone = (skeleton.bind(context, decoded)
                                   if skeleton is not None else (None, None))
     if smr_bones is not None:
