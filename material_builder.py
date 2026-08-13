@@ -39,8 +39,14 @@ _BUILTIN_RESOURCE_GUIDS = frozenset((
 
 
 def _is_builtin_shader(props):
-    ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
-    return str((ref or {}).get("guid") or "").lower() in _BUILTIN_RESOURCE_GUIDS
+    return props.shader_guid() in _BUILTIN_RESOURCE_GUIDS
+
+
+def _shader_identity(builder, props):
+    guid = props.shader_guid()
+    if not guid:
+        return "<no m_Shader reference>"
+    return unity_material.shader_identity(builder.db._text(guid)) or "guid " + guid
 
 
 def register_graph_provider(provider):
@@ -379,20 +385,23 @@ class MaterialBuilder:
         # by construction a STOCK shader, so no game provider can claim it and
         # none is asked -- a provider that reported "this shader is not in the
         # closure" would be right and useless, since that file never is.
-        for provider in ([] if _is_builtin_shader(props) else GRAPH_PROVIDERS):
+        game_shader = not _is_builtin_shader(props)
+        for provider in ([] if not game_shader else GRAPH_PROVIDERS):
             try:
                 claimed = provider(self, props)
             except Exception:
                 import traceback
                 traceback.print_exc()
-                # 响亮失败:provider 炸掉 ≠ 无人认领——静默滑进 Principled 会把移植 bug
-                # 伪装成"材质没被认领"(实锤:悬空 gen.PART_DEFAULTS 让全员兜底了一轮)。
                 print("[material] !! provider {0} EXCEPTION on '{1}' -- falling back to Principled, "
                       "graph is NOT the game shader".format(
                           getattr(provider, "__module__", provider), name))
                 claimed = None
             if claimed is not None:
                 return claimed
+        if game_shader:
+            print("[material] !! UNCLAIMED '{0}' shader={1} -- no generated stack covers it, "
+                  "falling back to Principled, graph is NOT the game shader".format(
+                      name, _shader_identity(self, props)))
 
         # 就地改写同名材质(网格按名字绑材质;另起新料会得 .001 后缀留下双份)。下方整树清空重建,幂等。
         mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)

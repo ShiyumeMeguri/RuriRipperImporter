@@ -156,20 +156,18 @@ class G:
         if isinstance(v, bpy.types.NodeSocket):
             self.t.links.new(v, sock)
             return
-        if isinstance(v, (int, float)):
-            if sock.type == 'RGBA':
-                sock.default_value = (v, v, v, 1.0)
-            elif sock.type == 'VECTOR':
-                sock.default_value = (v, v, v)
-            else:
-                sock.default_value = float(v)
-            return
+        if not isinstance(v, (int, float)):
+            v = v[0] if sock.type not in ('RGBA', 'VECTOR') else v
         if sock.type == 'RGBA':
-            sock.default_value = (v[0], v[1], v[2], 1.0)
+            sock.default_value = (v, v, v, 1.0) if isinstance(v, (int, float)) else (v[0], v[1], v[2], 1.0)
         elif sock.type == 'VECTOR':
-            sock.default_value = (v[0], v[1], v[2])
+            sock.default_value = (v, v, v) if isinstance(v, (int, float)) else (v[0], v[1], v[2])
+        elif sock.type == 'INT':
+            sock.default_value = int(v)
+        elif sock.type == 'BOOLEAN':
+            sock.default_value = bool(v)
         else:
-            sock.default_value = float(v[0])
+            sock.default_value = float(v)
 
     # ---- 标量/向量运算 ----
     def math(self, op, a, b=0.0, c=0.0):
