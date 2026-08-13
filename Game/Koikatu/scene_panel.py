@@ -85,7 +85,7 @@ def _selected_place(state):
 def _rebuild(state):
     global STATUS
     state.entries.clear()
-    matched, table = datasets.search(datasets.PLACES, (), state.search.strip(), state.filter_rules)
+    matched, table = datasets.search(datasets.PLACES, {}, state.search.strip(), state.filter_rules)
     if table is None:
         STATUS = "Load a cabmap, then refresh."
         return

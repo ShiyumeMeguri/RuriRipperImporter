@@ -45,24 +45,24 @@ def reset():
     _TABLES.clear()
 
 
-def table(dataset_id, *args, refresh=False):
-    """One published dataset. Returns None when there is no bridge yet, which is
-    what a draw callback sees before a cabmap is loaded."""
+def table(dataset_id, refresh=False, **args):
+    """One published dataset, by NAME-ed arguments. Returns None when there is no
+    bridge yet, which is what a draw callback sees before a cabmap is loaded."""
     if cabmap_state.BRIDGE is None:
         return None
-    key = (dataset_id,) + tuple(str(arg) for arg in args)
+    key = (dataset_id,) + tuple(sorted((name, str(value)) for name, value in args.items()))
     if refresh:
         _TABLES.pop(key, None)
     if key not in _TABLES:
-        _TABLES[key] = cabmap_state.BRIDGE.game_data(dataset_id, *args)
+        _TABLES[key] = cabmap_state.BRIDGE.game_data(dataset_id, **args)
     return _TABLES[key]
 
 
-def rows(dataset_id, *args, refresh=False):
+def rows(dataset_id, refresh=False, **args):
     """The dataset's rows as dicts -- for the handful of places that genuinely
     need every row (a build plan is 15 rows). A LIST does not use this: it draws
     through search_data_table over the table's own handle."""
-    found = table(dataset_id, *args, refresh=refresh)
+    found = table(dataset_id, refresh=refresh, **args)
     if found is None:
         return []
     return [{name: found.cell(index, name) for name in found.names}
@@ -74,7 +74,7 @@ def search(dataset_id, args, query, filter_rules):
     engine, over the buffers the read already produced. ``table.handle`` is the
     search handle, so reading and searching are not two registrations that can
     disagree."""
-    found = table(dataset_id, *args)
+    found = table(dataset_id, **args)
     if found is None:
         return [], None
     if cabmap_state.BRIDGE is None or not len(found):
@@ -103,7 +103,7 @@ def number(table_, row, column):
 def cabs_for(bundles):
     """The seed CABs a set of the game's own bundle paths resolves to -- asked of
     the hook, which owns the rule, rather than re-derived here."""
-    found = table(BUNDLE_CABS, *bundles)
+    found = table(BUNDLE_CABS, bundle=list(bundles))
     if found is None:
         return []
     seen = set()

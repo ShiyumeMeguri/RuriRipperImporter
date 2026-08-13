@@ -1050,7 +1050,7 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
         try:
             game = state.current_game or None
             hooks = _current_game_hooks(state, game)
-            bridge = cabmap_state.ensure_bridge(hooks)
+            bridge = cabmap_state.ensure_bridge(hooks, root)
             code = bridge.build_cab_map(root, out)
             if code != 0:
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
@@ -1098,7 +1098,8 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             game = state.current_game or None
-            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, game))
+            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, game),
+                                                bpy.path.abspath(state.game_root) if state.game_root else "")
             bridge.load_cab_map(path, game=game)
             cabmap_state.activate(game)
             # Land back on the folder the user was browsing (persisted per game on the

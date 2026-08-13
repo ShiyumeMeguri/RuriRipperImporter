@@ -204,8 +204,7 @@ def _read_summary(state, context, map_name):
     if not map_name or cabmap_state.BRIDGE is None:
         return
     try:
-        summary = scene_state.load_summary(cabmap_state.BRIDGE,
-                                           context.scene.ruri_cabmap.game_root, map_name)
+        summary = scene_state.load_summary(map_name)
     except Exception as exc:
         scene_state.STATUS = "{0}: {1}".format(type(exc).__name__, exc)
         print("[RuriRipper] chunk summary for '{0}' failed: {1}".format(map_name, exc))
@@ -327,8 +326,7 @@ class RURI_OT_scene_refresh(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            scene_state.load_scenes(cabmap_state.BRIDGE, context.scene.ruri_cabmap.game_root,
-                                    _language())
+            scene_state.load_scenes(_language())
         except Exception as exc:
             _report_exception(self, "Scene list failed", exc)
             return {"CANCELLED"}
@@ -372,8 +370,7 @@ class RURI_OT_scene_discover(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             scene_state.discover_placements(
-                cabmap_state.BRIDGE, context.scene.ruri_cabmap.game_root, map_name,
-                rect, int(state.scene_state_id), state.lod0_only)
+                map_name, rect, int(state.scene_state_id), state.lod0_only)
             scene_state.resolve_cabs(cabmap_state.BRIDGE)
         except Exception as exc:
             _report_exception(self, "Read failed", exc)

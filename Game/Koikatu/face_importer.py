@@ -58,7 +58,7 @@ def table(armature):
     bundle, asset = head_of(armature)
     if not bundle or not asset:
         return {}
-    rows = datasets.rows(datasets.FACE_PATTERNS, bundle, asset)
+    rows = datasets.rows(datasets.FACE_PATTERNS, bundle=bundle, asset=asset)
     built = {}
     for row in rows:
         channel = str(row["channel"])

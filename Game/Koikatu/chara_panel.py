@@ -100,15 +100,11 @@ def _grouped(state, rows, label_key, group_key, key_key, detail_key):
         state.active_index = 0
 
 
-def _game_root():
-    return bpy.context.scene.ruri_cabmap.game_root
-
-
 # ── the cast ────────────────────────────────────────────────────────────────
 
 def _rebuild_cast(state):
     global STATUS
-    matched, table = datasets.search(datasets.CAST, (_game_root(),),
+    matched, table = datasets.search(datasets.CAST, {},
                                      state.search.strip(), state.filter_rules)
     if table is None:
         state.entries.clear()
@@ -128,7 +124,7 @@ def _plan(state):
     card = _selected_card(state)
     if not card:
         return []
-    return datasets.rows(datasets.PLAN, card, int(state.coordinate))
+    return datasets.rows(datasets.PLAN, cardPath=card, outfit=int(state.coordinate))
 
 
 def _coordinate_items(self, context):
@@ -188,7 +184,7 @@ def _side_of(bundle):
 
 
 def _rebuild_anime(state):
-    matched, table = datasets.search(datasets.ANIMATIONS, (),
+    matched, table = datasets.search(datasets.ANIMATIONS, {},
                                      state.search.strip(), state.filter_rules)
     if table is None:
         state.entries.clear()
@@ -407,7 +403,7 @@ class RURI_OT_kk_refresh(bpy.types.Operator):
     def execute(self, context):
         state = context.scene.ruri_kk_chara
         try:
-            datasets.table(datasets.CAST, _game_root(), refresh=True)
+            datasets.table(datasets.CAST, refresh=True)
         except Exception as exc:
             _report_exception(self, "Character list failed", exc)
             return {"CANCELLED"}
@@ -465,7 +461,7 @@ class RURI_OT_kk_build(bpy.types.Operator):
 
 
 def _personality_of(state):
-    table = datasets.table(datasets.CAST, _game_root())
+    table = datasets.table(datasets.CAST)
     card = _selected_card(state)
     if table is None or not card:
         return 0

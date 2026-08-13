@@ -147,7 +147,7 @@ def _buildable(game_root):
     """Cached: the manifest is one small file, but a redraw must not re-read it."""
     if game_root not in _BUILDABLE:
         try:
-            _BUILDABLE[game_root] = roster.buildable_templates(cabmap_state.BRIDGE, game_root)
+            _BUILDABLE[game_root] = roster.buildable_templates()
         except Exception:
             _BUILDABLE[game_root] = None
     return _BUILDABLE[game_root]
@@ -248,11 +248,10 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_roster
-        game_root = context.scene.ruri_cabmap.game_root
         language = _language(state)
         state.language = language
         try:
-            rows = roster.load(cabmap_state.BRIDGE, game_root, language, state.kind)
+            rows = roster.load(language, state.kind)
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             _report(self, state.status)
@@ -488,8 +487,7 @@ def _npc_materials(context, info, template_id):
         return {}
     try:
         assigned = datasets.npc_materials(
-            roster.vfs_roots(context.scene.ruri_cabmap.game_root), template_id,
-            [cabmap_state.ROWS.cab(rows[0][0])])
+            template_id, [cabmap_state.ROWS.cab(rows[0][0])])
     except Exception:
         return {}
     return {row["mesh"].lower(): row["materials"] for row in assigned}
@@ -605,9 +603,8 @@ def _model_parts(context, entry):
     The avatar template is NOT an import row: it is read only for its skeleton
     paths + leaf names (see _templet_skeleton), which the assembler feeds to a
     SkeletonBinder to rebuild the shared skeleton the loose meshes hash against."""
-    roots = roster.vfs_roots(context.scene.ruri_cabmap.game_root)
     try:
-        info = datasets.npc_parts(roots, entry.key)
+        info = datasets.npc_parts(entry.key)
     except Exception:
         return None, [], []
     hits = []

@@ -99,14 +99,6 @@ CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, lod0_only
 STATUS = "Refresh to read the game's scene list."
 
 
-def vfs_roots(game_root):
-    """VFS root paths in priority order -- the hot-update overlay first, then the
-    base client. Both are needed together: a patch's manifest can list a chunk it
-    never duplicated because that patch didn't change it (see
-    RipperBlenderBridge.ExtractFirstAvailable in Ruri.RipperHook)."""
-    return roster.vfs_roots(game_root)
-
-
 def name_columns(language):
     """One column: the scene's display name, resolved through the chosen
     language's text container. Both naming tables carry it under the same field,
@@ -114,7 +106,7 @@ def name_columns(language):
     return [("display", "showName.id", roster.text_container(language), "")]
 
 
-def load_scenes(bridge, game_root, language):
+def load_scenes(language):
     """Read the game's scene list, split into the two kinds, with the names the
     game itself shows.
 
@@ -122,18 +114,17 @@ def load_scenes(bridge, game_root, language):
     its map-level name where both name the same id. A scene neither names keeps
     its own id as its label -- the game ships no other name for it."""
     global SCENES, LANDMARKS, STATUS
-    roots = vfs_roots(game_root)
 
     names = {}
     for table in (LEVEL_DESC_TABLE, MAP_ID_TABLE):
-        rows = datasets.projected_table(roots, roster.container(table), name_columns(language))
+        rows = datasets.projected_table(roster.container(table), name_columns(language))
         for index in range(rows.row_count):
             display = rows.cell(index, "display")
             if display:
                 names[rows.cell(index, "key")] = display
 
-    scene_ids = datasets.scene_maps(roots)
-    places = datasets.landmarks(roots)
+    scene_ids = datasets.scene_maps()
+    places = datasets.landmarks()
 
     # A place that is not its own level belongs to the streaming map whose id it
     # starts with -- matched against the real scene list, so nothing is inferred
@@ -186,17 +177,17 @@ def family(scene_id):
     return scene_id.split("_", 1)[0]
 
 
-def load_summary(bridge, game_root, map_name):
+def load_summary(map_name):
     """One map's chunk inventory, summarized on the C# side that read the
     manifests -- scene states plus the anchored/floating split. Cached per map:
     it never changes under a session, and the controls read it on every
     redraw."""
     if map_name not in SUMMARIES:
-        SUMMARIES[map_name] = datasets.chunk_summary(vfs_roots(game_root), map_name)
+        SUMMARIES[map_name] = datasets.chunk_summary(map_name)
     return SUMMARIES[map_name]
 
 
-def discover_placements(bridge, game_root, map_name, rect, scene_state_id, lod0_only):
+def discover_placements(map_name, rect, scene_state_id, lod0_only):
     """What one world rect of one map places, reduced on the C# side that
     decoded it: PLACEMENTS holds only the importable rows, SEED_PATHS the
     container paths an import needs, COUNTS the drop accounting. Resets state
@@ -205,9 +196,12 @@ def discover_placements(bridge, game_root, map_name, rect, scene_state_id, lod0_
     global PLACEMENTS, COUNTS, SEED_PATHS, RESOLVED_CABS, CLOSURE_CABS
     global CURRENT_MAP, CURRENT_WINDOW, STATUS
     min_x, min_z, max_x, max_z = rect
+    # A scene state filter is a LIST on the wire; the panel picks one at a time,
+    # and "no state chosen" is the empty list rather than a sentinel number.
+    chosen = "" if scene_state_id is None else str(scene_state_id).strip()
     result = datasets.placements(
-        vfs_roots(game_root), map_name, min_x, min_z, max_x, max_z,
-        scene_state_id, lod0_only)
+        map_name, min_x, min_z, max_x, max_z,
+        [chosen] if chosen else [], lod0_only)
     PLACEMENTS = result["placements"]
     SEED_PATHS = result["seed_paths"]
     COUNTS = {key: result[key] for key in ("total", "no_transform", "lod_filtered", "distinct_assets")}
