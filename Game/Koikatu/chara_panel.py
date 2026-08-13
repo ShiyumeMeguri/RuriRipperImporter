@@ -197,6 +197,7 @@ def _rebuild_anime(state):
         return
     normal = []
     sides = {"male": {}, "female": {}}
+    group_of = {"male": {}, "female": {}}
     order = []
     seen = set()
     for index in matched:
@@ -220,19 +221,27 @@ def _rebuild_anime(state):
         key = (str(category), str(name), str(table.cell(index, "clip")))
         if key not in sides[side]:
             sides[side][key] = row
+            group_of[side].setdefault(str(category), row["group"])
             if key not in seen:
                 seen.add(key)
                 order.append(key)
     _grouped(state, normal, "name", "group", "row", "clip")
-    _grouped_pairs(state, order, sides)
+    _grouped_pairs(state, order, sides, group_of)
 
 
-def _grouped_pairs(state, order, sides):
+def _grouped_pairs(state, order, sides, group_of):
     """Fill the male and female lists so their indices correspond.
 
-    Both collections get the same headers and the same number of rows in the
-    same order; a position only one partner has gets a blank placeholder on the
-    other side rather than shifting every later row out of alignment."""
+    Both collections get headers and rows at the same indices and in the same
+    order; a position only one partner has gets a blank placeholder on the other
+    side rather than shifting every later row out of alignment.
+
+    A header names the group the way that column's own rows are filed -- the two
+    partners of one act sit in DIFFERENT groups (男H挿入 vs 女H挿入), and the
+    position alone is often just a number, so a shared header would have to drop
+    the half that actually reads as a name. Where a column has nothing at all for
+    a position it borrows the other one's, since the band is the same act either
+    way and a bare position number names nothing."""
     state.male_entries.clear()
     state.female_entries.clear()
     order.sort(key=lambda key: (key[0], key[1], key[2]))
@@ -244,9 +253,12 @@ def _grouped_pairs(state, order, sides):
     for key in order:
         if key[0] != current:
             current = key[0]
-            for entries in (state.male_entries, state.female_entries):
+            for side, other, entries in (("male", "female", state.male_entries),
+                                         ("female", "male", state.female_entries)):
                 header = entries.add()
-                header.label = "{0}  ({1})".format(current, counts[current])
+                header.label = "{0}  ({1})".format(
+                    group_of[side].get(current) or group_of[other].get(current) or current,
+                    counts[current])
                 header.is_group = True
         for side, entries in (("male", state.male_entries),
                               ("female", state.female_entries)):
@@ -267,6 +279,8 @@ def _grouped_pairs(state, order, sides):
 
 def _on_anime_edit(self, context):
     _rebuild_anime(self)
+
+
 
 
 def _row_of_entry(entry):
