@@ -1934,6 +1934,22 @@ class RURI_OT_import_selected(bpy.types.Operator):
         # own ERROR/WARNING); only a batch that produced nothing cancels.
         if imported == 0 and not (clip_rows and clips_ok):
             return {"CANCELLED"}
+
+        # A game's post-processing belongs to the scene's look, not to one import:
+        # a character loaded on its own needs the same tonemap a display stage
+        # does. Idempotent, and a no-op for a game whose shader package registers
+        # no post stage. Loud on failure -- a missing post chain looks exactly
+        # like a shading bug in the materials.
+        try:
+            try:
+                from . import material_builder
+            except ImportError:
+                import material_builder
+            material_builder.apply_post_stages(context.scene)
+        except Exception as post_error:
+            import traceback
+            traceback.print_exc()
+            self.report({"ERROR"}, "Post chain install failed: {0}".format(post_error))
         return {"FINISHED"}
 
     def _resolve_union_closure(self, context, other_rows, clip_rows):

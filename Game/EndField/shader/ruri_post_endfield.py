@@ -697,7 +697,7 @@ def install(scene):
                 continue
             for space in area.spaces:
                 if space.type == 'VIEW_3D':
-                    space.shading.use_compositor = 'CAMERA'
+                    space.shading.use_compositor = 'ALWAYS'
     return tree
 
 
