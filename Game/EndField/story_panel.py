@@ -83,6 +83,10 @@ _ACTOR_RIGS = {}
 # objects the story spawns, not on a rig that can be loaded on its own.
 _MODEL_KINDS = ("actor", "npc", "monster")
 
+# The Timeline track classes that place an animation. The others a cutscene
+# carries (activation, control, audio) are its wiring, not its motion.
+_ANIMATION_TRACKS = ("AnimationTrack",)
+
 
 def _top_table(state):
     """The list on top: the story units of the current channel, or the actor index.
@@ -689,6 +693,229 @@ def _make_active(context, armature):
     context.view_layer.objects.active = armature
 
 
+def _camera_of(context, unit):
+    """The cutscene's camera object, created once per unit.
+
+    A cutscene is a camera performance: its cam track drives a camera, not a rig,
+    so the clip lands on an object action instead of pose bones."""
+    name = unit + "_camera"
+    existing = bpy.data.objects.get(name)
+    if existing is not None and existing.type == "CAMERA":
+        if existing.name not in context.scene.objects:
+            context.scene.collection.objects.link(existing)
+        return existing
+    camera = bpy.data.objects.new(name, bpy.data.cameras.new(name))
+    camera.rotation_mode = "QUATERNION"
+    context.scene.collection.objects.link(camera)
+    return camera
+
+
+def _camera_action(camera, cab, clip_name):
+    """Build the object action one camera clip states.
+
+    The clip is a transform track like any other, so it is read through the same
+    curve path every clip takes; what is camera-specific is only the two
+    conventions at the end -- Unity's basis (converted by the shared reflection,
+    exactly as a top-level import object is) and Unity's camera facing +Z with up
+    +Y against Blender's -Z with up +Y, which is one fixed local quarter turn."""
+    import numpy
+    from mathutils import Matrix, Quaternion, Vector
+
+    from ... import animation_builder, coordinate
+    from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
+
+    assets, _roots, _seeds, clips_by_cab, _scenes = cabmap_state.BRIDGE.import_cabs(
+        [cab], export_class_ids=[class_registry.id_for_name("AnimationClip")])
+    database = bridge_asset_db.BridgeAssetDatabase(
+        assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+    curves = None
+    for guid in clips_by_cab.get(cab.lower(), []):
+        found = database.clip_curves(guid)
+        if found is not None and (clip_name in ("", found.name) or curves is None):
+            curves = found
+    if curves is None:
+        return None
+
+    rate = curves.sample_rate or 60.0
+    frames = max(1, int(round(curves.max_time() * rate)) + 1)
+    times = numpy.arange(frames, dtype=numpy.float64) / rate
+    position = curves.positions[0].sample(times) if curves.positions else None
+    rotation = curves.rotations[0].sample(times) if curves.rotations else None
+    if position is None and rotation is None:
+        return None
+
+    action = bpy.data.actions.new(curves.name)
+    action.use_fake_user = True
+    fcurves, slot = animation_builder._prepare_channels(action, action.name, "OBJECT")
+    facing = Matrix.Rotation(numpy.pi / 2.0, 4, "X")
+    locations = numpy.zeros((frames, 3), dtype=numpy.float64)
+    quaternions = numpy.zeros((frames, 4), dtype=numpy.float64)
+    for frame in range(frames):
+        translation = Matrix.Translation(Vector(position[frame]) if position is not None else Vector())
+        turn = Quaternion((rotation[frame][3], rotation[frame][0], rotation[frame][1],
+                           rotation[frame][2])).to_matrix().to_4x4() if rotation is not None \
+            else Matrix.Identity(4)
+        world = coordinate.convert_root_matrix(translation @ turn) @ facing
+        locations[frame] = world.to_translation()
+        turned = world.to_quaternion()
+        quaternions[frame] = (turned.w, turned.x, turned.y, turned.z)
+
+    keys = numpy.arange(frames, dtype=numpy.float64)
+    for index, axis in enumerate("xyz"):
+        curve = fcurves.new("location", index=index)
+        _write_curve(curve, keys, locations[:, index])
+    for index in range(4):
+        curve = fcurves.new("rotation_quaternion", index=index)
+        _write_curve(curve, keys, quaternions[:, index])
+    return action, slot
+
+
+def _write_curve(curve, frames, values):
+    import numpy
+    curve.keyframe_points.add(count=len(frames))
+    flat = numpy.empty(len(frames) * 2, dtype=numpy.float64)
+    flat[0::2] = frames
+    flat[1::2] = values
+    curve.keyframe_points.foreach_set("co", flat)
+    curve.keyframe_points.foreach_set("interpolation", [1] * len(frames))
+    curve.update()
+
+
+def _report_exception(operator, headline, error):
+    import traceback
+    traceback.print_exc()
+    operator.report({"ERROR"}, "{0}: {1}: {2}".format(headline, type(error).__name__, error))
+
+
+def _action_named(clip):
+    """The action built for one clip. The importer names an action after the
+    clip's own m_Name, which is exactly what the timeline plan carries -- and
+    Blender uniquifies a second import as "<name>.001", so a re-import lands on
+    the newest one rather than silently re-using the first."""
+    if not clip:
+        return None
+    exact = bpy.data.actions.get(clip)
+    if exact is not None:
+        return exact
+    numbered = [action for action in bpy.data.actions
+                if action.name.rsplit(".", 1)[0] == clip]
+    return max(numbered, key=lambda action: action.name) if numbered else None
+
+
+def _plan_rows(unit):
+    """The unit's own playback plan, as plain dicts in timeline order."""
+    table = datasets.story_timeline(unit)
+    columns = ("playable", "track", "trackKind", "trackPath", "binding", "clip", "clipCab",
+               "start", "duration", "clipIn", "timeScale", "blendIn", "blendOut",
+               "frameRate", "sampleRate", "clipLength", "muted")
+    rows = [{name: table.cell(index, name) for name in columns} for index in range(len(table))]
+    for row in rows:
+        for number in ("start", "duration", "clipIn", "timeScale", "blendIn", "blendOut",
+                       "frameRate", "sampleRate", "clipLength", "muted"):
+            row[number] = float(row[number] or 0.0)
+    rows.sort(key=lambda row: (row["playable"], row["trackPath"], row["start"]))
+    return rows
+
+
+def _actor_by_cab(table):
+    """{clip cab: actor token} for one unit -- the join between the plan (which
+    names clips) and the cast (which names who plays them) is the CAB itself, so
+    no name matching happens anywhere in this."""
+    found = {}
+    for row in range(len(table)):
+        cab = table.cell(row, "cab")
+        if cab:
+            found[cab] = table.cell(row, "actor")
+    return found
+
+
+def _scene_fps(context, rows):
+    """The frame rate the timeline itself states, applied to the scene so one
+    Blender frame IS one game frame. A unit that states none keeps the scene's."""
+    stated = {row["frameRate"] for row in rows if row["frameRate"] > 0}
+    if not stated:
+        return float(context.scene.render.fps)
+    fps = max(stated)
+    context.scene.render.fps = int(round(fps))
+    context.scene.render.fps_base = 1.0
+    return float(context.scene.render.fps)
+
+
+def _action_rate(action, row, fps):
+    """How many action frames one second of this clip is.
+
+    MEASURED off the built action against the length the clip itself states, not
+    taken from the clip's m_SampleRate: an ACL clip routinely decodes at a rate
+    its own field does not carry (a 30 in the asset, 60 frames per second on the
+    curves), and placing by the stated rate would play those shots at half
+    speed."""
+    frames = action.frame_range[1] - action.frame_range[0]
+    if row["clipLength"] > 0.0 and frames > 0.0:
+        return frames / row["clipLength"]
+    return row["sampleRate"] if row["sampleRate"] > 0 else fps
+
+
+def _free_track(animation, name, start, end):
+    """The NLA track this clip goes on: the one named after the game's own track,
+    or the next layer of it.
+
+    Timeline lets two clips of one track overlap (that is how it cross-blends);
+    Blender does not, so an overlap becomes another layer of the same track
+    rather than a dropped clip or a moved one."""
+    layer = 0
+    while True:
+        layered = name if layer == 0 else "{0}.{1}".format(name, layer + 1)
+        track = next((entry for entry in animation.nla_tracks if entry.name == layered), None)
+        if track is None:
+            track = animation.nla_tracks.new()
+            track.name = layered
+            return track
+        if all(strip.frame_end <= start + 1e-3 or strip.frame_start >= end - 1e-3
+               for strip in track.strips):
+            return track
+        layer += 1
+
+
+def _place_strip(rig, row, action, fps):
+    """Put one action on one rig where the timeline puts it.
+
+    Timeline states a clip as (start, duration, clipIn, timeScale) in SECONDS
+    against the clip's own sample rate; Blender states a strip as a frame span
+    plus the action frames it consumes and a scale between them. The two are the
+    same statement in different units, so this is a conversion, not a guess:
+    the strip spans duration*fps frames and eats duration*timeScale*sampleRate
+    action frames starting at clipIn*sampleRate."""
+    animation = rig.animation_data or rig.animation_data_create()
+    start = row["start"] * fps
+    span = max(row["duration"] * fps, 1.0)
+    track = _free_track(animation, row["track"] or row["trackPath"] or "Timeline", start, start + span)
+    # Blender builds a new strip at the action's OWN length and refuses any
+    # overlap, so it is born past everything already on the track and then moved
+    # into place -- the region it moves into was just checked to be free.
+    parking = max(int(round(start)),
+                  int(max((strip.frame_end for strip in track.strips), default=0.0)) + 1)
+    strip = track.strips.new(action.name, parking, action)
+    sample = _action_rate(action, row, fps)
+    consumed = max(row["duration"] * row["timeScale"] * sample, 1.0 / sample)
+    # Order matters: the action range first, then the scale that stretches it to
+    # the span the timeline gives it, and only then the move into place. Resizing
+    # by frame_end_ui instead would rewrite the action range back to the span and
+    # silently play the whole shot at the wrong speed.
+    strip.action_frame_start = row["clipIn"] * sample
+    strip.action_frame_end = strip.action_frame_start + consumed
+    strip.scale = span / consumed
+    strip.frame_start_ui = start
+    strip.blend_in = min(row["blendIn"] * fps, span)
+    strip.blend_out = min(row["blendOut"] * fps, span)
+    # Outside its own span a Timeline clip contributes nothing -- holding the
+    # last pose instead would leave every actor frozen in place after their
+    # first shot, on top of whoever plays next.
+    strip.extrapolation = "NOTHING"
+    strip.mute = row["muted"] > 0
+    return strip
+
+
 class RURI_OT_story_load_unit(bpy.types.Operator):
     """Bring the whole scene up the way the game does: load every performer this
     unit animates, then build that one's own animations onto its own rig.
@@ -717,37 +944,79 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
         if table is None:
             self.report({"WARNING"}, "Open a unit first.")
             return {"CANCELLED"}
-        cast = _cast_of(table)
-        if not cast:
-            self.report({"WARNING"}, "This unit animates nobody the game ships a model for.")
+        try:
+            plan = _plan_rows(state.unit)
+        except Exception as exc:
+            _report_exception(self, "Reading this unit's timeline failed", exc)
+            return {"CANCELLED"}
+        if not plan:
+            self.report({"WARNING"}, "This unit's timeline places no clip -- nothing to play.")
             return {"CANCELLED"}
 
-        loaded, built, unresolved = 0, 0, []
-        for actor, clip_cabs in cast.items():
-            rows = _model_rows_for(actor)
-            if not rows:
-                unresolved.append(actor)
-                continue
-            ok, added = _import_cabs(context, [row["cab"] for row in rows])
-            if not ok or not added:
-                unresolved.append(actor)
-                continue
-            rig = added[0]
-            _ACTOR_RIGS[actor] = rig.name
-            loaded += 1
-            _make_active(context, rig)
-            if _import_cabs(context, clip_cabs)[0]:
-                built += len(clip_cabs)
+        actor_of = _actor_by_cab(table)
+        cast = _cast_of(table)
+        fps = _scene_fps(context, plan)
 
-        skipped = sum(1 for row in range(len(table))
-                      if table.cell(row, "clip") and table.cell(row, "kind") not in _MODEL_KINDS)
-        summary = "{0}: loaded {1} actor(s), {2} animation(s)".format(state.unit, loaded, built)
-        if skipped:
-            summary += "; {0} camera/prop animation(s) belong to objects the story spawns".format(skipped)
+        loaded, unresolved = {}, []
+        for actor, clip_cabs in cast.items():
+            rig = _rig_for(context, actor) or self._load_actor(context, actor)
+            if rig is None:
+                unresolved.append(actor)
+                continue
+            loaded[actor] = rig
+            _make_active(context, rig)
+            _import_cabs(context, clip_cabs)
+
+        camera = None
+        placed, unplaced = 0, 0
+        last = 0.0
+        for row in plan:
+            if row["trackKind"] not in _ANIMATION_TRACKS:
+                continue
+            actor = actor_of.get(row["clipCab"], "")
+            target, action = None, None
+            if actor:
+                target = loaded.get(actor)
+                action = _action_named(row["clip"]) if target is not None else None
+            elif row["clipCab"]:
+                # A track the story drives on something that is not one of its
+                # performers -- the camera it films through. That clip is a
+                # transform track, so it becomes an object action on a camera
+                # this unit owns.
+                camera = camera or _camera_of(context, state.unit)
+                built = _camera_action(camera, row["clipCab"], row["clip"])
+                if built is not None:
+                    target, action = camera, built[0]
+            if target is None or action is None:
+                unplaced += 1
+                continue
+            _place_strip(target, row, action, fps)
+            placed += 1
+            last = max(last, (row["start"] + row["duration"]) * fps)
+
+        if placed:
+            context.scene.frame_start = 0
+            context.scene.frame_end = max(1, int(round(last)))
+            context.scene.frame_set(0)
+        summary = "{0}: {1} actor(s), {2} of {3} timeline clip(s) placed at {4} fps".format(
+            state.unit, len(loaded), placed, len(plan), int(fps))
+        if unplaced:
+            summary += "; {0} belong to objects the story spawns (camera, props)".format(unplaced)
         if unresolved:
             summary += "; no model shipped for " + ", ".join(unresolved[:4])
-        self.report({"INFO"} if loaded else {"WARNING"}, summary)
-        return {"FINISHED"} if loaded else {"CANCELLED"}
+        self.report({"INFO"} if placed else {"WARNING"}, summary)
+        return {"FINISHED"} if placed else {"CANCELLED"}
+
+    def _load_actor(self, context, actor):
+        """Bring one performer in, and remember which rig IS them."""
+        rows = _model_rows_for(actor)
+        if not rows:
+            return None
+        ok, added = _import_cabs(context, [row["cab"] for row in rows])
+        if not ok or not added:
+            return None
+        _ACTOR_RIGS[actor] = added[0].name
+        return added[0]
 
 
 class RURI_OT_story_reveal(bpy.types.Operator):

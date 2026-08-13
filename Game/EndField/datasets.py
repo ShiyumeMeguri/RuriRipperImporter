@@ -57,6 +57,8 @@ UI_BINDINGS = "endfield.ui.bindings"
 STORY_UNITS = "endfield.story.units"
 STORY_CLIPS = "endfield.story.clips"
 STORY_ACTORS = "endfield.story.actors"
+STORY_TIMELINE = "endfield.story.timeline"
+STORY_TIMELINE_SHAPE = "endfield.story.timeline_shape"
 
 
 def _table(dataset_id, **args):
@@ -134,6 +136,21 @@ def story_clips(channel="", unit="", actor=""):
     dialogue timeline files the morph asset next to the clip that drives it).
     Asked by actor, the answer also carries that one's own animation library."""
     return _table(STORY_CLIPS, channel=channel, unit=unit, actor=actor)
+
+
+def story_timeline(unit, variant=""):
+    """One unit's playback PLAN, read off its own Timeline assets: every clip the
+    timeline places, the track and bound object it belongs to, and the times the
+    timeline gives it -- start, duration, clip-in, speed, blends, in seconds --
+    plus the clip's own sample rate. Laying these out reproduces the scene the
+    game plays; the clip list next door only says which takes exist."""
+    return _table(STORY_TIMELINE, unit=unit, variant=variant)
+
+
+def story_timeline_shape(unit, variant=""):
+    """What one unit's Timeline assets carry, field by field. Diagnostic: the
+    reader binds to field names, and this is how a drift in them is seen."""
+    return _table(STORY_TIMELINE_SHAPE, unit=unit, variant=variant)
 
 
 def story_actors(channel=""):
