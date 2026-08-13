@@ -30,7 +30,6 @@ PLACEMENT_MATERIALS = "endfield.scene.placement_materials"
 PLACEMENT_COUNTS = "endfield.scene.placement_counts"
 SEED_PATHS = "endfield.scene.seed_paths"
 NPC_PARTS = "endfield.npc.parts"
-NPC_MANIFEST = "endfield.npc.manifest"
 NPC_MATERIALS = "endfield.npc.materials"
 CHARACTER_MODELS = "endfield.character.models"
 LANGUAGE = "endfield.roster.language"
@@ -95,7 +94,11 @@ def language_for_locale(locale):
 
 def cast(kind, language):
     """One cast, already joined to its display names and reduced to what a list
-    draws: key/label/detail/group, plus the game's own columns to filter on."""
+    draws: key/label/detail/group, plus the game's own columns to filter on.
+
+    A cast that has rows the game ships nothing loadable for carries a ``shipped``
+    column saying which is which -- so the list can drop what it could not load
+    without a second crossing to ask."""
     return _table(CAST, cast=kind, language=language)
 
 
@@ -341,10 +344,6 @@ def ui_bindings():
 
 
 # ── npcs and characters ─────────────────────────────────────────────────────
-
-def npc_manifest():
-    return set(_column(NPC_MANIFEST, "template"))
-
 
 def npc_parts(template_id):
     """What one npc template is assembled from. The template's own fields repeat on

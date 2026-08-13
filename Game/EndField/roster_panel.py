@@ -30,7 +30,8 @@ NPCS = datasets.NPCS
 # Column labels worth spelling out; anything else reads as its own column name,
 # so a column the hook adds to a cast shows up here with no edit.
 _FIELD_LABELS = {"key": "Id", "display": "Name", "english": "English", "group": "Profession",
-                 "npc": "Npc Id", "template": "Template", "label": "Name", "detail": "Detail"}
+                 "npc": "Npc Id", "template": "Template", "label": "Name", "detail": "Detail",
+                 "also": "Also Worn By", "shipped": "Has A Model"}
 
 
 def _filter_fields():
@@ -135,23 +136,6 @@ def _rows(state):
     return _ROWS.get((state.kind, _language(state)))
 
 
-_BUILDABLE = {}
-
-
-def context_game_root():
-    return bpy.context.scene.ruri_cabmap.game_root
-
-
-def _buildable(game_root):
-    """Cached: the manifest is one small file, but a redraw must not re-read it."""
-    if game_root not in _BUILDABLE:
-        try:
-            _BUILDABLE[game_root] = datasets.npc_manifest()
-        except Exception:
-            _BUILDABLE[game_root] = None
-    return _BUILDABLE[game_root]
-
-
 def _rebuild(state):
     """Rebuild the drawn line list.
 
@@ -166,16 +150,24 @@ def _rebuild(state):
         return
     matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(),
                                                     state.filter_rules)
-    rows = [{name: table.cell(int(index), name) for name in ("key", "label", "detail", "group")}
-            for index in matched]
-    if state.kind == NPCS:
-        # Row ids index the WHOLE projected table, which is what the C# search
-        # returns them against -- so the unbuildable ones are dropped here rather
-        # than by subsetting the table out from under the search.
-        buildable = _buildable(context_game_root())
-        if buildable is not None:
-            rows = [row for row in rows if row["key"] in buildable]
-    rows.sort(key=lambda row: (row["group"], row["label"]))
+    # A row the game ships no model for gets no Load button, so it is not drawn --
+    # offering one would be a lie. Which rows those are is the cast's own column
+    # (a cast whose every row is loadable has no such column), and the drop happens
+    # here rather than by subsetting the table out from under the search: the row
+    # ids come back against the WHOLE table.
+    #
+    # Ordering reads the two columns it sorts on as WHOLE columns (built once per
+    # table, then cached) and materializes cells only for the rows that end up drawn:
+    # this cast is every model the game ships, so it is a list in the thousands and a
+    # redraw happens per keystroke. The budget is the bundle browser's own.
+    labels = table.values("label")
+    groups = table.values("group")
+    shipped = table.values("shipped") if "shipped" in table.names else None
+    order = sorted((int(index) for index in matched if shipped is None or shipped[int(index)]),
+                   key=lambda index: (groups[index], labels[index]))
+    matched_count = len(order)
+    rows = [{name: table.cell(index, name) for name in ("key", "label", "detail", "group")}
+            for index in order[:cabmap_state.DISPLAY_CAP]]
 
     counts = {}
     for row in rows:
@@ -195,8 +187,10 @@ def _rebuild(state):
         entry.group = row["group"]
         entry.detail = row["detail"]
         entry.row_index = index
-    state.status = "{0} of {1} {2} · {3}".format(
-        len(rows), table.row_count, state.kind, _language(state))
+    state.status = "{0} of {1} {2} · {3}{4}".format(
+        matched_count, table.row_count, state.kind, _language(state),
+        "" if matched_count == len(rows) else
+        " · showing {0}, narrow your search to see the rest".format(len(rows)))
     if state.active_index >= len(state.entries):
         state.active_index = 0
 
@@ -821,5 +815,4 @@ def unregister():
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     _ROWS.clear()
-    _BUILDABLE.clear()
     _CHARACTER_MODELS.clear()
