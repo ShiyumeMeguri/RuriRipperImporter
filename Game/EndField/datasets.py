@@ -53,6 +53,8 @@ MORPH_SHADER_PARAMS = "endfield.morph.shaderparams"
 UI_CANDIDATES = "endfield.ui.candidates"
 UI_SCHEMA = "endfield.ui.schema"
 UI_BINDINGS = "endfield.ui.bindings"
+STORY_UNITS = "endfield.story.units"
+STORY_CLIPS = "endfield.story.clips"
 
 
 def _table(dataset_id, **args):
@@ -100,6 +102,29 @@ def cast(kind, language):
     column saying which is which -- so the list can drop what it could not load
     without a second crossing to ask."""
     return _table(CAST, cast=kind, language=language)
+
+
+# ── story playback ──────────────────────────────────────────────────────────
+
+# The two things this game plays story through. A panel states WHICH channel it
+# wants; how each one is filed is the hook's read of the game's own folders.
+CUTSCENE = "cutscene"
+DIALOG = "dialog"
+
+
+def story_units(channel=""):
+    """Every unit of story playback the game files animations under, as the table
+    itself -- so the list searches through the same C# engine every other list
+    here does. One row is a cutscene or a dialogue timeline, with the shot/actor/
+    clip counts of its own folder and the protagonist variants it ships in."""
+    return _table(STORY_UNITS, channel=channel)
+
+
+def story_clips(channel, unit):
+    """What one unit plays, in the game's own filing: the shot it belongs to, the
+    kind of thing it moves, the actor, and whether the row is an importable clip
+    (a dialogue timeline files the morph asset next to the clip that drives it)."""
+    return _table(STORY_CLIPS, channel=channel, unit=unit)
 
 
 # ── scenes ──────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 """Endfield (Arknights: Endfield) -- everything the add-on has for this game and
 nothing else, across every hooked version of it.
 
-Two tabs, neither of which means anything for another title:
+Three tabs, none of which means anything for another title:
 
 ``StreamingScene``  the game's own scenes, every kind it ships, switched inside
                the tab: ``Scene`` the self-contained ones -- pick one from the
@@ -16,6 +16,10 @@ Two tabs, neither of which means anything for another title:
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
                (``skeletal_morph`` + ``morph_state``)
+``Story``      the animations story playback uses, filed the way the game files
+               them: a cutscene by shot / kind / actor, a dialogue timeline by
+               spoken line. Cabmap-only to browse; a clip is built when checked.
+               (``story_panel``)
 
 All of it lives here, including the parts that touch no bpy: the game's
 addressable-path conventions and its studio-written MonoBehaviour schemas are
@@ -30,13 +34,14 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, roster_panel, scene_panel, shader
+from . import character_panel, roster_panel, scene_panel, shader, story_panel
 
 
 def _register():
     scene_panel.register()
     roster_panel.register()
     character_panel.register()
+    story_panel.register()
     # CharacterNPR materials build as generated Ruri Uber node groups instead of
     # the host's Principled fallback -- a graph provider, so the host core stays
     # game-blind (see shader/__init__ and material_builder.GRAPH_PROVIDERS).
@@ -45,6 +50,7 @@ def _register():
 
 def _unregister():
     shader.unregister()
+    story_panel.unregister()
     character_panel.unregister()
     roster_panel.unregister()
     scene_panel.unregister()
@@ -67,6 +73,10 @@ GAME_MODULE = GameModule(
                 "Drive an imported character's face: the SkeletalMorph "
                 "emotion/pose/lipsync library and its morph animations",
                 character_panel.draw_character_tab),
+        GameTab("story", "Story",
+                "The animations the game plays during story, under its own filing: a cutscene "
+                "by shot and actor, a dialogue timeline by spoken line",
+                story_panel.draw_story_tab),
     ),
     register=_register,
     unregister=_unregister,

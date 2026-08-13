@@ -703,11 +703,59 @@ class RURI_PG_animation_clip(bpy.types.PropertyGroup):
     """One discovered-but-not-yet-built animation clip -- see
     discovery.discover_clip_refs. `selected` drives the
     checkbox in RURI_UL_animation_clips; nothing here has been parsed past a
-    cheap name/size peek, so ticking a box is free until Import is clicked."""
+    cheap name/size peek, so ticking a box is free until Import is clicked.
+
+    `folder` is the game's own folder for that clip, which is what a list of a
+    few hundred clips is worth reading by; `visible` is the filter's verdict on
+    this row. The filter HIDES rather than removes, so a clip checked before the
+    box was typed into is still checked -- and still imported -- afterwards."""
     guid: StringProperty()
     name: StringProperty()
+    folder: StringProperty()
     size_bytes: IntProperty()
     selected: BoolProperty(default=False)
+    visible: BoolProperty(default=True)
+
+
+# The handle the discovered-clip list is published under so it can be searched by
+# the same engine as everything else (see _apply_animation_filter). One handle:
+# re-publishing replaces, which is exactly what a re-discovery wants.
+_ANIMATION_TABLE_HANDLE = "ruri.animation_browser"
+
+
+def _apply_animation_filter(state):
+    """Decide which discovered clips the list shows.
+
+    The query runs through the SAME vectorized C# engine every other list here
+    searches with: the discovered clips are published as a host table
+    (open_host_table) and matched there, rather than scanned with a Python
+    substring test that would quietly mean something different from "contains"
+    in the browser next door."""
+    query = state.animation_search.strip()
+    if not query or cabmap_state.BRIDGE is None:
+        for item in state.available_clips:
+            item.visible = True
+        return
+    try:
+        handle = cabmap_state.BRIDGE.open_host_table(
+            _ANIMATION_TABLE_HANDLE, ("name", "folder"),
+            [(item.name, item.folder) for item in state.available_clips])
+        matched = {int(row) for row in cabmap_state.BRIDGE.search_data_table(handle, query, None)}
+    except Exception as exc:
+        print(f"[RuriRipper] animation filter failed: {exc}")
+        return
+    for index, item in enumerate(state.available_clips):
+        item.visible = index in matched
+
+
+def _on_animation_search(self, context):
+    _apply_animation_filter(self)
+
+
+def _clip_folder(path):
+    """The folder part of a clip's own container/export path, which is what the
+    list groups by. Empty for a clip discovered with no path known yet."""
+    return (path or "").rpartition("/")[0]
 
 
 def _format_size(num_bytes):
@@ -951,6 +999,9 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                     "check them there and click Import -- a single clip can "
                     "be 100+MB, so nothing is loaded automatically")
     animation_character_name: StringProperty(default="")
+    animation_search: StringProperty(
+        name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_animation_search,
+        description="Filter the discovered clips by name or by the game's own folder")
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)
     available_clips_active_index: IntProperty()
 
@@ -2181,7 +2232,9 @@ def _populate_animation_browser(state, report):
         item = state.available_clips.add()
         item.guid = ref["guid"]
         item.name = ref["name"]
+        item.folder = _clip_folder(ref.get("path"))
         item.size_bytes = ref["size_bytes"]
+    _apply_animation_filter(state)
     cabmap_state.set_animation_build_state(
         report.db, report.armature.name, report.maps, report.path_to_meshobjects)
 
@@ -2243,26 +2296,39 @@ class RURI_UL_cabmap(bpy.types.UIList):
 
 
 class RURI_UL_animation_clips(bpy.types.UIList):
-    """Checkbox-per-clip list for the Animations sub-panel. Uses Blender's
-    built-in name filter (the funnel icon) rather than a hand-rolled search --
-    a character's own clip count is small enough (tens, not the cabmap's
-    260k rows) that no debouncing/windowing is needed here."""
+    """Checkbox-per-clip list for the Animations sub-panel.
+
+    Each row carries the game's own folder for that clip, dimmed and right
+    aligned: a character's discovered closure routinely mixes its body library
+    with cutscene and dialogue clips that share nothing but a name pattern, and
+    the folder is the only thing on the row that says which is which. The rows
+    arrive sorted by folder, so that column also reads as the grouping.
+
+    Filtering is the panel's own search box, not Blender's built-in name filter:
+    it matches the folder as well as the name, through the same C# engine the
+    browser searches with (see _apply_animation_filter)."""
     bl_idname = "RURI_UL_animation_clips"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         row = layout.row(align=True)
         row.prop(item, "selected", text="")
         row.label(text=item.name)
+        if item.folder:
+            folder = row.row()
+            folder.enabled = False
+            folder.alignment = "RIGHT"
+            folder.label(text=item.folder.rpartition("/")[2])
         # size_bytes is 0 for a cheaply-discovered-but-not-yet-resolved clip
         # (see RURI_OT_discover_animations -- pure cabmap metadata has no
         # per-asset byte size); showing "0 B" would misleadingly read as an
         # empty clip rather than "size not known yet."
-        row.label(text=_format_size(item.size_bytes) if item.size_bytes > 0 else "size unknown")
+        size = row.row()
+        size.alignment = "RIGHT"
+        size.label(text=_format_size(item.size_bytes) if item.size_bytes > 0 else "size unknown")
 
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
-        flags = bpy.types.UI_UL_list.filter_items_by_name(
-            self.filter_name, self.bitflag_filter_item, items, "name")
+        flags = [self.bitflag_filter_item if item.visible else 0 for item in items]
         order = bpy.types.UI_UL_list.sort_items_by_name(items, "name") if self.use_filter_sort_alpha else []
         return flags, order
 
@@ -2460,7 +2526,9 @@ class RURI_OT_discover_animations(bpy.types.Operator):
         rows_by_cab = cabmap_state.rows_by_cab()
         clip_rows = [rows_by_cab[cab] for cab in closure_cabs
                      if cab in rows_by_cab and "AnimationClip" in rows_by_cab[cab]["type_names"]]
-        clip_rows.sort(key=lambda r: r["name"].lower())
+        # By folder first, name second: a closure mixes several of the game's own
+        # animation folders, and folder order is what makes that readable.
+        clip_rows.sort(key=lambda r: (_clip_folder(r.container_path()).lower(), r["name"].lower()))
 
         state.available_clips.clear()
         state.animation_character_name = (target_rows[0]["name"] if len(target_rows) == 1
@@ -2474,7 +2542,9 @@ class RURI_OT_discover_animations(bpy.types.Operator):
             # and one CAB can host several clips -- identity, never names).
             item.guid = row["cab"]
             item.name = row["name"]
+            item.folder = _clip_folder(row.container_path())
             item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
+        _apply_animation_filter(state)
         cabmap_state.set_animation_discovery_state(seed_cabs, state.as_options())
 
         if clip_rows:
@@ -2580,8 +2650,10 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 item = state.available_clips.add()
                 item.guid = ref["guid"]
                 item.name = ref["name"]
+                item.folder = _clip_folder(ref["path"])
                 item.size_bytes = ref["size_bytes"]
                 item.selected = ref["guid"] in selected_guids
+            _apply_animation_filter(state)
             if not selected_guids:
                 self.report({"WARNING"}, "The checked row(s) mapped to no exported clip -- "
                                          "pick from the refreshed list and import again.")
@@ -2625,9 +2697,15 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
 
 
 class RURI_OT_animation_select_all(bpy.types.Operator):
+    """Check every clip the filter is currently showing, or uncheck all of them.
+
+    Checking is deliberately asymmetric: "All" means the rows in front of you
+    (filter to a folder, click All, and you have that folder), while "None"
+    clears the hidden ones too -- otherwise a filtered-away tick would ride
+    along into the import nobody could see it in."""
     bl_idname = "ruri.animation_select_all"
     bl_label = "Select All / None"
-    bl_description = "Check or uncheck every listed animation clip"
+    bl_description = "Check every shown animation clip, or uncheck all of them"
     bl_options = {"REGISTER", "UNDO"}
     select: BoolProperty(default=True)
 
@@ -2637,6 +2715,8 @@ class RURI_OT_animation_select_all(bpy.types.Operator):
 
     def execute(self, context):
         for item in context.scene.ruri_cabmap.available_clips:
+            if self.select and not item.visible:
+                continue
             item.selected = self.select
         return {"FINISHED"}
 
@@ -2675,8 +2755,10 @@ class RURI_PT_animation_browser(bpy.types.Panel):
 
         layout.label(text=f"Clips for: {state.animation_character_name}", icon="ARMATURE_DATA")
 
+        layout.prop(state, "animation_search", icon="VIEWZOOM", text="")
+
         row = layout.row(align=True)
-        op = row.operator(RURI_OT_animation_select_all.bl_idname, text="All")
+        op = row.operator(RURI_OT_animation_select_all.bl_idname, text="All Shown")
         op.select = True
         op = row.operator(RURI_OT_animation_select_all.bl_idname, text="None")
         op.select = False
@@ -2684,11 +2766,22 @@ class RURI_PT_animation_browser(bpy.types.Panel):
         layout.template_list(RURI_UL_animation_clips.bl_idname, "", state, "available_clips",
                              state, "available_clips_active_index", rows=8)
 
+        total = len(state.available_clips)
+        shown = sum(1 for item in state.available_clips if item.visible)
         selected = [item for item in state.available_clips if item.selected]
-        summary = f"Selected: {len(selected)} clip(s)" if selected else "Nothing checked yet."
-        layout.label(text=summary)
+        folders = len({item.folder for item in state.available_clips if item.folder})
+        # Says all three numbers, because they differ for real reasons: a filter
+        # hides rows, and a check made before the filter is still going to be
+        # imported even while its row is off screen.
+        layout.label(text="{0} clip(s){1}{2} · {3} checked".format(
+            total,
+            "" if shown == total else f" · {shown} shown",
+            "" if folders <= 1 else f" · {folders} folders",
+            len(selected)))
 
-        layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT")
+        layout.operator(RURI_OT_import_selected_animations.bl_idname, icon="IMPORT",
+                        text=f"Import {len(selected)} Checked Animation(s)" if selected
+                        else "Import Checked Animations")
 
 
 _CLASSES = (
