@@ -36,7 +36,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import roster, scene_importer, scene_state, ui_scene_panel
+from . import datasets, scene_importer, scene_state, ui_scene_panel
 
 SELF_CONTAINED = scene_state.SELF_CONTAINED
 STREAMING = scene_state.STREAMING
@@ -88,7 +88,7 @@ def _report_exception(op, prefix, exc):
 def _language():
     """The game language these lists are shown in -- Blender's own locale, mapped
     onto the languages the game ships."""
-    return roster.language_for_locale(bpy.app.translations.locale)
+    return datasets.language_for_locale(bpy.app.translations.locale)
 
 
 def _state(context, kind):

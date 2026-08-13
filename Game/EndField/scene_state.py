@@ -2,17 +2,12 @@
 the way the game itself splits it, and the placements of whichever piece is
 selected.
 
-Everything here is a DECLARATION over the game's own data. The names come out of
-its config containers, exactly the way the roster's do -- which container, which
-field path, which text container to resolve the id through -- and nothing is
-parsed on this side:
+Nothing here reads the game. Which containers carry a scene's name, which place
+belongs to which map, and how the ids group are stated by the hook
+(``endfield.scene.maps`` / ``endfield.scene.landmarks``); this module holds the
+selection they feed.
 
-    MapIdTable      the open-world maps, keyed by the same id the streaming data
-                    is filed under ("map02" -> "武陵")
-    LevelDescTable  every level the game names, same shape ("map01_lv007" ->
-                    "供能高地")
-
-The split between the two kinds of scene is the game's own too, not a guess from
+The split between the two kinds of scene is the game's own, not a guess from
 names. Its map UI publishes one entry per place it can display, each with a world
 rect and an ``isSingleLevel`` flag (see EndfieldSceneLandmarks in
 Ruri.RipperHook). A place that is its own level is a SELF-CONTAINED scene, small
@@ -28,14 +23,11 @@ placement count runs into the hundreds of thousands and is only ever read in bul
 
 from __future__ import annotations
 
-from . import datasets, roster
+from . import datasets
 
 # Holds the current window's discovered-but-not-yet-imported placements, so a
 # host's script reload skips this module instead of throwing that discovery away.
 HOLDS_PROCESS_STATE = True
-
-MAP_ID_TABLE = "MapIdTable"
-LEVEL_DESC_TABLE = "LevelDescTable"
 
 # A whole scene, as a rect no piece of world falls outside of.
 WHOLE = (float("-inf"), float("-inf"), float("inf"), float("inf"))
@@ -99,67 +91,29 @@ CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, lod0_only
 STATUS = "Refresh to read the game's scene list."
 
 
-def name_columns(language):
-    """One column: the scene's display name, resolved through the chosen
-    language's text container. Both naming tables carry it under the same field,
-    so one declaration serves both."""
-    return [("display", "showName.id", roster.text_container(language), "")]
-
-
 def load_scenes(language):
-    """Read the game's scene list, split into the two kinds, with the names the
-    game itself shows.
-
-    LevelDescTable is read first and MapIdTable second, so an open-world map takes
-    its map-level name where both name the same id. A scene neither names keeps
-    its own id as its label -- the game ships no other name for it."""
+    """Read the game's scene list, already split into the two kinds and already
+    named: which containers carry a scene's name, which place belongs to which
+    map, and how the ids group are the game's own facts, stated by the hook."""
     global SCENES, LANDMARKS, STATUS
 
-    names = {}
-    for table in (LEVEL_DESC_TABLE, MAP_ID_TABLE):
-        rows = datasets.projected_table(roster.container(table), name_columns(language))
-        for index in range(rows.row_count):
-            display = rows.cell(index, "display")
-            if display:
-                names[rows.cell(index, "key")] = display
-
-    scene_ids = datasets.scene_maps()
-    places = datasets.landmarks()
-
-    # A place that is not its own level belongs to the streaming map whose id it
-    # starts with -- matched against the real scene list, so nothing is inferred
-    # from the shape of a name.
-    LANDMARKS = {scene_id: [] for scene_id in scene_ids}
-    for place in places:
-        if place["is_single_level"]:
-            continue
-        for scene_id in scene_ids:
-            if place["level_id"].startswith(scene_id + "_"):
-                LANDMARKS[scene_id].append(_named(place, names))
-                break
+    scenes = datasets.scene_maps(language)
+    LANDMARKS = {scene["id"]: [] for scene in scenes}
+    for place in datasets.landmarks(language):
+        rows = LANDMARKS.get(place["scene"])
+        if rows is not None:
+            rows.append({key: place[key] for key in ("id", "label", "named", "rect")})
     for rows in LANDMARKS.values():
         rows.sort(key=lambda row: row["id"])
 
     SCENES = {SELF_CONTAINED: [], STREAMING: []}
-    for scene_id in scene_ids:
-        kind = STREAMING if LANDMARKS[scene_id] else SELF_CONTAINED
-        SCENES[kind].append({"id": scene_id, "label": names.get(scene_id, scene_id),
-                             "named": scene_id in names, "group": family(scene_id)})
+    for scene in scenes:
+        kind = STREAMING if scene["streaming"] else SELF_CONTAINED
+        SCENES[kind].append({key: scene[key] for key in ("id", "label", "named", "group")})
     STATUS = "{0} scenes ({1} streaming, {2} named) · {3}".format(
-        len(scene_ids), len(SCENES[STREAMING]),
-        sum(1 for rows in SCENES.values() for row in rows if row["named"]), language)
+        len(scenes), len(SCENES[STREAMING]),
+        sum(1 for row in scenes if row["named"]), language)
     return SCENES
-
-
-def _named(place, names):
-    """One landmark row: the game's id, the game's name for it, and the rect the
-    game gives it."""
-    return {
-        "id": place["level_id"],
-        "label": names.get(place["level_id"], place["level_id"]),
-        "named": place["level_id"] in names,
-        "rect": (place["min_x"], place["min_z"], place["max_x"], place["max_z"]),
-    }
 
 
 def scaled(rect, scale):
@@ -169,12 +123,6 @@ def scaled(rect, scale):
     centre_x, centre_z = (min_x + max_x) * 0.5, (min_z + max_z) * 0.5
     half_x, half_z = (max_x - min_x) * 0.5 * scale, (max_z - min_z) * 0.5 * scale
     return (centre_x - half_x, centre_z - half_z, centre_x + half_x, centre_z + half_z)
-
-
-def family(scene_id):
-    """The scene id's own family prefix ("dung01_cdg005" -> "dung01"), which is
-    how the game files them. Only used to group the drawn list."""
-    return scene_id.split("_", 1)[0]
 
 
 def load_summary(map_name):

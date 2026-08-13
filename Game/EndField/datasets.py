@@ -32,8 +32,9 @@ SEED_PATHS = "endfield.scene.seed_paths"
 NPC_PARTS = "endfield.npc.parts"
 NPC_MANIFEST = "endfield.npc.manifest"
 NPC_MATERIALS = "endfield.npc.materials"
-TABLE = "endfield.table"
 CHARACTER_MODELS = "endfield.character.models"
+LANGUAGE = "endfield.roster.language"
+CAST = "endfield.roster.cast"
 MODEL = "endfield.asset.model"
 PART = "endfield.asset.part"
 NAMED = "endfield.asset.named"
@@ -64,42 +65,45 @@ def _int(value):
         return 0
 
 
-# ── the game's own config containers ────────────────────────────────────────
+# ── the cast ────────────────────────────────────────────────────────────────
 
-def projected_table(container, column_specs, distinct_by="", prefer_non_empty=""):
-    """One container projected into columns -- the same ColumnTable the roster and
-    the scene lists draw and search. ``column_specs`` is (name, path) or
-    (name, path, through_file, through_path); a join chain may be a list of hops.
+# The two casts the game publishes. The hook declares the same two words; a panel
+# states WHICH cast it wants, never how that cast is read.
+CHARACTERS = "characters"
+NPCS = "npcs"
 
-    One spec crosses as one ``column`` value, its four fields separated by '|'
-    (a chain's hops by ';'), so how many columns there are is stated by how many
-    times the name repeats rather than by a count argument."""
-    columns = []
-    for spec in column_specs:
-        name, path = spec[0], spec[1]
-        through = spec[2] if len(spec) > 2 else ""
-        through_path = spec[3] if len(spec) > 3 else ""
-        if not isinstance(through, str):
-            through = ";".join(through)
-        if not isinstance(through_path, str):
-            through_path = ";".join(through_path)
-        columns.append("|".join((name, path, through, through_path)))
-    return _table(TABLE, container=container, distinctBy=distinct_by,
-                  preferNonEmpty=prefer_non_empty, column=columns)
+
+def language_for_locale(locale):
+    """The game language a host locale reads as. Which languages exist, and which
+    locale lands on which, are the game's own facts."""
+    rows = _rows(LANGUAGE, locale=str(locale or ""))
+    return rows[0]["language"] if rows else ""
+
+
+def cast(kind, language):
+    """One cast, already joined to its display names and reduced to what a list
+    draws: key/label/detail/group, plus the game's own columns to filter on."""
+    return _table(CAST, cast=kind, language=language)
 
 
 # ── scenes ──────────────────────────────────────────────────────────────────
 
-def scene_maps():
-    return _column(MAPS, "map")
+def scene_maps(language):
+    """Every scene the game ships streaming data for, under its own name, its own
+    grouping, and the game's own streaming/self-contained split."""
+    return [{"id": row["map"], "label": row["label"], "named": bool(_int(row["named"])),
+             "group": row["group"], "streaming": bool(_int(row["streaming"]))}
+            for row in _rows(MAPS, language=language)]
 
 
-def landmarks():
-    return [{"level_id": row["levelId"],
+def landmarks(language):
+    """Every place the game's map UI names, with the streaming scene it belongs to
+    (empty for a place that is its own level)."""
+    return [{"id": row["levelId"], "scene": row["scene"], "label": row["label"],
+             "named": bool(_int(row["named"])),
              "is_single_level": bool(_int(row["isSingleLevel"])),
-             "min_x": row["minX"], "min_z": row["minZ"],
-             "max_x": row["maxX"], "max_z": row["maxZ"]}
-            for row in _rows(LANDMARKS)]
+             "rect": (row["minX"], row["minZ"], row["maxX"], row["maxZ"])}
+            for row in _rows(LANDMARKS, language=language)]
 
 
 def chunk_summary(map_name):

@@ -22,15 +22,15 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import datasets, roster
+from . import datasets
 
-CHARACTERS = roster.CHARACTERS
-NPCS = roster.NPCS
+CHARACTERS = datasets.CHARACTERS
+NPCS = datasets.NPCS
 
 # Column labels worth spelling out; anything else reads as its own column name,
-# so a column added to roster.py's declarations shows up here with no edit.
+# so a column the hook adds to a cast shows up here with no edit.
 _FIELD_LABELS = {"key": "Id", "display": "Name", "english": "English", "group": "Profession",
-                 "npc": "Npc Id", "template": "Template"}
+                 "npc": "Npc Id", "template": "Template", "label": "Name", "detail": "Detail"}
 
 
 def _filter_fields():
@@ -45,8 +45,8 @@ def _filter_fields():
     state = getattr(bpy.context.scene, "ruri_roster", None)
     table = _rows(state) if state is not None else None
     if table is None:
-        return (("display", "Name"),)
-    names = sorted(table.names, key=lambda name: 0 if name == "display" else 1)
+        return (("label", "Name"),)
+    names = sorted(table.names, key=lambda name: 0 if name == "label" else 1)
     return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
                  for name in names)
 
@@ -128,7 +128,7 @@ class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 def _language(state):
     """The game language this roster is shown in -- Blender's own locale,
     mapped onto the languages the game ships."""
-    return roster.language_for_locale(bpy.app.translations.locale)
+    return datasets.language_for_locale(bpy.app.translations.locale)
 
 
 def _rows(state):
@@ -146,7 +146,7 @@ def _buildable(game_root):
     """Cached: the manifest is one small file, but a redraw must not re-read it."""
     if game_root not in _BUILDABLE:
         try:
-            _BUILDABLE[game_root] = roster.buildable_templates()
+            _BUILDABLE[game_root] = datasets.npc_manifest()
         except Exception:
             _BUILDABLE[game_root] = None
     return _BUILDABLE[game_root]
@@ -166,7 +166,8 @@ def _rebuild(state):
         return
     matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(),
                                                     state.filter_rules)
-    rows = [roster.row(table, int(index), state.kind) for index in matched]
+    rows = [{name: table.cell(int(index), name) for name in ("key", "label", "detail", "group")}
+            for index in matched]
     if state.kind == NPCS:
         # Row ids index the WHOLE projected table, which is what the C# search
         # returns them against -- so the unbuildable ones are dropped here rather
@@ -250,7 +251,7 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         language = _language(state)
         state.language = language
         try:
-            rows = roster.load(language, state.kind)
+            rows = datasets.cast(state.kind, language)
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             _report(self, state.status)
