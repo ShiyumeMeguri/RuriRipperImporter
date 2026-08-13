@@ -165,7 +165,7 @@ RuriRipperImporter/            ← 插件本体(装这个)
     EndField/                  ← Endfield 全版本专属,连不碰 bpy 的部分也在这里
       __init__.py              ← GAME_MODULE 声明(两个 tab + 默认 hook id)
       scene_panel.py scene_importer.py    场景 tab
-      scene_state.py asset_paths.py       ← 场景 placement / 寻址路径 + LOD 规则
+      scene_state.py                      ← 场景 placement(寻址路径与 LOD 规则在 hook 侧)
       character_panel.py                  表情 tab
       skeletal_morph.py morph_state.py    ← SkeletalMorph 资产解析与库模型
   RuriRipperPyBridge/               ← git submodule:与 Painter 插件共用的那一半

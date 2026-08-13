@@ -34,6 +34,12 @@ NPC_MANIFEST = "endfield.npc.manifest"
 NPC_MATERIALS = "endfield.npc.materials"
 TABLE = "endfield.table"
 CHARACTER_MODELS = "endfield.character.models"
+MODEL = "endfield.asset.model"
+PART = "endfield.asset.part"
+NAMED = "endfield.asset.named"
+RANK = "endfield.asset.rank"
+MODEL_ASSETS = "endfield.character.model_assets"
+ANIMATIONS = "endfield.character.animations"
 
 
 def _table(dataset_id, **args):
@@ -137,6 +143,64 @@ def placements(map_name, min_x, min_z, max_x, max_z, scene_state_ids, lod0_only)
         "lod_filtered": _int(count.get("lodFiltered", 0)),
         "distinct_assets": _int(count.get("distinctAssets", 0)),
     }
+
+
+# ── resolving a name to the rows that hold it ───────────────────────────────
+
+def _selection(dataset_id, **args):
+    """Rows of one selection dataset, in the game's own preference order. Every
+    row is (cab, container, lod_rank, variant) -- the CAB an import seeds with,
+    the addressable path it resolved to, and the two facts the game states about
+    a path: which detail level it is, and whether it is the skinned variant."""
+    return [{"cab": row["cab"], "container": row["container"],
+             "lod_rank": _int(row["lodRank"]), "variant": bool(_int(row["variant"]))}
+            for row in _rows(dataset_id, **args)]
+
+
+def model_rows(name, family, cast=""):
+    """The rows of the prefab named ``<name>_<family>`` exactly."""
+    return _selection(MODEL, name=name, family=family, cast=cast)
+
+
+def part_rows(part, cast=""):
+    """One assembled part's rows -- prefab where the game ships one, else the
+    authored skinned mesh, else its material-variant family's shared mesh."""
+    return _selection(PART, part=part, cast=cast)
+
+
+def named_rows(stem):
+    """Every row whose asset leaf IS this name, any extension."""
+    return _selection(NAMED, stem=stem)
+
+
+def ranked(names):
+    """{name: {mesh_name, stem, extension, lod_rank, family_stem, is_prefab}} for a
+    batch of asset paths or mesh names. One crossing for the whole batch: these
+    are the game's naming conventions, and a per-name call inside an import loop
+    would be a round trip per placement."""
+    names = [str(name) for name in names]
+    if not names:
+        return {}
+    return {row["name"]: {"mesh_name": row["meshName"], "stem": row["stem"],
+                          "lod_rank": _int(row["lodRank"]), "family_stem": row["familyStem"],
+                          "is_prefab": bool(_int(row["isPrefab"]))}
+            for row in _rows(RANK, name=names)}
+
+
+def character_model_cabs():
+    """The CABs holding the game's own per-character data assets."""
+    return _column(MODEL_ASSETS, "cab")
+
+
+def animation_anchor(name, cast):
+    """Where this one's body animations live, or None when the game ships none.
+    ``group`` is non-empty when the anchor is the shared library of a body type
+    rather than this one's own folder -- which the panel says out loud."""
+    rows = _rows(ANIMATIONS, name=name, cast=cast)
+    if not rows:
+        return None
+    row = rows[0]
+    return {"anchor": row["anchor"], "hits": _int(row["hits"]), "group": row["group"]}
 
 
 # ── npcs and characters ─────────────────────────────────────────────────────

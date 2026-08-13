@@ -3,8 +3,9 @@
 The generic importer knows how to build ONE prefab or ONE mesh out of a resolved
 closure; what a placement is, how its asset path resolves to a named mesh
 sub-object, and which of its LOD siblings to keep are all facts about this game
-(see ``asset_paths`` / ``scene_state`` next to this file), so the pass that walks
-placements lives here rather than in that importer.
+-- stated by the hook (``endfield.asset.rank``, ``scene_state``), read here as
+columns -- so the pass that walks placements lives here rather than in that
+importer.
 """
 
 from __future__ import annotations
@@ -13,10 +14,10 @@ import bpy
 
 from ... import coordinate, material_builder, prefab_importer
 from ...RuriRipperPyBridge.unity import discovery
-from . import asset_paths
+from . import datasets
 
 
-def _scene_materials_for(material_index, mat_builder, material_asset_paths):
+def _scene_materials_for(material_index, mat_builder, material_asset_paths, named):
     """Real materials for a scene-placed mesh, resolved directly from its own
     material_asset_paths -- the entity's actual material hash(es), resolved
     through the same StringPathHash LUT as its mesh. [] when the entity
@@ -25,7 +26,7 @@ def _scene_materials_for(material_index, mat_builder, material_asset_paths):
         return []
     materials = []
     for path in material_asset_paths:
-        guid = material_index.get(asset_paths.expected_mesh_name(path))
+        guid = material_index.get(named.get(path, {}).get("mesh_name", ""))
         if guid is None:
             continue
         mat = mat_builder.build_from_ref({"guid": guid})
@@ -93,7 +94,7 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
       -- FBPropertyAssetData AssetType==1, same hashLut as the mesh, no
       naming-convention guess), and builds via import_mesh_from_db.
     - DynamicScene family (Model/Effect/Tree, resolved to REAL .prefab
-      paths -- asset_paths.is_full_prefab_path): resolves the prefab by name against
+      paths -- the rank table's isPrefab): resolves the prefab by name against
       `roots` (discovery.prefab_name_index) and builds via
       import_prefab_from_db, which already brings real Renderer + Materials
       (no separate material-hash lookup needed for these).
@@ -118,11 +119,20 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
     placed = 0
     unresolved = 0
 
+    # The game's naming conventions for every path this pass will touch, read once:
+    # a map places the same prop hundreds of times, and asking per placement would
+    # be a round trip per placement.
+    wanted = {placement["asset_path"] for placement in placements}
+    for placement in placements:
+        wanted.update(placement.get("material_asset_paths") or ())
+    named = datasets.ranked(sorted(wanted))
+
     for placement in placements:
         asset_path = placement["asset_path"]
+        convention = named.get(asset_path, {})
 
-        if asset_paths.is_full_prefab_path(asset_path):
-            guid = prefab_index.get(asset_paths.prefab_asset_stem(asset_path))
+        if convention.get("is_prefab"):
+            guid = prefab_index.get(convention.get("stem", ""))
             if guid is None:
                 unresolved += 1
                 continue
@@ -146,7 +156,7 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
 
             target = _duplicate_hierarchy(context, base_anchor)
         else:
-            expected_name = asset_paths.expected_mesh_name(asset_path)
+            expected_name = convention.get("mesh_name", "")
             guid = name_index.get(expected_name)
             if guid is None:
                 unresolved += 1
@@ -158,7 +168,8 @@ def import_scene_placements(context, db, placements, roots=(), options=None):
                 if mesh_file is None:
                     unresolved += 1
                     continue
-                materials = _scene_materials_for(material_index, mat_builder, placement.get("material_asset_paths") or [])
+                materials = _scene_materials_for(material_index, mat_builder,
+                                                 placement.get("material_asset_paths") or [], named)
                 report = prefab_importer.import_mesh_from_db(context, db, mesh_file, options, materials)
                 if not report.mesh_objects:
                     unresolved += 1

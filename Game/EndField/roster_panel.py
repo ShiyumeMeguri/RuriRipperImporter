@@ -15,7 +15,6 @@ select, and one button reveals where the selection lives over in that browser.
 from __future__ import annotations
 
 import json
-import re
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
@@ -23,7 +22,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import asset_paths, datasets, roster
+from . import datasets, roster
 
 CHARACTERS = roster.CHARACTERS
 NPCS = roster.NPCS
@@ -261,39 +260,6 @@ class RURI_OT_roster_refresh(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _prefab_rows(query, model_kind):
-    """The cabmap rows for the ONE prefab named ``<query>_<model_kind>``.
-
-    ``query`` is the id the GAME keys the row by, ``model_kind`` one of the
-    game's own model families ("postmodel" = in-world actor, "uimodel" = the one
-    menus pose). Matching is EXACT on the file stem, never a substring:
-
-    a substring match reads as "one character" but resolves to every asset whose
-    path happens to carry the word -- "chr_0004_pelica" also lives inside
-    "abilityentity_chr_0004_pelica_ultimate_skill_postmodel". Each extra hit
-    drags its own dependency closure into the load, and the closures are what
-    make an import eat the whole game instead of one character. Exact stem or
-    nothing; a caller with no ``model_kind`` has no business importing.
-
-    One row per distinct path: the same prefab is listed by every bundle that
-    carries it, and importing it thirty times is thirty times the work for the
-    same result. Returns [(row index, container path)]."""
-    if not model_kind:
-        raise ValueError("_prefab_rows needs a model_kind -- substring import was removed")
-    cabmap_state.apply_filter(query)
-    wanted = "{0}_{1}".format(query.lower(), model_kind)
-    by_path = {}
-    for row in cabmap_state.VISIBLE:
-        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-            path = cabmap_state.ROWS.container_path(row, path_index)
-            low = path.lower()
-            if not low.endswith(".prefab") or low in by_path:
-                continue
-            if low.rsplit("/", 1)[-1][:-len(".prefab")] == wanted:
-                by_path[low] = (row, path)
-    return sorted(by_path.values(), key=lambda hit: hit[1])
-
-
 # charId -> {"model", "tag", "asset"}, read once per session from the game's own
 # character data assets. Module scope for the same reason the tables are.
 _CHARACTER_MODELS = {}
@@ -303,20 +269,14 @@ def _character_model(character_id):
     """The model prefab the game itself declares for a character, or "" when its
     data asset is not in the loaded cabmap.
 
-    No config table carries a model field (all 693 were swept), so
-    ``gamedata/characterdata/data_chr_*.asset`` is the only source. Read as one
-    batch: they share a handful of bundles, so paying per character would mean
-    re-resolving the same closure thirty times."""
+    No config table carries a model field (all 693 were swept), so the game's own
+    per-character data assets are the only source. Read as one batch: they share a
+    handful of bundles, so paying per character would mean re-resolving the same
+    closure thirty times."""
     if not _CHARACTER_MODELS:
-        cabs = set()
-        cabmap_state.apply_filter("gamedata/characterdata/data_chr_")
-        for row in cabmap_state.VISIBLE:
-            for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-                path = cabmap_state.ROWS.container_path(row, path_index).lower()
-                if "gamedata/characterdata/data_chr_" in path and path.endswith(".asset"):
-                    cabs.add(cabmap_state.ROWS.cab(row))
+        cabs = datasets.character_model_cabs()
         if cabs:
-            _CHARACTER_MODELS.update(datasets.character_models(sorted(cabs)))
+            _CHARACTER_MODELS.update(datasets.character_models(cabs))
     return _CHARACTER_MODELS.get(character_id, {}).get("model", "")
 
 
@@ -335,76 +295,6 @@ def character_tag(token):
             except ValueError:
                 return 0
     return 0
-
-
-def _prefab_named(name):
-    """The importable rows for one part of an assembled npc.
-
-    A part manifest names the part, not the asset that holds it, and the game
-    ships parts in two shapes: some as a generated prefab
-    (``.../generated/.../prefabs/p_<part>_static.prefab``), the rest only as the
-    authored skinned mesh (``arts/entity/npc/.../models/sk_<part>.fbx``). Both
-    are the same part; which one exists is the game's choice, so both are
-    accepted and prefabs win when a part has both.
-
-    The leading kind letter is the game's own asset-kind prefix (``p_`` prefab,
-    ``sk_`` skinned mesh, ``m_`` material, ``t_`` texture), so the part id is the
-    stem underneath it -- matched exactly, never as a substring."""
-    core = name.lower()
-    if core.startswith("p_"):
-        core = core[2:]
-    cabmap_state.apply_filter(core)
-    prefabs = {}
-    meshes = {}
-    for row in cabmap_state.VISIBLE:
-        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-            path = cabmap_state.ROWS.container_path(row, path_index)
-            low = path.lower()
-            leaf = low.rsplit("/", 1)[-1]
-            stem, _, extension = leaf.rpartition(".")
-            if extension == "prefab" and (
-                    stem == core or stem == "p_" + core
-                    or stem.startswith(core + "_") or stem.startswith("p_" + core + "_")):
-                prefabs[low] = (row, path)
-            elif extension == "fbx" and stem in (core, "sk_" + core):
-                meshes[low] = (row, path)
-    found = prefabs or meshes
-    if found:
-        return sorted(found.values(), key=lambda hit: hit[1])
-
-    # The trailing number on a part id picks the MATERIAL variant, not the mesh:
-    # "..._body_rfg_a_04" is shipped as m_..._rfg_a_04.mat over whichever mesh the
-    # family has (sk_..._rfg_a_01.fbx / _02.fbx -- there is no _04 mesh). So when
-    # the exact index has no asset, the part is that family's mesh.
-    family = re.sub(r"_\d+$", "", core)
-    if family == core:
-        return []
-    cabmap_state.apply_filter(family)
-    siblings = {}
-    for row in cabmap_state.VISIBLE:
-        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-            path = cabmap_state.ROWS.container_path(row, path_index)
-            low = path.lower()
-            leaf = low.rsplit("/", 1)[-1]
-            stem, _, extension = leaf.rpartition(".")
-            if extension == "fbx" and re.fullmatch(re.escape("sk_" + family) + r"_\d+", stem):
-                siblings[low] = (row, path)
-    return sorted(siblings.values(), key=lambda hit: hit[1])[:1]
-
-
-def _asset_named(stem):
-    """Cabmap rows whose asset leaf IS this name, any extension."""
-    cabmap_state.apply_filter(stem)
-    wanted = stem.lower()
-    found = {}
-    for row in cabmap_state.VISIBLE:
-        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-            path = cabmap_state.ROWS.container_path(row, path_index)
-            low = path.lower()
-            if low.rsplit("/", 1)[-1].rsplit(".", 1)[0] == wanted:
-                found[low] = (row, path)
-    return sorted(found.values(), key=lambda hit: hit[1])
-
 
 
 def _avatar_skeleton(db, avatar_file):
@@ -429,11 +319,11 @@ def _templet_skeleton(info):
     templet = (info.get("avatar_templet") or "").rsplit("/", 1)[-1]
     if not templet:
         return {}, [], []
-    rows = _asset_named("data_npc_avatartemplet_" + templet.lower())
+    rows = datasets.named_rows("data_npc_avatartemplet_" + templet.lower())
     if not rows:
         return {}, [], []
     from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
-    cab = cabmap_state.ROWS.cab(rows[0][0])
+    cab = rows[0]["cab"]
     try:
         graph = cabmap_state.BRIDGE.scan_cabs([cab])
         mono_behaviour_id = class_registry.id_for_name("MonoBehaviour")
@@ -482,12 +372,11 @@ def _npc_materials(context, info, template_id):
     leaf = (info.get("avatar_mesh") or "").rsplit("/", 1)[-1]
     if not leaf:
         return {}
-    rows = _asset_named("data_npc_avatarmesh_" + leaf.lower())
+    rows = datasets.named_rows("data_npc_avatarmesh_" + leaf.lower())
     if not rows:
         return {}
     try:
-        assigned = datasets.npc_materials(
-            template_id, [cabmap_state.ROWS.cab(rows[0][0])])
+        assigned = datasets.npc_materials(template_id, [rows[0]["cab"]])
     except Exception:
         return {}
     return {row["mesh"].lower(): row["materials"] for row in assigned}
@@ -553,9 +442,11 @@ def _materials_for(mesh_name, materials_by_mesh, material_index, mat_builder):
     mesh in nothing, or a named material is not in the resolved closure."""
     if mat_builder is None or not mesh_name:
         return []
+    paths = list((materials_by_mesh or {}).get(mesh_name.lower(), ()))
+    named = datasets.ranked(paths)
     materials = []
-    for path in (materials_by_mesh or {}).get(mesh_name.lower(), ()):
-        guid = material_index.get(asset_paths.expected_mesh_name(path))
+    for path in paths:
+        guid = material_index.get(named.get(path, {}).get("mesh_name", ""))
         if guid is None:
             continue
         material = mat_builder.build_from_ref({"guid": guid})
@@ -569,7 +460,7 @@ def _loose_part_mesh_guids(db, level):
     per mesh family, so one detail level lands rather than the lod0..lod3 the
     closure ships all stacked at the origin."""
     from ...RuriRipperPyBridge.unity import discovery
-    families = {}
+    meshes = []
     for guid in db.all_guids():
         text = db.raw_text(guid)
         if not text:
@@ -577,10 +468,14 @@ def _loose_part_mesh_guids(db, level):
         class_name, name = discovery.peek_class_and_name(text)
         if class_name != "Mesh":
             continue
-        families.setdefault(asset_paths.lod_family_stem(name or guid), []).append((guid, name or guid))
+        meshes.append((guid, name or guid))
+    named = datasets.ranked(name for _guid, name in meshes)
+    families = {}
+    for guid, name in meshes:
+        families.setdefault(named[name]["family_stem"], []).append((guid, name))
     chosen = []
     for members in families.values():
-        ranked = [(asset_paths.lod_rank(name), guid) for guid, name in members]
+        ranked = [(named[name]["lod_rank"], guid) for guid, name in members]
         exact = [guid for rank, guid in ranked if rank == level]
         if exact:
             chosen.extend(exact)
@@ -610,39 +505,26 @@ def _model_parts(context, entry):
     hits = []
     missing = []
     for part in info["parts"]:
-        candidates = _prefab_named(part)
+        candidates = datasets.part_rows(part)
         if not candidates:
             missing.append(part)
             continue
-        skinned = [hit for hit in candidates if "_variant." in hit[1].lower()]
-        row, path = (skinned or candidates)[0]
-        hits.append((part, row, path))
+        skinned = next((row for row in candidates if row["variant"]), None)
+        hits.append((part, skinned or candidates[0]))
     return info, hits, missing
 
 
-
-def _for_cast(hits, kind):
-    """When the same model is published under more than one folder, take the one
-    belonging to the cast being browsed -- the game files a character's actor
-    model under ``.../characters/`` and its npc-usage copy under ``.../npc/``,
-    and importing both is the same geometry twice."""
-    folder = "/characters/" if kind == CHARACTERS else "/npc/"
-    preferred = [hit for hit in hits if folder in hit[1].lower()]
-    return preferred or hits
-
-
-def _at_detail_level(hits, level):
-    """The hits at the requested detail level, or -- when the model simply is
+def _at_detail_level(rows, level):
+    """The rows at the requested detail level, or -- when the model simply is
     not authored at that level -- the closest one it does have, reported rather
-    than silently substituted. ``asset_paths.lod_rank`` is the game's own
-    suffix convention, already used by the scene importer."""
-    ranked = [(asset_paths.lod_rank(path), row, path) for row, path in hits]
-    exact = [(row, path) for rank, row, path in ranked if rank == level]
+    than silently substituted. The rank is the game's own suffix convention, read
+    off the row rather than re-derived here."""
+    exact = [row for row in rows if row["lod_rank"] == level]
     if exact:
         return exact, level
     # -1 is "no LOD suffix at all", i.e. a single-detail model: as good as LOD0.
-    best = min((rank for rank, _, _ in ranked), key=lambda rank: (rank < 0, abs(rank - level)))
-    return [(row, path) for rank, row, path in ranked if rank == best], best
+    best = min((row["lod_rank"] for row in rows), key=lambda rank: (rank < 0, abs(rank - level)))
+    return [row for row in rows if row["lod_rank"] == best], best
 
 
 class RURI_OT_roster_load(bpy.types.Operator):
@@ -675,18 +557,18 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # the UI model is named by convention, because no asset declares one.
         model = _character_model(entry.key)
         if model and state.model_kind == "postmodel":
-            hits = _prefab_named(model)
+            hits = datasets.part_rows(model, cast=state.kind)
             if hits:
-                return self._import(context, state, entry, _for_cast(hits, state.kind), model)
+                return self._import(context, state, entry, hits, model)
             self.report({"WARNING"}, "'{0}' declares model '{1}', which is not in the cabmap.".format(
                 entry.label, model))
             return {"CANCELLED"}
 
-        hits = _prefab_rows(entry.key, state.model_kind)
+        hits = datasets.model_rows(entry.key, state.model_kind, cast=state.kind)
         if not hits:
             # 只报另一个 model family(同样精确名),不做子串扫描——诊断不值得把闭包炸开。
             other = "uimodel" if state.model_kind == "postmodel" else "postmodel"
-            alt = _prefab_rows(entry.key, other)
+            alt = datasets.model_rows(entry.key, other, cast=state.kind)
             self.report({"WARNING"},
                         "'{0}' has no {1}_{2} prefab; it does have the {3} one.".format(
                             entry.label, entry.key, state.model_kind, other)
@@ -695,7 +577,7 @@ class RURI_OT_roster_load(bpy.types.Operator):
                             entry.key, state.model_kind))
             return {"CANCELLED"}
 
-        return self._import(context, state, entry, _for_cast(hits, state.kind), "")
+        return self._import(context, state, entry, hits, "")
 
     def _import(self, context, state, entry, hits, declared):
         """Put the resolved rows in the browser's own selection and run its own
@@ -703,8 +585,8 @@ class RURI_OT_roster_load(bpy.types.Operator):
         did, so the report says where the choice came from."""
         chosen, level = _at_detail_level(hits, state.lod)
         cabmap_state.clear_selection()
-        for row, _path in chosen:
-            cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+        for row in chosen:
+            cabmap_state.SELECTED_CABS.add(row["cab"])
 
         result = bpy.ops.ruri.import_selected()
         if "FINISHED" not in result:
@@ -760,8 +642,8 @@ class RURI_OT_roster_load(bpy.types.Operator):
             binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
             materials_by_mesh = _npc_materials(context, info, entry.key)
             imported_any = False
-            for _part, row, _path in hits:
-                if _import_part(context, cabmap_state.ROWS.cab(row), binder, options, state.lod,
+            for _part, row in hits:
+                if _import_part(context, row["cab"], binder, options, state.lod,
                                 materials_by_mesh):
                     imported_any = True
             # The binder builds its rig itself rather than through the prefab
@@ -773,9 +655,9 @@ class RURI_OT_roster_load(bpy.types.Operator):
             # roots into the first so it ends on one armature.
             imported_any = False
             before = {o for o in context.scene.objects if o.type == "ARMATURE"}
-            for _part, row, _path in hits:
+            for _part, row in hits:
                 cabmap_state.clear_selection()
-                cabmap_state.SELECTED_CABS.add(cabmap_state.ROWS.cab(row))
+                cabmap_state.SELECTED_CABS.add(row["cab"])
                 if "FINISHED" in bpy.ops.ruri.import_selected():
                     imported_any = True
             new_arms = [o for o in context.scene.objects
@@ -807,22 +689,9 @@ class RURI_OT_roster_load(bpy.types.Operator):
                         "Model loaded, but no rig was found to bind '{0}'s expressions to.".format(entry.label))
 
 
-# ── 动画:锚点是容器路径,不是名字 ────────────────────────────────────────────
-# 游戏把动画归在与模型完全不同的一棵树下(模型 prefab 在
-# dynamicassets/gameplay/actors/postmodels/,动画在 arts/entity/actor/),所以
-# reveal 那套"取模型所在目录"在这里无效,得另立锚点。EndField_1.4.4 cabmap 实测:
-#   角色本体      arts/entity/actor/<体型组>/<短名>/animations/<类别>/
-#                 类别 = dialog / 3c / battle / customized / ui / interact
-#   行人 NPC      自己没有 animations 目录,跑体型组共享库
-#                 arts/entity/actor/<体型组>/common/animations/
-#   物件/动物 NPC arts/entity/npc/<类>/<模板>/animations/
-# 按名字搜会被对话表情 morph 淹没 —— pelica 名下 2403 条 AnimationClip 里绝大多数是
-# dialog/timeline/dlgtl_*/morphanim/*_npc_chr_0004_pelica_N.anim(嘴型/表情,不是身体
-# 动画);锚到 "<标识>/animations/" 则 431 行命中 431 行是本体动画,零噪音。
-_ANIM_ANCHOR = "{0}/animations/"
-_SHARED_ANIM_ANCHOR = "actor/{0}/common/animations/"
-
-
+# 动画锚点、体型组回退与短名规则全在 hook 侧(endfield.character.animations):游戏
+# 把动画归在与模型完全不同的一棵树下,按名字搜会被上千条对话表情 morph 淹没,而锚到
+# 容器路径则零噪音——这些是这个游戏的目录事实,面板只消费它算出来的锚点。
 def _ANIM_RULES(anchor):
     """按钮装进浏览器的 Include 规则集(全部成立才显示 —— 规则编辑器的 AND 语义)。
     搜索框刻意留空:规则是这个按钮的查询,搜索框留给使用者在其上再缩小范围
@@ -831,59 +700,6 @@ def _ANIM_RULES(anchor):
         {"field": "container", "relation": "contains", "value": anchor, "action": "include"},
         {"field": "type_names", "relation": "contains", "value": "AnimationClip", "action": "include"},
     ]
-_ACTOR_TREE = "/arts/entity/actor/"
-_PEDESTRIAN_TREE = "/pedestrain/"
-
-
-def _short_name(key):
-    """角色 id → 动画树用的短名:chr_0004_pelica -> pelica。目录段与片段名都用它,
-    完整 id 只出现在 postmodel prefab 那棵树里。"""
-    return re.sub(r"^chr_\d+_", "", key.lower())
-
-
-def _anim_hits(anchor):
-    """锚点在 cabmap 里的命中行数(走 C# 快搜引擎,全表向量化)。"""
-    cabmap_state.apply_filter(anchor)
-    return len(cabmap_state.VISIBLE)
-
-
-def _segment_after(marker, needle, want_index):
-    """在命中 needle 的行里找出 marker 之后的第 want_index 段 —— 体型组是从这一位
-    自己的资产路径上读出来的,不是从名字猜的(模板名与目录会不一致:npc_fattym_* 的
-    prefab 就住在 pedestrain/fatty/ 下)。"""
-    cabmap_state.apply_filter(needle)
-    for row in cabmap_state.VISIBLE:
-        for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-            low = cabmap_state.ROWS.container_path(row, path_index).lower()
-            _head, found, tail = low.partition(marker)
-            if not found:
-                continue
-            segments = tail.split("/")
-            if len(segments) > want_index:
-                return segments[want_index]
-    return ""
-
-
-def _body_group(kind, key, short):
-    """这一位的体型组(girl/lady/gentleman/…),即共享动画库那一段。"""
-    if kind == CHARACTERS:
-        # arts/entity/actor/<组>/<短名>/... —— 只认第二段真是这个角色的那条路径。
-        cabmap_state.apply_filter(short)
-        for row in cabmap_state.VISIBLE:
-            for path_index in range(cabmap_state.ROWS.container_path_count(row)):
-                low = cabmap_state.ROWS.container_path(row, path_index).lower()
-                _head, found, tail = low.partition(_ACTOR_TREE)
-                if not found:
-                    continue
-                segments = tail.split("/")
-                if len(segments) > 1 and segments[1] == short:
-                    return segments[0]
-        return ""
-    group = _segment_after(_PEDESTRIAN_TREE, key, 0)
-    if group:
-        return group
-    parts = key.lower().split("_")
-    return parts[1] if len(parts) > 1 else ""
 
 
 class RURI_OT_roster_animations(bpy.types.Operator):
@@ -911,25 +727,19 @@ class RURI_OT_roster_animations(bpy.types.Operator):
         if entry is None:
             return {"CANCELLED"}
 
-        short = _short_name(entry.key) if state.kind == CHARACTERS else entry.key.lower()
-        anchor = _ANIM_ANCHOR.format(short)
-        hits = _anim_hits(anchor)
-        note = "{0}: {1} animation rows.".format(entry.label, hits)
+        found = datasets.animation_anchor(entry.key, state.kind)
+        if found is None:
+            self.report({"WARNING"}, "No animation folder for '{0}' in the loaded cabmap.".format(
+                entry.label))
+            return {"CANCELLED"}
 
-        if not hits:
-            group = _body_group(state.kind, entry.key, short)
-            anchor = _SHARED_ANIM_ANCHOR.format(group) if group else ""
-            hits = _anim_hits(anchor) if anchor else 0
-            if not hits:
-                self.report({"WARNING"}, "No animation folder for '{0}' in the loaded cabmap.".format(
-                    entry.label))
-                return {"CANCELLED"}
-            # 换的是**别人的**动画库,必须说出来,不能静默替换。
-            note = ("'{0}' ships no animations of its own; showing the {1} body-type "
-                    "library it actually plays ({2} rows).".format(entry.label, group, hits))
-
+        # 换成**别人的**动画库时必须说出来,不能静默替换。
+        note = ("'{0}' ships no animations of its own; showing the {1} body-type "
+                "library it actually plays ({2} rows).".format(entry.label, found["group"], found["hits"])
+                if found["group"] else
+                "{0}: {1} animation rows.".format(entry.label, found["hits"]))
         self.report({"INFO"}, note)
-        return bpy.ops.ruri.cabmap_show_rules(rules=json.dumps(_ANIM_RULES(anchor)))
+        return bpy.ops.ruri.cabmap_show_rules(rules=json.dumps(_ANIM_RULES(found["anchor"])))
 
 
 class RURI_OT_roster_reveal(bpy.types.Operator):
@@ -953,15 +763,13 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
         # The folder of the model this row actually loads -- not a text search,
         # which lands on every asset whose name merely contains the id.
         if state.kind == CHARACTERS:
-            found = [(row, path) for row, path in
-                     _for_cast(_prefab_rows(entry.key, state.model_kind), CHARACTERS)]
+            found = datasets.model_rows(entry.key, state.model_kind, cast=CHARACTERS)
         else:
-            found = [(row, path) for _part, row, path in _model_parts(context, entry)[1]]
+            found = [row for _part, row in _model_parts(context, entry)[1]]
         if found:
-            row, path = found[0]
-            folder = path.rpartition("/")[0]
-            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder=folder,
-                                              cab=cabmap_state.ROWS.cab(row))
+            row = found[0]
+            folder = row["container"].rpartition("/")[0]
+            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder=folder, cab=row["cab"])
         return bpy.ops.ruri.cabmap_reveal(query=entry.key)
 
 

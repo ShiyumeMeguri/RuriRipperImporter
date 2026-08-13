@@ -11,7 +11,7 @@ Two tabs, neither of which means anything for another title:
                own chunk format; ``UI`` the lit little stages an interface stands
                a model on (CharInfo, CharFormation, WeaponInfo), loaded around a
                character already in the scene.
-               (``scene_state`` + ``asset_paths`` + ``scene_importer``,
+               (``scene_state`` + ``scene_importer``,
                 ``ui_scene_state`` + ``ui_scene_importer``)
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
