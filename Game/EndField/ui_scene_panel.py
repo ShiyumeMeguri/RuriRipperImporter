@@ -91,6 +91,12 @@ class RURI_PG_ui_scene(bpy.types.PropertyGroup):
     apply_character_params: BoolProperty(name="Character Params", default=True,
                                          description="Push the stage's HGCharacterVolume onto every "
                                                      "Endfield material already in the scene")
+    apply_post: BoolProperty(name="Post Processing", default=True,
+                             description="Put the game's post-processing chain on the scene "
+                                         "compositor. Visible in the viewport only in Material "
+                                         "Preview/Rendered shading AND camera view (numpad 0) -- "
+                                         "the chain is framed by the camera, so the viewport "
+                                         "compositor is set to Camera")
     reset_scene: BoolProperty(name="Reset Scene", default=False,
                               description="Delete existing objects first. Off by default: a stage is "
                                           "normally loaded AROUND a character that is already here")
@@ -160,6 +166,11 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
                 touched, written = ui_scene_importer.apply_character_params(char_volume["data"])
                 done.append("{0} param(s) onto {1} material(s)".format(written, touched))
 
+        if state.apply_post:
+            installed = ui_scene_importer.apply_post(context)
+            done.append("post chain on the compositor" if installed
+                        else "no post stage registered (shader package not loaded?)")
+
         if state.import_art and row["stage_prefabs"]:
             try:
                 reports = self._import_stage(context, row)
@@ -227,6 +238,7 @@ def draw_ui_scene_tab(layout, context):
     options.enabled = row is not None
     options.prop(state, "apply_environment")
     options.prop(state, "apply_character_params")
+    options.prop(state, "apply_post")
     options.prop(state, "import_art")
     options.prop(state, "reset_scene")
     options.operator(RURI_OT_ui_scene_load.bl_idname, icon="IMPORT")
