@@ -163,8 +163,14 @@ def _rebuild(state):
     labels = table.values("label")
     groups = table.values("group")
     shipped = table.values("shipped") if "shipped" in table.names else None
+    # The ones the game actually names come FIRST. A label falls back to the row's
+    # own id when the game names it nothing, and ids are ASCII while the names are
+    # not -- so plain alphabetical order pushed every named npc past 1600 ids, and
+    # the list read as "this game has no localized names at all".
+    named = table.values("display") if "display" in table.names else None
     order = sorted((int(index) for index in matched if shipped is None or shipped[int(index)]),
-                   key=lambda index: (groups[index], labels[index]))
+                   key=lambda index: (0 if named is not None and named[index] else 1,
+                                      groups[index], labels[index]))
     matched_count = len(order)
     # The whole match set, not a first-N slice: this cast tops out in the low
     # thousands, so it materializes in one go and the list simply SCROLLS. Cutting
