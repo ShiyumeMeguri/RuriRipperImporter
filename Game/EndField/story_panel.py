@@ -206,6 +206,8 @@ class RURI_PG_story_clip(bpy.types.PropertyGroup):
     without it being one (a dialogue timeline's morph asset), which is why the
     import button counts them separately instead of failing on them."""
     label: StringProperty()
+    channel: StringProperty()
+    unit: StringProperty()
     shot: StringProperty()
     kind: StringProperty()
     actor: StringProperty()
@@ -400,7 +402,11 @@ def _rebuild_clips(state):
             header = state.clips.add()
             header.label = "{0}  ({1})".format(bucket, counts[bucket])
             header.is_group = True
+            header.channel = row["channel"]
+            header.unit = row["unit"]
         item = state.clips.add()
+        item.channel = row["channel"]
+        item.unit = row["unit"]
         item.shot = row["shot"]
         item.kind = row["kind"]
         item.actor = row["actor"]
@@ -473,9 +479,15 @@ class RURI_UL_story_clips(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_prop, index):
         if item.is_group:
-            row = layout.row()
-            row.enabled = False
-            row.label(text=item.label, icon="SEQUENCE")
+            row = layout.row(align=True)
+            title = row.row()
+            title.enabled = False
+            title.label(text=item.label, icon="SEQUENCE")
+            # By actor, a group IS a story unit -- so it carries the way into it.
+            if item.unit and context.scene.ruri_story.mode == BY_ACTOR:
+                jump = row.operator(RURI_OT_story_goto_unit.bl_idname, text="", icon="ZOOM_SELECTED")
+                jump.channel = item.channel
+                jump.unit = item.unit
             return
         row = layout.row(align=True)
         checkbox = row.row()
@@ -1164,6 +1176,52 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
         return added[0]
 
 
+class RURI_OT_story_goto_unit(bpy.types.Operator):
+    """Open the story this animation belongs to.
+
+    The actor view answers "where does this one appear"; this is the other half
+    of that question -- one click lands on that cutscene or dialogue with its own
+    shots, cast and Load Whole Cutscene button, instead of leaving the user to
+    retype an id they just read."""
+    bl_idname = "ruri.story_goto_unit"
+    bl_label = "Open This Story"
+    bl_description = "Switch to By Story and open the cutscene / dialogue this animation belongs to"
+    channel: StringProperty()
+    unit: StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded and cabmap_state.BRIDGE is not None
+
+    def execute(self, context):
+        state = context.scene.ruri_story
+        if not self.unit:
+            self.report({"WARNING"}, "That row belongs to no story unit.")
+            return {"CANCELLED"}
+        channel = self.channel if self.channel in (datasets.CUTSCENE, datasets.DIALOG)             else datasets.CUTSCENE
+        state.mode = BY_STORY
+        state.channel = channel
+        if _top_table(state) is None:
+            try:
+                _UNITS[(BY_STORY, channel)] = datasets.story_units(channel)
+            except Exception as exc:
+                _report_exception(self, "Reading the {0} units failed".format(channel), exc)
+                return {"CANCELLED"}
+        # Narrow to it as well as select it: the list is hundreds of units long,
+        # and a selection the user cannot see reads as nothing having happened.
+        state.search = self.unit
+        _rebuild_top(state)
+        index = next((position for position, entry in enumerate(state.entries)
+                      if not entry.is_group and entry.key == self.unit), -1)
+        if index < 0:
+            self.report({"WARNING"}, "'{0}' is not in the {1} list.".format(self.unit, channel))
+            return {"CANCELLED"}
+        state.active_index = index
+        _open_entry(state, self.unit)
+        self.report({"INFO"}, "Opened {0}.".format(self.unit))
+        return {"FINISHED"}
+
+
 class RURI_OT_story_reveal(bpy.types.Operator):
     """Open where the open selection's animations live, over in the bundle
     browser.
@@ -1251,6 +1309,19 @@ def draw_story_tab(layout, context):
     checked = _checked(state)
     box.label(text=state.clip_status, icon="INFO")
     actions = box.column(align=True)
+    if state.mode == BY_ACTOR:
+        # The row in front of the user names a story; make going there one click,
+        # since "which cutscene is this from" is the question the actor view
+        # raises and cannot answer on its own.
+        highlighted = state.clips[state.clips_active_index]             if 0 <= state.clips_active_index < len(state.clips) else None
+        jump = actions.row()
+        jump.enabled = highlighted is not None and bool(highlighted.unit)
+        opened = jump.operator(RURI_OT_story_goto_unit.bl_idname, icon="ZOOM_SELECTED",
+                               text="Open {0}".format(highlighted.unit) if highlighted is not None
+                               and highlighted.unit else "Open This Story")
+        if highlighted is not None:
+            opened.channel = highlighted.channel
+            opened.unit = highlighted.unit
     if state.mode == BY_STORY:
         whole = actions.row()
         whole.scale_y = 1.3
@@ -1270,6 +1341,7 @@ _CLASSES = (
     RURI_OT_story_refresh,
     RURI_OT_story_select,
     RURI_OT_story_load_unit,
+    RURI_OT_story_goto_unit,
     RURI_OT_story_import,
     RURI_OT_story_reveal,
 )
