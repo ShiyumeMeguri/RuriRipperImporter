@@ -85,6 +85,66 @@ def read_avatar_json(arm_obj):
     return str(raw) if raw else None
 
 
+# Which collection a humanoid slot lands in. Keyed on the WORD Unity's own slot
+# names are built from, not on the slots themselves: the enum is systematic
+# (side prefix + region), so a table over regions covers every present and future
+# member of it, while a table over the 65 slots would restate the enum.
+_HUMANOID_REGIONS = (
+    ("Finger", "Fingers"),
+    ("Thumb", "Fingers"), ("Index", "Fingers"), ("Middle", "Fingers"),
+    ("Ring", "Fingers"), ("Little", "Fingers"),
+    ("Shoulder", "Arms"), ("Arm", "Arms"), ("Hand", "Arms"),
+    ("Leg", "Legs"), ("Foot", "Legs"), ("Toe", "Legs"),
+    ("Eye", "Head"), ("Jaw", "Head"), ("Head", "Head"), ("Neck", "Head"),
+    ("Hips", "Torso"), ("Spine", "Torso"), ("Chest", "Torso"),
+)
+
+
+def _humanoid_collection(slot):
+    """The collection name a human slot belongs to: '<Region>' or '<Region>.L/R'."""
+    side = ""
+    body = slot
+    for prefix, suffix in (("Left", ".L"), ("Right", ".R")):
+        if slot.startswith(prefix):
+            side = suffix
+            body = slot[len(prefix):]
+            break
+    for word, region in _HUMANOID_REGIONS:
+        if word in body:
+            return region + side
+    return "Other" + side
+
+
+def build_bone_collections(arm_obj, bone_slots):
+    """Sort a humanoid rig's bones into Blender bone collections.
+
+    ``bone_slots`` is {bone name: human slot name} as the avatar states it (see
+    pythonnet_bridge.describe_humanoid_bones). A generic rig hands in nothing and
+    gets nothing: there is no statement anywhere of what its bones are, and
+    guessing from names is how a rig ends up mis-sorted with no way to tell.
+    Bones the avatar never mentions (twist helpers, skirt, hair, props) are left
+    out of every collection rather than swept into a bucket -- an empty
+    collection list means 'unclassified', which is the truth about them.
+    Returns the number of bones assigned."""
+    if not bone_slots or arm_obj is None or arm_obj.type != "ARMATURE":
+        return 0
+    armature = arm_obj.data
+    if not hasattr(armature, "collections"):
+        return 0
+    assigned = 0
+    by_collection = {}
+    for bone in armature.bones:
+        slot = bone_slots.get(bone.name)
+        if slot:
+            by_collection.setdefault(_humanoid_collection(slot), []).append(bone)
+    for name in sorted(by_collection):
+        collection = armature.collections.get(name) or armature.collections.new(name)
+        for bone in by_collection[name]:
+            collection.assign(bone)
+            assigned += 1
+    return assigned
+
+
 def _bone_length(node):
     """Cosmetic length: distance to the nearest child, else a small default."""
     head = node.world.translation

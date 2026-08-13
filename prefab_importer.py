@@ -192,6 +192,23 @@ def _stamp_prefab_avatar(db, prefab, arm_obj, maps, warnings):
                         f"-- muscle-encoded clips will not solve on this rig.")
         return
     armature_builder.stamp_avatar(arm_obj, avatar_doc.data)
+    _sort_bones_into_collections(arm_obj, warnings)
+
+
+def _sort_bones_into_collections(arm_obj, warnings):
+    """Group the rig's bones by what its avatar says they are. Humanoid only --
+    a generic avatar states nothing about its bones, and this add-on does not
+    guess from names."""
+    avatar_json = armature_builder.read_avatar_json(arm_obj)
+    if not avatar_json:
+        return
+    try:
+        from .RuriRipperPyBridge.runtime import pythonnet_bridge
+        slots = pythonnet_bridge.describe_humanoid_bones(avatar_json)
+    except Exception as exc:
+        warnings.append(f"bone collections: {type(exc).__name__}: {exc} -- rig left unsorted")
+        return
+    armature_builder.build_bone_collections(arm_obj, slots)
 
 
 def _solve_humanoid_curves(clip, avatar_json, path_to_bone, warnings, clip_name):
