@@ -1698,7 +1698,25 @@ PART_META = {
 }
 NON_SHADING_SHADERS = ()
 
+CULL_PROPERTY = '_CullMode'
+CULL_FIXED = 2
 _shader_name_cache = {}
+
+
+def _cull_mode(props):
+    """材质的 Unity Cull 值,按**本家族真源自己的属性名**读 —— `Cull [<名>]` 逐 shader
+    家族不同(characternpr 系 _Cull,lit/unlit/effect 系 _CullMode),真源没有 `Cull` 行的
+    家族则是固定态(CULL_FIXED)。
+    名字对不上就取不到值,而静默落「只渲正面」会让站在球壳内部的背景壳整个消失
+    (实测:白房间 alpha 恒 0,画面只剩世界背景),所以这里响亮报错并按双面渲。"""
+    if not CULL_PROPERTY:
+        return CULL_FIXED
+    value = props.floats.get(CULL_PROPERTY)
+    if value is None:
+        print('[ruri-uber] !! {0} 未声明 {1},按双面渲染'.format(
+            props.name, CULL_PROPERTY), flush=True)
+        return 0.0
+    return float(value)
 
 
 def _shader_name(builder, props):
@@ -1902,7 +1920,7 @@ def provider(builder, props):
         mat.use_nodes = True
     grp = build_material(mat, clone.name, opaque=opaque,
                          multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
-                         part=part_name, cull=float(props.floats.get('_Cull', 2.0)))
+                         part=part_name, cull=_cull_mode(props))
     # 组外贴图节点(原始 UV 直采的那些建在材质树上):换真图,节点标签 = 槽名。
     for node in mat.node_tree.nodes:
         if node.type != 'TEX_IMAGE':
