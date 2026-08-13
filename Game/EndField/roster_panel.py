@@ -166,8 +166,13 @@ def _rebuild(state):
     order = sorted((int(index) for index in matched if shipped is None or shipped[int(index)]),
                    key=lambda index: (groups[index], labels[index]))
     matched_count = len(order)
+    # The whole match set, not a first-N slice: this cast tops out in the low
+    # thousands, so it materializes in one go and the list simply SCROLLS. Cutting
+    # it at a boundary reads as "the game ships no more of these" -- and cut at 500
+    # of 2084 npcs sorted by name, every row on screen was an unnamed id while the
+    # named ones sat past the cut.
     rows = [{name: table.cell(index, name) for name in ("key", "label", "detail", "group")}
-            for index in order[:cabmap_state.DISPLAY_CAP]]
+            for index in order[:cabmap_state.LIST_CAP]]
 
     counts = {}
     for row in rows:
@@ -275,6 +280,14 @@ def _character_model(character_id):
     return _CHARACTER_MODELS.get(character_id, {}).get("model", "")
 
 
+def character_model(character_id):
+    """The model prefab the game itself declares for a character id, or "" when
+    that id has no data asset in the loaded cabmap. The one way any other panel
+    asks: the declaration lives in the game's per-character data assets, read
+    once per session here."""
+    return _character_model(character_id)
+
+
 def character_tag(token):
     """The SkeletalMorph tag the game itself assigns a character, matched from a
     rig's name token. Empty when the token names no character in the roster's
@@ -306,52 +319,64 @@ def _templet_skeleton(info):
     """``(world_rests, paths, leaf_names)`` for an npc's shared skeleton, read from
     the avatar template the manifest names.
 
-    The template's ``sizeAvatar`` carries the whole skeleton's STANDING world rest
-    (m_AvatarSkeleton + m_AvatarSkeletonPose) AND its ``m_TOS`` name/parent table
-    -- the authoritative pose a part mesh is bind-baked against, exactly what a
-    shipped rig gets from its prefab transform hierarchy. ``bonePathsStr`` is kept
-    as leaf-name vocabulary for any part-specific bone the table does not name."""
+    The skeleton is the Avatar asset the template's own bundle carries: its
+    ``m_AvatarSkeleton`` + ``m_AvatarSkeletonPose`` are the whole rig's STANDING
+    world rest and its ``m_TOS`` the name/parent table -- the authoritative pose a
+    part mesh is bind-baked against, exactly what a shipped rig gets from its
+    prefab transform hierarchy. The template MonoBehaviour beside it contributes
+    ``bonePathsStr``, the leaf-name vocabulary for any part-specific bone the
+    table does not name.
+
+    Both are materialized by their own identity out of a bundle that carries a
+    thousand other assets -- never the whole closure."""
     templet = (info.get("avatar_templet") or "").rsplit("/", 1)[-1]
     if not templet:
         return {}, [], []
-    rows = datasets.named_rows("data_npc_avatartemplet_" + templet.lower())
+    stem = "data_npc_avatartemplet_" + templet.lower()
+    rows = datasets.named_rows(stem)
     if not rows:
         return {}, [], []
     from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
     cab = rows[0]["cab"]
     try:
         graph = cabmap_state.BRIDGE.scan_cabs([cab])
-        mono_behaviour_id = class_registry.id_for_name("MonoBehaviour")
         avatar_id = class_registry.id_for_name("Avatar")
-        # The templet is the one MonoBehaviour that references an Avatar
-        # (sizeAvatar); materialize exactly that pair, never the whole closure.
-        keys = set()
-        for index in graph.indices_of_class(mono_behaviour_id):
-            avatars = [target for _field, target in graph.out_edges(index)
-                       if graph.class_id(target) == avatar_id]
-            if avatars:
-                keys.add(graph.key(index))
-                keys.update(graph.key(target) for target in avatars)
+        mono_behaviour_id = class_registry.id_for_name("MonoBehaviour")
+        keys = [graph.key(index) for index in graph.indices_of_class(avatar_id)]
+        keys += [graph.key(index) for index in graph.find(mono_behaviour_id, stem)]
         if not keys:
             return {}, [], []
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
-            [cab], export_asset_keys=sorted(keys))
+            [cab], export_asset_keys=sorted(set(keys)))
     except Exception:
         return {}, [], []
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+
+    world_rests, paths, leaves = {}, [], []
     for guid in db.all_guids():
-        mono = db.load_guid(guid)
-        doc = mono.first("MonoBehaviour") if mono is not None else None
-        if doc is None or "bonePathsStr" not in (doc.data or {}):
+        loaded = db.load_guid(guid)
+        if loaded is None:
             continue
-        leaves = [str(name) for name in (doc.data.get("bonePathsStr") or [])]
-        size_ref = doc.data.get("sizeAvatar")
-        world_rests, paths = {}, []
-        if isinstance(size_ref, dict) and size_ref.get("guid"):
-            world_rests, paths = _avatar_skeleton(db, db.load_guid(size_ref["guid"]))
-        return world_rests, paths, leaves
-    return {}, [], []
+        if not world_rests and loaded.first("Avatar") is not None:
+            world_rests, paths = _avatar_skeleton(db, loaded)
+            continue
+        doc = loaded.first("MonoBehaviour")
+        if doc is not None and "bonePathsStr" in (doc.data or {}):
+            leaves = [str(name) for name in (doc.data.get("bonePathsStr") or [])]
+    return world_rests, paths, leaves
+
+
+def _avatar_mesh_cab(info):
+    """The CAB holding this npc's avatar-mesh family table (``data_npc_avatarmesh_
+    <leaf>``, named by the manifest's own avatarMeshName). That table is what says
+    which mesh each part slot wears and which materials dress it; without it an
+    npc cannot be assembled at all."""
+    leaf = (info.get("avatar_mesh") or "").rsplit("/", 1)[-1]
+    if not leaf:
+        return ""
+    rows = datasets.named_rows("data_npc_avatarmesh_" + leaf.lower())
+    return rows[0]["cab"] if rows else ""
 
 
 def _npc_materials(context, info, template_id):
@@ -361,27 +386,26 @@ def _npc_materials(context, info, template_id):
     An npc's colours are stated by its TEMPLATE (a material code per renderer),
     never by its parts -- the same part takes different materials under different
     templates, and a part's trailing number is its own index, not a material's.
-    So the codes have to be resolved against the family's shared table
-    (``data_npc_avatarmesh_<leaf>``, named by the manifest's avatarMeshName) --
-    which the C# side does, codes and path hashes being binary."""
-    leaf = (info.get("avatar_mesh") or "").rsplit("/", 1)[-1]
-    if not leaf:
-        return {}
-    rows = datasets.named_rows("data_npc_avatarmesh_" + leaf.lower())
-    if not rows:
+    So the codes have to be resolved against the family's shared table -- which
+    the C# side does, codes and path hashes being binary."""
+    cab = _avatar_mesh_cab(info)
+    if not cab:
         return {}
     try:
-        assigned = datasets.npc_materials(template_id, [rows[0]["cab"]])
+        return datasets.npc_materials(template_id, [cab])
     except Exception:
         return {}
-    return {row["mesh"].lower(): row["materials"] for row in assigned}
 
 
-def _import_part(context, cab, binder, options, level, materials_by_mesh=None):
-    """Import one part's best-LOD meshes, each baked onto the shared rig the binder
-    is growing. Works for every part kind -- a body/hair/tail fbx or a face/ear
-    _variant prefab -- since each is a skinned mesh with a bind pose and its own
-    avatar. One cab's own closure at a time. True when anything built.
+def _import_part(context, cab, binder, options, wanted_meshes, materials_by_mesh=None):
+    """Import exactly the meshes ``wanted_meshes`` names, each baked onto the shared
+    rig the binder is growing. One cab's own closure at a time. True when anything
+    built.
+
+    The names come from the game's own slot table, so nothing here guesses which
+    of a closure's meshes belong to this part or which detail level they are: a
+    CAB routinely carries several parts' meshes at every LOD, and picking by name
+    pattern imported the wrong ones (or none).
 
     ``materials_by_mesh`` maps a mesh's own name to the container paths the
     template dresses it in (see _npc_materials); those materials live in their
@@ -401,8 +425,12 @@ def _import_part(context, cab, binder, options, level, materials_by_mesh=None):
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(seeds)
     except Exception:
         return False
+    # The raw geometry blobs have to come with it: this game streams/packs its
+    # vertex data, so a database without them silently decodes every mesh to zero
+    # vertices and the part imports as nothing at all.
     db = bridge_asset_db.BridgeAssetDatabase(
-        assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+        assets, mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
     # This part's own Avatar supplies the standing rest for any bone it alone
     # introduces (the base skeleton already came from the template avatar).
     for guid in db.all_guids():
@@ -416,7 +444,7 @@ def _import_part(context, cab, binder, options, level, materials_by_mesh=None):
     material_index = discovery.material_name_index(db) if mat_builder is not None else {}
 
     imported = False
-    for guid in _loose_part_mesh_guids(db, level):
+    for guid in _named_mesh_guids(db, wanted_meshes):
         mesh_file = db.load_guid(guid)
         if mesh_file is None:
             continue
@@ -450,45 +478,48 @@ def _materials_for(mesh_name, materials_by_mesh, material_index, mat_builder):
     return materials
 
 
-def _loose_part_mesh_guids(db, level):
-    """The Mesh guids to import from a loose part's closure: the best-ranked LOD
-    per mesh family, so one detail level lands rather than the lod0..lod3 the
-    closure ships all stacked at the origin."""
+def _named_mesh_guids(db, wanted_meshes):
+    """The guids of exactly the Meshes the slot table named, in that order.
+
+    Matched on the Mesh's own m_Name (case-insensitively -- the slot table writes
+    ``S_npc_...`` while the addressable path is lowercase), read off a bounded
+    prefix peek rather than a parse, so scanning a closure costs one sniff per
+    document instead of decoding every mesh in it."""
     from ...RuriRipperPyBridge.unity import discovery
-    meshes = []
+    wanted = {str(name).lower(): position for position, name in enumerate(wanted_meshes)}
+    if not wanted:
+        return []
+    found = []
     for guid in db.all_guids():
         text = db.raw_text(guid)
         if not text:
             continue
         class_name, name = discovery.peek_class_and_name(text)
-        if class_name != "Mesh":
+        if class_name != "Mesh" or name is None:
             continue
-        meshes.append((guid, name or guid))
-    named = datasets.ranked(name for _guid, name in meshes)
-    families = {}
-    for guid, name in meshes:
-        families.setdefault(named[name]["family_stem"], []).append((guid, name))
-    chosen = []
-    for members in families.values():
-        ranked = [(named[name]["lod_rank"], guid) for guid, name in members]
-        exact = [guid for rank, guid in ranked if rank == level]
-        if exact:
-            chosen.extend(exact)
-            continue
-        best = min((rank for rank, _guid in ranked), key=lambda rank: (rank < 0, abs(rank - level)))
-        chosen.extend(guid for rank, guid in ranked if rank == best)
-    return chosen
+        position = wanted.get(name.lower())
+        if position is not None:
+            found.append((position, guid))
+    found.sort()
+    return [guid for _position, guid in found]
 
 
 
-def _model_parts(context, entry):
-    """(manifest, [(part, row, path)], [unresolved part]) for an npc row.
+def _model_parts(context, entry, level=0):
+    """(manifest, [(cab, [mesh name])], [unresolved part]) for an npc row.
 
-    A part is taken as ONE asset: the game publishes some parts as a generated
-    prefab and the rest only as the authored skinned mesh, and where both a
-    ``_variant`` and a ``_static`` prefab exist the variant is the one skinned
-    onto the shared skeleton -- the static one is a standalone posed copy, which
-    is what lands unparented with no armature modifier.
+    A template's ``partNameIdList`` entries are SLOT NAMES in its avatar-mesh
+    family table, not asset names -- the mesh a slot wears is stated there and
+    nowhere else. Matching the slot name against the cabmap is what used to
+    happen here, and it silently fails for every npc whose slot is a postmodel id
+    (``npc_8001_deathgirl_postmodel`` wears ``s_npc_major_deathgirl_body_01_lod0``;
+    nothing joins those two by name) -- and it quietly imports the WRONG mesh for
+    the pedestrians it appears to work for (slot ``P_npc_girl_body_unionscholar_a_02``
+    wears the ``_a_01`` mesh).
+
+    So the slot table answers it: slot -> meshes at the wanted detail level, then
+    each mesh name resolves to the CAB that actually holds it. Meshes are grouped
+    by CAB so one closure resolve covers everything it carries.
 
     The avatar template is NOT an import row: it is read only for its skeleton
     paths + leaf names (see _templet_skeleton), which the assembler feeds to a
@@ -497,16 +528,61 @@ def _model_parts(context, entry):
         info = datasets.npc_parts(entry.key)
     except Exception:
         return None, [], []
-    hits = []
+    cab = _avatar_mesh_cab(info)
+    if not cab:
+        return info, [], list(info["parts"])
+    try:
+        slots = datasets.npc_meshes([cab])
+    except Exception:
+        return info, [], list(info["parts"])
+
+    by_key = {str(name).lower(): levels for name, levels in slots.items()}
+    wanted = []
     missing = []
     for part in info["parts"]:
-        candidates = datasets.part_rows(part)
-        if not candidates:
+        levels = by_key.get(str(part).lower())
+        meshes = _meshes_at_level(levels, level) if levels else []
+        if not meshes:
             missing.append(part)
             continue
-        skinned = next((row for row in candidates if row["variant"]), None)
-        hits.append((part, skinned or candidates[0]))
-    return info, hits, missing
+        wanted.extend(meshes)
+    if not wanted:
+        return info, [], missing
+
+    # The slot states the addressable path of the mesh it wears, so the CAB it
+    # lives in is a lookup, not a search. Paths batch into ONE resolve.
+    paths = [mesh["path"] for mesh in wanted if mesh["path"]]
+    cabs_by_path = {}
+    if paths:
+        try:
+            for path in paths:
+                found = cabmap_state.BRIDGE.resolve_cabs_for_paths([path])
+                if found:
+                    cabs_by_path[path] = found[0]
+        except Exception:
+            cabs_by_path = {}
+
+    by_cab = {}
+    for mesh in wanted:
+        cab_name = cabs_by_path.get(mesh["path"]) if mesh["path"] else None
+        if cab_name is None:
+            missing.append(mesh["name"])
+            continue
+        by_cab.setdefault(cab_name, []).append(mesh["name"])
+    return info, list(by_cab.items()), missing
+
+
+def _meshes_at_level(levels, level):
+    """One slot's meshes at the requested detail level, or the nearest level the
+    game authored it at -- the game states which levels exist per slot, and a
+    part simply not authored at LOD2 is normal (see the deathgirl slot, whose
+    LOD2 drops the eyeshadow and hairshadow meshes)."""
+    if not levels:
+        return []
+    if level in levels:
+        return levels[level]
+    nearest = min(levels, key=lambda candidate: (abs(candidate - level), candidate))
+    return levels[nearest]
 
 
 def _at_detail_level(rows, level):
@@ -607,66 +683,52 @@ class RURI_OT_roster_load(bpy.types.Operator):
         return {"FINISHED"}
 
     def _load_npc(self, context, state, entry):
-        """An npc is assembled, not shipped: its template's manifest lists the
-        part prefabs (body, face, hair, ear, tail), and a named actor's manifest
-        lists one whole prefab instead. The terminal state is ONE armature named
-        after the model template, with every part parented and skinned onto it."""
+        """An npc is assembled, not shipped: its template's manifest names part
+        SLOTS, its avatar-mesh family table says which mesh each slot wears, and
+        every one of those meshes is skinned onto the skeleton the avatar template
+        carries. The terminal state is ONE armature named after the model
+        template, with every mesh parented and skinned onto it."""
         from ... import armature_builder
 
-        info, hits, missing = _model_parts(context, entry)
+        info, hits, missing = _model_parts(context, entry, state.lod)
         if info is None:
             self.report({"WARNING"}, "'{0}' ({1}) has no part manifest -- the game ships no "
                                      "assembled model for it.".format(entry.label, entry.key))
             return {"CANCELLED"}
         if not hits:
-            self.report({"WARNING"}, "None of {0}'s {1} part(s) are in the loaded cabmap.".format(
-                entry.label, len(info["parts"])))
+            self.report({"WARNING"}, "'{0}' resolved none of its {1} part slot(s) to a mesh -- "
+                                     "its avatar-mesh table ({2}) is not in the loaded cabmap.".format(
+                entry.label, len(info["parts"]), info.get("avatar_mesh") or "unnamed"))
             return {"CANCELLED"}
 
         options = context.scene.ruri_cabmap.as_options()
-        # A named actor (manifest carries correspondingCharId) ships one complete
-        # standing prefab and takes the prefab path; a generic npc is assembled
-        # from parts that share the template skeleton and takes the binder path.
-        named_actor = bool(info.get("character_id"))
-        world_rests, paths, leaf_names = ({}, [], []) if named_actor else _templet_skeleton(info)
-        if world_rests:
-            # Assembled npc: every part is a skinned mesh sharing one skeleton
-            # (the template avatar's standing pose). Each part -- body/hair/tail
-            # authored standing, face/ear authored at their own origin -- is baked
-            # onto ONE binder rig, its own bones aligned onto the shared skeleton.
-            binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
-            materials_by_mesh = _npc_materials(context, info, entry.key)
-            imported_any = False
-            for _part, row in hits:
-                if _import_part(context, row["cab"], binder, options, state.lod,
-                                materials_by_mesh):
-                    imported_any = True
-            # The binder builds its rig itself rather than through the prefab
-            # importer, so the game identity is stamped at this call site.
-            armature_builder.stamp_game(binder.armature, options.get("source_game"))
-        else:
-            # Named actor: one complete standing prefab (no shared-skeleton
-            # template) -- the browser's own hierarchy import, grafting any extra
-            # roots into the first so it ends on one armature.
-            imported_any = False
-            before = {o for o in context.scene.objects if o.type == "ARMATURE"}
-            for _part, row in hits:
-                cabmap_state.clear_selection()
-                cabmap_state.SELECTED_CABS.add(row["cab"])
-                if "FINISHED" in bpy.ops.ruri.import_selected():
-                    imported_any = True
-            new_arms = [o for o in context.scene.objects
-                        if o.type == "ARMATURE" and o not in before]
-            for arm in new_arms[1:]:
-                armature_builder.graft_armature(context, new_arms[0], arm)
+        world_rests, paths, leaf_names = _templet_skeleton(info)
+        if not world_rests:
+            self.report({"WARNING"}, "'{0}' names avatar template '{1}', which is not in the "
+                                     "loaded cabmap -- its meshes have no skeleton to bind to.".format(
+                entry.label, info.get("avatar_templet") or "none"))
+            return {"CANCELLED"}
+
+        # Every mesh a slot names is skinned onto ONE shared skeleton (the template
+        # avatar's standing pose): body/hair/tail authored standing, face/ear at
+        # their own origin, each aligned onto that skeleton by the binder.
+        binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
+        materials_by_mesh = _npc_materials(context, info, entry.key)
+        imported_any = False
+        for cab, meshes in hits:
+            if _import_part(context, cab, binder, options, meshes, materials_by_mesh):
+                imported_any = True
+        # The binder builds its rig itself rather than through the prefab
+        # importer, so the game identity is stamped at this call site.
+        armature_builder.stamp_game(binder.armature, options.get("source_game"))
 
         if not imported_any:
             return {"CANCELLED"}
         if missing:
-            self.report({"WARNING"}, "{0} of {1} part(s) are not in the cabmap: {2}".format(
-                len(missing), len(info["parts"]), ", ".join(missing)))
+            self.report({"WARNING"}, "{0} of {1} part slot(s) resolved to nothing: {2}".format(
+                len(missing), len(info["parts"]), ", ".join(missing[:4])))
         else:
-            self.report({"INFO"}, "Assembled '{0}' from {1} part(s).".format(
+            self.report({"INFO"}, "Assembled '{0}' from {1} part slot(s).".format(
                 entry.label, len(info["parts"])))
         if state.load_expressions:
             self._load_expressions(context, entry)
@@ -759,12 +821,19 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
         # which lands on every asset whose name merely contains the id.
         if state.kind == CHARACTERS:
             found = datasets.model_rows(entry.key, state.model_kind, cast=CHARACTERS)
-        else:
-            found = [row for _part, row in _model_parts(context, entry)[1]]
-        if found:
-            row = found[0]
-            folder = row["container"].rpartition("/")[0]
-            return bpy.ops.ruri.cabmap_reveal(query=entry.key, folder=folder, cab=row["cab"])
+            if found:
+                row = found[0]
+                return bpy.ops.ruri.cabmap_reveal(query=entry.key, cab=row["cab"],
+                                                  folder=row["container"].rpartition("/")[0])
+            return bpy.ops.ruri.cabmap_reveal(query=entry.key)
+
+        # An npc's own name reaches no mesh at all (the meshes are named after the
+        # art family, not the template), so reveal the first mesh its slot table
+        # actually names.
+        _info, hits, _missing = _model_parts(context, entry, state.lod)
+        if hits:
+            cab, meshes = hits[0]
+            return bpy.ops.ruri.cabmap_reveal(query=meshes[0], cab=cab)
         return bpy.ops.ruri.cabmap_reveal(query=entry.key)
 
 

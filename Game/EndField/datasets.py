@@ -31,6 +31,7 @@ PLACEMENT_COUNTS = "endfield.scene.placement_counts"
 SEED_PATHS = "endfield.scene.seed_paths"
 NPC_PARTS = "endfield.npc.parts"
 NPC_MATERIALS = "endfield.npc.materials"
+NPC_MESHES = "endfield.npc.meshes"
 CHARACTER_MODELS = "endfield.character.models"
 LANGUAGE = "endfield.roster.language"
 CAST = "endfield.roster.cast"
@@ -55,6 +56,7 @@ UI_SCHEMA = "endfield.ui.schema"
 UI_BINDINGS = "endfield.ui.bindings"
 STORY_UNITS = "endfield.story.units"
 STORY_CLIPS = "endfield.story.clips"
+STORY_ACTORS = "endfield.story.actors"
 
 
 def _table(dataset_id, **args):
@@ -106,10 +108,14 @@ def cast(kind, language):
 
 # ── story playback ──────────────────────────────────────────────────────────
 
-# The two things this game plays story through. A panel states WHICH channel it
-# wants; how each one is filed is the hook's read of the game's own folders.
+# Where this game plays animation from during story. The first two are the
+# playback systems themselves; the third is one actor's own animation folder, the
+# states a dialogue scene drives it through -- which the game names for what they
+# DO ("dialog_state_idle", "idle_talkhands") rather than for the shot they were
+# authored in. A panel states WHICH channel it wants, never how one is filed.
 CUTSCENE = "cutscene"
 DIALOG = "dialog"
+LIBRARY = "library"
 
 
 def story_units(channel=""):
@@ -120,11 +126,22 @@ def story_units(channel=""):
     return _table(STORY_UNITS, channel=channel)
 
 
-def story_clips(channel, unit):
-    """What one unit plays, in the game's own filing: the shot it belongs to, the
-    kind of thing it moves, the actor, and whether the row is an importable clip
-    (a dialogue timeline files the morph asset next to the clip that drives it)."""
-    return _table(STORY_CLIPS, channel=channel, unit=unit)
+def story_clips(channel="", unit="", actor=""):
+    """The animations of ONE unit, or of ONE actor across every unit it plays in.
+
+    Same columns either way: the unit and shot the row belongs to, the kind of
+    thing it moves, the actor, and whether the row is an importable clip (a
+    dialogue timeline files the morph asset next to the clip that drives it).
+    Asked by actor, the answer also carries that one's own animation library."""
+    return _table(STORY_CLIPS, channel=channel, unit=unit, actor=actor)
+
+
+def story_actors(channel=""):
+    """Everyone the story animates, by the token the game's own file names use,
+    joined to the character id whose data asset carries that token (empty for an
+    actor the game ships no character data for). One row per actor, with how many
+    units it appears in and how many animations each channel holds."""
+    return _table(STORY_ACTORS, channel=channel)
 
 
 # ── scenes ──────────────────────────────────────────────────────────────────
@@ -383,6 +400,26 @@ def npc_parts(template_id):
         "avatar_mesh": first.get("avatarMesh", ""),
         "parts": [row["part"] for row in rows],
     }
+
+
+def npc_meshes(cabs):
+    """{part slot: {detail level: [{name, path}]}} for one avatar-mesh family.
+
+    A template's part names are SLOT names in this table, not asset names -- which
+    mesh a slot wears, and WHERE that mesh lives, are stated here and nowhere else.
+    The slot's own meshPathHash resolves through the game's addressable hash table
+    to the container path, so nothing has to be matched by name: the mesh an npc
+    wears is routinely a sub-asset of a shared fbx, or a baked mesh under a
+    generated/ tree, neither of which carries its own name anywhere findable."""
+    texts = _mono_behaviour_texts(cabs)
+    if not texts:
+        return {}
+    slots = {}
+    for row in _rows(NPC_MESHES, assetText=texts):
+        levels = slots.setdefault(str(row["part"]), {})
+        levels.setdefault(_int(row["lod"]), []).append(
+            {"name": str(row["mesh"]), "path": str(row["path"])})
+    return slots
 
 
 def npc_materials(template_id, cabs):
