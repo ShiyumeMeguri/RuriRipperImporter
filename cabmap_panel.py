@@ -924,7 +924,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     # Name alone shrinks them all in proportion -- on screen that lands at
     # Name .800 / Container .089 / Type .042 / Deps .014 / Source .056.
     col_name_factor: FloatProperty(
-        name="Name", default=0.8, min=0.05, max=0.95, subtype="FACTOR",
+        name="Name", default=0.7, min=0.05, max=0.95, subtype="FACTOR",
         description="Width of the Name column")
     col_container_factor: FloatProperty(
         name="Path", default=0.4444, min=0.05, max=0.95, subtype="FACTOR",
