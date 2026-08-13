@@ -55,8 +55,26 @@ for _mod in (coordinate, hierarchy, armature_builder,
 # The game subtree goes registry-first then DEEPEST-first: a game package's
 # GAME_MODULE captures both the registry's GameTab/GameModule classes and its own
 # panels' draw functions, so it has to be rebuilt after all of them.
+#
+# An import that died PARTWAY leaves orphans behind: python drops the package it
+# failed on out of sys.modules but keeps whichever children already imported, and
+# reloading one of those raises "parent not in sys.modules" -- which would make a
+# single bad module unrecoverable without restarting the host. Drop the orphans
+# instead, so the next import of that package starts clean and the real error is
+# the one the user sees.
 _game_prefix = __package__ + ".Game"
 importlib.reload(sys.modules[_game_prefix])
+def _orphaned(name):
+    parent = name.rpartition(".")[0]
+    while parent.startswith(_game_prefix):
+        if parent not in sys.modules:
+            return True
+        parent = parent.rpartition(".")[0]
+    return False
+
+
+for _name in [_key for _key in list(sys.modules) if _key.startswith(_game_prefix + ".") and _orphaned(_key)]:
+    del sys.modules[_name]
 _game_modules = [_entry for _entry in sys.modules.items()
                  if _entry[0].startswith(_game_prefix + ".")
                  and not _holds_process_state(_entry[1])]
