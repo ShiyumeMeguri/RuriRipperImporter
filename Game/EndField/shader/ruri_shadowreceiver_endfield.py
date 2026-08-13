@@ -42,79 +42,6 @@ def _tree(name):
     return bpy.data.node_groups.new(name, TREE_KIND)
 
 
-def _viewport_shading():
-    """优先活动窗口的 3D 视图 shading(仅 Material Preview / Rendered 才谈得上环境);没有则 None。"""
-    screen = getattr(bpy.context, 'screen', None)
-    screens = ([screen] if screen is not None else []) + [s for s in bpy.data.screens if s is not screen]
-    for scr in screens:
-        for area in scr.areas:
-            if area.type != 'VIEW_3D':
-                continue
-            for space in area.spaces:
-                if space.type == 'VIEW_3D' and space.shading.type in {'MATERIAL', 'RENDERED'}:
-                    return space.shading
-    return None
-
-
-def _studiolight_image(name):
-    """视口 studiolight 名 → HDRI image(自带的在 datafiles/studiolights/world/*.exr)。"""
-    for sl in bpy.context.preferences.studio_lights:
-        if sl.name == name and sl.type == 'WORLD' and sl.path:
-            return bpy.data.images.load(sl.path, check_existing=True)
-    return None
-
-
-def _scene_world_env():
-    """scene.world → (image, projection, mapping_spec, strength, 纯色 rgb)。
-    只认最常见的两种世界:Background(Environment Texture) 与 Background(纯色);
-    读不懂的(如 Sky Texture 驱动 Color)纯色返 None,调用方落引擎灰。"""
-    scene = getattr(bpy.context, 'scene', None)
-    world = getattr(scene, 'world', None) if scene is not None else None
-    if world is None:
-        return None, None, None, 1.0, None
-    if not world.use_nodes or world.node_tree is None:
-        return None, None, None, 1.0, tuple(world.color[:3])
-    nodes = world.node_tree.nodes
-    bg = next((n for n in nodes if n.type == 'BACKGROUND'), None)
-    strength = bg.inputs['Strength'].default_value if bg is not None else 1.0
-    tex = next((n for n in nodes if n.type == 'TEX_ENVIRONMENT' and n.image is not None), None)
-    if tex is not None:
-        links = tex.inputs['Vector'].links
-        src = links[0].from_node if links else None
-        spec = None
-        if src is not None and src.type == 'MAPPING':
-            spec = (src.vector_type, src.inputs['Location'].default_value[:],
-                    src.inputs['Rotation'].default_value[:], src.inputs['Scale'].default_value[:])
-        return tex.image, tex.projection, spec, strength, None
-    if bg is not None and not bg.inputs['Color'].links:
-        c = bg.inputs['Color'].default_value
-        return None, None, None, strength, (c[0] * strength, c[1] * strength, c[2] * strength)
-    return None, None, None, strength, None
-
-
-def _env_source():
-    """**当前真正在照亮视口的那份环境** → (image, projection, mapping_spec, strength, 纯色 rgb)。
-
-    真源的 _CharMaxCubemap 声明在 space0(引擎全局描述符空间,与 _LightCookie/辐照度体同列),
-    characternpr.shader 的 Properties 里零出现 —— 它是场景环境探针而非材质槽,不该让谁手动绑图。
-    取值顺序按 Blender 的实际照明来源:Material Preview / Rendered 关着 Scene World 时,
-    EEVEE 照的是**视口 studiolight**(那排 HDRI 小球)而不是 scene.world —— 只读后者就会
-    "切了球纹丝不动";勾上 Scene World 或没有 3D 视图(headless)才回落 scene.world。"""
-    shading = _viewport_shading()
-    if shading is not None:
-        use_world = (shading.use_scene_world_render if shading.type == 'RENDERED'
-                     else shading.use_scene_world)
-        if not use_world:
-            image = _studiolight_image(shading.studio_light)
-            if image is not None:
-                rot = shading.studiolight_rotate_z
-                # 转角按 Blender 自己 Mapping-on-world 的同一约定作用在方向上;
-                # 万一反射与可见背景反向,要翻的符号只在这一处。
-                spec = None if rot == 0.0 else ('VECTOR', (0.0, 0.0, 0.0), (0.0, 0.0, rot), (1.0, 1.0, 1.0))
-                return image, 'EQUIRECTANGULAR', spec, shading.studiolight_intensity, None
-    return _scene_world_env()
-
-
 class G:
     """节点建图器:一个实例绑一棵 node tree。socket 或 Python 常量(float / 3 元组)皆可作输入。"""
 
@@ -381,12 +308,12 @@ class G:
         return color
 
     def env(self, name, direction, default, mip=None):
-        """环境反射按方向采样 = cubemap 的 Blender 等价物。源 = 当前在照亮视口的那份环境
-        (视口 studiolight 或 scene.world,见 _env_source);存在同名 image 时优先,作手动覆盖。
-        取不到图(纯色世界/读不懂)就退成常量色。
+        """环境反射按方向采样 = cubemap 的 Blender 等价物。源**只有**同名 image
+        (游戏自己的探针贴图导进来后按 IBL_<槽名> 命名);没有就退引擎兜底常量。
 
-        为什么只能走图节点、只能是快照:方向在组内算,而节点图不许成环,组外的 BSDF 拿不到它 ——
-        所以换球/换世界/转 HDRI 之后要重跑 ensure(rebuild=True) 才跟上。
+        🔴 严禁拿视口 studiolight / scene.world 顶上:那是自造替身,不是游戏数据。
+        真源的 _CharMaxCubemap 是角色反射探针,展示台没提供时引擎读到的就是未绑定 cube 的
+        默认值 —— 拿天空 SH 或影棚 HDRI 冒充,会把布料照成漆皮(实测丝袜峰值 0.80 vs 兜底 0.17)。
 
         Environment Texture 没有 LOD 口,真源的 mip 只能**程序化**补:mip 是 cubemap 预滤波
         链上的位置,等价的角度锥半径由真源自己的 mip↔粗糙度式反解(mip = 1.2*log2(r) + 5 ⇒
@@ -398,14 +325,11 @@ class G:
         if hit is not None:
             return hit
         override = bpy.data.images.get(name)
-        if override is not None:
-            image, projection, spec, strength = override, 'EQUIRECTANGULAR', None, 1.0
-        else:
-            image, projection, spec, strength, flat = _env_source()
-            if image is None:
-                r = ((flat if flat is not None else default), 1.0)
-                self._cse[k] = r
-                return r
+        if override is None:
+            r = (default, 1.0)
+            self._cse[k] = r
+            return r
+        image, projection, spec, strength = override, 'EQUIRECTANGULAR', None, 1.0
         if mip is None:
             r = (self._env_tap(image, projection, spec, strength, direction), 1.0)
             self._cse[k] = r
@@ -1500,8 +1424,8 @@ def _clone_uber(part, material_name, images):
 
 
 def _standard_view_transform(scene):
-    # 本次生成**未内联** tonemap:组输出是场景线性 HDR,显示变换归用户
-    #(Color Management 的 View Transform / 合成器)。这里不越界改场景设置。
+    """材质组输出恒为场景线性 HDR:tonemap 是后处理链的一级,住合成器,
+    由后处理级按需装配。材质侧不碰用户的 view transform。"""
     return False
 
 
