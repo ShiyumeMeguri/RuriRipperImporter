@@ -42,6 +42,10 @@ RANK = "endfield.asset.rank"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
 MORPH_LIBRARY = "endfield.morph.library"
+MORPH_AVATARS = "endfield.morph.avatars"
+MORPH_CTRLS = "endfield.morph.ctrls"
+MORPH_BONES = "endfield.morph.bones"
+MORPH_SHADER_PARAMS = "endfield.morph.shaderparams"
 UI_CANDIDATES = "endfield.ui.candidates"
 UI_SCHEMA = "endfield.ui.schema"
 UI_BINDINGS = "endfield.ui.bindings"
@@ -218,6 +222,39 @@ def morph_library():
     game files it under. Where that family lives and how its folders name a kind
     are the game's own filing."""
     return _rows(MORPH_LIBRARY)
+
+
+def morph_avatars(cabs):
+    """The ctrl-to-bone tables these CABs carry, with the character tag the game
+    joins each to. Read off the game's own typed assets by the hook."""
+    return [{"name": row["name"], "tag_id": _int(row["tagId"])}
+            for row in _rows(MORPH_AVATARS, cab=list(cabs))]
+
+
+def morph_ctrls(cabs):
+    """Every ctrl a table declares, including the ones that move no bone at all
+    -- a ctrl the game states but nothing moves is not the same as one it never
+    states, and a rig binding pass has to be able to tell them apart."""
+    return [{"avatar": row["avatar"], "ctrl": row["ctrl"], "bones": _int(row["bones"])}
+            for row in _rows(MORPH_CTRLS, cab=list(cabs))]
+
+
+def morph_bones(cabs):
+    """What one ctrl moves: a per-bone TRS delta. A row with no ctrl is that
+    bone's base pose (weight 0)."""
+    return [{"avatar": row["avatar"], "ctrl": row["ctrl"], "bone_id": _int(row["boneId"]),
+             "bone": row["bone"],
+             "position": (row["px"], row["py"], row["pz"]),
+             "rotation": (row["rx"], row["ry"], row["rz"]),
+             "scale": (row["sx"], row["sy"], row["sz"])}
+            for row in _rows(MORPH_BONES, cab=list(cabs))]
+
+
+def morph_shader_params(cabs):
+    """The ctrls that drive a material parameter rather than geometry."""
+    return [{"avatar": row["avatar"], "ctrl": row["ctrl"], "param": row["param"],
+             "default": row["default"]}
+            for row in _rows(MORPH_SHADER_PARAMS, cab=list(cabs))]
 
 
 # ── ui display stages ───────────────────────────────────────────────────────

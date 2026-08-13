@@ -28,7 +28,6 @@ for transform curves.
 from __future__ import annotations
 
 import re
-import zlib
 
 import numpy as np
 
@@ -153,18 +152,6 @@ def _number(token):
         return float(token)
     except (TypeError, ValueError):
         return 0.0
-
-
-def _rid(token):
-    """A [SerializeReference] id, kept EXACT. These run past 4e18, well beyond
-    what a float64 mantissa holds, so routing one through _number silently
-    collapses neighbouring ids onto the same value -- and neighbouring ids are
-    exactly what an avatar's mapping list is made of, so every ctrl would bind
-    to some other ctrl's bones with nothing to show for it."""
-    try:
-        return int(token)
-    except (TypeError, ValueError):
-        return None
 
 
 def _driver_list(entries, channel_key):
@@ -300,26 +287,13 @@ def _int32_blob(hex_text):
 
 # ── the avatar: what a ctrl actually MOVES on one character ───────────────────
 #
-# SkeletalMorphAvatarDataSO. This is the table the whole system hangs off, and
-# it only exists in an export at all when AssetRipper's [SerializeReference]
-# support is enabled -- its polymorphic entries live in a ManagedReferencesRegistry,
-# and AssetRipper drops the entire MonoBehaviour structure without it (a 700 KB
-# asset arrives as a 416-byte shell, silently).
+# The tables themselves are read by the hook off the game's own typed asset
+# (``endfield.morph.avatars``/``.ctrls``/``.bones``/``.shaderparams``); what
+# lives here is only the shape a host holds them in.
 #
-#   data.allBoneNames[boneID]         the bone a delta targets
-#   data.morphMappingNames[i]         the ctrl name
-#   data.morphMappingCfgs[i].rid   ->  references.RefIds[rid].data.bones
-#                                     = that ctrl's per-bone TRS DELTA
-#   data.basePoseConfig               each bone's base TRS, weight 0
-#
-# A face at weights w is therefore, per bone:
+# A face at weights w is, per bone:
 #     base + sum(w_i * delta_i)
 # with rotation in Euler degrees and scale deltas defaulting to 0 (= unchanged).
-
-AVATAR_MAPPING_CLASS = "SkeletalMorphMappingData"
-# Cheap text sniff that tells an avatar apart from the animation/pose assets
-# before paying for a YAML parse -- the field is unique to this schema.
-AVATAR_MARKER = "morphMappingNames"
 
 
 class MorphBoneDelta:
@@ -364,116 +338,6 @@ class MorphAvatar:
     def __repr__(self):
         return (f"MorphAvatar({self.name!r}, {len(self.bone_names)} bone(s), "
                 f"{len(self.mappings)} ctrl(s))")
-
-
-def _vector(value, default=0.0):
-    if not isinstance(value, dict):
-        return (default, default, default)
-    return (_number(value.get("x", default)), _number(value.get("y", default)),
-            _number(value.get("z", default)))
-
-
-def bone_name_hash(name):
-    """The identity the avatar keys its bones by: a SIGNED CRC32 of the bone
-    name. Verified against pelica's table -- all 85 basePoseConfig hashes are
-    exactly crc32 of the matching allBoneNames entry.
-
-    ``boneID`` is NOT that identity and must not be used as one: it indexes some
-    larger rig (values run past the end of allBoneNames), so treating it as an
-    index silently resolves half the deltas to no bone at all."""
-    return _to_signed32(zlib.crc32(name.encode("utf-8")))
-
-
-def _to_signed32(value):
-    value &= 0xFFFFFFFF
-    return value - 0x100000000 if value & 0x80000000 else value
-
-
-def _bone_delta(entry, name_by_hash):
-    bone_id = int(_number(entry.get("boneID", -1)))
-    name = name_by_hash.get(int(_number(entry.get("boneNameHash", 0))), "")
-    return MorphBoneDelta(bone_id, name,
-                          _vector(entry.get("position")),
-                          _vector(entry.get("rotation")),
-                          _vector(entry.get("scale")))
-
-
-def parse_avatar(data, guid="", name=""):
-    """Parse a SkeletalMorphAvatarDataSO body, or None when it is not one (or
-    when it arrived as an empty shell, which is what a missing
-    [SerializeReference] pass produces -- caught here rather than surfacing as
-    a character whose every ctrl silently does nothing)."""
-    if not isinstance(data, dict):
-        return None
-    payload = data.get("data")
-    if not isinstance(payload, dict) or "morphMappingNames" not in payload:
-        return None
-
-    tag = data.get("tag")
-    tag_id = _number(tag.get("tagId", 0)) if isinstance(tag, dict) else 0
-    avatar = MorphAvatar(guid, name or (data.get("m_Name") or ""), int(tag_id))
-    avatar.bone_names = [str(n) for n in (payload.get("allBoneNames") or [])]
-    name_by_hash = {bone_name_hash(name): name for name in avatar.bone_names}
-    for entry in payload.get("basePoseConfig") or ():
-        if isinstance(entry, dict):
-            delta = _bone_delta(entry, name_by_hash)
-            avatar.base_pose[delta.bone_id] = delta
-
-    by_rid = {}
-    references = data.get("references")
-    for entry in (references or {}).get("RefIds") or ():
-        if isinstance(entry, dict) and "rid" in entry:
-            rid = _rid(entry.get("rid"))
-            if rid is not None:
-                by_rid[rid] = entry
-
-    _bind_rid_list(avatar, payload.get("morphMappingNames"), payload.get("morphMappingCfgs"),
-                   by_rid, name_by_hash)
-    _bind_shader_params(avatar, payload.get("shaderParamNames"), payload.get("shaderParams"),
-                        by_rid)
-    return avatar
-
-
-def _bind_rid_list(avatar, names, configs, by_rid, name_by_hash):
-    """``morphMappingNames`` and ``morphMappingCfgs`` are PARALLEL arrays -- the
-    Unity convention for a serialized dictionary split into keys and values.
-    Each config is a [SerializeReference] handle resolved through RefIds."""
-    names = list(names or ())
-    configs = list(configs or ())
-    for index, ctrl in enumerate(names):
-        if index >= len(configs) or not isinstance(configs[index], dict):
-            continue
-        reference = by_rid.get(_rid(configs[index].get("rid")))
-        payload = (reference or {}).get("data")
-        if not isinstance(payload, dict):
-            continue
-        avatar.mappings[str(ctrl)] = [_bone_delta(bone, name_by_hash)
-                                      for bone in payload.get("bones") or ()
-                                      if isinstance(bone, dict)]
-
-
-def _bind_shader_params(avatar, names, configs, by_rid):
-    """The same parallel-array shape for the ctrls that drive a MATERIAL rather
-    than geometry (a screen-faced robot's emotion atlas frame, for one)."""
-    names = list(names or ())
-    configs = list(configs or ())
-    for index, ctrl in enumerate(names):
-        if index >= len(configs) or not isinstance(configs[index], dict):
-            continue
-        reference = by_rid.get(_rid(configs[index].get("rid")))
-        payload = (reference or {}).get("data")
-        if not isinstance(payload, dict):
-            continue
-        avatar.shader_params[str(ctrl)] = {
-            "param": str(payload.get("_paramName") or ""),
-            "default": _number(payload.get("defaultValue")),
-        }
-
-
-def parse_avatar_document(document, guid=""):
-    if document is None:
-        return None
-    return parse_avatar(getattr(document, "data", None), guid=guid)
 
 
 def parse_document(document, guid=""):

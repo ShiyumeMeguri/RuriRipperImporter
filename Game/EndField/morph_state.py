@@ -106,31 +106,23 @@ def plan_load():
 
 
 def load_from_db(db, guids=None):
-    """Parse every SkeletalMorph asset in an already-resolved closure into
-    ASSETS/ASSETS_BY_NAME. Sniffs the raw text first (one substring test) so a
-    closure full of meshes and textures costs one failed sniff each rather than
-    a full YAML parse each -- the same cheap-sniff shape the clip discovery
-    uses. Returns the number of assets newly parsed."""
+    """Parse every SkeletalMorph pose/animation asset in an already-resolved
+    closure into ASSETS/ASSETS_BY_NAME. Sniffs the raw text first (one substring
+    test) so a closure full of meshes and textures costs one failed sniff each
+    rather than a full YAML parse each -- the same cheap-sniff shape the clip
+    discovery uses. Returns the number of assets newly parsed."""
     added = 0
     for guid in (guids if guids is not None else list(db.all_guids())):
         guid = guid.lower()
-        if guid in ASSETS or guid in AVATARS:
+        if guid in ASSETS:
             continue
         text = db.raw_text(guid) if hasattr(db, "raw_text") else None
         if not text:
             continue
-        is_avatar = skeletal_morph.AVATAR_MARKER in text
-        if not is_avatar and (skeletal_morph.CTRL_KEY not in text
-                              and skeletal_morph.LIPSYNC_KEY not in text):
+        if skeletal_morph.CTRL_KEY not in text and skeletal_morph.LIPSYNC_KEY not in text:
             continue
         unity_file = db.load_guid(guid)
         document = unity_file.first("MonoBehaviour") if unity_file is not None else None
-        if is_avatar:
-            avatar = skeletal_morph.parse_avatar_document(document, guid=guid)
-            if avatar is not None:
-                AVATARS[guid] = avatar
-                added += 1
-            continue
         asset = skeletal_morph.parse_document(document, guid=guid)
         if asset is None:
             continue
@@ -138,6 +130,42 @@ def load_from_db(db, guids=None):
         if asset.name:
             ASSETS_BY_NAME[asset.name] = asset
         added += 1
+    return added
+
+
+def load_avatars(cabs):
+    """The ctrl-to-bone tables these CABs carry, read by the hook off the game's
+    own typed assets (``endfield.morph.avatars``/``.ctrls``/``.bones``/
+    ``.shaderparams``) rather than re-parsed out of an export. Keyed by name --
+    the identity every list here already uses. Returns how many were added."""
+    added = 0
+    for row in datasets.morph_avatars(cabs):
+        name = row["name"]
+        if name in AVATARS:
+            continue
+        avatar = skeletal_morph.MorphAvatar(name, name, int(row["tag_id"]))
+        AVATARS[name] = avatar
+        added += 1
+    for row in datasets.morph_ctrls(cabs):
+        avatar = AVATARS.get(row["avatar"])
+        if avatar is not None:
+            avatar.mappings.setdefault(row["ctrl"], [])
+    for row in datasets.morph_bones(cabs):
+        avatar = AVATARS.get(row["avatar"])
+        if avatar is None:
+            continue
+        delta = skeletal_morph.MorphBoneDelta(
+            row["bone_id"], row["bone"], row["position"], row["rotation"], row["scale"])
+        if row["ctrl"]:
+            avatar.mappings.setdefault(row["ctrl"], []).append(delta)
+        else:
+            avatar.base_pose[delta.bone_id] = delta
+            if delta.bone_name and delta.bone_name not in avatar.bone_names:
+                avatar.bone_names.append(delta.bone_name)
+    for row in datasets.morph_shader_params(cabs):
+        avatar = AVATARS.get(row["avatar"])
+        if avatar is not None:
+            avatar.shader_params[row["ctrl"]] = {"param": row["param"], "default": row["default"]}
     return added
 
 

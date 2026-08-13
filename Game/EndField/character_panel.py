@@ -806,7 +806,7 @@ class RURI_OT_character_load_library(bpy.types.Operator):
                 assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
                 mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
                 asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-            parsed = morph_state.load_from_db(db)
+            parsed = morph_state.load_from_db(db) + morph_state.load_avatars(cabs)
         except Exception as exc:
             _report_exception(self, "Morph library load failed", exc)
             return {"CANCELLED"}
