@@ -351,29 +351,15 @@ class G:
         x, y, z = self.sep(v)
         return self.vtrans(self.comb(x, z, y), 'OBJECT', 'WORLD', 'VECTOR')
 
-    def env(self, name, direction, default):
-        """环境反射按方向采样 = cubemap 的 Blender 等价物。源 = 当前在照亮视口的那份环境
-        (视口 studiolight 或 scene.world,见 _env_source);存在同名 image 时优先,作手动覆盖。
-        取不到图(纯色世界/读不懂)就退成常量色。
+    ENV_PREFILTER_TAPS = (
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.5), (-1.0, 0.0, 0.5), (0.0, 1.0, 0.5), (0.0, -1.0, 0.5),
+        (0.7071, 0.7071, 0.35), (-0.7071, 0.7071, 0.35),
+        (0.7071, -0.7071, 0.35), (-0.7071, -0.7071, 0.35),
+    )
 
-        为什么只能走图节点、只能是快照:方向在组内算,而节点图不许成环,组外的 BSDF 拿不到它 ——
-        所以换球/换世界/转 HDRI 之后要重跑 ensure(rebuild=True) 才跟上。
-        图节点无 LOD 口 → mip 丢弃,粗糙面反射未预滤。Environment Texture 只有 Color 一个输出。"""
-        k = ('env', name, self._ck(direction))
-        hit = self._cse.get(k)
-        if hit is not None:
-            return hit
-        override = bpy.data.images.get(name)
-        if override is not None:
-            image, projection, spec, strength = override, 'EQUIRECTANGULAR', None, 1.0
-        else:
-            image, projection, spec, strength, flat = _env_source()
-            if image is None:
-                r = ((flat if flat is not None else default), 1.0)
-                self._cse[k] = r
-                return r
+    def _env_tap(self, image, projection, spec, strength, direction):
         if spec is not None:
-            # 环境那侧把方向先过一道旋转,这边不跟就会和可见背景错位。
             vector_type, location, rotation, scale = spec
             md = self._nd('ShaderNodeMapping')
             md.vector_type = vector_type
@@ -390,6 +376,66 @@ class G:
         color = nd.outputs[0]
         if strength != 1.0:
             color = self.vmath('SCALE', color, s=strength)
+        return color
+
+    def env(self, name, direction, default, mip=None):
+        """环境反射按方向采样 = cubemap 的 Blender 等价物。源 = 当前在照亮视口的那份环境
+        (视口 studiolight 或 scene.world,见 _env_source);存在同名 image 时优先,作手动覆盖。
+        取不到图(纯色世界/读不懂)就退成常量色。
+
+        为什么只能走图节点、只能是快照:方向在组内算,而节点图不许成环,组外的 BSDF 拿不到它 ——
+        所以换球/换世界/转 HDRI 之后要重跑 ensure(rebuild=True) 才跟上。
+
+        Environment Texture 没有 LOD 口,真源的 mip 只能**程序化**补:mip 是 cubemap 预滤波
+        链上的位置,等价的角度锥半径由真源自己的 mip↔粗糙度式反解(mip = 1.2*log2(r) + 5 ⇒
+        r = exp2((mip-5)/1.2)),再按 alpha = r*r 抖动反射向量做定点多抽样锥平均。
+        r→0 时锥收敛回单抽样锐反射,与真源 mip0 同构;布料这种高粗糙度拿到的是宽锥均值而不是
+        镜面 HDRI。**不是逐字的 GGX 预滤波**(那要离线烘 mip 链),是同一单调关系的程序化近似。"""
+        k = ('env', name, self._ck(direction, mip))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        override = bpy.data.images.get(name)
+        if override is not None:
+            image, projection, spec, strength = override, 'EQUIRECTANGULAR', None, 1.0
+        else:
+            image, projection, spec, strength, flat = _env_source()
+            if image is None:
+                r = ((flat if flat is not None else default), 1.0)
+                self._cse[k] = r
+                return r
+        if mip is None:
+            r = (self._env_tap(image, projection, spec, strength, direction), 1.0)
+            self._cse[k] = r
+            return r
+
+        roughness = self.math('POWER', 2.0, self.math('DIVIDE', self.math('SUBTRACT', mip, 5.0), 1.2))
+        spread = self.math('MINIMUM', self.math('MULTIPLY', roughness, roughness), 1.0)
+
+        _dx, _dy, dz = self.sep(direction)
+        polar = self.math('GREATER_THAN', self.math('ABSOLUTE', dz), 0.9)
+        tangent = self.vmath('NORMALIZE', self.mixv(
+            polar,
+            self.vmath('CROSS_PRODUCT', direction, (0.0, 0.0, 1.0)),
+            self.vmath('CROSS_PRODUCT', direction, (1.0, 0.0, 0.0))))
+        bitangent = self.vmath('NORMALIZE', self.vmath('CROSS_PRODUCT', direction, tangent))
+
+        total = None
+        weight_sum = 0.0
+        for offset_x, offset_y, weight in self.ENV_PREFILTER_TAPS:
+            if offset_x or offset_y:
+                offset = self.vmath('ADD',
+                                    self.vmath('SCALE', tangent, s=offset_x),
+                                    self.vmath('SCALE', bitangent, s=offset_y))
+                tap = self.vmath('NORMALIZE',
+                                 self.vmath('ADD', direction, self.vmath('SCALE', offset, s=spread)))
+            else:
+                tap = direction
+            sample = self._env_tap(image, projection, spec, strength, tap)
+            total = (self.vmath('SCALE', sample, s=weight) if total is None
+                     else self.vmath('ADD', total, self.vmath('SCALE', sample, s=weight)))
+            weight_sum += weight
+        color = self.vmath('SCALE', total, s=1.0 / weight_sum)
         r = (color, 1.0)
         self._cse[k] = r
         return r
@@ -547,7 +593,7 @@ class GV(G):
     def attr(self, name):
         raise RuntimeError('几何树无 ShaderNodeAttribute(命名属性由 wrapper 读)')
 
-    def env(self, name, direction, default):
+    def env(self, name, direction, default, mip=None):
         raise RuntimeError('几何树无环境采样(顶点腿不该走到 IBL)')
 
     def group(self, name, ins):
@@ -2439,7 +2485,7 @@ def build_Ruri_Endfield_Scene_Lit():
     v1439 = g.math('SUBTRACT', 1.7, v1438)
     v1440 = g.math('MULTIPLY', v659, v1439)
     v1441 = g.math('MULTIPLY', v1440, 6)
-    v1442, v1443 = g.env('IBL_CustomIBL', g.u2b(v1435), (0.2159, 0.2159, 0.2159))
+    v1442, v1443 = g.env('IBL_CustomIBL', g.u2b(v1435), (0.2159, 0.2159, 0.2159), v1441)
     v1444 = g.inp('_CustomIBLIntensity', False, 1.0)
     v1445 = g.bc(v1444)
     v1446 = g.vmath('MULTIPLY', v1442, v1445)
@@ -3969,7 +4015,7 @@ def build_Ruri_Endfield_Scene_LitForward():
     v1439 = g.math('SUBTRACT', 1.7, v1438)
     v1440 = g.math('MULTIPLY', v659, v1439)
     v1441 = g.math('MULTIPLY', v1440, 6)
-    v1442, v1443 = g.env('IBL_CustomIBL', g.u2b(v1435), (0.2159, 0.2159, 0.2159))
+    v1442, v1443 = g.env('IBL_CustomIBL', g.u2b(v1435), (0.2159, 0.2159, 0.2159), v1441)
     v1444 = g.inp('_CustomIBLIntensity', False, 1.0)
     v1445 = g.bc(v1444)
     v1446 = g.vmath('MULTIPLY', v1442, v1445)
@@ -5501,7 +5547,7 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v1441 = g.math('SUBTRACT', 1.7, v1440)
     v1442 = g.math('MULTIPLY', v661, v1441)
     v1443 = g.math('MULTIPLY', v1442, 6)
-    v1444, v1445 = g.env('IBL_CustomIBL', g.u2b(v1437), (0.2159, 0.2159, 0.2159))
+    v1444, v1445 = g.env('IBL_CustomIBL', g.u2b(v1437), (0.2159, 0.2159, 0.2159), v1443)
     v1446 = g.inp('_CustomIBLIntensity', False, 1.0)
     v1447 = g.bc(v1446)
     v1448 = g.vmath('MULTIPLY', v1444, v1447)
@@ -7035,7 +7081,7 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v1443 = g.math('SUBTRACT', 1.7, v1442)
     v1444 = g.math('MULTIPLY', v663, v1443)
     v1445 = g.math('MULTIPLY', v1444, 6)
-    v1446, v1447 = g.env('IBL_CustomIBL', g.u2b(v1439), (0.2159, 0.2159, 0.2159))
+    v1446, v1447 = g.env('IBL_CustomIBL', g.u2b(v1439), (0.2159, 0.2159, 0.2159), v1445)
     v1448 = g.inp('_CustomIBLIntensity', False, 1.0)
     v1449 = g.bc(v1448)
     v1450 = g.vmath('MULTIPLY', v1446, v1449)
@@ -7363,7 +7409,7 @@ EXTERNAL_TEXTURES = {
 }
 
 DEFAULT_PART = 'Lit'
-STAMP = 'c301b708d0ae40b8'
+STAMP = 'ebefba388dfe81be'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
