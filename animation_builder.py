@@ -288,6 +288,9 @@ def _channels_by_path(channels, kind, clip_name):
     return by_path
 
 
+SAMPLE_RATE_KEY = "ruri_sample_rate"
+
+
 def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=None,
                  display_name=None):
     """Create a Blender action from a clip_curves.ClipCurves (the one clip
@@ -330,6 +333,12 @@ def build_action(clip, armature_obj, maps, path_to_meshobjects=None, options=Non
     action = bpy.data.actions.new(name)
     if hasattr(action, "use_fake_user"):
         action.use_fake_user = True
+    # The rate these frames were sampled at, stamped on the artifact itself: a
+    # consumer placing this action on a timeline needs seconds, and deriving the
+    # rate back out of the frame count needs a clip length that is not always the
+    # one the asset states (a decoded clip can run a few frames past its own
+    # stopTime).
+    action[SAMPLE_RATE_KEY] = float(sample_rate)
     # action.name, not the clip name: Blender has already uniquified it against every
     # existing action, which is exactly the guarantee the slot identifier needs (see
     # _prepare_channels). Importing the same clip twice would otherwise mint a second
