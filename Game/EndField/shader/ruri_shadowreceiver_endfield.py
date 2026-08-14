@@ -700,6 +700,21 @@ def _library_path(create=False):
     return os.path.join(folder, '%s.%s.blend' % (__name__.rsplit('.', 1)[-1], STAMP))
 
 
+def _alive(block):
+    """这个数据块引用还活着吗。
+    **必须问**:link 进来的模板组按 Blender 规矩是只读的,设不了 fake user,
+    所以用它的材质一被删除(删角色再导一次就是这个流程),它就没有用户、被释放,
+    而缓存字典还攥着那个指针 —— 再碰它是 ReferenceError,不是 None。
+    缓存数据块引用就得配这个判活,否则等于缓存了一个悬垂指针。"""
+    if block is None:
+        return False
+    try:
+        block.name
+    except ReferenceError:
+        return False
+    return True
+
+
 def _prune_stale_libraries():
     """删掉本模块留在预设目录里的旧指纹库。**在模块导入时跑**,不是写库时:
     重新生成之后,一个这次没被用到的模块永远走不到写库那一步,它上一版的库就会
@@ -728,6 +743,9 @@ def _library_groups():
     """预设库里的全部模板 + 共享组,LINK 进来(不是 append):图只在库里存一份,
     不复制进每个导入过东西的 .blend。库不在或读不出就返回 None,调用方现建。"""
     global _LIBRARY, _LIBRARY_TRIED
+    if _LIBRARY is not None and not all(_alive(g) for g in _LIBRARY.values()):
+        _LIBRARY = None       # 上一批 link 的组被释放了(见 _alive)——重连
+        _LIBRARY_TRIED = False
     if _LIBRARY_TRIED:
         return _LIBRARY
     _LIBRARY_TRIED = True
@@ -769,7 +787,8 @@ def _write_library():
                 group = bpy.data.node_groups[group_name]
                 group.use_fake_user = True
                 group[STAMP_KEY] = STAMP
-            _BUILT.setdefault(part_name, group)
+            if not _alive(_BUILT.get(part_name)):
+                _BUILT[part_name] = group
             blocks.add(group)
         bpy.data.libraries.write(path, blocks, fake_user=True, compress=True)
         print('[Ruri] 着色器预设库已写出:%s(%d 组)' % (path, len(blocks)))
@@ -785,7 +804,7 @@ def ensure(part=None, rebuild=False):
     group_name, builder = PARTS.get(part, PARTS[DEFAULT_PART])
     if not rebuild:
         ready = _BUILT.get(part)
-        if ready is not None:
+        if _alive(ready):
             return ready
         library = _library_groups()
         linked = library.get(group_name) if library else None
