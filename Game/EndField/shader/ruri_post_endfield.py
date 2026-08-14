@@ -349,11 +349,16 @@ class G:
         self._cse[k] = r
         return r
 
-    def env_image(self, image, direction, mip=None):
-        if mip is None:
+    def env_image(self, image, direction, mip=None, spread=None):
+        """锥形预滤波的等距环境采样。锥宽两种给法,语义同一个:
+           mip    —— 真源在 cubemap 预滤波链上的位置,按真源自己的 mip↔粗糙度式反解;
+           spread —— 兑现面直接给的锥半径(能力割点走这条:询问给的是粗糙度,不是 mip)。
+           两者皆无 = 锐反射单抽样。"""
+        if mip is None and spread is None:
             return (self._env_tap(image, 'EQUIRECTANGULAR', None, 1.0, direction), 1.0)
-        roughness = self.math('POWER', 2.0, self.math('DIVIDE', self.math('SUBTRACT', mip, 5.0), 1.2))
-        spread = self.math('MINIMUM', self.math('MULTIPLY', roughness, roughness), 1.0)
+        if spread is None:
+            roughness = self.math('POWER', 2.0, self.math('DIVIDE', self.math('SUBTRACT', mip, 5.0), 1.2))
+            spread = self.math('MINIMUM', self.math('MULTIPLY', roughness, roughness), 1.0)
         _dx, _dy, dz = self.sep(direction)
         polar = self.math('GREATER_THAN', self.math('ABSOLUTE', dz), 0.9)
         tangent = self.vmath('NORMALIZE', self.mixv(
@@ -470,6 +475,202 @@ class G:
             self._set(nd.inputs[sname], v)
         self._cse[k] = nd.outputs
         return nd.outputs
+
+
+# ===================== 环境询问的兑现面(Blender 数据平面) =====================
+# 真源侧声明身份(Ruri.Shading 的 [ShaderCapability<T>]),编译器只负责把询问切成一对接口
+# socket —— 拿什么原生物回答,唯一真源就是下面这张表。加一条能力 = 这里加一行,别处零改动。
+#
+# 🛑 表里查不到 = 本引擎**没有**原生等价物:什么都不接,socket 停在能力自声明的缺席值上并大声记账。
+#    绝不允许"没匹配上就顺手落个中性数"——那正是上一版把整条间接光静默吞掉的病根。
+
+
+def _world_background(scene):
+    """当前世界的背景节点(没有世界 / 没有节点树 = 答不出)。"""
+    world = getattr(scene, 'world', None)
+    if world is None or not world.use_nodes or world.node_tree is None:
+        return None
+    for nd in world.node_tree.nodes:
+        if nd.type == 'BACKGROUND':
+            return nd
+    return None
+
+
+def _world_sample(g, direction, spread):
+    """沿方向对**当前世界环境**取一次值 —— 这就是光追/EEVEE 下真正在照亮场景的那份数据。
+
+    两种世界都答得出,且都是真值不是替身:
+      · 背景色链到 Environment Texture → 复用同一张图、同一份 Mapping,按方向采样;
+        spread 非 None 时套锥形预滤波(粗糙面拿宽锥均值,与真源 mip 链同一单调关系)。
+      · 背景是平色 → 各向同性,任何方向的入射就是那个颜色 × Strength,直接给常量(精确,不是近似)。
+    方向 socket 收的是**内核自己的空间语义**(Unity 世界系):换轴是宿主知识,在这里做。
+    """
+    bg = _world_background(bpy.context.scene)
+    if bg is None:
+        return None
+    strength = float(bg.inputs['Strength'].default_value)
+    color_in = bg.inputs['Color']
+    src = color_in.links[0].from_node if color_in.is_linked else None
+    if src is not None and src.type == 'TEX_ENVIRONMENT' and src.image is not None:
+        d = g.u2b(direction)
+        if src.inputs['Vector'].is_linked:
+            up = src.inputs['Vector'].links[0].from_node
+            if up.type == 'MAPPING':
+                # 世界自己的 Mapping 逐值复刻:HDRI 转过多少度,采样也得转多少度。
+                md = g._nd('ShaderNodeMapping')
+                md.vector_type = up.vector_type
+                for key in ('Location', 'Rotation', 'Scale'):
+                    md.inputs[key].default_value = up.inputs[key].default_value[:]
+                g._set(md.inputs['Vector'], d)
+                d = md.outputs[0]
+        color, _alpha = g.env_image(src.image, d, spread=spread)
+        return g.vmath('SCALE', color, s=strength) if strength != 1.0 else color
+    c = color_in.default_value
+    return (float(c[0]) * strength, float(c[1]) * strength, float(c[2]) * strength)
+
+
+def _cap_ambient_irradiance(g, query, ctx):
+    """环境辐照度 = 沿法线取一次世界环境。锥开到最满(漫反射吃的是整个半球的积分),
+    与真源辐照度体同一单调关系的程序化近似 —— 不是逐字的 SH 投影,也不假装是。"""
+    _ = ctx
+    normal = query.get('normal')
+    if normal is None:
+        return None
+    answer = _world_sample(g, normal, spread=1.0)
+    return None if answer is None else {'': answer}
+
+
+def _cap_specular_radiance(g, query, ctx):
+    """镜面环境 = 沿反射向量取一次世界环境;锥半径 = 感知粗糙度的平方(与 env_image
+    从 mip 反解出的那条 spread 同式),粗糙面拿宽锥均值而不是镜面 HDRI。"""
+    _ = ctx
+    direction = query.get('direction')
+    if direction is None:
+        return None
+    roughness = query.get('roughness')
+    spread = None if roughness is None else g.math(
+        'MINIMUM', g.math('MULTIPLY', roughness, roughness), 1.0)
+    answer = _world_sample(g, direction, spread=spread)
+    return None if answer is None else {'': answer}
+
+
+MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
+
+
+def _scene_sun():
+    """场景里的主方向光 = 第一盏 SUN(按名字排序取定,免得场景枚举序变了图就跟着变)。"""
+    suns = [o for o in bpy.context.scene.objects
+            if o.type == 'LIGHT' and o.data.type == 'SUN' and o.visible_get()]
+    return sorted(suns, key=lambda o: o.name)[0] if suns else None
+
+
+def _override_light(material):
+    """逐角色自定义灯:材质自定义属性 `ruri_main_light` 指向一盏灯物体,覆盖场景主光。
+
+    为什么挂在**材质**而不是对象上:节点图就是逐材质建的,材质才是这个覆盖的天然作用域。
+    挂对象上得靠「反查哪些对象用了这个材质」,而真流程里材质是**先建好再往对象上挂**的 ——
+    建图那一刻还没有任何对象引用它,反查必然落空(实测:覆盖被无声吃掉,退回场景太阳)。
+    同一材质被两个角色共用时,「谁的覆盖算数」本身也答不出来。
+
+    面板侧的操作仍是「选中对象 → 指定灯」:算子把选中对象的材质逐个写上这个属性再重建,
+    用户看到的是对象,单一真源仍是材质上的这一处。"""
+    if material is None:
+        return None
+    light = material.get(MAIN_LIGHT_OVERRIDE)
+    return light if light is not None and getattr(light, 'type', '') == 'LIGHT' else None
+
+
+def _drive(sock, obj, data_path, expr='v', extra=None):
+    """把一个 socket 接到 **Blender 自己的数据**上 —— 驱动器是 Blender 原生的「跟着物体走」机制,
+    每次依赖图更新自动重算。不是快照:转动/换色/调能量,着色实时跟,不用重建材质。"""
+    fcurve = sock.driver_add('default_value')
+    driver = fcurve.driver
+    driver.type = 'SCRIPTED'
+    for old in list(driver.variables):
+        driver.variables.remove(old)
+    var = driver.variables.new()
+    var.name = 'v'
+    var.type = 'SINGLE_PROP'
+    var.targets[0].id_type = 'OBJECT'
+    var.targets[0].id = obj
+    var.targets[0].data_path = data_path
+    if extra is not None:
+        name, path = extra
+        second = driver.variables.new()
+        second.name = name
+        second.type = 'SINGLE_PROP'
+        second.targets[0].id_type = 'OBJECT'
+        second.targets[0].id = obj
+        second.targets[0].data_path = path
+    driver.expression = expr
+
+
+def _light_vector(g, light, column, label):
+    """灯物体世界矩阵的一列 → 一个 CombineXYZ,逐分量挂驱动器。
+    column=2 取旋转 Z 轴(Blender 灯沿本地 -Z 照射,故「指向光源」是 +Z);column=3 取平移(灯位置)。"""
+    node = g._nd('ShaderNodeCombineXYZ')
+    node.label = label
+    for i in range(3):
+        _drive(node.inputs[i], light, 'matrix_world[%d][%d]' % (i, column))
+    return node.outputs[0]
+
+
+def _cap_main_light(g, query, ctx):
+    """主方向光的兑现。**不自造光照系统** —— 方向与颜色全部原生取自 Blender 自己的灯物体,
+    经**驱动器**绑到灯的 `matrix_world` / `data.color` / `data.energy`:转灯、换色、调能量
+    实时跟随,材质不用重建(不是建图时刻的快照)。
+
+    取谁,三级,单一真源逐级下落:
+      ① **逐角色覆盖** —— 对象自定义属性 `ruri_main_light` 指向一盏灯(选中对象设一下即可);
+      ② **场景太阳** —— 没有覆盖就取场景里的 SUN;
+      ③ **前向光** —— 一盏灯都没有时,方向 = ShaderNodeNewGeometry 的 Incoming
+         (表面指向观察者),也是 Blender 原生量,等价一盏永远跟着视角的头灯。
+         这不是替身值:没有场景灯时,「光从看的方向来」是唯一不依赖任何未知量的定义。
+
+    灯的类型也照 Blender 原生语义分:SUN 是平行光,方向恒为灯的 +Z 轴;POINT/SPOT/AREA 的方向
+    随着色点变,故按 `归一化(灯位 − 着色点)` 算,着色点取 Geometry 的 Position(同样原生)。
+    归一化交给节点(灯物体可能带缩放),不在 Python 里算死。
+
+    方向最后经 g.b2u 换回内核的 Unity 语义(内核 +Y 是上)。距离衰减恒 1(方向光无距离项);
+    阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,而它在 Blender 上是 Subsumed ——
+    EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。
+    """
+    _ = query
+    light = _override_light(ctx.get('material')) or _scene_sun()
+    if light is None:
+        return {
+            'direction': g.b2u(g.geo().outputs['Incoming']),
+            'color': (1.0, 1.0, 1.0),
+            'distanceAttenuation': 1.0,
+            'shadowAttenuation': 1.0,
+            'layerMask': 1.0,
+        }
+    if light.data.type == 'SUN':
+        to_light = _light_vector(g, light, 2, 'RuriMainLightAxis')
+    else:
+        to_light = g.vmath('SUBTRACT', _light_vector(g, light, 3, 'RuriMainLightPos'),
+                           g.geo().outputs['Position'])
+    tint = g._nd('ShaderNodeCombineXYZ')
+    tint.label = 'RuriMainLightColor'
+    for i in range(3):
+        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
+    return {
+        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
+        'color': tint.outputs[0],
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+# 能力身份 → {引擎: 建图器}。建图器契约:答得出 → (值, w值) 二元组;答不出 → None。
+# '*' = 所有引擎同一答案(世界环境对 EEVEE 与 Cycles 是同一份数据:
+# 本腿的材质出口是 Emission + Transparent,两个引擎都不会给表面送任何接收光,间接光只能自取)。
+CAP_BUILDERS = {
+    'AmbientIrradiance': {'*': _cap_ambient_irradiance},
+    'SpecularRadiance': {'*': _cap_specular_radiance},
+    'MainLight': {'*': _cap_main_light},
+}
 
 
 def _gntree(name):
