@@ -349,6 +349,35 @@ class G:
         self._cse[k] = r
         return r
 
+    def env_image(self, image, direction, mip=None):
+        if mip is None:
+            return (self._env_tap(image, 'EQUIRECTANGULAR', None, 1.0, direction), 1.0)
+        roughness = self.math('POWER', 2.0, self.math('DIVIDE', self.math('SUBTRACT', mip, 5.0), 1.2))
+        spread = self.math('MINIMUM', self.math('MULTIPLY', roughness, roughness), 1.0)
+        _dx, _dy, dz = self.sep(direction)
+        polar = self.math('GREATER_THAN', self.math('ABSOLUTE', dz), 0.9)
+        tangent = self.vmath('NORMALIZE', self.mixv(
+            polar,
+            self.vmath('CROSS_PRODUCT', direction, (0.0, 0.0, 1.0)),
+            self.vmath('CROSS_PRODUCT', direction, (1.0, 0.0, 0.0))))
+        bitangent = self.vmath('NORMALIZE', self.vmath('CROSS_PRODUCT', direction, tangent))
+        total = None
+        weight_sum = 0.0
+        for offset_x, offset_y, weight in self.ENV_PREFILTER_TAPS:
+            if offset_x or offset_y:
+                offset = self.vmath('ADD',
+                                    self.vmath('SCALE', tangent, s=offset_x),
+                                    self.vmath('SCALE', bitangent, s=offset_y))
+                tap = self.vmath('NORMALIZE',
+                                 self.vmath('ADD', direction, self.vmath('SCALE', offset, s=spread)))
+            else:
+                tap = direction
+            sample = self._env_tap(image, 'EQUIRECTANGULAR', None, 1.0, tap)
+            total = (self.vmath('SCALE', sample, s=weight) if total is None
+                     else self.vmath('ADD', total, self.vmath('SCALE', sample, s=weight)))
+            weight_sum += weight
+        return (self.vmath('SCALE', total, s=1.0 / weight_sum), 1.0)
+
     def vtrans(self, v, frm, to, kind='VECTOR'):
         k = ('vt', frm, to, kind, self._ck(v))
         hit = self._cse.get(k)
