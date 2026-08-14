@@ -309,50 +309,82 @@ def post_stages_installed(scene):
 def _image_from_texture_bytes(data, name):
     """Load an exported texture's raw bytes (produced by AssetRipper's own
     TextureConverter, so no compressed/mipmap formats ever reach here) into a
-    Blender image via a PERSISTENT cache file and Blender's OWN native image
+    Blender image through a throwaway temp file and Blender's OWN native image
     loader (bpy.data.images.load) -- NOT Pillow; measured pixel-identical and
     30x faster on the real Pelica texture set.
 
-    The image is NOT packed. Packing pinned every texture's full bytes inside
-    the .blend session forever -- on a scene window with hundreds of textures
-    that is gigabytes of working set Blender can never evict. Loaded from a
-    real file instead, Blender's own image cache pages pixels in and out under
-    its own memory budget, and a re-import reuses both the file and the loaded
-    datablock (check_existing).
+    The image is PACKED into the .blend and the temp file deleted, so nothing
+    on disk outlives the call. An earlier build kept a persistent
+    content-addressed cache directory instead and did not pack; that traded
+    away both of the things a texture has to keep:
 
-    The cache is CONTENT-ADDRESSED, and has to be: an export batch mints fresh
-    guids every run, so keying on a guid gives a cache that never hits and
-    grows by the whole texture set per import (measured: 213 textures -> 426
-    files after two runs). A digest of the bytes also self-invalidates when the
-    game updates a texture, and collapses duplicates shipped under several
-    names. The cache lives in the toolchain workspace (never the addon
-    checkout, never a temp dir that vanishes while the .blend still references
-    it); the container is deliberately not named or checked anywhere -- Blender
+    * IDENTITY -- a content digest is not a name. The .blend referenced
+      ``<workspace>/texture_cache/dca05ac4...img`` where the game says
+      ``T_actor_jsspsi_body_01_D``, so every unpack, every relink and every
+      look at the image's path showed a hash;
+    * PORTABILITY -- a .blend whose textures live in a machine-local AppData
+      directory cannot be moved, handed over or archived, and silently loses
+      every texture the moment that directory is cleaned.
+
+    Packing costs the bytes staying resident in the session (a scene window's
+    whole texture payload, hundreds of MB) -- that is the price of a .blend
+    that is one self-contained file, and it is the deliberate choice here.
+
+    The name is stamped in three places because they are three different
+    records: the datablock name (what the UI lists), ``filepath_raw`` (what a
+    relink resolves) and the PACKED FILE's own path (what File > Unpack
+    writes). Unpack reads the last of those, not image.filepath -- which is why
+    setting only the first two used to leave every unpacked texture called
+    tmpXXXXXXXX.img.
+
+    The container is deliberately not named or checked anywhere: Blender
     identifies an image by content, so png/tga/exr all arrive the same way and
     a new export format needs no code here."""
-    import hashlib
+    import tempfile
 
+    temp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     try:
-        from .RuriRipperPyBridge.runtime import workspace
-    except ImportError:  # standalone (non-package) testing
-        from RuriRipperPyBridge.runtime import workspace
-
-    cache_dir = workspace.subdir("texture_cache")
-    path = os.path.join(cache_dir,
-                        "{0}.img".format(hashlib.blake2b(data, digest_size=16).hexdigest()))
-    try:
-        if not os.path.isfile(path) or os.path.getsize(path) != len(data):
-            with open(path, "wb") as handle:
-                handle.write(data)
-    except OSError:
-        return None
-    try:
-        image = bpy.data.images.load(path, check_existing=True)
-    except RuntimeError:
-        return None
-    image.name = name
+        temp.write(data)
+        temp.close()
+        try:
+            image = bpy.data.images.load(temp.name)
+        except RuntimeError:
+            return None
+        image.name = name
+        target = "//textures/" + name + _image_extension(image)
+        # Pack FIRST -- it reads the file while it is still on disk -- and only
+        # then rewrite both path records to the game's own name.
+        image.pack()
+        if image.packed_files:
+            image.packed_files[0].filepath = target
+        image.filepath_raw = target
+    finally:
+        os.unlink(temp.name)
     _disable_alpha_interpretation(image)
     return image
+
+
+def _image_extension(image):
+    """The extension Blender itself uses for this image's DETECTED format, read
+    out of Blender's own format table rather than a map here -- a container this
+    importer has never seen still unpacks under a truthful name.
+
+    Falls back to the format's own name, never to a guess like ".png": naming a
+    DDS ".png" would be worse than an unusual extension."""
+    fallback = "." + (image.file_format or "img").lower()
+    render = getattr(getattr(bpy.context, "scene", None), "render", None)
+    if render is None:
+        return fallback
+    previous = render.image_settings.file_format
+    try:
+        render.image_settings.file_format = image.file_format
+        return render.file_extension or fallback
+    except (TypeError, ValueError):
+        # Blender can READ formats it cannot render to (dds, ...); those simply
+        # have no entry in that table.
+        return fallback
+    finally:
+        render.image_settings.file_format = previous
 
 
 def _disable_alpha_interpretation(image):
