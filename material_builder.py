@@ -28,20 +28,6 @@ except ImportError:  # standalone (non-package) testing
 GRAPH_PROVIDERS = []
 
 
-# Unity's own two built-in resource files, by the guids every project references
-# them under: `unity default resources` and `unity_builtin_extra`. A shader
-# reference into either is a stock Unity shader (Standard, Sprites/Default...),
-# which no game's shader graph can be.
-_BUILTIN_RESOURCE_GUIDS = frozenset((
-    "0000000000000000e000000000000000",
-    "0000000000000000f000000000000000",
-))
-
-
-def _is_builtin_shader(props):
-    return props.shader_guid() in _BUILTIN_RESOURCE_GUIDS
-
-
 def _material_content_digest(doc):
     """A stable digest of what a Material document DECLARES -- its shader
     reference and its whole property table -- independent of which guid or CAB
@@ -60,10 +46,16 @@ def _material_content_digest(doc):
 
 
 def _shader_identity(builder, props):
+    """What a report calls this material's shader: its resolved name, else the
+    raw reference -- never a guess."""
+    name = builder.shader_display_name(props)
+    if name:
+        return name
     guid = props.shader_guid()
     if not guid:
         return "<no m_Shader reference>"
-    return unity_material.shader_identity(builder.db._text(guid)) or "guid " + guid
+    ref = props.shader_ref if isinstance(props.shader_ref, dict) else {}
+    return "guid {0} fileID {1}".format(guid, ref.get("fileID"))
 
 
 def register_graph_provider(provider):
@@ -567,6 +559,29 @@ class MaterialBuilder:
         self._cache = {}            # guid -> bpy material
         self._content_cache = {}    # property-content digest -> bpy material
         self._image_cache = {}      # path -> bpy image
+        self._shader_names = {}     # shader guid -> resolved name or None
+
+    def shader_display_name(self, props):
+        """The ONE shader-name resolution every consumer goes through (the
+        generated stacks' ``_variant`` claims by it, reports print it): the
+        shader asset's own ``Shader "..."`` line, read out of the closure.
+
+        A material pointing at Unity's own builtin resource files resolves to
+        None here, and that is the whole answer: those references carry no
+        shader asset in any closure, and a generated stack has no business
+        claiming a stock engine shader anyway -- unclaimed lands on the
+        Principled fallback, which for Unity Standard IS the faithful build
+        (same PBR model)."""
+        ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
+        guid = (ref or {}).get("guid")
+        if not guid:
+            return None
+        key = str(guid).lower()
+        if key in self._shader_names:
+            return self._shader_names[key]
+        name = unity_material.shader_identity(self.db._text(key))
+        self._shader_names[key] = name
+        return name
 
     def build_from_ref(self, ref):
         """Build/return a material from a {fileID, guid} reference.
@@ -633,13 +648,14 @@ class MaterialBuilder:
         props = unity_material.parse_material(doc)
         name = props.name or "UnityMaterial"
 
-        # Game-shader providers first (each declines with None); fallback below.
-        # A material whose shader lives in Unity's own built-in resource files is
-        # by construction a STOCK shader, so no game provider can claim it and
-        # none is asked -- a provider that reported "this shader is not in the
-        # closure" would be right and useless, since that file never is.
-        game_shader = not _is_builtin_shader(props)
-        for provider in ([] if not game_shader else GRAPH_PROVIDERS):
+        # Generated shader stacks first (each declines with None); fallback below.
+        # Every material is asked, builtin-shader ones included -- they simply
+        # resolve to no name (see shader_display_name) and no stack claims them.
+        # That is the intended route, not a gap: a stock engine shader belongs to
+        # the Principled fallback below, which for Unity Standard IS the faithful
+        # build (same PBR model, and this fallback reads Standard's own property
+        # names directly).
+        for provider in GRAPH_PROVIDERS:
             try:
                 claimed = provider(self, props)
             except Exception:
@@ -651,10 +667,8 @@ class MaterialBuilder:
                 claimed = None
             if claimed is not None:
                 return claimed
-        if game_shader:
-            print("[material] !! UNCLAIMED '{0}' shader={1} -- no generated stack covers it, "
-                  "falling back to Principled, graph is NOT the game shader".format(
-                      name, _shader_identity(self, props)))
+        print("[material] UNCLAIMED '{0}' shader={1} -- Principled fallback".format(
+            name, _shader_identity(self, props)))
 
         # 就地改写同名材质(网格按名字绑材质;另起新料会得 .001 后缀留下双份)。下方整树清空重建,幂等。
         mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
@@ -667,23 +681,52 @@ class MaterialBuilder:
         bsdf.location = (200, 0)
         nt.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
-        # Base colour.
+        # Base colour. The material's own tint (Unity Standard `_Color`, HGRP
+        # `_BaseColor`) MULTIPLIES the texture exactly as those shaders do; a
+        # neutral white tint adds no node.
+        tint = props.find_color(unity_material.BASE_COLOR_FACTORS)
+        base_node = None
         base_name, base_guid = props.find_texture(
             unity_material.BASE_COLOR_NAMES, unity_material.GENERIC_BASE_COLOR_HINTS)
         if base_guid:
             img = self._load_image(base_guid)
             if img:
-                node = nt.nodes.new("ShaderNodeTexImage")
-                node.image = img
-                node.location = (-400, 100)
-                node.label = base_name
-                nt.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
-                if self.options.get("connect_alpha", True):
-                    nt.links.new(node.outputs["Alpha"], bsdf.inputs["Alpha"])
-        else:
-            col = props.find_color(unity_material.BASE_COLOR_FACTORS)
-            if col is not None:
-                bsdf.inputs["Base Color"].default_value = tuple(col)
+                base_node = nt.nodes.new("ShaderNodeTexImage")
+                base_node.image = img
+                base_node.location = (-400, 100)
+                base_node.label = base_name
+                color_socket = base_node.outputs["Color"]
+                if tint is not None and tuple(tint[:3]) != (1.0, 1.0, 1.0):
+                    mix = nt.nodes.new("ShaderNodeMix")
+                    mix.data_type = "RGBA"
+                    mix.blend_type = "MULTIPLY"
+                    mix.clamp_factor = False
+                    mix.location = (-100, 100)
+                    mix.inputs["Factor"].default_value = 1.0
+                    nt.links.new(color_socket, mix.inputs["A"])
+                    mix.inputs["B"].default_value = (float(tint[0]), float(tint[1]),
+                                                     float(tint[2]), 1.0)
+                    color_socket = mix.outputs["Result"]
+                nt.links.new(color_socket, bsdf.inputs["Base Color"])
+        elif tint is not None:
+            bsdf.inputs["Base Color"].default_value = tuple(tint)
+
+        # The blend state is material DATA when the material declares Unity
+        # Standard's `_Mode` (0 Opaque, 1 Cutout, 2 Fade, 3 Transparent).
+        # Opaque Standard materials routinely repurpose the base map's alpha
+        # (smoothness lives there under _SmoothnessTextureChannel=1), so wiring
+        # it as opacity turns whole walls translucent -- honour the declared
+        # mode; a material stating none keeps the old connect_alpha behaviour.
+        mode = props.floats.get("_Mode")
+        wire_alpha = (self.options.get("connect_alpha", True) if mode is None
+                      else float(mode) >= 0.5)
+        if base_node is not None and wire_alpha:
+            nt.links.new(base_node.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if mode is not None:
+            try:
+                mat.surface_render_method = "BLENDED" if float(mode) >= 1.5 else "DITHERED"
+            except Exception:
+                pass
 
         # Normal map -- hair's dual-channel split normal takes priority (see
         # material.SPLIT_NORMAL_NAMES / _wire_hair_split_normal's docstring):
@@ -708,6 +751,7 @@ class MaterialBuilder:
                     node.label = "Normal"
                     nmap = nt.nodes.new("ShaderNodeNormalMap")
                     nmap.location = (-100, -250)
+                    nmap.inputs["Strength"].default_value = float(props.floats.get("_BumpScale", 1.0))
                     nt.links.new(node.outputs["Color"], nmap.inputs["Color"])
                     nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
 
@@ -715,6 +759,7 @@ class MaterialBuilder:
         # MetallicGlossMap; the ground-truthed channel layout of each is
         # documented on material.MRO_NAMES. No generic fallback for this slot.
         _mroname, mro_guid = props.find_texture(unity_material.MRO_NAMES)
+        _mgname, mg_guid = (None, None)
         if mro_guid:
             img = self._load_image(mro_guid, non_color=True)
             if img:
@@ -725,19 +770,43 @@ class MaterialBuilder:
                 img = self._load_image(mg_guid, non_color=True)
                 if img:
                     _wire_packed_metallic_gloss(nt, bsdf, img, (-400, -420))
+        if not mro_guid and not mg_guid:
+            # No packed map: the material's own scalars ARE the truth (Unity
+            # Standard `_Metallic`/`_Glossiness`, HGRP `_Smoothness` -- both
+            # smoothness conventions, so Roughness = 1 - x).
+            metallic = props.floats.get("_Metallic")
+            if metallic is not None:
+                bsdf.inputs["Metallic"].default_value = float(metallic)
+            smoothness = props.floats.get("_Glossiness", props.floats.get("_Smoothness"))
+            if smoothness is not None:
+                bsdf.inputs["Roughness"].default_value = 1.0 - float(smoothness)
 
-        # Emission.
+        # Emission = map x its colour factor (Unity Standard semantics: a BLACK
+        # `_EmissionColor` means emission OFF even with a map bound -- skipping
+        # the multiply made every such material glow at full map brightness).
         _ename, emis_guid = props.find_texture(
             unity_material.EMISSION_NAMES, unity_material.GENERIC_EMISSION_HINTS)
         if emis_guid:
             img = self._load_image(emis_guid)
-            if img:
+            if img and "Emission Color" in bsdf.inputs:
                 node = nt.nodes.new("ShaderNodeTexImage")
                 node.image = img
                 node.location = (-400, -750)
                 node.label = "Emission"
-                if "Emission Color" in bsdf.inputs:
-                    nt.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
-                    bsdf.inputs["Emission Strength"].default_value = 1.0
+                emission_socket = node.outputs["Color"]
+                emis_color = props.find_color(unity_material.EMISSION_COLOR_FACTORS)
+                if emis_color is not None and tuple(emis_color[:3]) != (1.0, 1.0, 1.0):
+                    emix = nt.nodes.new("ShaderNodeMix")
+                    emix.data_type = "RGBA"
+                    emix.blend_type = "MULTIPLY"
+                    emix.clamp_factor = False
+                    emix.location = (-100, -750)
+                    emix.inputs["Factor"].default_value = 1.0
+                    nt.links.new(emission_socket, emix.inputs["A"])
+                    emix.inputs["B"].default_value = (float(emis_color[0]), float(emis_color[1]),
+                                                      float(emis_color[2]), 1.0)
+                    emission_socket = emix.outputs["Result"]
+                nt.links.new(emission_socket, bsdf.inputs["Emission Color"])
+                bsdf.inputs["Emission Strength"].default_value = 1.0
 
         return mat
