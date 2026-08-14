@@ -6381,167 +6381,167 @@ CASCADE = {
 
 FETCHES = {
     'Lit': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'LitForward': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'LitTransparent': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'LitEffect': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'LitEffectBlend': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'LitHLod': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
-        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_MacroNormalMap', 'slot': '_MacroNormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_DetailMap', 'slot': '_DetailMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F10_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F11_MaskMap', 'slot': '_MaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F12_Layer1BaseMap', 'slot': '_Layer1BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F13_Layer1BumpMap', 'slot': '_Layer1BumpMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F14_BaseHeightMap', 'slot': '_BaseHeightMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F15_LayerBlendMaskMap', 'slot': '_LayerBlendMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F16_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F17_MatcapMap', 'slot': '_MatcapMap', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F18_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F19_ParallaxMap', 'slot': '_ParallaxMap', 'depth': 2, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F20_ParallaxMaskMap', 'slot': '_ParallaxMaskMap', 'depth': 3, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F21_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F22_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'clamp': False, 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F23_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
     'Unlit': [
-        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
-        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
     ],
 }
 
@@ -6552,7 +6552,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'LitForward': [
@@ -6561,7 +6561,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'LitTransparent': [
@@ -6570,7 +6570,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'LitEffect': [
@@ -6579,7 +6579,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'LitEffectBlend': [
@@ -6588,7 +6588,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'LitHLod': [
@@ -6597,7 +6597,7 @@ ZONES = {
          'reads': [('__done', False), ('steps', False), ('stepH', False), ('stepUV', True)],
          'uniforms': [('_ParallaxNoiseMapTilling', 0, 0.0, 0.0)],
          'fetches': [
-             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+             {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'clamp': False, 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
     'Unlit': [
@@ -6785,12 +6785,12 @@ def ensure(part=None, rebuild=False):
     return built
 
 
-def _teximage(g, fetch, image):
+def _teximage(g, fetch, image, force_closest=False):
     nd = g._nd('ShaderNodeTexImage')
     nd.label = fetch['slot']
     nd.width = 260
     nd.extension = 'EXTEND' if fetch['clamp'] else 'REPEAT'
-    if fetch['point']:
+    if force_closest or fetch['point']:
         nd.interpolation = 'Closest'
     nd.image = image
     if image is not None:
@@ -6803,6 +6803,49 @@ def _teximage(g, fetch, image):
     return nd
 
 
+def _sample(g, fetch, image, uv):
+    """把割点声明的**采样语义**在宿主上兑现,返回 (Color, Alpha, 锚点节点)。
+    内核只说 derivative_mip(真源写的是隐式采样形还是显式 LOD 形),不含任何滤波数学:
+      · 吃屏幕导数 → 一个 TexImage,mip 交给 EEVEE;
+      · 不吃导数(显式 LOD)→ Blender 的 TexImage 没有 LOD 口,只能在这里兑现:
+        按**真图 image.size** 算纹素域,四角各取一次 Closest,手工双线性。
+        四角是纹素寻址,恒 Closest —— 再让硬件插一次值,打包 LUT 就会跨切片
+        平均掉(症状:暗部等高线状阈值线)。尺寸取自真图,不是手打元数据。"""
+    if image is None:
+        return None, None, None
+    if fetch['derivative_mip'] or not image.size[0] or not image.size[1]:
+        nd = _teximage(g, fetch, image)
+        g._set(nd.inputs['Vector'], uv)
+        return nd.outputs['Color'], nd.outputs['Alpha'], nd
+    size = (float(image.size[0]), float(image.size[1]), 1.0)
+    texel = g.vmath('SUBTRACT', g.vmath('MULTIPLY', uv, size), (0.5, 0.5, 0.0))
+    base = g.vmath('FLOOR', texel)
+    frac = g.vmath('SUBTRACT', texel, base)
+    fx, fy, _fz = g.sep(frac)
+    taps = []
+    for dy in (0.5, 1.5):
+        for dx in (0.5, 1.5):
+            nd = _teximage(g, fetch, image, force_closest=True)
+            g._set(nd.inputs['Vector'],
+                   g.vmath('DIVIDE', g.vmath('ADD', base, (dx, dy, 0.0)), size))
+            taps.append(nd)
+    top = g.mixv(fx, taps[0].outputs['Color'], taps[1].outputs['Color'])
+    bot = g.mixv(fx, taps[2].outputs['Color'], taps[3].outputs['Color'])
+    top_a = g.mixf(fx, taps[0].outputs['Alpha'], taps[1].outputs['Alpha'])
+    bot_a = g.mixf(fx, taps[2].outputs['Alpha'], taps[3].outputs['Alpha'])
+    return g.mixv(fy, top, bot), g.mixf(fy, top_a, bot_a), taps[0]
+
+
+def _feed(g, heads, sock, color, alpha):
+    if color is None:
+        return
+    for c in heads:
+        g._set(c.inputs[sock], color)
+        a = c.inputs.get(sock + '_alpha')
+        if a is not None and alpha is not None:
+            g._set(a, alpha)
+
+
 def _wire_fetch(g, insts, fetch, image):
     src = insts[fetch['depth']]
     heads = insts[fetch['depth'] + 1:]
@@ -6811,24 +6854,14 @@ def _wire_fetch(g, insts, fetch, image):
             return None
         mip = src.outputs[fetch['sock'] + '_mip'] if fetch['mip'] else None
         color, alpha = g.env_image(image, src.outputs[fetch['sock'] + '_dir'], mip)
-        for c in heads:
-            g._set(c.inputs[fetch['sock']], color)
-            a = c.inputs.get(fetch['sock'] + '_alpha')
-            if a is not None:
-                g._set(a, alpha)
+        _feed(g, heads, fetch['sock'], color, alpha)
         return None
-    nd = _teximage(g, fetch, image)
-    g._set(nd.inputs['Vector'], src.outputs[fetch['sock'] + '_uv'])
-    if image is not None:
-        for c in heads:
-            g._set(c.inputs[fetch['sock']], nd.outputs['Color'])
-            a = c.inputs.get(fetch['sock'] + '_alpha')
-            if a is not None:
-                g._set(a, nd.outputs['Alpha'])
-    return nd
+    color, alpha, anchor = _sample(g, fetch, image, src.outputs[fetch['sock'] + '_uv'])
+    _feed(g, heads, fetch['sock'], color, alpha)
+    return anchor
 
 
-def _wire_zone(g, insts, zone, images, inst_sink):
+def _wire_zone(g, insts, zone, images, inst_sink, part):
     feed = insts[zone['depth']]
     heads = insts[zone['depth'] + 1:]
     body_tpl = bpy.data.node_groups[zone['body']]
@@ -6840,7 +6873,9 @@ def _wire_zone(g, insts, zone, images, inst_sink):
         zout.repeat_items.new('VECTOR' if is_vec else 'FLOAT', item)
     g._set(zin.inputs['Iterations'], feed.outputs[zone['sock'] + '_it'])
     for item, is_vec in zone['states']:
-        g._set(zin.inputs[item], feed.outputs[zone['sock'] + '_s_' + item])
+        out = feed.outputs.get(zone['sock'] + '_s_' + item)
+        if out is not None:
+            g._set(zin.inputs[item], out)
     binsts = []
     for _i in range(zone['cascade']):
         b = g._nd('ShaderNodeGroup')
@@ -6848,37 +6883,37 @@ def _wire_zone(g, insts, zone, images, inst_sink):
         binsts.append(b)
         inst_sink.append(b)
         for item, is_vec in zone['states']:
-            g._set(b.inputs['s_' + item], zin.outputs[item])
+            sock = b.inputs.get('s_' + item)
+            if sock is not None:
+                g._set(sock, zin.outputs[item])
         for rname, is_vec in zone['reads']:
-            g._set(b.inputs['r_' + rname], feed.outputs[zone['sock'] + '_r_' + rname])
+            sock = b.inputs.get('r_' + rname)
+            out = feed.outputs.get(zone['sock'] + '_r_' + rname)
+            if sock is not None and out is not None:
+                g._set(sock, out)
     for f in zone['fetches']:
         src = binsts[f['depth']]
+        heads = binsts[f['depth'] + 1:]
         image = images.get(f['slot']) if images else None
         if f['env']:
             if image is None:
                 continue
             mip = src.outputs[f['sock'] + '_mip'] if f['mip'] else None
             color, alpha = g.env_image(image, src.outputs[f['sock'] + '_dir'], mip)
-            for b in binsts[f['depth'] + 1:]:
-                g._set(b.inputs[f['sock']], color)
-                a = b.inputs.get(f['sock'] + '_alpha')
-                if a is not None:
-                    g._set(a, alpha)
+            _feed(g, heads, f['sock'], color, alpha)
             continue
-        nd = _teximage(g, f, image)
-        g._set(nd.inputs['Vector'], src.outputs[f['sock'] + '_uv'])
-        if image is not None:
-            for b in binsts[f['depth'] + 1:]:
-                g._set(b.inputs[f['sock']], nd.outputs['Color'])
-                a = b.inputs.get(f['sock'] + '_alpha')
-                if a is not None:
-                    g._set(a, nd.outputs['Alpha'])
+        color, alpha, _anchor = _sample(g, f, image, src.outputs[f['sock'] + '_uv'])
+        _feed(g, heads, f['sock'], color, alpha)
     last = binsts[-1]
     for item, is_vec in zone['states']:
-        g._set(zout.inputs[item], last.outputs['o_' + item])
+        out = last.outputs.get('o_' + item)
+        if out is not None:
+            g._set(zout.inputs[item], out)
     for c in heads:
         for item, is_vec in zone['states']:
-            g._set(c.inputs[zone['sock'] + '_o_' + item], zout.outputs[item])
+            sock = c.inputs.get(zone['sock'] + '_o_' + item)
+            if sock is not None:
+                g._set(sock, zout.outputs[item])
 
 
 _ANCHOR_SLOTS = ('_BaseMap', '_BaseColorMap', '_MainTex')
@@ -6934,7 +6969,7 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
             if anchor is None or (f['slot'] in _ANCHOR_SLOTS and (anchor.label not in _ANCHOR_SLOTS)):
                 anchor = nd
     for z in ZONES.get(part, ()):
-        _wire_zone(g, insts, z, images, all_insts)
+        _wire_zone(g, insts, z, images, all_insts, part)
     if anchor is not None:
         nt.nodes.active = anchor
         anchor.select = True
