@@ -93,11 +93,16 @@ def plan_load():
     entries, dropped = [], 0
     for kind in kinds():
         whole = entries_for(kind)
-        if len(whole) <= SCOPE_BUDGET or not CHARACTER_TOKEN:
+        if len(whole) <= SCOPE_BUDGET:
             entries.extend(whole)
             continue
-        scoped = entries_for(kind, character_only=True)
+        # Over budget: this kind is per-entity and is NEVER loaded whole, not even
+        # when there is no token to narrow it by -- the dialogue expressions alone
+        # run to 16k assets, and resolving that closure is not a slow import, it is
+        # a dead session. With no token there is nothing to keep, and the caller
+        # says so rather than quietly loading a fraction.
         SCOPED_KINDS.add(kind)
+        scoped = entries_for(kind, character_only=True) if CHARACTER_TOKEN else []
         entries.extend(scoped)
         dropped += len(whole) - len(scoped)
     return entries, dropped
@@ -203,6 +208,55 @@ def avatars_for_tag(tag_id):
     matches = [avatar for avatar in AVATARS.values()
                if getattr(avatar, "tag_id", 0) == tag_id]
     return sorted(matches, key=lambda avatar: avatar.name)
+
+
+# How an avatar table's own name separates what it is from whose it is:
+# `data_facemorph_avatar_ardashir` = the FACE family, for `ardashir`. A name
+# without the separator is a family of its own and matches no one.
+_AVATAR_SEPARATOR = "_avatar_"
+
+
+def _avatar_family(name):
+    """(family, whose) split off an avatar table's own name."""
+    lowered = (name or "").lower()
+    cut = lowered.rfind(_AVATAR_SEPARATOR)
+    if cut < 0:
+        return lowered, ""
+    return lowered[:cut], lowered[cut + len(_AVATAR_SEPARATOR):]
+
+
+def avatars_for_declaration(declared):
+    """The avatar tables the game's OWN declaration names, for a rig whose
+    entity states one (an npc's ``facialMorphAvatarName``, e.g.
+    ``FacialMorph/Avatar/Boy/ardashir``).
+
+    This is the only correct lookup for an npc, and the reason a name token is
+    not: the game routinely gives an npc one name and its face table a
+    completely different one -- ``npc_spl_adaxier_01`` wears ``ardashir``, and
+    227 npcs share ``boy_face_common_a_01``. Nothing joins those by name, which
+    is exactly the trap the part-slot resolution already had to get out of.
+
+    The declaration carries both halves of a face: its LEAF names the table
+    authored for this entity, its FOLDER the body type whose SHARED tables the
+    same entity wears for whatever the leaf does not cover (adaxier has a face
+    of his own and the boy rig's ears). So per family the leaf wins and the body
+    type fills in -- never both, which would bind one ctrl twice.
+
+    Exact: a declaration naming nothing loaded returns nothing rather than some
+    other character's face."""
+    segments = [segment for segment in str(declared or "").replace("\\", "/").split("/") if segment]
+    if not segments:
+        return []
+    leaf = segments[-1].lower()
+    body = segments[-2].lower() if len(segments) > 1 else ""
+    chosen = {}
+    for avatar in AVATARS.values():
+        family, whose = _avatar_family(avatar.name)
+        if whose and whose == leaf:
+            chosen[family] = avatar
+        elif whose and whose == body:
+            chosen.setdefault(family, avatar)
+    return sorted(chosen.values(), key=lambda avatar: avatar.name)
 
 
 def avatars_for(token=""):

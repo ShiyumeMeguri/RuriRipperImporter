@@ -41,7 +41,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
-from ... import animation_builder, coordinate, filter_ui
+from ... import animation_builder, coordinate, filter_ui, prefab_importer
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import morph_state, roster_panel, skeletal_morph, story_panel
 
@@ -90,17 +90,18 @@ def _report_exception(op, prefix, exc):
 # ── rig discovery ─────────────────────────────────────────────────────────────
 
 def resolve_rig(context):
-    """The armature this tab drives: the active object when it is one, else the
-    scene's only armature. Returns (armature_obj, error_message)."""
-    active = context.active_object
-    if active is not None and active.type == "ARMATURE":
-        return active, ""
-    armatures = [obj for obj in context.scene.objects if obj.type == "ARMATURE"]
-    if len(armatures) == 1:
-        return armatures[0], ""
-    if not armatures:
+    """The armature this tab drives, resolved by the add-on's ONE rig rule
+    (prefab_importer.find_target_armature): the active object's rig -- which a
+    skinned MESH stands for just as well as the skeleton, via its Armature
+    modifier -- then the selection's single rig, then the scene's only one.
+    Returns (armature_obj, error_message); this only words the failure."""
+    rig = prefab_importer.find_target_armature(context)
+    if rig is not None:
+        return rig, ""
+    if not any(obj.type == "ARMATURE" for obj in context.scene.objects):
         return None, "No armature in the scene -- import a character first."
-    return None, "Multiple armatures -- select the one whose face you want to drive."
+    return None, ("Ambiguous rig -- select the one whose face you want to drive: its "
+                  "skeleton, or any mesh skinned to it.")
 
 
 def rig_meshes(armature_obj):
@@ -443,13 +444,25 @@ class RigBinding:
 
 
 def _avatars_for(state):
-    """The avatar tables belonging to this rig's character.
+    """The avatar tables belonging to this rig, by whichever identity the GAME
+    states for it -- never by what the rig happens to be called.
 
-    Joined by the game's own tag when the character is known: its data asset
-    states a SkeletalMorphComponentData tagId and each avatar table states the
-    same one back, so the pairing is identity rather than a guess about names.
-    A rig the roster never loaded has no character to look up, and only then is
-    the name token all there is to go on."""
+    Three kinds of entity state it three different ways, so this reads the one
+    that exists rather than retrying a chain: an npc's prefab info names its
+    face tables outright (``facialMorphAvatarName``); a playable character's
+    data asset states a SkeletalMorphComponentData tagId that each avatar table
+    states back; a rig from neither -- imported from somewhere else entirely --
+    has no declaration anywhere, and only then is its name all there is.
+
+    The npc case is why the name token cannot be the primary: the game gives
+    ``npc_spl_adaxier_01`` a face table called ``ardashir``, and 227 npcs share
+    one called ``boy_face_common_a_01``. Matching on the rig's name found
+    neither, so every npc bound zero ctrls and no expression did anything."""
+    declared = state.face_morph or roster_panel.declared_face_morph(state.armature_name)
+    if declared:
+        matched = morph_state.avatars_for_declaration(declared)
+        if matched:
+            return matched
     tag = roster_panel.character_tag(state.character_token)
     if tag:
         matched = morph_state.avatars_for_tag(tag)
@@ -477,7 +490,6 @@ def _rig_maps(armature_obj):
     """The Unity rig identity stamped on the armature at import time. Without it
     there is no rest matrix to conjugate against, so bone binding is impossible
     and says so rather than posing the face wrongly."""
-    from ... import prefab_importer
     try:
         return prefab_importer.maps_from_stamped_armature(armature_obj)
     except Exception:
@@ -580,6 +592,12 @@ class RURI_PG_character(bpy.types.PropertyGroup):
         name="Character",
         description="Name fragment that marks this character's own facial "
                     "animations in the cabmap (e.g. \"pelica\")")
+    face_morph: StringProperty(
+        name="Face Tables",
+        description="The face-morph avatar this rig's entity DECLARES "
+                    "(e.g. \"FacialMorph/Avatar/Boy/ardashir\"). Filled in from the "
+                    "game's own data when the rig is loaded; it names the ctrl-to-bone "
+                    "tables, which for an npc is never its own name")
     section: EnumProperty(name="Section", items=_section_items, update=_section_changed)
     status: StringProperty(default="Scan a rig to begin.")
     library_ready: BoolProperty(default=False)
@@ -743,14 +761,29 @@ class RURI_OT_character_scan(bpy.types.Operator):
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
 
+        # The declaration belongs to the RIG, so a scan of a different one never
+        # inherits the last one's face (which would bind some other npc's ctrls
+        # and look like it worked). Whatever loaded this rig may have stated it
+        # already; otherwise the rig is named after its entity, so its own name
+        # is the key the game files that declaration under.
+        if armature_obj.name != state.armature_name:
+            state.face_morph = ""
         state.armature_name = armature_obj.name
-        token = state.character_token.strip() or _suggest_token(armature_obj.name)
+        state.face_morph = (state.face_morph
+                            or roster_panel.declared_face_morph(armature_obj.name))
+        # An npc rig names its own template, which is the EXACT key its per-line
+        # dialogue assets are filed under. Guessing a name fragment instead picks
+        # whichever fragment matches most, and for an npc that is its body-type
+        # word -- scoping the load to every sibling that shares it.
+        token = (state.character_token.strip()
+                 or roster_panel.npc_template(armature_obj.name)
+                 or _suggest_token(armature_obj.name))
         morph_state.discover(token)
         state.character_token = token
-        # Bound AFTER discovery: the bone table comes from this character's
-        # avatar, which only exists once Load Library has run, so a first scan
-        # binds shape keys only and Load Library re-binds with the real table.
-        BINDING = resolve_bindings(armature_obj, morph_state.avatars_for(token))
+        # Bound AFTER discovery: the bone table comes from this rig's own avatar,
+        # which only exists once Load Library has run, so a first scan binds
+        # shape keys only and Load Library re-binds with the real table.
+        BINDING = resolve_bindings(armature_obj, _avatars_for(state))
 
         counts = morph_state.counts()
         own = sum(morph_state.counts(character_only=True).values()) if token else 0
