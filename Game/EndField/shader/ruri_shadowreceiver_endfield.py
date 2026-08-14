@@ -662,12 +662,15 @@ OUTLINE_TEMPLATE = 'Ruri Endfield Outline'
 CLONE_V_PREFIX = 'Ruri Endfield V '
 CLONE_O_PREFIX = 'Ruri Endfield O '
 
-_BUILT = set()   # 本会话已重建过的 part
+_BUILT = {}      # part -> 本会话在用的模板组(link 来的或现建的)
 _SHARED_READY = False
+_LIBRARY = None       # {组名: 已 link 的组}
+_LIBRARY_TRIED = False
+_LIBRARY_WRITTEN = False
 
 
 def _ensure_shared():
-    # 共享子组:全会话建一次(九棵 part 树引用同一份;换血逻辑与 part 相同)。
+    # 共享子组:全会话建一次(各 part 树引用同一份;换血逻辑与 part 相同)。
     global _SHARED_READY
     if _SHARED_READY:
         return
@@ -684,19 +687,117 @@ def _ensure_shared():
     _SHARED_READY = True
 
 
+def _library_path(create=False):
+    """<用户脚本目录>/presets/<插件包名>/<本模块>.<STAMP>.blend。
+    指纹进文件名而不是文件内容:'这份缓存配不配得上当前生成物' 就是一次
+    存在性判断,不必先把库读出来再比对,也不存在读到过时组的窗口。"""
+    package = (__package__ or '').split('.')[0] or 'RuriShaders'
+    folder = bpy.utils.user_resource('SCRIPTS',
+                                     path=os.path.join('presets', package),
+                                     create=create)
+    if not folder:
+        return None
+    return os.path.join(folder, '%s.%s.blend' % (__name__.rsplit('.', 1)[-1], STAMP))
+
+
+def _prune_stale_libraries():
+    """删掉本模块留在预设目录里的旧指纹库。**在模块导入时跑**,不是写库时:
+    重新生成之后,一个这次没被用到的模块永远走不到写库那一步,它上一版的库就会
+    一直堆在目录里。加载插件即清,一次 listdir。"""
+    path = _library_path()
+    if not path:
+        return
+    folder = os.path.dirname(path)
+    keep = os.path.basename(path)
+    prefix = __name__.rsplit('.', 1)[-1] + '.'
+    try:
+        stale_names = os.listdir(folder)
+    except OSError:
+        return
+    for stale in stale_names:
+        if stale == keep or not stale.startswith(prefix) or not stale.endswith('.blend'):
+            continue
+        try:
+            os.remove(os.path.join(folder, stale))
+            print('[Ruri] 删除过时着色器预设库:%s' % stale)
+        except OSError as exc:
+            print('[Ruri] 过时预设库删不掉(%s):%s' % (stale, exc))
+
+
+def _library_groups():
+    """预设库里的全部模板 + 共享组,LINK 进来(不是 append):图只在库里存一份,
+    不复制进每个导入过东西的 .blend。库不在或读不出就返回 None,调用方现建。"""
+    global _LIBRARY, _LIBRARY_TRIED
+    if _LIBRARY_TRIED:
+        return _LIBRARY
+    _LIBRARY_TRIED = True
+    path = _library_path()
+    if not path or not os.path.isfile(path):
+        return None
+    wanted = [n for n, _b in SHARED_GROUPS] + [n for n, _b in PARTS.values()]
+    try:
+        with bpy.data.libraries.load(path, link=True) as (src, dst):
+            dst.node_groups = [n for n in dict.fromkeys(wanted) if n in src.node_groups]
+        _LIBRARY = {g.name: g for g in dst.node_groups if g is not None}
+    except Exception as exc:
+        print('[Ruri] 着色器预设库读不出(%s):%s —— 改为现建' % (path, exc))
+        _LIBRARY = None
+    return _LIBRARY
+
+
+def _write_library():
+    """把本模块全部模板写成预设库,每会话至多一次。整套一起写:库要么完整要么
+    不存在 —— 只写用过的 part 会让没写进去的那些每个会话都重建一次,而文件已在
+    所以永远不会被补全。建出来的每个 part 同时登记进 _BUILT,本会话后面再要它就是
+    字典命中(否则同一棵树会被换血重建一遍,实测每棵 9s)。同目录下别的指纹是上一版
+    生成物留下的,顺手清掉。"""
+    global _LIBRARY_WRITTEN
+    if _LIBRARY_WRITTEN:
+        return
+    _LIBRARY_WRITTEN = True
+    path = _library_path(create=True)
+    if not path:
+        return
+    try:
+        _images()
+        _ensure_shared()
+        blocks = {bpy.data.node_groups[n] for n, _b in SHARED_GROUPS}
+        for part_name, (group_name, builder) in PARTS.items():
+            group = bpy.data.node_groups.get(group_name)
+            if group is None:
+                builder()
+                group = bpy.data.node_groups[group_name]
+                group.use_fake_user = True
+                group[STAMP_KEY] = STAMP
+            _BUILT.setdefault(part_name, group)
+            blocks.add(group)
+        bpy.data.libraries.write(path, blocks, fake_user=True, compress=True)
+        print('[Ruri] 着色器预设库已写出:%s(%d 组)' % (path, len(blocks)))
+    except Exception as exc:
+        print('[Ruri] 着色器预设库写不出(%s):%s —— 下次仍会现建' % (path, exc))
+
+
 def ensure(part=None, rebuild=False):
-    """该 part 的模板组(固定名)。
-    本 blend 里首次用到 → 直接换血覆盖同名组(不看指纹,所以插件更新后不会有
-    过时组残留);之后再导入一律复用,零创建。
+    """该 part 的模板组。命中预设库就 link 回来(零建图);库不在才现建,
+    并把整套写成库供以后的会话用。rebuild=True 强制现建(换环境球等场景)。
     Blender 没有贴图 socket ⇒ 组不能跨材质共享,故模板只是克隆源。"""
     part = part or DEFAULT_PART
     group_name, builder = PARTS.get(part, PARTS[DEFAULT_PART])
-    existing = bpy.data.node_groups.get(group_name)
-    if existing is not None and part in _BUILT and not rebuild:
-        return existing
-    stale = existing
-    if stale is not None:
+    if not rebuild:
+        ready = _BUILT.get(part)
+        if ready is not None:
+            return ready
+        library = _library_groups()
+        linked = library.get(group_name) if library else None
+        if linked is not None:
+            _images()   # 组外的贴图占位图仍要本地建
+            _BUILT[part] = linked
+            return linked
+    stale = bpy.data.node_groups.get(group_name)
+    if stale is not None and stale.library is None:
         stale.name = group_name + '.old'
+    else:
+        stale = None
     _images()
     _ensure_shared()
     builder()
@@ -706,7 +807,9 @@ def ensure(part=None, rebuild=False):
     if stale is not None:
         stale.user_remap(built)  # 旧组的用户(上次导入的克隆源)改指新组后删除
         bpy.data.node_groups.remove(stale)
-    _BUILT.add(part)
+    _BUILT[part] = built
+    if not rebuild:
+        _write_library()
     return built
 
 
@@ -1565,5 +1668,8 @@ def unregister():
     host.unregister_vertex_stage(apply_vertex_stage)
 
 
+# 导入即清理过时预设库(见 _prune_stale_libraries):要在 register() 之外,
+# 因为脱包直接加载本文件的探针也该把目录扫干净。
+_prune_stale_libraries()
 if __name__ == '__main__':
     build_root()
