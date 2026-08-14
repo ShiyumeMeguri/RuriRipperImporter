@@ -47,7 +47,7 @@ import numpy as np
 import bpy
 from mathutils import Matrix
 
-from ... import material_builder, mesh_builder, prefab_importer
+from ... import light_units, material_builder, mesh_builder, prefab_importer
 from ...RuriRipperPyBridge.math3d import coordinate as math3d
 from ...RuriRipperPyBridge.unity import (bridge_asset_db, hierarchy as unity_hierarchy,
                                          prefab as prefab_scan, skinning)
@@ -245,11 +245,12 @@ def _flatten_prefab(context, db, prefab_file, mat_builder, options, report):
     return pieces, cameras, lights
 
 
-def _light_data(light):
-    kind = {0: "SPOT", 1: "SUN", 2: "POINT"}.get(light.type, "AREA")
+def _light_data(light, options):
+    kind = light_units.blender_type(light.type)
     data = bpy.data.lights.new(light.name, kind)
     data.color = light.color
-    data.energy = light.intensity
+    data.energy = light_units.energy_for(light.type, light.intensity, light.area_size,
+                                         options["pre_exposure"])
     if kind == "SPOT":
         data.spot_size = math.radians(light.spot_angle)
         if light.spot_angle > 0.0:
@@ -449,7 +450,7 @@ def import_scene_window(context, bridge, options=None):
                 _place_aimed(collection, data, camera.name, blender_world, camera.disabled)
                 report.cameras += 1
         for light, world in lights:
-            data = _light_data(light)
+            data = _light_data(light, options)
             for blender_world in _BLENDER.convert_root_matrices(
                     placement_unity @ np.asarray(world, dtype=np.float64)[None]):
                 _place_aimed(collection, data, light.name, blender_world, light.disabled)
