@@ -440,6 +440,79 @@ def _prepare_channels(action, slot_name, id_type):
     return action.fcurves, None
 
 
+# ── putting an action ON something ───────────────────────────────────────────
+#
+# The ONE way anything in this add-on makes an action play. Building an action
+# and leaving it in bpy.data is only half the job: the user asked to see an
+# animation, and an action nobody assigned is invisible -- it does not play, the
+# timeline still spans whatever the last thing spanned, and finding it means
+# hunting through the Action editor. Every importer used to end with its own
+# copy of "assign it, maybe", they disagreed about the slot and none of them
+# touched the frame range, so which of them ran decided whether the clip played.
+
+def set_frame_range(scene, start, end, move_playhead=True):
+    """Make the scene's playable range exactly [start, end].
+
+    Rounded to the integer frames a scene range is stated in, and never
+    collapsed to a single frame: a degenerate span would leave the timeline
+    unable to play at all, which reads as "the import produced nothing"."""
+    if scene is None:
+        return None
+    first = int(round(start))
+    last = max(int(round(end)), first + 1)
+    scene.frame_start = first
+    scene.frame_end = last
+    if move_playhead:
+        # A playhead left outside the new range shows the rest pose and looks
+        # like the clip failed to import.
+        scene.frame_set(first)
+    return first, last
+
+
+def action_frame_range(action):
+    """The span an action's own curves cover, or None when it has none.
+
+    ``Action.frame_range`` is the truth for slotted actions too (verified on
+    5.2: a channelbag-only action reports its curves' real span), while
+    ``Action.fcurves`` does not exist on them at all -- so nothing here may
+    reach for the fcurves to work this out."""
+    span = getattr(action, "frame_range", None)
+    if span is None:
+        return None
+    first, last = float(span[0]), float(span[1])
+    return None if last <= first else (first, last)
+
+
+def adopt_action(owner, action, slot=None, scene=None, frame_range=True):
+    """Make ``action`` the one PLAYING on ``owner``, and aim the scene at it.
+
+    ``owner`` is any AnimData holder this add-on animates -- an armature or
+    mesh OBJECT, a shape-key datablock. The slot must be set explicitly or the
+    action evaluates to nothing (Blender 4.4+; see the repair section below for
+    why relying on auto-pick is not an option).
+
+    ``frame_range`` True (the default -- importing an animation IS the request
+    to look at it) retimes the scene to the action's own span. Pass False for a
+    caller that owns the range itself, e.g. one laying several clips onto a
+    timeline, where any single clip's span is the wrong answer.
+
+    ``scene`` defaults to the scene the user is looking at."""
+    if owner is None or action is None:
+        return None
+    if owner.animation_data is None:
+        owner.animation_data_create()
+    animation = owner.animation_data
+    animation.action = action
+    if slot is not None and hasattr(animation, "action_slot"):
+        animation.action_slot = slot
+    if not frame_range:
+        return action
+    span = action_frame_range(action)
+    if span is not None:
+        set_frame_range(scene if scene is not None else bpy.context.scene, span[0], span[1])
+    return action
+
+
 # ── slotted-action assignment repair ─────────────────────────────────────────
 #
 # Blender 4.4+ slotted actions: assigning ``animation_data.action`` alone plays
@@ -604,15 +677,15 @@ def _apply_float_curves(action, clip, path_to_meshobjects, sample_rate, times):
             # through its own action so they bind to the correct id type.
             try:
                 shape_keys = mesh.shape_keys
-                if shape_keys.animation_data is None:
-                    shape_keys.animation_data_create()
-                key_action = shape_keys.animation_data.action
+                key_action = (shape_keys.animation_data.action
+                              if shape_keys.animation_data is not None else None)
                 if key_action is None:
                     key_action = bpy.data.actions.new(action.name + "_shapekeys")
-                    shape_keys.animation_data.action = key_action
                 fcurves, slot = _prepare_channels(key_action, shape_name, "KEY")
-                if slot is not None:
-                    shape_keys.animation_data.action_slot = slot
+                # The shape-key half of THIS clip: assigned through the one
+                # adopter like everything else, but never retiming -- the caller
+                # aims the scene once, at the clip's own transform action.
+                adopt_action(shape_keys, key_action, slot, frame_range=False)
                 data_path = key.path_from_id("value")
                 fcurve = fcurves.new(data_path)
                 fcurve.keyframe_points.add(n)

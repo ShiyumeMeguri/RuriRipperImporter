@@ -346,7 +346,7 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
         if first is None:
             first = (action, slot)
     if first is not None and (assign_always or not has_action):
-        _assign_first_action(arm_obj, first[0], first[1])
+        animation_builder.adopt_action(arm_obj, first[0], first[1])
     return built, warnings
 
 
@@ -443,7 +443,8 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
         report.actions = len(actions)
         if actions:
             first_action, first_slot = actions[0]
-            _assign_first_action(arm_obj, first_action, first_slot)
+            animation_builder.adopt_action(arm_obj, first_action, first_slot,
+                                           scene=context.scene)
 
     report.maps = maps
     report.db = db
@@ -530,17 +531,6 @@ def _gather_clip_paths(db, prefab, prefab_path, assets_dir=None):
     if scope:
         paths.extend(_walk_for_clips(scope))
     return paths
-
-
-def _assign_first_action(arm_obj, action, slot=None):
-    if arm_obj.animation_data is None:
-        arm_obj.animation_data_create()
-    try:
-        arm_obj.animation_data.action = action
-        if slot is not None and hasattr(arm_obj.animation_data, "action_slot"):
-            arm_obj.animation_data.action_slot = slot
-    except Exception:
-        pass
 
 
 def _build_materials(renderer, mat_builder):
@@ -973,7 +963,7 @@ def _apply_clip_paths(context, clip_paths, options):
         if first is None:
             first = (action, slot)
     if first is not None:
-        _assign_first_action(arm, first[0], first[1])
+        animation_builder.adopt_action(arm, first[0], first[1], scene=context.scene)
     report.seconds = time.time() - start
     return report
 

@@ -991,6 +991,7 @@ class RURI_OT_character_build_actions(bpy.types.Operator):
 
         fps = context.scene.render.fps
         built, skipped = 0, 0
+        playing = None
         for item in state.items:
             if not item.selected:
                 continue
@@ -1000,6 +1001,7 @@ class RURI_OT_character_build_actions(bpy.types.Operator):
                 continue
             if build_morph_action(asset, bindings, fps):
                 built += 1
+                playing = asset
             else:
                 skipped += 1
 
@@ -1007,6 +1009,12 @@ class RURI_OT_character_build_actions(bpy.types.Operator):
             self.report({"WARNING"}, f"Nothing built -- none of the {skipped} checked "
                                      f"animation(s) drive a ctrl bound on this rig.")
             return {"CANCELLED"}
+        # One face animation is two actions (shape keys + bones), so neither half
+        # retimes on its own; the scene is aimed once, at whichever animation is
+        # left playing -- the same "importing it IS the request to see it" rule
+        # every other clip flow follows.
+        if playing is not None and playing.duration:
+            animation_builder.set_frame_range(context.scene, 0.0, playing.duration * fps)
         message = f"Built {built} morph action(s)."
         if skipped:
             message += f" {skipped} skipped (no bound ctrl)."
@@ -1039,17 +1047,16 @@ def _build_shape_key_action(asset, shape_binding, fps):
         return False
 
     for owner, pairs in by_owner.items():
-        if owner.animation_data is None:
-            owner.animation_data_create()
         action = bpy.data.actions.new(asset.name)
         if hasattr(action, "use_fake_user"):
             action.use_fake_user = True
         fcurves, slot = animation_builder._prepare_channels(action, action.name, "KEY")
         for driver, target in pairs:
             _write_weight_fcurve(fcurves, driver, target, fps)
-        owner.animation_data.action = action
-        if slot is not None:
-            owner.animation_data.action_slot = slot
+        # A shape-key action is one HALF of a face animation (the bone half
+        # lands next door), so it must not retime the scene on its own -- the
+        # caller does that once, for the whole animation.
+        animation_builder.adopt_action(owner, action, slot, frame_range=False)
     return True
 
 
@@ -1080,8 +1087,6 @@ def _build_bone_action(asset, bone_binding, fps):
     samples = [skeletal_morph.sample_weights(asset, float(time)) for time in times]
 
     armature_obj = bone_binding.armature
-    if armature_obj.animation_data is None:
-        armature_obj.animation_data_create()
     action = bpy.data.actions.new(asset.name)
     if hasattr(action, "use_fake_user"):
         action.use_fake_user = True
@@ -1100,9 +1105,9 @@ def _build_bone_action(asset, bone_binding, fps):
         animation_builder._write_bone_fcurves(fcurves, bone_name, frames,
                                               locations, quaternions, scales)
 
-    armature_obj.animation_data.action = action
-    if slot is not None:
-        armature_obj.animation_data.action_slot = slot
+    # Same reason as the shape-key half: one animation, one retime, done by the
+    # caller once both halves exist.
+    animation_builder.adopt_action(armature_obj, action, slot, frame_range=False)
     return True
 
 

@@ -1085,6 +1085,8 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
                 and state.mode == BY_STORY and bool(state.unit))
 
     def execute(self, context):
+        from ... import animation_builder
+
         state = context.scene.ruri_story
         table = _clips_table(state)
         if table is None:
@@ -1169,9 +1171,10 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
                                  windows, fps, last)
 
         if placed:
-            context.scene.frame_start = 0
-            context.scene.frame_end = max(1, int(round(last)))
-            context.scene.frame_set(0)
+            # A timeline's range is the WHOLE unit, not any one clip's span --
+            # which is why the strips were laid down with frame_range=False and
+            # the range is stated here instead, through the same one setter.
+            animation_builder.set_frame_range(context.scene, 0.0, last)
         summary = ("{0}: {1} actor(s), {2} of {3} timeline clip(s) placed at {4} fps, "
                    "{5} activation window(s), {6} marker(s)").format(
             state.unit, len(loaded), placed, len(plan), int(fps), len(spans), marks)
