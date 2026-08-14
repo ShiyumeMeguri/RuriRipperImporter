@@ -98,6 +98,43 @@ def apply_vertex_stages(objects=None, camera=None):
     return sum(stage(objects=objects, camera=camera) for stage in VERTEX_STAGES)
 
 
+# Capability rewires, same contract again: each generated shader module registers
+# its own ``rewire_capabilities(material) -> bool``. A shader's environment
+# queries -- ambient irradiance, specular radiance, the main light -- are cut at
+# the group interface and answered from scene state, so changing that state (a
+# different sun, a per-material light override, another world) leaves the answer
+# stale until the fulfilment side is rebuilt.
+#
+# Only the fulfilment nodes are rebuilt, never the graph: a full material rebuild
+# would take the user's tuned parameters back to shipped defaults. A module
+# returns False for a material it did not build, so asking all of them is safe
+# and order-independent.
+CAPABILITY_REWIRES = []
+
+
+def register_capability_rewire(rewire):
+    if rewire not in CAPABILITY_REWIRES:
+        CAPABILITY_REWIRES.append(rewire)
+
+
+def unregister_capability_rewire(rewire):
+    if rewire in CAPABILITY_REWIRES:
+        CAPABILITY_REWIRES.remove(rewire)
+
+
+def rewire_capabilities(materials=None):
+    """Re-answer the environment queries of every Ruri-built material.
+
+    ``materials`` defaults to every material in the file. Returns how many were
+    claimed and rewired.
+    """
+    import bpy
+
+    pool = list(bpy.data.materials) if materials is None else list(materials)
+    return sum(1 for mat in pool
+               if mat is not None and any(rewire(mat) for rewire in CAPABILITY_REWIRES))
+
+
 # Post stages, same contract again, except that a stage is the generated MODULE
 # rather than one function: post-processing owns scene-level state (the
 # compositor tree, the view transform), so it has to be able to hand that state
