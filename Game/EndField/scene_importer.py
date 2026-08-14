@@ -1,30 +1,40 @@
-"""Build a whole Endfield map window into the scene as INSTANCES.
+"""Build a whole Endfield map window into the scene.
 
-The shape of the problem: a window places 10^5 entities drawn from a few hundred
-distinct assets. The old pass imported per placement -- one Blender object each,
-a full-closure name-index scan to join placements to assets, a full-closure
-export behind it, and a per-prefab animation discovery sweep. Every one of those
-costs is gone structurally, not tuned:
+Every placement is a REAL, selectable, editable object. Picking one rock out of a
+hillside and moving it is the point of importing a map at all, so this pass does
+not produce GPU instances or a merged blob -- it produced them once, and that cost
+0.05s of a 36s import while taking away the only interaction the result exists
+for. What placements of the same asset DO share is the data-block: one mesh, one
+material set, N cheap object headers pointing at them -- Blender's own linked
+duplicate, which costs a copy of the object struct rather than a re-decode.
+
+The expensive parts of the old pass are gone structurally, and none of them was
+editability:
 
 * the join is ``bridge.import_reachable``'s seed_asset_guids_by_path -- the C#
   side resolves every placement path ("a.fbx##sub" included) to its exported
   guid while it still holds the loaded closure, and exports ONLY what the seeds
   reach (no clips, no controllers, no co-hosted junk);
-* each DISTINCT (asset, material set) builds ONE source object; every placement
-  is one row of the scene_instancer point cloud -- two foreach_set writes total;
+* each DISTINCT (asset, material set) decodes and builds ONE source object;
 * placement transforms are built and converted in ONE batched numpy pass
   (math3d.unity_trs_batch -> BLENDER.convert_root_matrices), never per row;
 * a DynamicScene prefab flattens ONCE into its renderer pieces (the SAME shared
   prefab_scan rules every importer uses -- LOD groups, shadow proxies, static
-  batching, disabled state), and a placement of it becomes one instance row per
-  piece: placement matrix x piece world matrix, again batched. Its cameras and
-  lights (rare) become real objects per placement. No armatures, no empties --
-  a massed environment placement is geometry at rest pose by definition; the
-  character pipeline next door is where rigs live.
+  batching, disabled state). A single-piece prop places as that one object; a
+  multi-piece one gets an anchor Empty per placement so the whole prop still
+  moves as a unit, with each piece's own local transform living on the piece and
+  therefore copied for free. No armatures -- a massed environment placement is
+  geometry at rest pose by definition; the character pipeline next door is where
+  rigs live.
+
+Everything is filed under a ``RuriScene`` collection with one sub-collection per
+distinct asset, so the outliner stays navigable instead of being one flat wall of
+names -- and so the imported assets are actually VISIBLE there, which an unlinked
+sources collection was not.
 
 What a placement is, and which columns state it, are this game's facts -- which
-is why this pass lives here; the instancing kernel it feeds (scene_instancer)
-and the closure crossing it rides (import_reachable) know no game at all.
+is why this pass lives here; the closure crossing it rides (import_reachable)
+knows no game at all.
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ import numpy as np
 import bpy
 from mathutils import Matrix
 
-from ... import material_builder, mesh_builder, prefab_importer, scene_instancer
+from ... import material_builder, mesh_builder, prefab_importer
 from ...RuriRipperPyBridge.math3d import coordinate as math3d
 from ...RuriRipperPyBridge.unity import (bridge_asset_db, hierarchy as unity_hierarchy,
                                          prefab as prefab_scan, skinning)
@@ -47,6 +57,8 @@ from . import datasets, scene_state
 # reason the old path paid a per-prefab closure scan) and streamed media.
 EXCLUDED_CLASSES = ("AnimationClip", "AnimatorController", "AnimatorOverrideController",
                     "Avatar", "AudioClip", "VideoClip")
+
+ROOT_COLLECTION = "RuriScene"
 
 # Cameras and lights aim down -Z in Blender but +Z forward in Unity -- the same
 # once-per-object aim the prefab importer applies.
@@ -89,7 +101,7 @@ class SceneReport:
         self.phases = {}
 
     def summary(self):
-        text = ("{0} distinct source(s), {1} instance(s)".format(self.sources, self.placed)
+        text = ("{0} distinct asset(s), {1} object(s)".format(self.sources, self.placed)
                 + (", {0} hidden".format(self.hidden_placed) if self.hidden_placed else "")
                 + (", {0} light(s)".format(self.lights) if self.lights else "")
                 + (", {0} camera(s)".format(self.cameras) if self.cameras else "")
@@ -126,6 +138,60 @@ def _timed_material(mat_builder, ref, report):
     return material
 
 
+def _asset_collection(root, name):
+    """One collection per distinct asset, under the scene's RuriScene root. The
+    root IS linked into the scene: an unlinked collection keeps its contents out
+    of the outliner entirely, which reads as "the import produced nothing"."""
+    collection = bpy.data.collections.new(name)
+    root.children.link(collection)
+    return collection
+
+
+def _adopt(obj, collection):
+    """Move an object the mesh builder linked into the working collection over to
+    its asset's own collection -- one membership, never two."""
+    for holder in list(obj.users_collection):
+        holder.objects.unlink(obj)
+    collection.objects.link(obj)
+
+
+def _place_copies(collection, source, matrices):
+    """Place ONE source at N world matrices. The first placement IS the source
+    object (already built, already linked); every further one is
+    ``source.copy()`` -- a linked duplicate sharing the mesh, its material slots
+    and every attribute, so N placements cost N object headers and one decode."""
+    link = collection.objects.link
+    for index, matrix in enumerate(matrices.tolist()):
+        obj = source
+        if index:
+            obj = source.copy()
+            link(obj)
+        obj.matrix_world = Matrix(matrix)
+
+
+def _place_anchored(collection, parts, matrices, name):
+    """Place a multi-piece prefab at N world matrices: one anchor Empty per
+    placement carrying the placement transform, with a copy of each piece
+    parented under it -- so the whole prop selects and moves as a unit while each
+    piece stays individually reachable.
+
+    Each piece already holds its OWN in-prefab local transform as its basis (set
+    once, before this runs), so a copy needs no matrix work at all: Blender
+    composes anchor world x piece basis, which is exactly R.C.P.C . C.L.C =
+    R.C.P.L.C -- the same product the single-piece path folds up front."""
+    link = collection.objects.link
+    for index, matrix in enumerate(matrices.tolist()):
+        anchor = bpy.data.objects.new(name, None)
+        link(anchor)
+        anchor.matrix_world = Matrix(matrix)
+        for part in parts:
+            obj = part
+            if index:
+                obj = part.copy()
+                link(obj)
+            obj.parent = anchor
+
+
 def _build_mesh_source(context, db, guid, name, materials, options, report):
     """(object, problem). ``problem`` is "empty" when the asset resolved but the
     game ships it with no vertices (a collision proxy -- see SceneReport), any
@@ -146,7 +212,8 @@ def _flatten_prefab(context, db, prefab_file, mat_builder, options, report):
     within the prefab, hidden) per surviving renderer, plus its cameras/lights
     as (data-block factory results, node) for per-placement instantiation.
     The renderer rules are the shared prefab_scan ones -- stated once for every
-    importer, applied here to a prefab that will only ever be instanced."""
+    importer. A piece that drew nothing in Unity is hidden on the SOURCE, so
+    every linked duplicate of it inherits that for free."""
     nodes, _roots = unity_hierarchy.build_hierarchy(prefab_file)
     go_to_node = {node.go_id: node for node in nodes.values()}
     world = unity_hierarchy.world_matrices(nodes)
@@ -167,6 +234,8 @@ def _flatten_prefab(context, db, prefab_file, mat_builder, options, report):
                                              None, [], {}, materials, options)
         local = np.eye(4, dtype=np.float64) if baked or renderer.node is None \
             else renderer.node.world
+        if renderer.disabled:
+            obj.hide_viewport = obj.hide_render = True
         pieces.append((obj, local, bool(renderer.disabled)))
 
     cameras = [(camera, camera.node.world) for camera in
@@ -207,9 +276,9 @@ def _camera_data(camera):
     return data
 
 
-def _place_aimed(context, data, name, world_blender, disabled):
+def _place_aimed(collection, data, name, world_blender, disabled):
     obj = bpy.data.objects.new(name, data)
-    context.collection.objects.link(obj)
+    collection.objects.link(obj)
     obj.matrix_world = Matrix([list(row) for row in world_blender]) @ _AIM
     if disabled:
         obj.hide_viewport = obj.hide_render = True
@@ -217,10 +286,11 @@ def _place_aimed(context, data, name, world_blender, disabled):
 
 
 def import_scene_window(context, bridge, options=None):
-    """Import the CURRENT discovery (scene_state.TABLE et al.) as instances.
+    """Import the CURRENT discovery (scene_state.TABLE et al.).
 
-    One closure crossing, K source builds, two attribute writes -- see the
-    module docstring for why each stage has the shape it has."""
+    One closure crossing, one build per distinct asset, a linked duplicate per
+    further placement -- see the module docstring for why each stage has the
+    shape it has."""
     start = time.time()
     report = SceneReport()
 
@@ -253,9 +323,11 @@ def import_scene_window(context, bridge, options=None):
     # the same mesh placed with different materials is a different drawable and
     # must not inherit the first placement's look. A prefab keys on its path
     # alone; its materials are its renderers' own.
+    root = bpy.data.collections.new(ROOT_COLLECTION)
+    context.scene.collection.children.link(root)
+
     sources = []
-    pieces_by_source = {}     # prefab source index -> extra pieces [(idx, local)]
-    key_to_entry = {}         # key -> ("mesh", src) | ("prefab", [(src, local, hidden)], cams, lights)
+    key_to_entry = {}         # key -> ("mesh", src, coll) | ("prefab", [(src, local, hidden)], cams, lights, coll)
     row_entries = []
     for row in range(len(table)):
         path = paths[row]
@@ -274,11 +346,15 @@ def import_scene_window(context, bridge, options=None):
                 else:
                     pieces, cameras, lights = _flatten_prefab(
                         context, db, prefab_file, mat_builder, options, report)
+                    collection = _asset_collection(
+                        root, convention.get("stem") or path.rsplit("/", 1)[-1])
                     indexed = []
                     for obj, local, hidden in pieces:
+                        _adopt(obj, collection)
                         sources.append(obj)
                         indexed.append((len(sources) - 1, local, hidden))
-                    key_to_entry[key] = entry = ("prefab", indexed, cameras, lights)
+                    key_to_entry[key] = entry = ("prefab", indexed, cameras, lights,
+                                                 collection)
             else:
                 materials = []
                 if mat_builder is not None:
@@ -299,8 +375,10 @@ def import_scene_window(context, bridge, options=None):
                 elif obj is None:
                     key_to_entry[key] = entry = ("missing", path)
                 else:
+                    collection = _asset_collection(root, display)
+                    _adopt(obj, collection)
                     sources.append(obj)
-                    key_to_entry[key] = entry = ("mesh", len(sources) - 1)
+                    key_to_entry[key] = entry = ("mesh", len(sources) - 1, collection)
         if entry[0] == "missing":
             report.unresolved += 1
             if entry[1] not in report.unresolved_paths:
@@ -325,69 +403,59 @@ def import_scene_window(context, bridge, options=None):
                 len(table) - accounted, len(row_entries), report.no_geometry,
                 report.unresolved, len(table)))
     report.phases["sources"] = time.time() - sources_started
-    instancing = time.time()
+    placing = time.time()
 
-    # Instance rows. Mesh rows bind the placement matrix directly; prefab rows
-    # fan out to one row per piece with the piece's own world folded in -- all
-    # of it batched per group, nothing per placement.
-    visible_indices = []
-    visible_matrices = []
-    hidden_indices = []
-    hidden_matrices = []
-
-    mesh_rows = {}        # source index -> [table rows]
-    prefab_rows = {}      # id(entry) -> (entry, [table rows])
+    # Placement. Rows are grouped by the asset they place so each group's
+    # matrices convert in ONE batched pass; within a group every row is a linked
+    # duplicate of that asset's already-built source.
+    mesh_groups = {}      # source index -> (entry, [table rows])
+    prefab_groups = {}    # id(entry) -> (entry, [table rows])
     for row, entry in row_entries:
         if entry[0] == "mesh":
-            mesh_rows.setdefault(entry[1], []).append(row)
+            mesh_groups.setdefault(entry[1], (entry, []))[1].append(row)
         else:
-            prefab_rows.setdefault(id(entry), (entry, []))[1].append(row)
+            prefab_groups.setdefault(id(entry), (entry, []))[1].append(row)
 
-    for source_index, rows in mesh_rows.items():
-        matrices = _BLENDER.convert_root_matrices(unity[rows])
-        visible_indices.append(np.full(len(rows), source_index, dtype=np.int32))
-        visible_matrices.append(matrices)
+    for entry, rows in mesh_groups.values():
+        _place_copies(entry[2], sources[entry[1]],
+                      _BLENDER.convert_root_matrices(unity[rows]))
         report.placed += len(rows)
 
-    for entry, rows in prefab_rows.values():
-        _kind, indexed, cameras, lights = entry
+    for entry, rows in prefab_groups.values():
+        _kind, indexed, cameras, lights, collection = entry
         placement_unity = unity[rows]                       # (r, 4, 4)
-        for source_index, local, hidden in indexed:
-            combined = placement_unity @ np.asarray(local, dtype=np.float64)[None]
-            matrices = _BLENDER.convert_root_matrices(combined)
-            target_i = hidden_indices if hidden else visible_indices
-            target_m = hidden_matrices if hidden else visible_matrices
-            target_i.append(np.full(len(rows), source_index, dtype=np.int32))
-            target_m.append(matrices)
-            if hidden:
-                report.hidden_placed += len(rows)
-            else:
-                report.placed += len(rows)
+        if len(indexed) == 1:
+            # A single-piece prop needs no grouping node: fold its own local
+            # transform into the placement and place the piece itself.
+            source_index, local, _hidden = indexed[0]
+            _place_copies(collection, sources[source_index],
+                          _BLENDER.convert_root_matrices(
+                              placement_unity @ np.asarray(local, dtype=np.float64)[None]))
+        else:
+            for source_index, local, _hidden in indexed:
+                sources[source_index].matrix_basis = Matrix(
+                    _BLENDER.convert_matrix(local).tolist())
+            _place_anchored(collection, [sources[i] for i, _l, _h in indexed],
+                            _BLENDER.convert_root_matrices(placement_unity),
+                            collection.name)
+        hidden_pieces = sum(1 for _i, _l, hidden in indexed if hidden)
+        report.placed += len(rows) * (len(indexed) - hidden_pieces)
+        report.hidden_placed += len(rows) * hidden_pieces
+
         for camera, world in cameras:
             data = _camera_data(camera)
             for blender_world in _BLENDER.convert_root_matrices(
                     placement_unity @ np.asarray(world, dtype=np.float64)[None]):
-                _place_aimed(context, data, camera.name, blender_world, camera.disabled)
+                _place_aimed(collection, data, camera.name, blender_world, camera.disabled)
                 report.cameras += 1
         for light, world in lights:
             data = _light_data(light)
             for blender_world in _BLENDER.convert_root_matrices(
                     placement_unity @ np.asarray(world, dtype=np.float64)[None]):
-                _place_aimed(context, data, light.name, blender_world, light.disabled)
+                _place_aimed(collection, data, light.name, blender_world, light.disabled)
                 report.lights += 1
 
-    sources_collection = scene_instancer.build_sources_collection(
-        "RuriScene Sources", sources)
-    if visible_indices:
-        scene_instancer.build_instancer(
-            context, "RuriScene", sources_collection,
-            np.concatenate(visible_indices), np.concatenate(visible_matrices))
-    if hidden_indices:
-        scene_instancer.build_instancer(
-            context, "RuriScene Hidden", sources_collection,
-            np.concatenate(hidden_indices), np.concatenate(hidden_matrices), hidden=True)
-
-    report.phases["instancing"] = time.time() - instancing
+    report.phases["placing"] = time.time() - placing
     if mat_builder is not None:
         report.materials = len(mat_builder._content_cache)
         report.textures = len(mat_builder._image_cache)
