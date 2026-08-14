@@ -185,11 +185,11 @@ class G:
         return self.comb(s, s, s)
 
     # ---- 纹理/几何/变换 ----
-    def tex(self, name, uv, non_color=False, clamp=False, interp='Linear'):
+    def tex(self, name, uv, non_color=False, extension='REPEAT', interp='Linear'):
         # 模板里恒用**中性占位图**,且图名 == 逻辑槽名 —— 材质克隆模板后按这个名字认出槽位、
         # 换成自己的真贴图(Blender 无贴图 socket,这是唯一能把组做成可复用模板的办法)。
         # 同名同 uv 同参采样合并成一个节点:克隆重映射按图名找节点,少一份完全兼容。
-        k = ('tx', name, self._ck(uv), non_color, clamp, interp)
+        k = ('tx', name, self._ck(uv), non_color, extension, interp)
         hit = self._cse.get(k)
         if hit is not None:
             return hit
@@ -203,7 +203,7 @@ class G:
         nd.interpolation = interp
         # 查找表/屏幕派生 UV 类必须钳制:REPEAT 下 U→0/1 会与另一端插值,
         # 在阴影最深/最亮处炸出一条突变细线(见生成器 ClampedTextures 注)。
-        nd.extension = 'EXTEND' if clamp else 'REPEAT'
+        nd.extension = extension
         # 数据类贴图(生成期按槽语义定)统一 Non-Color;克隆换图时按占位图的这个设定跟随。
         if non_color:
             img.colorspace_settings.name = 'Non-Color'
@@ -231,10 +231,10 @@ class G:
 
         x1 = self.math('ADD', x0, 1.0)
         y1 = self.math('ADD', y0, 1.0)
-        c00, a00 = self.tex(name, texel_uv(x0, y0), non_color, clamp=True, interp='Closest')
-        c10, _ = self.tex(name, texel_uv(x1, y0), non_color, clamp=True, interp='Closest')
-        c01, _ = self.tex(name, texel_uv(x0, y1), non_color, clamp=True, interp='Closest')
-        c11, _ = self.tex(name, texel_uv(x1, y1), non_color, clamp=True, interp='Closest')
+        c00, a00 = self.tex(name, texel_uv(x0, y0), non_color, extension='EXTEND', interp='Closest')
+        c10, _ = self.tex(name, texel_uv(x1, y0), non_color, extension='EXTEND', interp='Closest')
+        c01, _ = self.tex(name, texel_uv(x0, y1), non_color, extension='EXTEND', interp='Closest')
+        c11, _ = self.tex(name, texel_uv(x1, y1), non_color, extension='EXTEND', interp='Closest')
         top = self.mixv(fx, c00, c10)
         bot = self.mixv(fx, c01, c11)
         return self.mixv(fy, top, bot), a00
@@ -488,8 +488,8 @@ class GV(G):
     随对象转,与游戏的世界重力有偏——文档级偏差,_FurGravityStrength 缺省 0)。
     相机位置经 vtrans(CAMERA→WORLD, POINT) 落 input_camPos socket,由 wrapper 喂对象空间值。"""
 
-    def tex(self, name, uv, non_color=False, clamp=False, interp='Linear'):
-        k = ('tx', name, self._ck(uv), non_color, clamp, interp)
+    def tex(self, name, uv, non_color=False, extension='REPEAT', interp='Linear'):
+        k = ('tx', name, self._ck(uv), non_color, extension, interp)
         hit = self._cse.get(k)
         if hit is not None:
             return hit
@@ -503,7 +503,7 @@ class GV(G):
         nd.inputs['Image'].default_value = img
         nd.label = name
         nd.interpolation = interp
-        nd.extension = 'EXTEND' if clamp else 'REPEAT'
+        nd.extension = extension
         self._set(nd.inputs['Vector'], uv)
         r = (nd.outputs['Color'], nd.outputs['Alpha'])
         self._cse[k] = r
