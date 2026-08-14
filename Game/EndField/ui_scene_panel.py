@@ -17,7 +17,7 @@ a character that is already in the scene.
 from __future__ import annotations
 
 import bpy
-from bpy.props import (BoolProperty, CollectionProperty, IntProperty,
+from bpy.props import (BoolProperty, CollectionProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 
 from ...RuriRipperPyBridge.session import cabmap_state
@@ -88,6 +88,14 @@ class RURI_PG_ui_scene(bpy.types.PropertyGroup):
     apply_environment: BoolProperty(name="Sun + Ambient", default=True,
                                     description="Build the stage's directional light and set the "
                                                 "world colour from its own sky SH")
+    exposure_ev: FloatProperty(
+        name="Exposure", default=0.0, soft_min=-8.0, soft_max=8.0, step=10, precision=2,
+        description="Stops applied to everything this stage lights -- the sun AND the sky "
+                    "ambient together, so the balance the asset states is preserved. 0 is the "
+                    "asset's own values, unscaled. This control exists because the game sets "
+                    "its absolute level at RUNTIME by metering the frame (HGAutoExposure); no "
+                    "field in the asset pins it, so there is nothing to read and nothing "
+                    "honest to guess")
     apply_character_params: BoolProperty(name="Character Params", default=True,
                                          description="Push the stage's HGCharacterVolume onto every "
                                                      "Endfield material already in the scene")
@@ -154,20 +162,13 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
 
-        # The stage's own frame exposure, read whether or not its sun is being
-        # applied: it is a property of the STAGE, and the prefab's own lights
-        # below have to be written in the same units as that sun or the two
-        # disagree by orders of magnitude.
-        env_data = ui_scene_state.document(row["env"]["path"])
-        exposure = ui_scene_importer.pre_exposure(env_data) if env_data else 1.0
-
         done = []
         if state.apply_environment:
+            env_data = ui_scene_state.document(row["env"]["path"])
             if env_data:
-                sun = ui_scene_importer.apply_environment(context, env_data, row["label"] + " Sun")
+                sun = ui_scene_importer.apply_environment(
+                    context, env_data, row["label"] + " Sun", state.exposure_ev)
                 done.append("sun " + (sun.name if sun else "(no direction in asset)"))
-                done.append("exposure x{0:.6g}".format(exposure) if exposure != 1.0
-                            else "no exposure in asset (radiance left un-exposed)")
 
         if state.apply_character_params:
             for char_volume in row["char_volumes"]:
@@ -181,7 +182,7 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
 
         if state.import_art and row["stage_prefabs"]:
             try:
-                reports = self._import_stage(context, row, exposure)
+                reports = self._import_stage(context, row)
             except Exception as exc:
                 _report_exception(self, "Stage import failed", exc)
                 return {"CANCELLED"}
@@ -195,11 +196,9 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
         self.report({"INFO"}, "{0}: {1}".format(row["label"], "; ".join(done) or "nothing selected to apply"))
         return {"FINISHED"}
 
-    def _import_stage(self, context, row, exposure):
+    def _import_stage(self, context, row):
         """Import the stage prefab the ordinary way -- one closure, the shared
-        prefab importer, whatever hierarchy the game authored. The stage's own
-        exposure rides along in the options so the prefab's lights land in the
-        same units as the environment's sun."""
+        prefab importer, whatever hierarchy the game authored."""
         bridge = cabmap_state.BRIDGE
         cabs = list(bridge.resolve_cabs_for_paths(row["stage_prefabs"]))
         if not cabs:
@@ -209,9 +208,8 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
             assets, clip_curve_blobs=bridge.clip_curves_by_guid,
             mesh_blobs=bridge.mesh_blobs_by_guid,
             asset_paths=bridge.asset_paths_by_guid)
-        options = dict(context.scene.ruri_cabmap.as_options())
-        options["pre_exposure"] = exposure
-        return ui_scene_importer.import_stage(context, db, roots, options)
+        return ui_scene_importer.import_stage(
+            context, db, roots, context.scene.ruri_cabmap.as_options())
 
 
 def draw_ui_scene_tab(layout, context):
@@ -248,6 +246,9 @@ def draw_ui_scene_tab(layout, context):
     options = layout.column(align=True)
     options.enabled = row is not None
     options.prop(state, "apply_environment")
+    exposure_row = options.row()
+    exposure_row.enabled = state.apply_environment
+    exposure_row.prop(state, "exposure_ev")
     options.prop(state, "apply_character_params")
     options.prop(state, "apply_post")
     options.prop(state, "import_art")
