@@ -67,7 +67,7 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
         if decoded.colors is not None:
             color_attr.data.foreach_set("color", decoded.colors[loop_verts].reshape(-1))
         else:
-            color_attr.data.foreach_set("color", [1.0] * (len(mesh.loops) * 4))
+            color_attr.data.foreach_set("color", np.ones(len(mesh.loops) * 4, dtype=np.float32))
 
     # Custom split normals if the stored normals decoded sanely. Blender keeps
     # these in an INT16_2D corner attribute, so a round trip is lossy by ~0.15
@@ -86,8 +86,7 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
                   f"({type(exc).__name__}: {exc}) -- Blender will average its own "
                   f"instead, which will not match the game's shading.")
 
-    for poly in mesh.polygons:
-        poly.use_smooth = True
+    mesh.polygons.foreach_set("use_smooth", np.ones(n_tris, dtype=bool))
 
     mesh.validate(clean_customdata=False)
     mesh.update()

@@ -211,6 +211,16 @@ def register():
     prefs = bpy.context.preferences.addons[__package__].preferences
     pythonnet_bridge.set_bin_dir(prefs.ripperhook_repo)
     pythonnet_bridge.set_bin_dir_hint(_BIN_DIR_HINT)
+    # What container every texture crosses in. Blender reads tga natively, so
+    # declaring nothing (keep each texture's authored container) looks like the
+    # neutral choice -- and is the expensive one, measured on a real scene
+    # window: the exporter's tga writer runs inside a process-wide lock while
+    # its png writer is lockless FPng, and tga is uncompressed. Same window,
+    # same pixels (both containers encode the identical 8-bit buffer, so this
+    # is lossless): texture stage 7.9s -> 4.1s, encode CPU 117s -> 29s, payload
+    # 1472MB -> 754MB. exr/hdr stay declared because a float texture naturally
+    # picks one of those, and png would truncate it to 8 bits.
+    pythonnet_bridge.set_texture_formats(("png", "exr", "hdr"))
     # Claim the process-wide CLR runtime (CoreCLR) as early as possible, before
     # any other addon in this profile gets a chance to trigger its own lazy
     # `import clr` (which defaults to .NET Framework on Windows and would

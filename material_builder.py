@@ -42,6 +42,23 @@ def _is_builtin_shader(props):
     return props.shader_guid() in _BUILTIN_RESOURCE_GUIDS
 
 
+def _material_content_digest(doc):
+    """A stable digest of what a Material document DECLARES -- its shader
+    reference and its whole property table -- independent of which guid or CAB
+    carries it. json with sorted keys over the already-parsed document data, so
+    two content-equal materials digest equally regardless of key order."""
+    import hashlib
+    import json
+
+    payload = {
+        "shader": doc.data.get("m_Shader"),
+        "properties": doc.data.get("m_SavedProperties"),
+        "name": doc.data.get("m_Name"),
+    }
+    text = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
 def _shader_identity(builder, props):
     guid = props.shader_guid()
     if not guid:
@@ -125,65 +142,50 @@ def post_stages_installed(scene):
 def _image_from_texture_bytes(data, name):
     """Load an exported texture's raw bytes (produced by AssetRipper's own
     TextureConverter, so no compressed/mipmap formats ever reach here) into a
-    Blender image through a temp file and Blender's OWN native image loader --
-    the same path disk-mode texture loading already used (bpy.data.images.load),
-    NOT Pillow. Measured on the real Pelica texture set (66 textures): the
-    previous PIL-decode + numpy + foreach_set push cost 5.3s wall (dominated by
-    Pillow's own import, itself slowed by a known CPython enum-module
-    regression); the native loader does the same 66 textures in 0.16s --
-    pixel-identical (0.0 max delta), since it's the exact decoder Blender uses
-    for every other image in the file.
+    Blender image via a PERSISTENT cache file and Blender's OWN native image
+    loader (bpy.data.images.load) -- NOT Pillow; measured pixel-identical and
+    30x faster on the real Pelica texture set.
 
-    The container is deliberately not named or checked anywhere: Blender's loader
-    identifies an image by its content, so png/tga/exr all arrive the same way and
+    The image is NOT packed. Packing pinned every texture's full bytes inside
+    the .blend session forever -- on a scene window with hundreds of textures
+    that is gigabytes of working set Blender can never evict. Loaded from a
+    real file instead, Blender's own image cache pages pixels in and out under
+    its own memory budget, and a re-import reuses both the file and the loaded
+    datablock (check_existing).
+
+    The cache is CONTENT-ADDRESSED, and has to be: an export batch mints fresh
+    guids every run, so keying on a guid gives a cache that never hits and
+    grows by the whole texture set per import (measured: 213 textures -> 426
+    files after two runs). A digest of the bytes also self-invalidates when the
+    game updates a texture, and collapses duplicates shipped under several
+    names. The cache lives in the toolchain workspace (never the addon
+    checkout, never a temp dir that vanishes while the .blend still references
+    it); the container is deliberately not named or checked anywhere -- Blender
+    identifies an image by content, so png/tga/exr all arrive the same way and
     a new export format needs no code here."""
-    import tempfile
+    import hashlib
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     try:
-        tmp.write(data)
-        tmp.close()
-        try:
-            image = bpy.data.images.load(tmp.name)
-        except RuntimeError:
-            return None
-        image.name = name
-        target = "//textures/" + name + _image_extension(image)
-        # Pack first (it reads the file still on disk), THEN name both records.
-        # Unpack writes to the path stamped on the packed-file record, NOT to
-        # image.filepath -- which is why clearing image.filepath used to leave
-        # every unpacked texture named tmpXXXXXXXX.img. Exactly one packed file
-        # exists here: this loads a single image, never a UDIM tile set.
-        image.pack()
-        image.packed_files[0].filepath = target
-        image.filepath_raw = target
-    finally:
-        os.unlink(tmp.name)
+        from .RuriRipperPyBridge.runtime import workspace
+    except ImportError:  # standalone (non-package) testing
+        from RuriRipperPyBridge.runtime import workspace
+
+    cache_dir = workspace.subdir("texture_cache")
+    path = os.path.join(cache_dir,
+                        "{0}.img".format(hashlib.blake2b(data, digest_size=16).hexdigest()))
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) != len(data):
+            with open(path, "wb") as handle:
+                handle.write(data)
+    except OSError:
+        return None
+    try:
+        image = bpy.data.images.load(path, check_existing=True)
+    except RuntimeError:
+        return None
+    image.name = name
     _disable_alpha_interpretation(image)
     return image
-
-
-def _image_extension(image):
-    """The extension Blender itself uses for this image's DETECTED format, read
-    out of Blender's own format table rather than a map here -- a container this
-    importer has never seen still unpacks under a truthful name.
-
-    Falls back to the format's own name, never to a guess like ".png": naming a
-    DDS ".png" would be worse than an unusual extension."""
-    fallback = "." + (image.file_format or "img").lower()
-    render = getattr(getattr(bpy.context, "scene", None), "render", None)
-    if render is None:
-        return fallback
-    previous = render.image_settings.file_format
-    try:
-        render.image_settings.file_format = image.file_format
-        return render.file_extension or fallback
-    except (TypeError, ValueError):
-        # Blender can READ formats it cannot render to (dds, ...); those simply
-        # have no entry in that table.
-        return fallback
-    finally:
-        render.image_settings.file_format = previous
 
 
 def _disable_alpha_interpretation(image):
@@ -364,10 +366,17 @@ class MaterialBuilder:
         self.db = asset_db
         self.options = options
         self._cache = {}            # guid -> bpy material
+        self._content_cache = {}    # property-content digest -> bpy material
         self._image_cache = {}      # path -> bpy image
 
     def build_from_ref(self, ref):
-        """Build/return a material from a {fileID, guid} reference."""
+        """Build/return a material from a {fileID, guid} reference.
+
+        Two cache layers, both identity-true: the guid (this exact asset), then
+        a digest of the material's OWN declared content (shader reference +
+        m_SavedProperties). A streaming map ships the same material stamped
+        into many chunks under distinct guids; content-equal materials build
+        one Blender material, not hundreds of identical ones."""
         if not isinstance(ref, dict):
             return None
         guid = ref.get("guid")
@@ -381,7 +390,11 @@ class MaterialBuilder:
             mat = bpy.data.materials.new("UnityMaterial")
             self._cache[guid] = mat
             return mat
-        mat = self._build(doc)
+        digest = _material_content_digest(doc)
+        mat = self._content_cache.get(digest)
+        if mat is None:
+            mat = self._build(doc)
+            self._content_cache[digest] = mat
         self._cache[guid] = mat
         return mat
 

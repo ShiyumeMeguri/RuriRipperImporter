@@ -81,7 +81,8 @@ STREAMING = "streaming"
 SCENES = {SELF_CONTAINED: [], STREAMING: []}   # kind -> list[dict]
 LANDMARKS = {}          # streaming map id -> list[dict], its named places
 SUMMARIES = {}          # map id -> dict, the cached per-map chunk summary
-PLACEMENTS = []         # list[dict] -- the current selection's IMPORTABLE placements
+TABLE = None            # ColumnTable -- the current selection's IMPORTABLE placements, columnar
+MATERIALS_BY_ROW = {}   # {placement row -> tuple of material container paths}
 COUNTS = {}             # the discovery's own counts (total/no_transform/lod_filtered/distinct_assets)
 SEED_PATHS = []         # list[str] -- the container paths the C# reduction extracted
 RESOLVED_CABS = []      # list[str] -- the seed CABs an import of it needs
@@ -89,6 +90,10 @@ CLOSURE_CABS = 0        # how many CABs those seeds pull in, the real memory pro
 CURRENT_MAP = ""
 CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
 STATUS = "Refresh to read the game's scene list."
+
+
+def placeable_count():
+    return 0 if TABLE is None else len(TABLE)
 
 
 def load_scenes(language):
@@ -137,11 +142,12 @@ def load_summary(map_name):
 
 def discover_placements(map_name, rect, scene_state_id, lod0_only):
     """What one world rect of one map places, reduced on the C# side that
-    decoded it: PLACEMENTS holds only the importable rows, SEED_PATHS the
-    container paths an import needs, COUNTS the drop accounting. Resets state
-    tied to whatever was discovered before -- a different selection's estimate
-    is not meaningful once the placement list has changed."""
-    global PLACEMENTS, COUNTS, SEED_PATHS, RESOLVED_CABS, CLOSURE_CABS
+    decoded it: TABLE holds only the importable rows (columnar, see
+    datasets.placements), MATERIALS_BY_ROW the sparse per-row material paths,
+    SEED_PATHS the container paths an import needs, COUNTS the drop accounting.
+    Resets state tied to whatever was discovered before -- a different
+    selection's estimate is not meaningful once the placement set has changed."""
+    global TABLE, MATERIALS_BY_ROW, COUNTS, SEED_PATHS, RESOLVED_CABS, CLOSURE_CABS
     global CURRENT_MAP, CURRENT_WINDOW, STATUS
     min_x, min_z, max_x, max_z = rect
     # A scene state filter is a LIST on the wire; the panel picks one at a time,
@@ -150,15 +156,16 @@ def discover_placements(map_name, rect, scene_state_id, lod0_only):
     result = datasets.placements(
         map_name, min_x, min_z, max_x, max_z,
         [chosen] if chosen else [], lod0_only)
-    PLACEMENTS = result["placements"]
+    TABLE = result["table"]
+    MATERIALS_BY_ROW = result["materials_by_row"]
     SEED_PATHS = result["seed_paths"]
     COUNTS = {key: result[key] for key in ("total", "no_transform", "lod_filtered", "distinct_assets")}
     RESOLVED_CABS = []
     CLOSURE_CABS = 0
     CURRENT_MAP = map_name
     CURRENT_WINDOW = (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
-    STATUS = "{0} placement(s) in {1}, state {2}.".format(len(PLACEMENTS), map_name, scene_state_id)
-    return PLACEMENTS
+    STATUS = "{0} placement(s) in {1}, state {2}.".format(len(TABLE), map_name, scene_state_id)
+    return TABLE
 
 
 def estimate():
@@ -174,7 +181,7 @@ def estimate():
     as far more data loss than is happening."""
     return {
         "total_placements": COUNTS.get("total", 0),
-        "placeable": len(PLACEMENTS),
+        "placeable": placeable_count(),
         "no_transform": COUNTS.get("no_transform", 0),
         "lod_filtered": COUNTS.get("lod_filtered", 0),
         "distinct_assets": COUNTS.get("distinct_assets", 0),
@@ -200,12 +207,13 @@ def resolve_cabs(bridge):
 
 
 def reset():
-    global SCENES, LANDMARKS, SUMMARIES, PLACEMENTS, COUNTS, SEED_PATHS
+    global SCENES, LANDMARKS, SUMMARIES, TABLE, MATERIALS_BY_ROW, COUNTS, SEED_PATHS
     global RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
     SCENES = {SELF_CONTAINED: [], STREAMING: []}
     LANDMARKS = {}
     SUMMARIES = {}
-    PLACEMENTS = []
+    TABLE = None
+    MATERIALS_BY_ROW = {}
     COUNTS = {}
     SEED_PATHS = []
     RESOLVED_CABS = []

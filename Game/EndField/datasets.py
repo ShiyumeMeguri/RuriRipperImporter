@@ -197,25 +197,30 @@ def placements(map_name, min_x, min_z, max_x, max_z, scene_state_ids, lod0_only)
     """One world rect's importable content. The placements, their material paths
     and the drop accounting are three datasets over ONE discovery -- the reader
     memoizes on the argument set they share, so asking for all three decodes the
-    window once."""
+    window once.
+
+    The placement rows stay COLUMNAR (the ColumnTable itself): a real window is
+    10^5 rows, read only in bulk -- transform columns feed one batched matrix
+    build, the asset-path column one distinct-key pass. Materializing a python
+    dict per row was pure overhead paid before a single object existed. Only the
+    sparse per-row material lists are folded into a plain dict here."""
     window = {"map": map_name, "minX": min_x, "minZ": min_z, "maxX": max_x, "maxZ": max_z,
               "sceneState": list(scene_state_ids), "lod0Only": lod0_only}
-    rows = _rows(PLACEMENTS, **window)
-    for row in rows:
-        row["asset_path"] = row.pop("assetPath")
-        row["entity_name"] = row.pop("entityName")
-        row["source_chunk"] = row.pop("sourceChunk")
-        row["material_asset_paths"] = []
+    table = _table(PLACEMENTS, **window)
 
-    for material in _rows(PLACEMENT_MATERIALS, **window):
-        index = _int(material["placement"])
-        if 0 <= index < len(rows):
-            rows[index]["material_asset_paths"].append(material["path"])
+    materials = _table(PLACEMENT_MATERIALS, **window)
+    materials_by_row = {}
+    if len(materials):
+        placement_column = materials.values("placement")
+        path_column = materials.values("path")
+        for i in range(len(materials)):
+            materials_by_row.setdefault(int(placement_column[i]), []).append(path_column[i])
 
     counts = _rows(PLACEMENT_COUNTS, **window)
     count = counts[0] if counts else {}
     return {
-        "placements": rows,
+        "table": table,
+        "materials_by_row": {row: tuple(paths) for row, paths in materials_by_row.items()},
         "seed_paths": _column(SEED_PATHS, "path", **window),
         "total": _int(count.get("total", 0)),
         "no_transform": _int(count.get("noTransform", 0)),

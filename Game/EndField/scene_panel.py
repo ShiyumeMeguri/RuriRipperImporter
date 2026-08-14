@@ -282,7 +282,8 @@ class _SceneListMixin(filter_ui.FilterStateMixin):
                             description="Keep only the best available LOD sibling per placed instance; "
                                         "affects both the estimate and the import")
     reset_scene: BoolProperty(name="Reset Scene", default=True,
-                              description="Delete existing scene objects before importing")
+                              description="Delete existing scene objects and purge now-orphaned "
+                                          "data (previous imports' sources) before importing")
 
 
 class RURI_PG_scene_box(_SceneListMixin, bpy.types.PropertyGroup):
@@ -422,36 +423,45 @@ class RURI_OT_scene_import(bpy.types.Operator):
         if state.reset_scene:
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
+            # The previous import's source objects live in an UNLINKED collection
+            # (that is what keeps them out of the outliner), so deleting the scene
+            # objects orphans them rather than freeing them -- purge, or every
+            # re-import of a window stacks another full asset set in bpy.data.
+            bpy.data.orphans_purge(do_recursive=True)
 
         try:
-            assets, roots, _seed_roots, _clips_by_cab, _scene_roots = \
-                cabmap_state.BRIDGE.import_cabs(scene_state.RESOLVED_CABS)
+            report = scene_importer.import_scene_window(
+                context, cabmap_state.BRIDGE, context.scene.ruri_cabmap.as_options())
         except Exception as exc:
-            _report_exception(self, "Scene import (bridge) failed", exc)
+            _report_exception(self, "Scene import failed", exc)
             return {"CANCELLED"}
 
-        db = _bridge_asset_db_module().BridgeAssetDatabase(
-            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-        try:
-            imported, placed, unresolved = scene_importer.import_scene_placements(
-                context, db, scene_state.PLACEMENTS, roots,
-                context.scene.ruri_cabmap.as_options())
-        except Exception as exc:
-            _report_exception(self, "Scene placement build failed", exc)
-            return {"CANCELLED"}
-
-        self.report({"INFO"}, f"Imported {imported} distinct asset(s), placed {placed} object(s)"
-                              + (f", {unresolved} unresolved" if unresolved else "") + ".")
+        for warning in report.warnings:
+            print("[RuriRipper] scene: " + warning)
+        print("[RuriRipper] scene phases: " + report.phase_summary())
+        if report.no_geometry:
+            print("[RuriRipper] scene: {0} placement(s) of {1} asset(s) carry no geometry in the "
+                  "game's own data (collision proxies) -- nothing was lost: {2}".format(
+                      report.no_geometry, len(report.no_geometry_assets),
+                      ", ".join(report.no_geometry_assets[:5])))
+        if report.unresolved_materials:
+            print("[RuriRipper] scene: {0} material path(s) did not resolve -- those slots are "
+                  "EMPTY on the meshes that named them: {1}".format(
+                      len(report.unresolved_materials),
+                      ", ".join(report.unresolved_materials[:5])))
+        # An unresolved placement IS lost content. It gets the operator's ERROR
+        # channel, not a number buried in an INFO line -- that is exactly how 3
+        # missing foliage imposters hid inside a count for a whole session.
+        if report.unresolved:
+            for path in report.unresolved_paths:
+                print("[RuriRipper] scene: UNRESOLVED " + path)
+            self.report({"ERROR"}, "{0} placement(s) of {1} asset(s) did NOT resolve and are "
+                                   "MISSING from the scene (paths in the console). {2}".format(
+                                       report.unresolved, len(report.unresolved_paths),
+                                       report.summary()))
+            return {"FINISHED"}
+        self.report({"INFO"}, report.summary())
         return {"FINISHED"}
-
-
-def _bridge_asset_db_module():
-    """Imported lazily: only the bridge path needs it, and the scene tabs draw
-    long before any bridge session exists."""
-    from ...RuriRipperPyBridge.unity import bridge_asset_db
-    return bridge_asset_db
 
 
 def _draw_list(layout, state):
@@ -463,7 +473,7 @@ def _draw_list(layout, state):
 
 
 def _draw_estimate(layout, state):
-    if not scene_state.PLACEMENTS:
+    if not scene_state.placeable_count():
         return
     est = scene_state.estimate()
     box = layout.box()
