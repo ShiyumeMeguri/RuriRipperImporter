@@ -10,6 +10,10 @@ publishes ``install`` / ``uninstall`` / ``installed`` / ``stage_node``; the
 parameters drawn below are simply the unconnected input sockets of the group
 node the stage put in the tree, so a chain that grows a knob grows a row here
 with no code change.
+
+Drawn as a top-level tab of the main panel rather than a panel of its own: it is
+scene state, so it belongs beside the browser and the game's tabs, not under
+whichever game happens to be open.
 """
 
 from __future__ import annotations
@@ -143,23 +147,12 @@ def draw_post_tab(layout, context):
             box.label(text="This chain exposes no parameters yet.", icon="INFO")
 
 
-class RURI_PT_post(bpy.types.Panel):
-    bl_idname = "RURI_PT_post"
-    bl_label = "Post Processing"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "RuriRipper"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        draw_post_tab(self.layout, context)
-
-
+# 面板本体不在这里注册:后处理是主面板的一格 tab(cabmap_panel._post_tab),
+# 与游戏无关、装了后处理栈才出现。这里只留它的操作符。
 _CLASSES = (
     RURI_OT_post_install,
     RURI_OT_post_remove,
     RURI_OT_post_reset,
-    RURI_PT_post,
 )
 
 

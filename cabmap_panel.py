@@ -51,6 +51,10 @@ except ImportError:  # standalone (non-package) testing
 # why nothing here names a game or knows how many tabs exist.
 BROWSER_TAB_ID = "assetbundle"
 BROWSER_TAB_LABEL = "VirtualAssetBundle"
+# 后处理是**宿主级**的:它占的是 scene.compositing_node_group / view transform,
+# 与哪个游戏在浏览无关 —— 所以它不是任何游戏的 GameTab,而是装了后处理栈就出现的一格。
+POST_TAB_ID = "post"
+POST_TAB_LABEL = "Post"
 BROWSER_TAB_DESCRIPTION = "Browse/search the loaded cabmap's rows and import individual assets"
 # Enabled for every session regardless of what is ticked -- see _hook_ids.
 _SORT_COLUMNS = (("name", "Name"), ("type_names", "Type"), ("deps", "Deps"), ("source", "Source"))
@@ -255,6 +259,38 @@ def _game_tabs(state):
     return Game.tabs_of(state.current_game)
 
 
+def _post_stages():
+    """宿主注册的后处理栈(生成物自注册进 material_builder)。惰性 import 与本文件其余
+    material_builder 用法同款,避免加载期环。"""
+    try:
+        from . import material_builder
+    except ImportError:
+        import material_builder
+    return material_builder.POST_STAGES
+
+
+class _HostTab:
+    """主面板一格的最小契约:key / label / draw —— 分发只用这三样。
+    不复用 GameTab:它的 key 按 owner 游戏加前缀(两个游戏可以各有一个 "scene" 格),
+    而后处理**不属于任何游戏**,借它会得到 ":post" 这种半吊子 key。"""
+
+    __slots__ = ("key", "label", "draw")
+
+    def __init__(self, key, label, draw):
+        self.key = key
+        self.label = label
+        self.draw = draw
+
+
+def _post_tab():
+    """后处理这一格:宿主级,装了后处理栈才存在。"""
+    try:
+        from . import post_panel
+    except ImportError:
+        import post_panel
+    return _HostTab(POST_TAB_ID, POST_TAB_LABEL, post_panel.draw_post_tab)
+
+
 def _active_tab(state):
     """The game tab actually being shown, or None for the browser.
 
@@ -265,6 +301,8 @@ def _active_tab(state):
     for tab in _game_tabs(state):
         if tab.key == state.active_tab:
             return tab
+    if state.active_tab == POST_TAB_ID and _post_stages():
+        return _post_tab()
     return None
 
 
@@ -273,6 +311,8 @@ def _tab_bar(state):
     current game's own."""
     entries = [(BROWSER_TAB_ID, BROWSER_TAB_LABEL)]
     entries.extend((tab.key, tab.label) for tab in _game_tabs(state))
+    if _post_stages():
+        entries.append((POST_TAB_ID, POST_TAB_LABEL))
     return entries
 
 

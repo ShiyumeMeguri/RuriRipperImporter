@@ -1,7 +1,7 @@
 """Endfield (Arknights: Endfield) -- everything the add-on has for this game and
 nothing else, across every hooked version of it.
 
-Three tabs, none of which means anything for another title:
+Two tabs, neither of which means anything for another title:
 
 ``StreamingScene``  the game's own scenes, every kind it ships, switched inside
                the tab: ``Scene`` the self-contained ones -- pick one from the
@@ -16,10 +16,11 @@ Three tabs, none of which means anything for another title:
 ``Character``  the SkeletalMorph facial system: browse the emotion/pose/lipsync
                library, bind its ctrl drivers to a rig, bake its animations.
                (``skeletal_morph`` + ``morph_state``)
-``Story``      the animations story playback uses, filed the way the game files
-               them: a cutscene by shot / kind / actor, a dialogue timeline by
-               spoken line. Cabmap-only to browse; a clip is built when checked.
-               (``story_panel``)
+               The cast browser's own row switches what the tab lists:
+               ``Characters``/``NPCs`` the two casts, ``Story`` the animations story
+               playback uses, filed the way the game files them -- a cutscene by
+               shot / kind / actor, a dialogue timeline by spoken line.
+               (``roster_panel`` + ``story_panel``)
 
 All of it lives here, including the parts that touch no bpy: the game's
 addressable-path conventions and its studio-written MonoBehaviour schemas are
@@ -73,10 +74,6 @@ GAME_MODULE = GameModule(
                 "Drive an imported character's face: the SkeletalMorph "
                 "emotion/pose/lipsync library and its morph animations",
                 character_panel.draw_character_tab),
-        GameTab("story", "Story",
-                "The animations the game plays during story, under its own filing: a cutscene "
-                "by shot and actor, a dialogue timeline by spoken line",
-                story_panel.draw_story_tab),
     ),
     register=_register,
     unregister=_unregister,

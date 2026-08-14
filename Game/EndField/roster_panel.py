@@ -81,6 +81,18 @@ def _on_filter_edit(self, context):
     _rebuild(self)
 
 
+CAST_PANE = "cast"
+STORY_PANE = "story"
+
+
+def _on_pane_change(self, context):
+    """三格一行里前两格选的是 cast,第三格根本不是 cast —— 所以 pane 是显示面、
+    kind 仍是「哪个 cast」。pane 单向写 kind(反向永不发生),两者语义各自完整。"""
+    state = context.scene.ruri_roster
+    if state.pane in (CHARACTERS, NPCS) and state.kind != state.pane:
+        state.kind = state.pane
+
+
 def _on_kind_change(self, context):
     """Switching cast only redraws; it never fires the refresh operator. An
     operator called from a property update runs with the UI mid-update, and its
@@ -96,6 +108,13 @@ def _on_kind_change(self, context):
 class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     FILTER_SPEC_KEY = "EndField:character"
 
+    pane: EnumProperty(
+        name="Pane",
+        items=[(CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
+               (NPCS, "NPCs", "Non-playable cast, one row per distinct model prefab"),
+               (STORY_PANE, "Story", "The animations the game plays during story, under its own filing")],
+        default=CHARACTERS,
+        update=_on_pane_change)
     kind: EnumProperty(
         name="Cast",
         items=[(CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
@@ -854,8 +873,11 @@ def draw_roster(layout, context):
     state = context.scene.ruri_roster
 
     head = layout.row(align=True)
-    head.prop(state, "kind", expand=True)
+    head.prop(state, "pane", expand=True)
     head.operator(RURI_OT_roster_refresh.bl_idname, text="", icon="FILE_REFRESH")
+
+    if state.pane == STORY_PANE:
+        return STORY_PANE
 
     filter_ui.draw_search_row(layout, state)
     layout.template_list(RURI_UL_roster.bl_idname, "", state, "entries",
@@ -872,6 +894,7 @@ def draw_roster(layout, context):
     options.operator(RURI_OT_roster_load.bl_idname, icon="IMPORT")
     options.operator(RURI_OT_roster_reveal.bl_idname, icon="FILE_FOLDER")
     options.operator(RURI_OT_roster_animations.bl_idname, icon="ANIM_DATA")
+    return state.pane
 
 
 _CLASSES = (
