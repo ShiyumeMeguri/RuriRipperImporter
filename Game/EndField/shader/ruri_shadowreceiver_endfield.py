@@ -929,6 +929,8 @@ def _img(name, rgba, non_color):
     img = bpy.data.images.get(name)
     if img is None:
         img = bpy.data.images.new(name, 4, 4, alpha=True)
+    # 占位身份标记:参数面板回读时据此不把中性占位当成用户绑的贴图。
+    img['ruri_placeholder'] = 1
     # 恒刷新:老会话同名旧占位(如白 _BumpMap)会被 get 命中,颜色必须跟上本次部署。
     img.generated_color = rgba
     # 色彩空间是**槽语义**,在这里定死 —— 曾经靠组内 g.tex 顺手设,贴图外提后那行
@@ -1451,12 +1453,22 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
     g._set(stmap.inputs['Vector'], tc.outputs['UV'])
     olattr = g._nd('ShaderNodeAttribute')
     olattr.attribute_name = 'ruri_outline'
+    # 对象空间位置 varying(树冠/树干高度渐变消费):texco Object 已是对象空间,
+    # 只差导入换轴的逆(Unity(x,y,z)=Blender(x,z,y))——入口 b2u 只管 WORLD varying,
+    # OS 量在接线处换,免得混进世界系换轴的 WORLD→OBJECT 一步。
+    os_sep = g._nd('ShaderNodeSeparateXYZ')
+    g._set(os_sep.inputs['Vector'], tc.outputs['Object'])
+    os_comb = g._nd('ShaderNodeCombineXYZ')
+    g._set(os_comb.inputs['X'], os_sep.outputs['X'])
+    g._set(os_comb.inputs['Y'], os_sep.outputs['Z'])
+    g._set(os_comb.inputs['Z'], os_sep.outputs['Y'])
     wires = {
         '_RuriOutlineShellGate': olattr.outputs['Fac'],
         'input_uv': stmap.outputs['Vector'],
         'input_uv1': uv1.outputs['UV'],
         'input_normalWS': geo.outputs['Normal'],
         'input_positionWS': geo.outputs['Position'],
+        'input_positionOS': os_comb.outputs['Vector'],
         'input_tangentWS': tan_ws,
         'input_tangentWS_w': tan_sign.outputs['Fac'],
         'input_color': col.outputs['Color'],
@@ -1943,7 +1955,7 @@ def apply_vertex_stage(objects=None, camera=None):
 #   全部键,「键存在」证明不了任何事(实锤:cloth 全带 _SkinRimOffScale,整套布料
 #   被吃成 Face 跑脸部 SDF,全身发暗)。解析不到 = 闭包丢依赖,响亮报错,禁止猜。
 PART_META = {
-    'ShadowReceiver': {'id': 0, 'transparent': True, 'shader': 'HGRP/CharacterNPR_ShadowReceiver', 'discriminator': None},
+    'ShadowReceiver': {'id': 0, 'transparent': True, 'shader': 'HGRP/CharacterNPR_ShadowReceiver', 'aliases': (), 'discriminator': None},
 }
 NON_SHADING_SHADERS = ()
 
@@ -1951,8 +1963,6 @@ CULL_PROPERTY = ''
 CULL_FIXED = 2
 GLOBALS = {
 }
-_shader_name_cache = {}
-
 
 def _cull_mode(props):
     """材质的 Unity Cull 值,按**本家族真源自己的属性名**读 —— `Cull [<名>]` 逐 shader
@@ -1971,42 +1981,30 @@ def _cull_mode(props):
 
 
 def _shader_name(builder, props):
-    """m_Shader 引用的 shader 自称名(闭包内该资产文本的 Shader \"...\" 行)。"""
-    ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
-    guid = (ref or {}).get('guid')
-    if not guid:
-        return None
-    guid = guid.lower()
-    if guid in _shader_name_cache:
-        return _shader_name_cache[guid]
-    name = None
-    text = builder.db._text(guid)
-    if text:
-        head = text.lstrip()
-        if head.startswith('Shader'):
-            first = head.split('\n', 1)[0]
-            q = first.find('"')
-            if q >= 0:
-                name = first[q + 1:first.find('"', q + 1)]
-    _shader_name_cache[guid] = name
-    return name
+    """m_Shader 的自称名 —— 唯一解析面在宿主(builder.shader_display_name):
+    闭包内 shader 资产的 Shader \"...\" 行。本模块自己不解析、不缓存 ——
+    两个生成栈各解析一遍就是同一语义两处真源。"""
+    return builder.shader_display_name(props)
 
 
 def _variant(builder, props):
     """(part 名, part id);非本风格/非着色 shader 返回 None(宿主落兜底材质)。
-    同 shader 多 part 时按 discriminator 开关分流(如 Fur 的 _UseCharacterFur)。"""
+    同 shader 多 part 时按 discriminator 开关分流(如 Fur 的 _UseCharacterFur);
+    aliases = 与本 part 共用同一表面的其它 shader 自称名(游戏按 LOD/批次切出的
+    同表面资产,如 Grass ↔ Grass Cardmesh Lod),认领等价、共用同一棵树。"""
     name = _shader_name(builder, props)
     if name is None:
         ref = props.shader_ref if isinstance(props.shader_ref, dict) else {}
-        print('[ruri-uber] !! 0DAY: material {0} 的 shader 引用 {1} 在闭包里解析不到 '
-              '—— 闭包丢了 shader 依赖,拒绝按指纹猜'.format(props.name, ref.get('guid')), flush=True)
+        print('[ruri-uber] !! 0DAY: material {0} 的 m_Shader {1}/{2} 解析不出自称名 '
+              '(闭包无此资产,引擎内置注册表也不认识)—— 拒绝按指纹猜,交宿主兜底'
+              .format(props.name, ref.get('guid'), ref.get('fileID')), flush=True)
         return None
     if name in NON_SHADING_SHADERS:
         print('[ruri-uber] {0} 用 {1}(非着色 part),不认领'.format(props.name, name), flush=True)
         return None
     fallback = None
     for part, meta in PART_META.items():
-        if meta['shader'] != name:
+        if meta['shader'] != name and name not in meta['aliases']:
             continue
         disc = meta['discriminator']
         if disc is None:
@@ -2158,6 +2156,7 @@ def provider(builder, props):
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
     print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} insts={5}'.format(
         name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(insts)), flush=True)
+    panel_sync(mat)
     return mat
 
 
@@ -2220,6 +2219,1415 @@ def refresh_light_tables():
     return touched
 
 
+# ============================ 材质参数面板 ============================
+# 参数面 = 从 C# 声明([ShaderProperty]/[MaterialTexture]/[ShaderPropertyHeader])反射派生的
+# **接口**,不是对节点树的遍历——平坦、分组、带量程、带功能门。此表是它的逐字投影。
+PANEL_KEY = 'ruri_shadowreceiver_endfield'
+PANEL_TITLE = 'Ruri_EndfieldShadowReceiver 参数'
+_PANEL_PROP = 'ruri_panel_' + PANEL_KEY
+INTERFACE = [
+    {'name': '基础', 'gate': None, 'rows': [
+        {'name': '_BaseMap', 'label': 'Albedo', 'kind': 'TEXTURE', 'st_node': 'RuriBaseMapST'},
+        {'name': '_BumpMap', 'label': 'Normal Map', 'kind': 'TEXTURE'},
+        {'name': '_RampMap', 'label': 'Diffuse Ramp Map', 'kind': 'TEXTURE'},
+        {'name': '_EmissionMap', 'label': 'Emission', 'kind': 'TEXTURE'},
+        {'name': '_OutlineMask', 'label': 'Outline Mask', 'kind': 'TEXTURE'},
+        {'name': '_HairBrowMask', 'label': 'Hair Brow Mask', 'kind': 'TEXTURE'},
+        {'name': '_RMOSMap', 'label': 'RMOS Map (R=Rough G=Metal B=Occ A=Spec)', 'kind': 'TEXTURE'},
+        {'name': '_RefractTex', 'label': '自定义折射贴图', 'kind': 'TEXTURE'},
+        {'name': '_WaterNormalMap', 'label': '水面法线贴图', 'kind': 'TEXTURE'},
+        {'name': '_WaterCausticMap', 'label': '水波纹贴图', 'kind': 'TEXTURE'},
+        {'name': '_DisplacementTex', 'label': '置换贴图', 'kind': 'TEXTURE'},
+        {'name': '_IceNormalMap', 'label': '冰块法线贴图', 'kind': 'TEXTURE'},
+        {'name': '_IceOpacityMap', 'label': '冰块不透明度贴图', 'kind': 'TEXTURE'},
+        {'name': '_BaseColorMap', 'label': 'Base Color Map', 'kind': 'TEXTURE'},
+        {'name': '_MaskMap', 'label': 'Mask Map', 'kind': 'TEXTURE'},
+        {'name': '_EmissiveMap', 'label': 'Emissive Map', 'kind': 'TEXTURE'},
+        {'name': '_LayerBlendMaskMap', 'label': 'Layer Blend Mask (R)', 'kind': 'TEXTURE'},
+        {'name': '_Layer1BaseMap', 'label': 'Layer1 Base (RGB)', 'kind': 'TEXTURE'},
+        {'name': '_Layer1BumpMap', 'label': 'Layer1 NRO (RG=N B=Rough A=AO)', 'kind': 'TEXTURE'},
+        {'name': '_BaseHeightMap', 'label': 'Base Height (R)', 'kind': 'TEXTURE'},
+        {'name': '_MatcapMap', 'label': 'Matcap Map', 'kind': 'TEXTURE'},
+        {'name': '_MacroNormalMap', 'label': 'Macro Normal', 'kind': 'TEXTURE'},
+        {'name': '_DetailMap', 'label': 'Detail Map (RG=N B=Rough A)', 'kind': 'TEXTURE'},
+        {'name': '_OffsetTex', 'label': 'Offset Tex (R)', 'kind': 'TEXTURE'},
+        {'name': '_OffsetMaskTex', 'label': 'Offset Mask Tex (R)', 'kind': 'TEXTURE'},
+        {'name': '_SubsurfaceMap', 'label': 'Subsurface Thickness (R)', 'kind': 'TEXTURE'},
+        {'name': '_ParallaxMap', 'label': 'Parallax Map', 'kind': 'TEXTURE'},
+        {'name': '_ILMMap', 'label': 'ILM Map', 'kind': 'TEXTURE'},
+        {'name': '_MetalMatcap', 'label': 'Metal Matcap', 'kind': 'TEXTURE'},
+        {'name': '_AddMatcapMap', 'label': 'Add Matcap', 'kind': 'TEXTURE'},
+        {'name': '_BurstTex', 'label': '爆发效果贴图 Burst Texture', 'kind': 'TEXTURE'},
+        {'name': '_ColorRamp', 'label': 'Color Ramp', 'kind': 'TEXTURE'},
+        {'name': '_DenierMap', 'label': 'Denier Map', 'kind': 'TEXTURE'},
+        {'name': '_DyeingTex', 'label': 'Dyeing Map', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex1', 'label': 'HightLightTex 1', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex2', 'label': 'HightLightTex 2', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex3', 'label': 'HightLightTex 3', 'kind': 'TEXTURE'},
+        {'name': '_IlmMap', 'label': 'ILM / Face SDF Map', 'kind': 'TEXTURE'},
+        {'name': '_BaseTex', 'label': 'Base Tex', 'kind': 'TEXTURE'},
+        {'name': '_DissolveTex', 'label': 'Dissolve Tex', 'kind': 'TEXTURE'},
+        {'name': '_Colortop', 'label': 'Color Top', 'kind': 'COLOR', 'size': 4, 'default': [0.02, 0.04, 0.09, 1.0]},
+        {'name': '_Colorbottom', 'label': 'Color Bottom', 'kind': 'COLOR', 'size': 4, 'default': [0.27, 0.16, 0.37, 1.0]},
+        {'name': '_BottomPos', 'label': 'Gradient Offset', 'kind': 'SLIDER', 'size': 1, 'min': -2.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_BottonWidth', 'label': 'Gradient Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_RimColor', 'label': 'Rim Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimPow', 'label': 'Rim Width (For Color)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_RimPow2', 'label': 'Rim Width (For Alpha)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_RimSterngth', 'label': 'Rim Strength', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_Opaqueness', 'label': 'Total Opaqueness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_BaseColor', 'label': 'Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BumpScale', 'label': 'Normal Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_ShadowSoft', 'label': 'Shadow Soft', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_RoughnessIntensity', 'label': 'Roughness Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_MetallicIntensity', 'label': 'Metallic Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_OcclusionIntensity', 'label': 'Occlusion Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_SpecularIntensity', 'label': 'Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EmissiveIntensity', 'label': 'Emissive Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 20.0, 'default': [1.0]},
+        {'name': '_UseCutoff', 'label': 'Use Alpha Cutoff', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Cutoff', 'label': 'Alpha Cutoff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseDitherClip', 'label': 'Use Dither Clip', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DitherAlpha', 'label': 'Dither Alpha Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SurfaceType', 'label': 'Surface Type', 'kind': 'INT', 'size': 2, 'default': [0.0]},
+        {'name': '_HairBrowMaskThreshold', 'label': 'Hair Brow Mask Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseRMOSMap', 'label': 'Use RMOS Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseRampMap', 'label': 'Use Ramp Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseBumpMap', 'label': 'Use Normal Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseEmission', 'label': 'Use Emission', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseMaskUV2', 'label': 'Use Mask UV2', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GameRenderStyle', 'label': 'Render Style', 'kind': 'VALUE', 'size': 2, 'default': [0.0]},
+        {'name': '_CharaPartID', 'label': 'Character Part', 'kind': 'INT', 'size': 2, 'default': [0.0]},
+        {'name': '_UseHairShadow', 'label': 'Use Hair Shadow', 'kind': 'INT', 'size': 1, 'default': [0.0]},
+        {'name': '_EyeShadowIntensity', 'label': 'Eye Shadow Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_UseAnisotropicSpecular', 'label': 'Use Anisotropic Specular', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropicGGX', 'label': 'Anisotropic GGX', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Anisotropy', 'label': 'Anisotropy', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_AnisotropyShift', 'label': 'Anisotropy Shift', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.05]},
+        {'name': '_UseStocking', 'label': 'Use Stocking Falloff', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_StockingCenterColor', 'label': 'Stocking Center Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_StockingFalloffColor', 'label': 'Stocking Falloff Color', 'kind': 'COLOR', 'size': 4, 'default': [0.1, 0.0, 0.0, 1.0]},
+        {'name': '_StockingFalloffPower', 'label': 'Stocking Falloff Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.1, 'max': 5.0, 'default': [1.0]},
+        {'name': '_CubemapIntensity', 'label': 'Cubemap Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EmissionColor', 'label': 'Emission Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_OutlineWidth', 'label': 'Outline Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_OutlineOffsetZ', 'label': 'Outline Offset Z', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_OutlineAverageNormal', 'label': 'Use Smooth Normal (UV2)', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_OutlineTintEnable', 'label': 'Outline Tint Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OutlineTintColor', 'label': 'Outline Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnableOutlineMask', 'label': 'Outline Mask Enable', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseVertexColorOutline', 'label': 'Use VertexColor Outline', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_BackFaceNormalFlip', 'label': 'Back Face Normal Flip', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AlphaPremultiply', 'label': 'Alpha Premultiply', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_FBXRotationFix', 'label': 'FBX -90 Z Rotation Fix (OTW col0/col1 swap)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_NormalScale', 'label': 'Normal Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_FresnelColor', 'label': 'Fresnel Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EffectPartID', 'label': 'Effect Part ID', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AlphaClipThreshold', 'label': 'Alpha Clip Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseAlphaTest', 'label': 'Use Alpha Test', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_IgnorePostExposure', 'label': 'Ignore Post Exposure', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_CullMode', 'label': 'Cull Mode', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_ExposureWithMiscParams', 'label': 'Exposure (y = post exposure)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXParams1', 'label': 'VFX Grade (rgb = tint, w = saturation)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ScenePartID', 'label': 'Scene Part (0=Lit 1=Forward 2=Transparent 3=Effect 4=EffectBlend 5=HLod 6=Unlit)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseReceiveShadows', 'label': 'Allow Receive Shadows', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseMaskMap', 'label': 'Use Mask Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TessellationFactor', 'label': 'Tessellation Factor', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 64.0, 'default': [16.0]},
+        {'name': '_TessellationMinDist', 'label': 'Min Distance', 'kind': 'VALUE', 'size': 1, 'default': [10.0]},
+        {'name': '_TessellationMaxDist', 'label': 'Max Distance', 'kind': 'VALUE', 'size': 1, 'default': [50.0]},
+        {'name': '_Use_VerexTexColorAsOpacity', 'label': '用顶点色控制Opacity', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Specular', 'label': 'Specular (Default 0.5)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_Roughness', 'label': '粗糙度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MatCapIgnorePostExposure', 'label': 'Matcap 不受自动曝光影响', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_RefractionIOR', 'label': '散射IOR', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_RefractionColor', 'label': '折射颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionFresnelColor', 'label': '折射菲涅尔颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionStrength', 'label': '折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_UseFresnel', 'label': 'Use Fresnel', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelBias', 'label': '菲涅尔偏移', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_FresnelAffectOpacity', 'label': '菲涅尔影响透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FresnelPower', 'label': 'Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_Use_VerexGAsFresnelOpacity', 'label': '使用顶点色G通道控制菲涅尔强度', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelUseMeshNormal', 'label': '菲涅尔效果使用模型法线', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelFlip', 'label': '翻转菲涅尔区域', 'kind': 'SWITCH', 'size': 1, 'default': [0.001]},
+        {'name': '_EnableGlassRefraction', 'label': '玻璃折射', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseCustomRefractTex', 'label': '折射类型 (0=折射率 1=自定义贴图)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_RefractTint', 'label': '折射染色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionContribution', 'label': '折射贡献', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_RefractThickness', 'label': '厚度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_IsShell', 'label': '玻璃类型 (0=实心 1=壳)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_IoR', 'label': '折射率 IoR', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_RefractTexIntensity', 'label': '折射贴图强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_RefractBrightness', 'label': '折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableGlassRim', 'label': '玻璃边缘高光', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassRimColor', 'label': '玻璃边缘颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_GlassRimPower', 'label': '玻璃边缘幂次', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 50.0, 'default': [1.0]},
+        {'name': '_GlassRimStrength', 'label': '玻璃边缘强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimRoughnessScale', 'label': '玻璃边缘粗糙度缩放', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimRefractionPower', 'label': '玻璃边缘折射幂次', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_GlassRimRefractionStrength', 'label': '玻璃边缘折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimUseMask', 'label': '使用边缘遮罩', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassRimMaskChannel', 'label': '边缘遮罩通道', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexColorAsRimMask', 'label': '使用顶点色作为边缘遮罩', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassMaskOpacity', 'label': '玻璃遮罩不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.995]},
+        {'name': '_EnableIce', 'label': '冰块效果', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_IceRefractionColor', 'label': '冰块折射颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_IceRefractionBrightness', 'label': '冰块折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceRefractionStrength', 'label': '冰块折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceRefractionMipBias', 'label': '冰块折射采样Mip偏移', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_IceOpacityMapTilling', 'label': '冰块不透明度贴图平铺', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [1.0]},
+        {'name': '_IceOpacityThreshold', 'label': '冰块不透明度阈值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableContainerWater', 'label': '容器液体效果', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_WaterShallowColor', 'label': '浅水颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterDeepColor', 'label': '深水颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterRefractionColor', 'label': '水折射颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterScatteringColor', 'label': '散射颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterAbsorptionColor', 'label': '吸收颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterSurfaceNormalScale', 'label': '水面法线强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_WaterNormalSpeed', 'label': '水面波动速度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_WaterFresnelPower', 'label': '水面菲涅尔强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_WaterReflectionStrength', 'label': '水面反射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_WaterRefractionStrength', 'label': '水面折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_WaterRefractionBrightness', 'label': '水面折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCupRadius', 'label': '杯体半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterMeniscusWidth', 'label': 'Meniscus宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterBaseOpacity', 'label': '基础不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityDepthFactor', 'label': '深度不透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityFresnelFactor', 'label': '菲涅尔不透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityMinimum', 'label': '最小不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityMaximum', 'label': '最大不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterEdgeOpacity', 'label': '边缘不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterTurbidity', 'label': '浑浊度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCausticStrength', 'label': '水波纹强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCausticSpeed', 'label': '水波纹速度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_IceballRadius', 'label': '冰球半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceballWaterlineWidth', 'label': '冰球水线宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IcePosition', 'label': '冰块位置', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DisplacementNormalStrength', 'label': '置换法线强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_NormalMapBlendWeight', 'label': '法线贴图混合权重', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_WaterStrokeDistance', 'label': '描边距离', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0395]},
+        {'name': '_WaterStrokeWidth', 'label': '描边宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0001, 'max': 0.1, 'default': [0.0352]},
+        {'name': '_WaterStrokeColor', 'label': '描边颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterStrokeOpacity', 'label': '描边不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterStrokeSoftness', 'label': '描边边缘柔和度', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 0.1, 'default': [0.0025]},
+        {'name': '_ParallaxIgnorePostExposure', 'label': 'Parallax Ignore Post Exposure', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_BaseColorTintCover', 'label': 'Base Color Tint Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BaseColorBrighterScale', 'label': 'Base Color Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_RoughnessMin', 'label': 'Roughness Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_RoughnessMax', 'label': 'Roughness Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_OcclusionStrength', 'label': 'Occlusion Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_TwoSidedNormal', 'label': 'Two Sided Flip Backface Normal', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_BaseTextureMapCount', 'label': 'Base Texture Map Count (0=Three)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseCustomIBL', 'label': 'Use Custom IBL', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CustomIBLIntensity', 'label': 'Custom IBL Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_UseEmissiveMap', 'label': 'Use Emissive Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveColor', 'label': 'Emissive Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EmissiveMaskChannel', 'label': 'Emissive Mask Channel', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AlbedoAffectEmissive', 'label': 'Albedo Not Affect Emissive', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseThinFilm', 'label': 'Use Thin Film', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ThinFilmIntensity', 'label': 'Thin Film Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_LayerBlend', 'label': 'Use Layer Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendType', 'label': 'Blend Type (0=VtxColor 1=Mask 2=WorldTop)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_LayerBlendMaskType', 'label': 'Mask Source (0=MaskR else=NROA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendMaskUVType', 'label': 'Mask UV (0=UV1 1=UV0)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendUVType', 'label': 'Layer UV (0=UV0 1=WorldXZ 2=UV2)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_TopBlendThreshold', 'label': 'Top Blend Threshold', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_TopBlendSmoothness', 'label': 'Top Blend Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.5]},
+        {'name': '_TopBlendWithBumpMap', 'label': 'Top Blend With Bump', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Layer1Tilling', 'label': 'Layer1 Tilling', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_Layer1TintColor', 'label': 'Layer1 Tint', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Layer1BumpScale', 'label': 'Layer1 Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_Layer1BaseNormalIntensity', 'label': 'Layer1 Base Normal Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LayerMetallicType', 'label': 'Layer Metallic (0=Slider else=BaseA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_Layer1Metallic', 'label': 'Layer1 Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Layer1AOStrength', 'label': 'Layer1 AO Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_Layer1Saturation', 'label': 'Layer1 Saturation', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 0.0, 'default': [0.0]},
+        {'name': '_Layer1ColorBrighterScale', 'label': 'Layer1 Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_LayerBlendHeight', 'label': 'Layer Height Blend', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_LayerBlendHeightTransition', 'label': 'Height Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoise', 'label': 'Layer Noise Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendNoiseLevel', 'label': 'Noise Level', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LayerBlendNoiseThreshold', 'label': 'Noise Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoiseNormalStrength', 'label': 'Noise Normal Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoiseNormalSmoothness', 'label': 'Noise Normal Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_LayerBlendVerticalFlowThreshold', 'label': 'Vertical Flow Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableEmissiveAnimSweep', 'label': 'Emissive Anim Sweep', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveSweepSpeed', 'label': 'Sweep Speed', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [3.0]},
+        {'name': '_EmissiveSweepInterval', 'label': 'Sweep Interval', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [3.0]},
+        {'name': '_EmissiveSweepWidth', 'label': 'Sweep Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 10.0, 'default': [0.8]},
+        {'name': '_EmissiveSweepFalloff', 'label': 'Sweep Falloff', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_EmissiveSweepRandom', 'label': 'Sweep Random Per Position', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveSweepAlbedoScale', 'label': 'Sweep Albedo Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_PlanarReflection', 'label': 'Use Planar Reflection', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PlanarReflectionTint', 'label': 'Planar Reflection Tint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnableUVAnimation', 'label': 'Enable UV Animation', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UVAnimationSpeed', 'label': 'UV Anim Speed (xy=UV0 zw=UV1)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnableEmissiveAnim', 'label': 'Enable Emissive Anim', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveAnimSpeed', 'label': 'Emissive Anim Speed', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 80.0, 'default': [0.0]},
+        {'name': '_EmissiveAnimInterval', 'label': 'Emissive Anim Interval', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_EmissiveMinBrightness', 'label': 'Emissive Min Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+        {'name': '_EmissiveAnimRandom', 'label': 'Emissive Anim Random', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EnableEmissiveAnimFlicker', 'label': 'Enable Emissive Flicker', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_BrightDarkRatio', 'label': 'Flicker Bright/Dark Ratio', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 0.99, 'default': [0.15]},
+        {'name': '_EnableRandomFlicker', 'label': 'Flicker Random Per Object', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_EnableMatcap', 'label': 'Enable Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MatcapMapStrength', 'label': 'Matcap Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_UseMacroNormalMap', 'label': 'Use Macro Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MacroNormalMapScale', 'label': 'Macro Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_EnableDetailMap', 'label': 'Enable Detail Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailMode', 'label': 'Detail Mode (0=AlbedoTint+R 1=R+AO)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailMaskMode', 'label': 'Detail Mask (0=All 1=DetailA 2=BaseA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailNormalIntensity', 'label': 'Detail Normal Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_DetailOverlayColor', 'label': 'Detail Overlay Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DetailBaseColorBrighterScale', 'label': 'Detail Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_DetailPBRIntensity', 'label': 'Detail PBR Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DetailFalloffStart', 'label': 'Detail Falloff Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 800.0, 'default': [750.0]},
+        {'name': '_DetailFalloffEnd', 'label': 'Detail Falloff End', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 800.0, 'default': [800.0]},
+        {'name': '_UseVertexOffset', 'label': 'Use Vertex Offset', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetSpeed', 'label': 'Offset Speed (xy=time zw=scroll)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetDir', 'label': 'Offset Dir (xyz axis)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetSwitchDir', 'label': 'Offset Space (0=Obj 1=World 2=Normal)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetIntensity', 'label': 'Offset Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_Bi_Offset', 'label': 'Bi-Directional Offset', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetUVSet', 'label': 'Offset UV (0=UV0 1=UV1)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexColorMask', 'label': 'Use VertexColor.a Mask', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexOffsetMask', 'label': 'Use Offset Mask Tex', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetMaskSpeed', 'label': 'Offset Mask Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetMaskPower', 'label': 'Offset Mask Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_EnableTriChannelMask', 'label': 'Enable Tri-Channel Mask (uses MaskMap RGB)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MaskAlbedoR', 'label': 'Mask R Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MaskAlbedoG', 'label': 'Mask G Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 1.0]},
+        {'name': '_MaskAlbedoB', 'label': 'Mask B Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 1.0]},
+        {'name': '_MaskRScale', 'label': 'Mask R Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskGScale', 'label': 'Mask G Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskBScale', 'label': 'Mask B Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskROffset', 'label': 'Mask R Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskGOffset', 'label': 'Mask G Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskBOffset', 'label': 'Mask B Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskRoghnessR', 'label': 'Mask R Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskRoghnessG', 'label': 'Mask G Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskRoghnessB', 'label': 'Mask B Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskMetallicR', 'label': 'Mask R Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskMetallicG', 'label': 'Mask G Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskMetallicB', 'label': 'Mask B Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableSubsurface', 'label': 'Enable Subsurface', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceShadingMode', 'label': 'SSS Mode (0=Default 1=BaseColor)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MinSubsurfaceThickness', 'label': 'Min Thickness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaxSubsurfaceThickness', 'label': 'Max Thickness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SubsurfaceWrapNoLBias', 'label': 'Wrap NoL Bias', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_SubsurfaceIndirect', 'label': 'Subsurface Indirect', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_UseSubsurfaceThicknessMap', 'label': 'Use Thickness Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceThicknessMapChannel', 'label': 'Thickness Channel', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_EnableParallaxMap', 'label': 'Enable Parallax Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxMappingType', 'label': 'Parallax Mode (0=Emissive 1=PBR)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxStrength', 'label': 'Parallax Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ParallaxTilling', 'label': 'Parallax Tilling', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [1.0]},
+        {'name': '_ParallaxColor', 'label': 'Parallax Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_ParallaxColorDark', 'label': 'Parallax Color Dark', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_EmissionTint', 'label': 'Emission Tint (x Albedo)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SubsurfaceColor', 'label': 'Subsurface Color', 'kind': 'COLOR', 'size': 4, 'default': [0.8, 0.8, 0.8, 1.0]},
+        {'name': '_ThinFilmWeight', 'label': 'Thin Film Weight', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ThinFilmThickness', 'label': 'Thin Film Thickness (um)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_ThinFilmIOR', 'label': 'Thin Film IOR', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.4]},
+        {'name': '_PorosityFactorX', 'label': 'Porosity Factor X (x Roughness)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_PorosityFactorY', 'label': 'Porosity Factor Y', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_PorosityFactorZ', 'label': 'Porosity Factor Z (x Metallic)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 0.0, 'default': [0.0]},
+        {'name': '_DisableVerticalFlow', 'label': 'Disable Vertical Flow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EffectIntensity', 'label': 'Effect Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_HLodFade', 'label': 'HLod Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableNormalMap', 'label': 'Foliage Normal Map Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Reflectance', 'label': 'Reflectance', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DiffuseUseVertexNormal', 'label': 'Diffuse Use Vertex Normal', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_BendNormalUpward', 'label': 'Bend Normal Upward', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Transmission', 'label': 'Transmission', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_TransmissionDistanceFade', 'label': 'Transmission Distance Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceIntensity', 'label': 'Subsurface Intensity (Foliage)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableBroadLeafTransmission', 'label': 'Broad Leaf Transmission', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_backfaceGiIntensity', 'label': 'Backface GI Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_FrontfaceIndirectDiffuse', 'label': 'Frontface Indirect Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_BackfaceIndirectDiffuse', 'label': 'Backface Indirect Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_AoAffectTransmissionStart', 'label': 'AO To Transmission Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoAffectTransmissionRange', 'label': 'AO To Transmission Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.01]},
+        {'name': '_AoAffectSubsurfaceStart', 'label': 'AO To Subsurface Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoAffectSubsurfaceRange', 'label': 'AO To Subsurface Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.01]},
+        {'name': '_FakeDirectionalShadowStrength', 'label': 'Fake Directional Shadow Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_FakeDirectionalShadowPow', 'label': 'Fake Directional Shadow Pow', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 5.0, 'default': [1.0]},
+        {'name': '_OcclusionShadow', 'label': 'Occlusion Affects Shadow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableVerticalNormalBoostAO', 'label': 'Vertical Normal Boost AO Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VerticalNormalThreshold', 'label': 'Vertical Normal Threshold', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VerticalNormalBoostAO', 'label': 'Vertical Normal Boost AO', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VerticalNormalAffectShadow', 'label': 'Vertical Normal Affect Shadow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableCanopyColorRamp', 'label': 'Canopy Color Ramp Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CanopyRampStartAtTop', 'label': 'Canopy Ramp Start At Top', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CanopyRampColor', 'label': 'Canopy Ramp Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CanopyRampColorBrighterScale', 'label': 'Canopy Ramp Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_CanopyRampIntensity', 'label': 'Canopy Ramp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_CanopyRampRange', 'label': 'Canopy Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_CanopyRampTransitionRange', 'label': 'Canopy Ramp Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.01]},
+        {'name': '_CanopyRampColorCover', 'label': 'Canopy Ramp Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableAoTuneColor', 'label': 'AO Mask Tune Color Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FlipAoMask', 'label': 'Flip AO Mask', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AoMaskTuneColor', 'label': 'AO Tune Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_AoMaskTuneColorBrighterScale', 'label': 'AO Tune Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_AoMaskTuneColorIntensity', 'label': 'AO Tune Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_AoMaskTuneColorRampStart', 'label': 'AO Tune Ramp Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoMaskTuneColorRampRange', 'label': 'AO Tune Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.2]},
+        {'name': '_AoMaskTuneColorCover', 'label': 'AO Tune Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableBlendColor', 'label': 'Blend Color Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_BlendColor', 'label': 'Blend Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BlendNormalAdd', 'label': 'Blend Normal Add', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BlendNormalPower', 'label': 'Blend Normal Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.3, 'max': 15.0, 'default': [1.0]},
+        {'name': '_BlendWithVertexNormal', 'label': 'Blend With Vertex Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DirIntensity', 'label': 'Dir Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_DirContrast', 'label': 'Dir Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.2]},
+        {'name': '_DirPosition', 'label': 'Dir Position', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DirRadius', 'label': 'Dir Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DirParams', 'label': 'Dir Params', 'kind': 'VECTOR', 'size': 4, 'default': [0.1, 1.0, 0.8, 99.0]},
+        {'name': '_MaskOnDiffuse', 'label': 'Mask On Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_MaskOnTransmission', 'label': 'Mask On Transmission', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_AoIntensity', 'label': 'Foliage AO Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_AoContrast', 'label': 'Foliage AO Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.2]},
+        {'name': '_AoPosition', 'label': 'Foliage AO Position', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AoRadius', 'label': 'Foliage AO Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.1]},
+        {'name': '_AoParams', 'label': 'Foliage AO Params', 'kind': 'VECTOR', 'size': 4, 'default': [0.1, 1.0, 0.8, 99.0]},
+        {'name': '_TrunkVertexAoStrength', 'label': 'Trunk Vertex AO Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableTrunkRamp', 'label': 'Trunk Ramp Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TrunkRampColor', 'label': 'Trunk Ramp Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_TrunkRampIntensity', 'label': 'Trunk Ramp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_TrunkRampRange', 'label': 'Trunk Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_TrunkRampTransitionRange', 'label': 'Trunk Ramp Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.01]},
+        {'name': '_EnableVertColorEmissive', 'label': 'Vertex Color Emissive Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertColorEmissiveChannelVector', 'label': 'Vertex Color Emissive Channel Vector', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_VertColorEmissiveBias', 'label': 'Vertex Color Emissive Bias', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VertColorEmissiveFlip', 'label': 'Vertex Color Emissive Flip', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertColorEmissiveColor', 'label': 'Vertex Color Emissive Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_VertColorEmissiveAlbedoAffect', 'label': 'Vertex Color Emissive Albedo Affect', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_EnableEmissiveMap', 'label': 'Foliage Emissive Map Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveColorR', 'label': 'Emissive Color R', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CrossCardViewCulling', 'label': 'Cross Card View Culling', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CrossCardViewCullingThreshold', 'label': 'Cross Card Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_CrossCardViewCullingFadeValue', 'label': 'Cross Card Fade Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_ShadowReceiverPartID', 'label': 'Shadow Receiver Part ID', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexStretchNoiseOffset', 'label': 'Vertex Stretch Noise Offset', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexStretchMinMax', 'label': 'Vertex Stretch MinMax', 'kind': 'VECTOR', 'size': 4, 'default': [0.8, 1.0, 0.0, 0.0]},
+        {'name': '_VertexStretchNoiseScale', 'label': 'Vertex Stretch Noise Scale', 'kind': 'VALUE', 'size': 1, 'default': [3.0]},
+        {'name': '_VertexStretchDirection', 'label': 'Vertex Stretch Direction', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 0.0, 0.0]},
+        {'name': '_VertexStretchIntensity', 'label': 'Vertex Stretch Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.4, 'default': [0.0]},
+        {'name': '_CatchZOffset', 'label': 'ZOffset', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SwitchToMultiply', 'label': '切换正片叠底叠加模式', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MainLightIntensity', 'label': '灯光强度', 'kind': 'VALUE', 'size': 1, 'default': [0.2]},
+        {'name': '_UseTimelineEffect', 'label': '使用时间线效果 Use Timeline Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TimelineSaturation', 'label': '时间线饱和度 Timeline Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineContrast', 'label': '时间线对比度 Timeline Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineBrightness', 'label': '时间线亮度 Timeline Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineColorTint', 'label': '时间线颜色色调 Timeline Color Tint', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_UseCharacterWeatherAdjust', 'label': '使用角色天气调整 Use Weather Adjust', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Weather_lightColorCh', 'label': '天气光照颜色 Weather Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_Weather_DarkSideValueCh', 'label': '天气暗面值 Weather Dark Side Value', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseScriptColorAdjust', 'label': '使用脚本颜色调整 Use Script Color Adjust', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DayNightValue', 'label': '夜晚渐变', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MainLightColorLimit', 'label': 'Main Light Color Limit', 'kind': 'VALUE', 'size': 1, 'default': [1.29688]},
+        {'name': '_DebugSaturation', 'label': '调试饱和度 Debug Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugContrast', 'label': '调试对比度 Debug Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugBrightness', 'label': '调试亮度 Debug Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AdditionalSpecularIntensity', 'label': 'Additional Light Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.29688]},
+        {'name': '_BackRimLightIntensityClamp', 'label': 'Back Rim Light Intensity Clamp', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_WetIntensity', 'label': 'Wet Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.39844]},
+        {'name': '_WetSpecularIntensity', 'label': 'Wet Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.1875]},
+        {'name': '_PhotoMode', 'label': '照片模式 Photo Mode', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_CharLightIntensity', 'label': '角色光照强度 Character Light Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_UseFakeLightDir', 'label': '使用假光照方向 Use Fake Light Direction', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FakeLightDir', 'label': '假光照方向 Fake Light Direction', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 0.0]},
+        {'name': '_UseFakeLightColor', 'label': '使用假光照颜色 Use Fake Light Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FakeLightColor', 'label': '假光照颜色 Fake Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DarkFaceSmoothness', 'label': '暗面平滑度 Dark Face Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DarkFaceThreshold', 'label': '暗面阈值 Dark Face Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_DarkFaceColor', 'label': '暗面颜色 Dark Face Color', 'kind': 'COLOR', 'size': 4, 'default': [0.5, 0.5, 0.5, 1.0]},
+        {'name': '_BrightFaceColor', 'label': '亮面颜色 Bright Face Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ScriptBackRimIntensity', 'label': '脚本背面边缘光强度 Script Back Rim Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ScriptBackFresnelMin', 'label': '脚本背面菲涅尔最小值 Script Back Fresnel Min', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_ScriptBackFresnelMax', 'label': '脚本背面菲涅尔最大值 Script Back Fresnel Max', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_BurstFrePow', 'label': '爆发菲涅尔幂 Burst Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_BurstFreColor', 'label': '爆发菲涅尔颜色 Burst Fresnel Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BurstPoint', 'label': '爆发点 Burst Point', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_BurstRadius', 'label': '爆发半径 Burst Radius', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_BurstHardness', 'label': '爆发硬度 Burst Hardness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ForwardWS', 'label': '脸正面朝向（需要脚本控制）', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, -1.0, 0.0]},
+        {'name': '_LeftWS', 'label': '脸左侧朝向（需要脚本控制）', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_AnisotropyBias', 'label': 'Anisotropy Bias', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+        {'name': '_AnisotropyHueColor', 'label': 'Anisotropy Hue', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_SpecularExponent', 'label': '高光宽窄', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 500.0, 'default': [50.0]},
+        {'name': '_SpecularColor', 'label': '高光颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SiwaFresnelMax', 'label': '丝袜菲涅尔最大值', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SiwaFresnelMin', 'label': '丝袜菲涅尔最小值', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SiwaColor', 'label': '丝袜颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SiwaBlackWhiteExchange', 'label': '黑白丝袜质感转换', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropySmoothness', 'label': 'Anisotropy Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.5, 'default': [0.2]},
+        {'name': '_DiffuseColorInfluence', 'label': '固有色影响自发光颜色', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_EmissiveGetRampEffect', 'label': '自发光区域受Ramp影响', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveRampMode', 'label': '  自发光区域Ramp跟随区域', 'kind': 'VALUE', 'size': 1, 'default': [3.0]},
+        {'name': '_RimIntensity', 'label': '边缘光强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_RimMainLightRatio', 'label': '主光源颜色影响强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_FresnelMin', 'label': '边缘光最小值', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.45]},
+        {'name': '_FresnelMax', 'label': '边缘光最大值', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.55]},
+        {'name': '_BackRimIntensity', 'label': '边缘光（背光）强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_BackFresnelMin', 'label': '背面菲涅尔最小值 Back Fresnel Min', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_BackFresnelMax', 'label': '背面菲涅尔最大值 Back Fresnel Max', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AddMatCapOn', 'label': '启用附加Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MetalMapOff', 'label': '关闭ILM金属度(仅附加Matcap部分)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AddMatcapBrightness', 'label': '附加Matcap亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 50.0, 'default': [1.0]},
+        {'name': '_SkinColor', 'label': '皮肤透色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_AOIntensity', 'label': '环境光遮蔽强度 AO Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AOColorSaturation', 'label': 'AO颜色饱和度 AO Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugDiffseLayer', 'label': 'Debug 漫反射层', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DebugSpecularLayer', 'label': 'Debug 高光层', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_ReverseRoughness', 'label': '使用光滑度（替换ILM粗糙度）', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_RimLightColor', 'label': '边缘光颜色 Rim Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimLightStrength', 'label': '边缘光强度 Rim Light Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_FresnelPow', 'label': '菲涅尔幂 Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ColorMinR', 'label': '头发过渡颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ColorMaxR', 'label': '头发颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_PartColor', 'label': '挑染颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RampColor', 'label': 'Ramp颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimLightColorRatio', 'label': '固有色颜色影响强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_RimMaskVal', 'label': '边缘光遮罩值 Rim Mask Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_PaintHighlightDayColor', 'label': '高光颜色(G通道)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HorizontalAmount2', 'label': 'Horizontal Amount', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_VerticalAmount2', 'label': 'Vertical Amount', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_ColorMin', 'label': 'Color Min', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ColorMax', 'label': 'Color Max', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Min', 'label': 'Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Max', 'label': 'Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_ColorG', 'label': 'Color(G)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_GLerpIntensity', 'label': 'Color(G) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ColorB', 'label': 'Color(B)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BLerpIntensity', 'label': 'Color(B) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ColorA', 'label': 'Color(A)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ALerpIntensity', 'label': 'Color(A) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_RotateAngle1', 'label': 'Anim Rotate Angle 1', 'kind': 'SLIDER', 'size': 1, 'min': -180.0, 'max': 180.0, 'default': [0.0]},
+        {'name': '_RotateAngle2', 'label': 'Anim Rotate Angle 2', 'kind': 'SLIDER', 'size': 1, 'min': -180.0, 'max': 180.0, 'default': [0.0]},
+        {'name': '_HighLightColor1', 'label': 'Hight Light Color 1', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HighLightColor2', 'label': 'Hight Light Color 2', 'kind': 'COLOR', 'size': 4, 'default': [0.4392, 0.8352, 1.0, 1.0]},
+        {'name': '_ScaleX1', 'label': 'Scale X 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleY1', 'label': 'Scale Y 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleX2', 'label': 'Scale X 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleY2', 'label': 'Scale Y 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_HighlightIntensity1', 'label': 'Intensity 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [2.0]},
+        {'name': '_HighlightIntensity2', 'label': 'Intensity 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.06]},
+        {'name': '_HighlightIntensity3', 'label': 'Intensity 3', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_Range', 'label': 'Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SpecularFlipHorizontal', 'label': 'Flip Horizontal', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DarkColor', 'label': 'Dark Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DayColor', 'label': 'Day Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorR', 'label': '眼影 (R)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorG', 'label': '腮红 (G)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_DyeingColorB', 'label': '唇彩 (B)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_DyeingColorA', 'label': '睫毛反光 (A)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_MaskColor02', 'label': '下睫毛 (0.2)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor03', 'label': '眼白牙齿 (0.4)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor04', 'label': '舌头 (0.3)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor05', 'label': '口腔牙床 (0.5)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor06', 'label': '睫毛描边 (0.6)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor07', 'label': 'NPC眼睛 (0.7)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor08', 'label': 'NPC眉毛 (0.8)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_AMin', 'label': 'Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AMax', 'label': 'Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DyeingColorAMin', 'label': '上睫毛 Min', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorAMax', 'label': '上睫毛 Max', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HighLightMoveDistance2', 'label': 'High Light Move Distance', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.02, 'default': [0.02]},
+        {'name': '_UseTestLightDir', 'label': 'Use Test Light Direction ?', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TestAngle', 'label': 'Test Light Angle', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 360.0, 'default': [0.0]},
+        {'name': '_ExpThreshold', 'label': 'Exp Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_ExpIntensity', 'label': 'Exp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 100.0, 'default': [0.0]},
+        {'name': '_MainUVSet', 'label': 'Main UV Set', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MainSwitchUV', 'label': 'Main UV Switcher', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MainTexUVRotate', 'label': 'MainTex UV Rotate', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseGridLine', 'label': 'Use Grid Line', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GridLineWidth', 'label': 'Grid Line Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.1, 'max': 15.0, 'default': [1.0]},
+        {'name': '_UseDissolve', 'label': 'Use Dissolve', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DissolveAmount', 'label': 'Dissolve Amount', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DissolveEdgeWidth', 'label': 'Dissolve Edge Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DissolveEdgeColor', 'label': 'Dissolve Edge Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_TransmissionColor', 'label': 'Transmission Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_UseVertexColor', 'label': 'Use Vertex Color (Voxel Albedo)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVoxelAtlas', 'label': 'Use Voxel Atlas (Block Textures)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VoxelEmissionScale', 'label': 'Voxel Emission Scale', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_RuriHeldRadiance', 'label': 'Held Item Radiance (Eye Lightmap)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_RuriHeldLightLevels', 'label': 'Held Eye Light Levels (Block, Sky)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 15.0, 0.0, 0.0]},
+        {'name': '_ShadowColor', 'label': 'Shadow Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CircleFade', 'label': 'Circle Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CircleFadeDistance', 'label': 'Circle Fade Distance', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_CircleFadeSmoothness', 'label': 'Circle Fade Smoothness', 'kind': 'VALUE', 'size': 1, 'default': [0.2]},
+        {'name': '_DisableSceneShadow', 'label': 'Disable Scene Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisableCharacterSelfShadow', 'label': 'Disable Character Self Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CapsuleAoColor', 'label': 'Capsule AO Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '引擎全局 CP', 'gate': None, 'rows': [
+        {'name': '_CharacterParams0', 'label': 'CP0 (.y=主光系数 .z=环境阴影系数 .w=环境光系数)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.9, 0.8, 0.8]},
+        {'name': '_CharacterParams1', 'label': 'CP1 (.x=brightMix .y=shadowStr .z=忽略主光阴影 .w=方向覆写量)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 0.0]},
+        {'name': '_CharacterParams2', 'label': 'CP2 (阴影色倾向 rgb，皮肤以外)', 'kind': 'VECTOR', 'size': 4, 'default': [0.7830188, 0.8293082, 1.0, 0.0]},
+        {'name': '_CharacterParams3', 'label': 'CP3 (阴影色倾向 rgb，皮肤)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.78114647, 0.68490565, 0.0]},
+        {'name': '_CharacterParams4', 'label': 'CP4 (主光自定义颜色 rgb，皮肤)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CharacterParams5', 'label': 'CP5 (主光自定义颜色 rgb，皮肤以外)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CharacterParams6', 'label': 'CP6 (环境光方向 = charGlobalAmbientParam0)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 4.371139E-08, 0.0]},
+        {'name': '_CharacterParams7', 'label': 'CP7 (环境光系数 = charGlobalAmbientParam1)', 'kind': 'VECTOR', 'size': 4, 'default': [0.15, 1.5, 0.5, 0.0]},
+        {'name': '_CharacterParams8', 'label': 'CP8 (skin spec color rgb + .w=intensity)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CharacterParams9', 'label': 'CP9 (skin spec .xy=dir .z=tint .w=width)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 0.4]},
+        {'name': '_CharacterParams10', 'label': 'CP10 (height darken control)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_RuriCharacterEnvironmentEffect', 'label': '环境效果量 (.x=雨 .y=水位量 .z=浸润 .w=雪)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_RuriCharacterEnvironmentWater', 'label': '环境效果水面 (.x=世界高度)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams11', 'label': 'CP11 (方向覆写 xyz + .w=明暗交界线偏移)', 'kind': 'VECTOR', 'size': 4, 'default': [-0.433, 0.5, 0.75, -0.4]},
+        {'name': '_CharacterParams12', 'label': 'CP12 (.x=灯光手动控制 .y=主光色覆写量 .z=shadowGate .w=exposureBlend)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams13', 'label': 'CP13 (.w=GGX specular toggle)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CharacterParams14', 'label': 'CP14 (secondary spec color rgb + .w=intensity)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams15', 'label': 'CP15 (.z=SDF secondary threshold)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnvironmentGlobalParams0', 'label': 'EnvGlobalParams0', 'kind': 'VECTOR', 'size': 4, 'default': [1.67, 1.5, 1.0, 0.0]},
+        {'name': '_ExposureParams', 'label': 'ExposureParams', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': '朝向与压暗', 'gate': None, 'rows': [
+        {'name': '_FaceForward', 'label': 'Face Forward (World)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 0.0]},
+        {'name': '_FaceRight', 'label': 'Face Right (World)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_HairDarkenParams', 'label': 'Hair Darken (x=offsetX y=darken z=offsetZ w=minDarken)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': 'PBR 基础', 'gate': None, 'rows': [
+        {'name': '_MetallicGlossMap', 'label': 'RGBA:Metal,Spec,Shadow,Smooth', 'kind': 'TEXTURE'},
+        {'name': '_UseMetallicGlossMap', 'label': 'Use MetallicGlossMap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Metallic', 'label': 'Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Smoothness', 'label': 'Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+    ]},
+    {'name': '自发光', 'gate': None, 'rows': [
+        {'name': '_EmissionBrightness', 'label': 'Emission Brightness', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': 'Ramp', 'gate': None, 'rows': [
+        {'name': '_DiffRampMap', 'label': 'Diffuse Ramp', 'kind': 'TEXTURE'},
+        {'name': '_SpecRampMap', 'label': 'Specular Ramp', 'kind': 'TEXTURE'},
+        {'name': '_UseDiffRampMap', 'label': 'Diffuse Ramp', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseSpecRampMap', 'label': 'Specular Ramp', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecRampIridescentMode', 'label': '彩虹色模式(镭射塑料请勾选)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '阴影色', 'gate': None, 'rows': [
+        {'name': '_ShadowLutTex', 'label': 'Shadow Color Lut', 'kind': 'TEXTURE'},
+        {'name': '_UseShadowLutTex', 'label': 'Use Shadow Color LUT Tex', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ShadowColorBrightness', 'label': 'Shadow Color Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_ShadowColorSaturation', 'label': 'Shadow Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+    ]},
+    {'name': '脸部 SDF/表情', 'gate': None, 'rows': [
+        {'name': '_SDFMask', 'label': 'RimMask/SDFMask/FlatSHMask', 'kind': 'TEXTURE'},
+        {'name': '_SDFLightmap', 'label': 'SDF Lightmap', 'kind': 'TEXTURE'},
+        {'name': '_EmotionMap', 'label': 'Emotion Map', 'kind': 'TEXTURE'},
+        {'name': '_HighlightMap', 'label': 'HighlightMap', 'kind': 'TEXTURE'},
+        {'name': '_UseSDFLightmap', 'label': 'Use SDF Lightmap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseEmotionMap', 'label': 'Use Emotion Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmotionIndex', 'label': 'Emotion Index', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_EmotionBlend', 'label': 'Emotion Blend', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SDFRimColor', 'label': 'Skin Rim Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SkinRimOffScale', 'label': 'Skin Rim Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [0.5]},
+        {'name': '_FaceRimOffScale', 'label': 'Face Rim Scale (SDF Area)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [1.0]},
+        {'name': '_FaceHighlightMap', 'label': 'Use Face Highlight Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_HighlightMapVector', 'label': 'HighlightMap Vector', 'kind': 'VECTOR', 'size': 4, 'default': [0.04, -0.01, 0.0, 0.0]},
+    ]},
+    {'name': '脸部贴花', 'gate': None, 'rows': [
+        {'name': '_FaceDecalTintColor', 'label': 'Face Decal Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_FaceDecalCenterX', 'label': 'Face Decal Center X', 'kind': 'SLIDER', 'size': 1, 'min': -0.5, 'max': 0.5, 'default': [0.0]},
+        {'name': '_FaceDecalCenterY', 'label': 'Face Decal Center Y', 'kind': 'SLIDER', 'size': 1, 'min': -0.5, 'max': 0.5, 'default': [0.0]},
+        {'name': '_FaceDecalInvertX', 'label': 'Face Decal Invert X', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalInvertY', 'label': 'Face Decal Invert Y', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalSize', 'label': 'Face Decal Size', 'kind': 'SLIDER', 'size': 1, 'min': 0.05, 'max': 2.0, 'default': [0.2]},
+        {'name': '_FaceDecalRotation', 'label': 'Face Decal Rotation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FaceDecalMirrorMode', 'label': 'Face Decal Mirror Mode', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalMirrorSplit', 'label': 'Face Decal Mirror Split', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_FaceDecalBrightnessMask', 'label': 'Face Decal Brightness Mask', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.7]},
+    ]},
+    {'name': '眼睛 Matcap', 'gate': None, 'rows': [
+        {'name': '_MatcapTex', 'label': 'Matcap', 'kind': 'TEXTURE'},
+        {'name': '_UseMatcap', 'label': 'Use Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EyeHighLight', 'label': 'Eye High Light', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MatcapNormalScale', 'label': 'Matcap Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [1.0]},
+        {'name': '_MatcapColor', 'label': 'Matcap Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EyeHighLightColor', 'label': 'High Light Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [2.0, 2.0, 2.0, 1.0]},
+        {'name': '_EyeScatteringColor', 'label': 'Scattering Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EyeTintColor', 'label': 'Eye Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '头发高光/描线', 'gate': None, 'rows': [
+        {'name': '_SplitNormalMap', 'label': 'Hair Normal Map', 'kind': 'TEXTURE'},
+        {'name': '_StrokeMap', 'label': 'Stroke Map(R:anisotropy G:specular offset)', 'kind': 'TEXTURE'},
+        {'name': '_LineMap', 'label': 'Line Map', 'kind': 'TEXTURE'},
+        {'name': '_UseSpecBumpMap', 'label': 'Split Diffuse / Specular Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecBumpScale', 'label': 'Spec Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_StrokeOn', 'label': 'Use Stroke Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecularLine', 'label': 'SpecularLine', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DrawUnderBrow', 'label': 'Draw Under Brow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropyValue', 'label': 'Anisotropy Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.35]},
+        {'name': '_AnisotropyValue2', 'label': 'Anisotropy Value2', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_AnisotropyDirX', 'label': 'Anisotropy Direction X', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyIntensity', 'label': 'Anisotropy Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_AnisotropyEdgeFade', 'label': 'Anisotropy Edge Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 10.0, 'default': [1.0]},
+        {'name': '_AnisotropyRange2', 'label': 'Anisotropy Range2', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyColor2', 'label': 'Anisotropy Color2', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_StrokeScale', 'label': 'Stroke Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_UseLineMap', 'label': 'Use Line Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LineAmount', 'label': 'Line Amount', 'kind': 'VALUE', 'size': 1, 'default': [300.0]},
+        {'name': '_LineValue', 'label': 'Line Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineRange', 'label': 'Line Range', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineIntensity', 'label': 'Line Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineSaturation', 'label': 'Line Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_HairBaseTintColor', 'label': 'Hair Base Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HairAddTintColor', 'label': 'Hair Add Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '皮毛', 'gate': '_UseCharacterFur', 'rows': [
+        {'name': '_UseCharacterFur', 'label': 'Use CharacterFur', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurMap', 'label': 'Fur Noise', 'kind': 'TEXTURE'},
+        {'name': '_FurDirMap', 'label': '毛发方向(RG)疏密(B)长短(A)', 'kind': 'TEXTURE'},
+        {'name': '_FurDyeMap', 'label': '皮毛染色', 'kind': 'TEXTURE'},
+        {'name': '_FurDyeEnable', 'label': '使用皮毛染色功能', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurDyeIntensity', 'label': '染色强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurLengthIntensity', 'label': '毛发长度', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 6.0, 'default': [1.0]},
+        {'name': '_FurCutoffStart', 'label': '发根CutOff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurCutoffEnd', 'label': '发尾CutOff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurAO', 'label': '发根AO', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurEdgeFade', 'label': '边缘平滑过度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurGravityStrength', 'label': '重力强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurTTIntensity', 'label': '直射光透光强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_FurDirMapEnable', 'label': '使用毛发方向贴图(RG)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurColorEnable', 'label': '使用尖端调色', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurColor', 'label': '尖端调色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_FurSharpen', 'label': '皮毛尖锐', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurNoise', 'label': '皮毛叠加噪声', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '清漆', 'gate': '_ClearCoat', 'rows': [
+        {'name': '_ClearCoat', 'label': 'ClearCoat Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ClearCoatMask', 'label': 'ClearCoat Mask', 'kind': 'TEXTURE'},
+        {'name': '_ClearCoatColor', 'label': 'ClearCoat Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ClearCoatSmoothness', 'label': 'ClearCoat Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.95]},
+        {'name': '_ClearCoatMetallic', 'label': 'ClearCoat Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ClearCoatNormalMode', 'label': 'ClearCoat Normal', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '视差', 'gate': '_UseParallax', 'rows': [
+        {'name': '_UseParallax', 'label': 'Use Parallax', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxTex', 'label': 'Parallax Tex', 'kind': 'TEXTURE'},
+        {'name': '_ParallaxUseNormal', 'label': 'Parallax Use Normal Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxMarchNum', 'label': 'Parallax March Num', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 5.0, 'default': [3.0]},
+        {'name': '_ParallaxScale', 'label': 'Parallax Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+    ]},
+    {'name': '丝袜', 'gate': '_SilkStockings', 'rows': [
+        {'name': '_SilkStockings', 'label': 'Silk Stockings', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SilkStockingsMask', 'label': '丝袜遮罩', 'kind': 'TEXTURE'},
+        {'name': '_SilkStockingsColor', 'label': '丝袜边缘颜色', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_SilkStockingsSpecularInt', 'label': '丝袜高光强度Remap', 'kind': 'VALUE', 'size': 1, 'default': [5.0]},
+        {'name': '_SilkStockingsSpecularValue', 'label': '丝袜高光位置偏移', 'kind': 'SLIDER', 'size': 1, 'min': -2.0, 'max': 2.0, 'default': [2.0]},
+        {'name': '_SilkStockingsAnisoDirection', 'label': '丝袜锐利度G', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_SilkStockingsDryColor', 'label': '丝袜常态偏色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SilkStockingsWetColor', 'label': '丝袜湿润偏色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SilkStockingsMinAffect', 'label': '丝袜最浅覆盖', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.49, 'default': [0.05]},
+        {'name': '_SilkStockingsMaxAffect', 'label': '丝袜最深覆盖', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 0.9, 'default': [0.9]},
+        {'name': '_SilkStockingsAdvance', 'label': '丝袜高级模式(使用贴图)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SilkStockingsSpecularMinAtMinWetness', 'label': '丝袜高光干燥态最小值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_SilkStockingsSpecularFalloff', 'label': '丝袜高光透肉衰减值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_SilkStockingsRainWetMaskScale', 'label': '丝袜浸润内置遮罩影响', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.7]},
+        {'name': '_SilkStockingsAlbedoAffectType', 'label': '浸润或水下时透肉or压暗', 'kind': 'SLIDER', 'size': 1, 'min': -0.9, 'max': 0.5, 'default': [0.5]},
+    ]},
+    {'name': '各向异性', 'gate': '_UseAnisotropy', 'rows': [
+        {'name': '_UseAnisotropy', 'label': 'Use Anisotropy', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropyUseGeometryTangent', 'label': '使用模型切线', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_AnisotropyDirectionMain', 'label': '基础各项异性高光方向', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyIntensityMultiplier', 'label': '基础各项异性高光强度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AnisotropyDirectionAdditional', 'label': '第二层各向异性方向', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyOffsetAdditional', 'label': '第二层各向异性位置偏移', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyColorAdditional', 'label': '第二层各向异性颜色', 'kind': 'COLOR', 'size': 4, 'default': [0.2, 0.2, 0.2, 1.0]},
+    ]},
+    {'name': 'UV2 染色', 'gate': None, 'rows': [
+        {'name': '_UseUV2Color', 'label': 'UV2 Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ExtraRootTintColor', 'label': 'Root Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ExtraDepthTintColor', 'label': 'Depth Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ViewFade', 'label': 'View Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+    ]},
+    {'name': '捏人染色', 'gate': '_AvatarCustomizeEnable', 'rows': [
+        {'name': '_AvatarCustomizeEnable', 'label': 'Avatar System Input', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CustomizeBaseColor', 'label': 'Customize Base Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CustomizeBaseTintColor', 'label': 'Customize Base Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CustomizeAddTintColor', 'label': 'Customize Add Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '深度淡出', 'gate': '_UseDepthFade', 'rows': [
+        {'name': '_UseDepthFade', 'label': 'Use Depth Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DepthFadeValue', 'label': 'Depth Fade Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DepthFadeExp', 'label': 'Depth Fade Exp', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 50.0, 'default': [10.0]},
+    ]},
+    {'name': '侵蚀', 'gate': '_UseCharacterErosion', 'rows': [
+        {'name': '_UseCharacterErosion', 'label': 'Use Character Erosion', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ErosionMetallic', 'label': 'Erosion Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_ErosionSmoothnessBias', 'label': 'Erosion Smoothness Bias', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ErosionNormalScale', 'label': 'Erosion Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 4.0, 'default': [1.0]},
+        {'name': '_ErosionBaseColor', 'label': 'Erosion Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.8, 0.4, 0.5, 1.0]},
+        {'name': '_ErosionUV2Tint', 'label': 'Erosion Tint UV2 Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ErosionBaseRootColor', 'label': 'Erosion Base Root Color', 'kind': 'COLOR', 'size': 4, 'default': [0.1, 0.1, 0.1, 1.0]},
+        {'name': '_ErosionBaseRootColorLocation', 'label': 'Erosion Root Color Location', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.1]},
+        {'name': '_ErosionBaseRootColorSmooth', 'label': 'Erosion Root Color Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.25, 'default': [0.1]},
+        {'name': '_ErosionBaseTopColor', 'label': 'Erosion Top Color', 'kind': 'COLOR', 'size': 4, 'default': [0.75, 0.75, 0.75, 1.0]},
+        {'name': '_ErosionBaseTopColorLocation', 'label': 'Erosion Top Color Location', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.7]},
+        {'name': '_ErosionBaseTopColorSmooth', 'label': 'Erosion Top Color Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.25, 'default': [0.1]},
+        {'name': '_ErosionPatternTintColor', 'label': 'Erosion Pattern Tint Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '傀儡', 'gate': '_UsePuppet', 'rows': [
+        {'name': '_UsePuppet', 'label': 'Use Puppet Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetUV2AreaMask', 'label': 'Puppet UV2 Area Mask', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetMaskLocationDown', 'label': 'Puppet Mask Location Down', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.1]},
+        {'name': '_PuppetMaskLocationTop', 'label': 'Puppet Mask Location Top', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.5]},
+        {'name': '_PuppetMaskSmooth', 'label': 'Puppet Mask Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.25, 'default': [0.1]},
+        {'name': '_PuppetProceduralDCurveEnable', 'label': 'Puppet Procedural DCurve Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetPDCurveUVScaleSpeed', 'label': 'Puppet DCurve UV2 Scale(XY) Speed(ZW)', 'kind': 'VECTOR', 'size': 4, 'default': [120.0, 12.0, 0.0, -0.06]},
+        {'name': '_PuppetPDCurveDistortSpeed', 'label': 'Puppet DCurve Distort Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_PuppetPDCurveDistortPeriodSpeed', 'label': 'Puppet DCurve Period Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_PuppetPDCurveBaseColor', 'label': 'Puppet DCurve Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.39, 0.58, 0.7, 1.0]},
+        {'name': '_PuppetPDCurveLightColor', 'label': 'Puppet DCurve Light Color', 'kind': 'COLOR', 'size': 4, 'default': [0.57, 0.3, 0.83, 0.5]},
+        {'name': '_PuppetPDCurveEdgeColor', 'label': 'Puppet DCurve Edge Color', 'kind': 'COLOR', 'size': 4, 'default': [0.45, 0.38, 0.73, 0.5]},
+        {'name': '_PuppetPDCurveEdgeLocation', 'label': 'Puppet DCurve Edge Location(1 = Unuse)', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.3]},
+        {'name': '_PuppetPatternSpeed', 'label': 'Puppet Pattern Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_PuppetPatternMapUseRGB', 'label': 'Puppet Pattern Map Use RGB', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetBaseColor', 'label': 'Puppet Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.5, 0.65, 0.8, 1.0]},
+        {'name': '_PuppetPatternTintColor', 'label': 'Puppet Pattern Tint Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.4, 0.2, 0.94, 1.0]},
+        {'name': '_PuppetPatternTintEdgeColor', 'label': 'Puppet Pattern Tint Edge Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_PuppetPatternTintEdgeLocation', 'label': 'Puppet Pattern Tint Edge Location(1 = Unuse)', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_PuppetMetallic', 'label': 'Puppet Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_PuppetRoughness', 'label': 'Puppet Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+    ]},
+    {'name': '风格化菲涅尔', 'gate': '_EnableStylizedFresnel', 'rows': [
+        {'name': '_EnableStylizedFresnel', 'label': 'Stylized Fresnel', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_StylizedFresnelColor', 'label': 'Color(A = Emission)', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_StylizedFresnelPow', 'label': 'Pow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [2.0]},
+        {'name': '_StylizedFresnelAmount', 'label': 'Amount', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_StylizedFresnelNoiseSpeed', 'label': 'Noise Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_StylizedNoiseContrast', 'label': 'Noise Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+    ]},
+    {'name': '受击闪光', 'gate': '_EnableEnemyHitFlash', 'rows': [
+        {'name': '_EnableEnemyHitFlash', 'label': 'Enemy Hit Flash', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EnemyHitFlashBrightColor', 'label': 'Bright(Scanline) Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnemyHitFlashInnerRadius', 'label': '羽化内半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [0.0]},
+        {'name': '_EnemyHitFlashOuterRadius', 'label': '羽化外半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [2.0]},
+        {'name': '_EnemyHitFlashBrightCenter', 'label': '覆盖中心坐标,0为默认主角位置', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnemyHitFlashFresnelColor', 'label': 'Fresnel Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnemyHitFlashFresnelBias', 'label': 'Fresnel Bias(Default:0)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_EnemyHitFlashFresnelAffectOpacity', 'label': 'Fresnel Affect Opacity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnemyHitFlashNormalScale', 'label': 'Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_EnemyHitFlashBrightColorAdjust', 'label': 'Bright Color Adjust', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EnemyHitFlashFresnelColorAdjust', 'label': 'Fresnel Color Adjust', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': '球形抖动消隐', 'gate': '_EnableDitherSphere', 'rows': [
+        {'name': '_EnableDitherSphere', 'label': 'Enable Sphere Dither', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DitherSphereRadius', 'label': 'Dither Sphere Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.3, 'default': [0.05]},
+        {'name': '_DitherSphereSmoothness', 'label': 'Dither Sphere Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.2]},
+    ]},
+    {'name': 'VAT 动画', 'gate': '_UseVATMap', 'rows': [
+        {'name': '_UseVATMap', 'label': 'UseVATMap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DebugVATFrameIndex', 'label': 'DebugVATFrame', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VATFrameIndex', 'label': 'VAT Frame Index', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+    ]},
+    {'name': 'UV 流动/呼吸', 'gate': None, 'rows': [
+        {'name': '_BaseMapUVSpeed', 'label': 'BaseMap UV Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EmissionMapUVSpeed', 'label': 'EmissionMap UV Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EmissionAlphaBrightBreath', 'label': 'Emission呼吸（A）', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissionAlphaBrightBreathSpeed', 'label': 'Emission呼吸速度', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EmissionAlphaBrightBreathScaleMin', 'label': 'Emission呼吸最小亮度', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_EmissionAlphaBrightBreathScaleMax', 'label': 'Emission呼吸最大亮度', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': '顶点动画', 'gate': '_VertexAnimationEnable', 'rows': [
+        {'name': '_VertexAnimationEnable', 'label': 'Vertex Animation', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexAnimationIntensity', 'label': 'Vertex Animation Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_VertexAnimationFrequency', 'label': 'Vertex Animation Frequency', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 30.0, 'default': [0.5]},
+        {'name': '_VertexAnimationWaveLength', 'label': 'Vertex Animation WaveLength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 20.0, 'default': [0.0]},
+        {'name': '_VertexAnimationFalloff', 'label': 'Vertex Animation Falloff', 'kind': 'SLIDER', 'size': 1, 'min': 0.1, 'max': 10.0, 'default': [1.0]},
+        {'name': '_VertexAnimationExpandOnly', 'label': 'Vertex Animation Expand Only', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexAnimationDirection', 'label': 'Vertex Animation Direction', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 1.0, 0.0]},
+        {'name': '_VertexAnimationNoiseIntensity', 'label': 'Vertex Animation Noise Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_VertexAnimationNoiseTiling', 'label': 'Vertex Animation Noise Tiling', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 4.0, 'default': [1.0]},
+        {'name': '_VertexAnimationNoiseFrequency', 'label': 'Vertex Animation Noise Frequency', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+    ]},
+    {'name': '自阴影', 'gate': None, 'rows': [
+        {'name': '_DisableSelfShadow', 'label': 'Disable Self Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '角色 VFX', 'gate': None, 'rows': [
+        {'name': '_EnableCharacterVFX', 'label': 'Character VFX', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': 'VFX 合成', 'gate': None, 'rows': [
+        {'name': '_VFXSpecialMainTex', 'label': 'VFX Special Main Tex', 'kind': 'TEXTURE'},
+        {'name': '_VFXSpecialBlendTex', 'label': 'VFX Special Blend Tex', 'kind': 'TEXTURE'},
+        {'name': '_UseMask', 'label': 'Use Mask (只影响Alpha)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseBlend', 'label': 'Use Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseDisturb', 'label': 'Use Disturb', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VFXColor', 'label': 'VFX Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXColorIntensity', 'label': 'VFX Color Intensity (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_VFXColorAlpha', 'label': 'VFX Color Alpha (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_UseVFXMainTexAsAlpha', 'label': 'UseMainTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VFXSpecialBlendTexRForDisturb', 'label': 'Use Blend Tex R For Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_VFXBlendTint', 'label': 'BlendTint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXSpecialParam', 'label': 'VFX Special Param(XY: MainTex, ZW: BlendTex)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_VFXFresnelColor', 'label': 'Fresnel Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXFresnelBias', 'label': 'Fresnel Bias(Default:0)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_VFXFresnelAffectOpacity', 'label': 'Fresnel Affect Opacity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_VFXFresnelPower', 'label': 'Fresnel Power(Default:1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_VFXFresnelFlip', 'label': 'Fresnel Flip', 'kind': 'SWITCH', 'size': 1, 'default': [0.001]},
+        {'name': '_SpecialDissolveScheduleOffset', 'label': 'Dissolve Schedule Offset', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+    ]},
+    {'name': '特效贴图/流动', 'gate': None, 'rows': [
+        {'name': '_MainTex', 'label': 'Main Tex', 'kind': 'TEXTURE'},
+        {'name': '_BlendTex', 'label': 'Blend Tex', 'kind': 'TEXTURE'},
+        {'name': '_MaskTex', 'label': 'Mask Tex', 'kind': 'TEXTURE'},
+        {'name': '_DisturbTex1', 'label': 'Disturb Tex 1', 'kind': 'TEXTURE'},
+        {'name': '_NormalMap', 'label': '法线图', 'kind': 'TEXTURE'},
+        {'name': '_BlendMode', 'label': 'Blend Type', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisableVertColor', 'label': 'Disable VertColor', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_InParticle', 'label': 'Use In Particle', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_VertCameraOffset', 'label': '顶点向相机偏移(单位米)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_TintColor', 'label': 'TintColor', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_TintColorIntensity', 'label': 'Tint Color Intensity (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_TintColorAlpha', 'label': 'Tint Color Alpha (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_UseMainTexAsAlpha', 'label': 'UseMainTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_MainTexUseDisturb', 'label': 'Main Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_MainTexUVSpeed', 'label': 'MainTexUVSpeed(XY:By Time,ZW:By Custom1.X)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_MainTexUVRotateMat', 'label': 'MainTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MainTexUVWeights', 'label': '\'_MainTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_UseMaskTexAsAlpha', 'label': 'UseMaskTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_MaskTexUseDisturb', 'label': 'Mask Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskTexUVSpeed', 'label': 'MaskTaexUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_MaskTexUVRotateMat', 'label': 'MaskTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MaskTexUVWeights', 'label': '\'_MaskTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTexUseDisturb', 'label': 'Blend Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BlendTexUVSpeed', 'label': 'BlendTexUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTexUVRotateMat', 'label': 'BlendTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_BlendTexUVWeights', 'label': '\'_BlendTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTint', 'label': 'BlendTint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Bi_Disturb', 'label': 'Disturbe in 2 Direction', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbTex1Normal', 'label': 'Disturb Tex1 is Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbUIntensity1', 'label': 'UIntensity1', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbVIntensity1', 'label': 'VIntensity1(Unused In Normal)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbUVSpeed1', 'label': 'DisturbUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DisturbUVRotateMat1', 'label': 'DisturbUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_DisturbUVWeights1', 'label': '\'_DisturbTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_NormalMapUVSpeed', 'label': 'NormalMapUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_NormalMapUVRotateMat', 'label': 'NormalMapUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_NormalMapUVWeights', 'label': '\'_NormalMapUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': '特效菲涅尔/近淡出', 'gate': None, 'rows': [
+        {'name': '_UseNearCameraFade', 'label': 'Use Near Camera Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_NearCameraFadeDistanceStart', 'label': '消失距离1', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [0.001]},
+        {'name': '_NearCameraFadeDistanceEnd', 'label': '出现距离1', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [10.0]},
+        {'name': '_NearCameraFadeDistanceEnd2', 'label': '出现距离2', 'kind': 'SLIDER', 'size': 1, 'min': 0.002, 'max': 3000.0, 'default': [100.0]},
+        {'name': '_NearCameraFadeDistanceStart2', 'label': '消失距离2', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [120.0]},
+    ]},
+    {'name': '特效杂项', 'gate': None, 'rows': [
+        {'name': '_UseGrayAsAlpha', 'label': 'Use Gray As Alpha', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ShadowAngleRange', 'label': 'Shadow Angle Range', 'kind': 'SLIDER', 'size': 1, 'min': -0.01, 'max': 0.01, 'default': [0.0]},
+    ]},
+    {'name': '特效调色', 'gate': '_EnableVFXColorAdjustment', 'rows': [
+        {'name': '_EnableVFXColorAdjustment', 'label': 'VFX Color Adjustment', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ColorAdjustmentContrast', 'label': 'Color Adjustment Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ColorAdjustmentSaturation', 'label': 'Color Adjustment Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ColorAdjustmentBrightness', 'label': 'Color Adjustment Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 1.5, 'default': [1.0]},
+        {'name': '_ColorAdjustmentRimWidth', 'label': 'Color Adjustment Rim Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.35]},
+        {'name': '_ColorAdjustmentRimIntensity', 'label': 'Color Adjustment Rim Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [4.0]},
+        {'name': '_ColorAdjustmentColorBlend', 'label': 'Color Adjustment Color Blend', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_ColorAdjustmentRimColor', 'label': 'Color Adjustment Rim Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '描边', 'gate': None, 'rows': [
+        {'name': '_OutlineColorBrightness', 'label': 'Outline Color Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_OutlineColorSaturation', 'label': 'Outline Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.5]},
+    ]},
+]
+
+
+_PANEL_GUARD = [False]
+_PANEL_REGISTERED = []
+
+
+def _panel_attr(name):
+    return 'p' + name
+
+
+def _panel_rows():
+    for group in INTERFACE:
+        for row in group['rows']:
+            yield row
+
+
+def _panel_insts(mat):
+    """级联组实例按建图序(ruri_inst 标记;与 rewire_capabilities 同一判据)。"""
+    nt = mat.node_tree
+    if nt is None:
+        return []
+    return sorted((n for n in nt.nodes if n.get('ruri_inst') is not None),
+                  key=lambda n: int(n['ruri_inst']))
+
+
+def _panel_vertex_nodes(mat):
+    """本材质的顶点腿克隆组实例(壳位移 + 描边)。没有顶点腿的目标返回空——
+    globals() 探测的是目标形态(该产物有没有发射顶点腿),不是运行时兜底。"""
+    prefix_v = globals().get('CLONE_V_PREFIX')
+    prefix_o = globals().get('CLONE_O_PREFIX')
+    modifier = globals().get('VTX_MODIFIER')
+    if not modifier:
+        return []
+    names = {p + mat.name for p in (prefix_v, prefix_o) if p}
+    nodes = []
+    for obj in bpy.data.objects:
+        mod = obj.modifiers.get(modifier)
+        tree = getattr(mod, 'node_group', None) if mod is not None else None
+        if tree is None:
+            continue
+        for node in tree.nodes:
+            sub = getattr(node, 'node_tree', None)
+            if sub is not None and sub.name in names:
+                nodes.append(node)
+    return nodes
+
+
+def _panel_touch(mat):
+    # 纯数据写不触发依赖图,必须自己打脏标记(rewire_capabilities 同款教训)。
+    if mat.node_tree is not None:
+        mat.node_tree.update_tag()
+    mat.update_tag()
+
+
+def _panel_write(mat, row, value):
+    """面板值 → 全部级联实例 socket + 快照字典 + 顶点腿克隆输入,一次到位。"""
+    name = row['name']
+    kind = row['kind']
+    insts = _panel_insts(mat)
+    if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+        scalar = (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)
+        for grp in insts:
+            sock = grp.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                sock.default_value = scalar
+        for node in _panel_vertex_nodes(mat):
+            sock = node.inputs.get(name)
+            if sock is not None:
+                sock.default_value = scalar
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        floats[name] = scalar
+        mat['ruri_uber_floats'] = floats
+    else:
+        vec4 = [float(v) for v in value] + [0.0] * 4
+        vec4 = vec4[:4]
+        xyz = (vec4[0], vec4[1], vec4[2])
+        for grp in insts:
+            sock = grp.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                sock.default_value = xyz
+            tail = grp.inputs.get(name + '_w')
+            if tail is not None and not tail.is_linked and row['size'] >= 4:
+                tail.default_value = vec4[3]
+        for node in _panel_vertex_nodes(mat):
+            sock = node.inputs.get(name)
+            if sock is not None:
+                try:
+                    sock.default_value = xyz
+                except (TypeError, ValueError):
+                    pass
+        colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+        colors[name] = vec4
+        mat['ruri_uber_colors'] = colors
+    _panel_touch(mat)
+
+
+def _panel_write_image(mat, row, image):
+    """贴图槽换图。清空 = 回落到该槽的中性占位图(槽语义中性,不是黑)。
+    只写本材质自有数据:链接库模板(library 非空)只读且跨材质共享,跳过。"""
+    name = row['name']
+    _images()
+    target = image if image is not None else bpy.data.images.get(name)
+    imgs = dict(mat.get('ruri_uber_images') or {})
+    if image is None:
+        imgs.pop(name, None)
+    else:
+        imgs[name] = image.name
+    mat['ruri_uber_images'] = imgs
+
+    def swap(tree, depth=0):
+        if tree is None or depth > 4 or tree.library is not None:
+            return
+        for node in tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                if target is not None:
+                    _swap_image(node, target)
+            elif node.type == 'GROUP':
+                swap(node.node_tree, depth + 1)
+
+    swapped = [0]
+    if mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                if target is not None:
+                    _swap_image(node, target)
+                    swapped[0] += 1
+            elif node.type == 'GROUP':
+                swap(node.node_tree, 1)
+    if not swapped[0] and target is not None and image is not None and mat.node_tree is not None:
+        # 建线,不只换图:导入期没绑图的槽根本没有采样节点。走导入期同一条
+        # _wire_fetch/_sample 链(FETCHES/ZONES 是唯一采样语义真源,面板不自己发明)。
+        part = mat.get('ruri_uber_part', '')
+        g = G(mat.node_tree, is_group=False)
+        ordered = _panel_insts(mat)
+        for fetch in FETCHES.get(part, ()):
+            if fetch['slot'] == name and not fetch['env']:
+                _wire_fetch(g, ordered, fetch, target)
+        for zone in ZONES.get(part, ()):
+            zone_rows = [f for f in zone['fetches'] if f['slot'] == name and not f['env']]
+            if not zone_rows:
+                continue
+            binsts = sorted((n for n in mat.node_tree.nodes if n.get('ruri_zone') == zone['sock']),
+                            key=lambda n: int(n['ruri_binst']))
+            if not binsts:
+                continue
+            for fetch in zone_rows:
+                src = binsts[fetch['depth']]
+                heads = binsts[fetch['depth'] + 1:]
+                color, alpha, _anchor = _sample(g, fetch, target, src.outputs[fetch['sock'] + '_uv'])
+                _feed(g, heads, fetch['sock'], color, alpha)
+    for group_node in _panel_vertex_nodes(mat):
+        sub = group_node.node_tree
+        if sub is None or target is None:
+            continue
+        for node in sub.nodes:
+            if node.bl_idname == 'GeometryNodeImageTexture' and _slot_of(node.label or '') == name:
+                holder = node.inputs['Image'].default_value
+                non_color = holder is not None and holder.colorspace_settings.name == 'Non-Color'
+                node.inputs['Image'].default_value = target
+                try:
+                    target.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+                except Exception:
+                    pass
+                if non_color:
+                    _fix_two_channel_layout(target)
+    _panel_touch(mat)
+
+
+def _panel_write_st(mat, row):
+    """平铺/偏移 → _ST socket 对 + 顶点期 uv 变换节点 + 描边 mask ST(同一真值三消费面)。"""
+    name = row['name']
+    pg = getattr(mat, _PANEL_PROP)
+    tiling = getattr(pg, 't' + name)
+    offset = getattr(pg, 'o' + name)
+    st_value = [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]
+    st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
+    st[name] = st_value
+    mat['ruri_uber_st'] = st
+    for grp in _panel_insts(mat):
+        sock = grp.inputs.get(name + '_ST')
+        if sock is not None and not sock.is_linked:
+            sock.default_value = (st_value[0], st_value[1], st_value[2])
+        tail = grp.inputs.get(name + '_ST_w')
+        if tail is not None and not tail.is_linked:
+            tail.default_value = st_value[3]
+    if row.get('st_node') and mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.label == row['st_node']:
+                node.inputs['Scale'].default_value = (st_value[0], st_value[1], 1.0)
+                node.inputs['Location'].default_value = (st_value[2], st_value[3], 0.0)
+        for group_node in _panel_vertex_nodes(mat):
+            scale_sock = group_node.inputs.get('mask_st_scale')
+            offset_sock = group_node.inputs.get('mask_st_offset')
+            if scale_sock is not None:
+                scale_sock.default_value = (st_value[0], st_value[1], 0.0)
+            if offset_sock is not None:
+                offset_sock.default_value = (st_value[2], st_value[3], 0.0)
+    _panel_touch(mat)
+
+
+def _panel_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write(self.id_data, row, getattr(self, _panel_attr(row['name'])))
+    return update
+
+
+def _panel_image_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write_image(self.id_data, row, getattr(self, _panel_attr(row['name'])))
+    return update
+
+
+def _panel_st_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write_st(self.id_data, row)
+    return update
+
+
+def _panel_bound_image(mat, slot):
+    def walk(tree, depth=0):
+        if tree is None or depth > 4:
+            return None
+        for node in tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == slot:
+                img = node.image
+                if img is not None and not img.get('ruri_placeholder'):
+                    return img
+            elif node.type == 'GROUP':
+                hit = walk(node.node_tree, depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+    return walk(mat.node_tree)
+
+
+def panel_sync(mat):
+    """图/快照 → 面板回读(守卫防触发写路径)。provider 每次建完自动调;
+    图被外部改动后由面板刷新按钮手动触发。"""
+    pg = getattr(mat, _PANEL_PROP, None)
+    if pg is None:
+        return False
+    insts = _panel_insts(mat)
+    if not insts:
+        return False
+    first = insts[0]
+    floats = dict(mat.get('ruri_uber_floats') or {})
+    st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
+    colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+    images = dict(mat.get('ruri_uber_images') or {})
+    _PANEL_GUARD[0] = True
+    try:
+        for row in _panel_rows():
+            name = row['name']
+            attr = _panel_attr(name)
+            kind = row['kind']
+            if kind == 'TEXTURE':
+                img = bpy.data.images.get(images.get(name, ''))
+                if img is None:
+                    img = _panel_bound_image(mat, name)
+                try:
+                    setattr(pg, attr, img)
+                except Exception:
+                    pass
+                value = st.get(name)
+                if value is None:
+                    sock = first.inputs.get(name + '_ST')
+                    if sock is not None and not sock.is_linked:
+                        tail = first.inputs.get(name + '_ST_w')
+                        raw = sock.default_value
+                        value = [raw[0], raw[1], raw[2],
+                                 tail.default_value if tail is not None else 0.0]
+                if value is not None:
+                    setattr(pg, 't' + name, (value[0], value[1]))
+                    setattr(pg, 'o' + name, (value[2], value[3]))
+                continue
+            sock = first.inputs.get(name)
+            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+                value = floats.get(name)
+                if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
+                    value = sock.default_value
+                if value is None:
+                    continue
+                setattr(pg, attr, bool(value > 0.5) if kind == 'SWITCH'
+                        else int(value) if kind == 'INT' else float(value))
+            else:
+                value = colors.get(name)
+                if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
+                    tail = first.inputs.get(name + '_w')
+                    raw = sock.default_value
+                    value = [raw[0], raw[1], raw[2],
+                             tail.default_value if tail is not None and not tail.is_linked else 1.0]
+                if value is None:
+                    continue
+                spread = (list(value) + [0.0] * 4)[:row['size']]
+                setattr(pg, attr, tuple(float(x) for x in spread))
+    finally:
+        _PANEL_GUARD[0] = False
+    return True
+
+
+def _panel_slots(mat):
+    """本材质有意义的贴图槽 = .mat 绑定 ∪ 本 part 的割点表(顶层/循环体)∪ 顶点腿图节点。
+    全部按既有表判定,零平行清单。"""
+    part = mat.get('ruri_uber_part', '')
+    slots = set(dict(mat.get('ruri_uber_images') or {}).keys())
+    for fetch in FETCHES.get(part, ()):
+        slots.add(fetch['slot'])
+    for zone in ZONES.get(part, ()):
+        for fetch in zone['fetches']:
+            slots.add(fetch['slot'])
+    for group_node in _panel_vertex_nodes(mat):
+        sub = group_node.node_tree
+        if sub is None:
+            continue
+        for node in sub.nodes:
+            if node.bl_idname == 'GeometryNodeImageTexture' and node.label:
+                slots.add(_slot_of(node.label))
+    return slots
+
+
+def _panel_visible(insts, slots, row):
+    """变体折叠掉的死支参数没有 socket → 不画。判据 = 图自己,不是另一张表。"""
+    if row['kind'] == 'TEXTURE':
+        return row['name'] in slots
+    name = row['name']
+    for grp in insts:
+        if grp.inputs.get(name) is not None:
+            return True
+    return False
+
+
+def _panel_classes():
+    toggle_idname = PANEL_KEY + '.toggle_group'
+    sync_idname = PANEL_KEY + '.sync_panel'
+
+    class Toggle(bpy.types.Operator):
+        bl_idname = toggle_idname
+        bl_label = '展开/折叠分组'
+        bl_options = {'INTERNAL'}
+        group: bpy.props.IntProperty()
+
+        def execute(self, context):
+            pg = getattr(context.material, _PANEL_PROP)
+            key = '_open_%d' % self.group
+            pg[key] = 0 if pg.get(key) else 1
+            return {'FINISHED'}
+
+    class Sync(bpy.types.Operator):
+        bl_idname = sync_idname
+        bl_label = '从图同步面板'
+        bl_description = '图被重建或外部改动后,把面板回读到当前值'
+        bl_options = {'INTERNAL'}
+
+        def execute(self, context):
+            panel_sync(context.material)
+            return {'FINISHED'}
+
+    class Panel(bpy.types.Panel):
+        bl_idname = 'RURI_PT_' + PANEL_KEY
+        bl_label = PANEL_TITLE
+        bl_space_type = 'PROPERTIES'
+        bl_region_type = 'WINDOW'
+        bl_context = 'material'
+
+        @classmethod
+        def poll(cls, context):
+            mat = getattr(context, 'material', None)
+            return (mat is not None and mat.get('ruri_uber_part') is not None
+                    and getattr(mat, _PANEL_PROP, None) is not None)
+
+        def draw(self, context):
+            mat = context.material
+            pg = getattr(mat, _PANEL_PROP)
+            layout = self.layout
+            layout.use_property_split = True
+            layout.use_property_decorate = False
+            head = layout.row(align=True)
+            head.label(text='{0} · {1}'.format(mat.get('ruri_uber_part', ''),
+                                               mat.get('ruri_uber_shader', '') or ''), icon='MATERIAL')
+            head.operator(sync_idname, text='', icon='FILE_REFRESH')
+            insts = _panel_insts(mat)
+            slots = _panel_slots(mat)
+            for index, group in enumerate(INTERFACE):
+                rows = [r for r in group['rows'] if _panel_visible(insts, slots, r)]
+                if not rows:
+                    continue
+                gate = group['gate']
+                box = layout.box()
+                header = box.row(align=True)
+                opened = bool(pg.get('_open_%d' % index))
+                arrow = header.operator(toggle_idname, text='', emboss=False,
+                                        icon='TRIA_DOWN' if opened else 'TRIA_RIGHT')
+                arrow.group = index
+                header.label(text=group['name'])
+                gate_open = True
+                gate_attr = _panel_attr(gate) if gate else None
+                if gate_attr is not None and hasattr(pg, gate_attr):
+                    header.prop(pg, gate_attr, text='')
+                    gate_open = bool(getattr(pg, gate_attr))
+                if not opened:
+                    continue
+                column = box.column()
+                column.active = gate_open
+                for row in rows:
+                    if gate is not None and row['name'] == gate:
+                        continue
+                    self.draw_row(column, pg, insts, row)
+
+        def draw_row(self, column, pg, insts, row):
+            attr = _panel_attr(row['name'])
+            if row['kind'] != 'TEXTURE':
+                column.prop(pg, attr)
+                return
+            split = column.split(factor=0.4)
+            split.label(text=row['label'])
+            split.template_ID(pg, attr, open='image.open')
+            has_st = bool(row.get('st_node')) or any(
+                grp.inputs.get(row['name'] + '_ST') is not None for grp in insts)
+            if has_st:
+                sub = column.column(align=True)
+                sub.prop(pg, 't' + row['name'], text='平铺')
+                sub.prop(pg, 'o' + row['name'], text='偏移')
+
+    return Toggle, Sync, Panel
+
+
+def _panel_register():
+    """INTERFACE → PropertyGroup(动态注解)+ 面板 + 操作符。幂等:先卸旧再注册。"""
+    _panel_unregister()
+    annotations = {}
+    for row in _panel_rows():
+        attr = _panel_attr(row['name'])
+        kind = row['kind']
+        if kind == 'TEXTURE':
+            annotations[attr] = bpy.props.PointerProperty(
+                type=bpy.types.Image, name=row['label'], update=_panel_image_updater(row))
+            annotations['t' + row['name']] = bpy.props.FloatVectorProperty(
+                name='平铺', size=2, default=(1.0, 1.0), update=_panel_st_updater(row))
+            annotations['o' + row['name']] = bpy.props.FloatVectorProperty(
+                name='偏移', size=2, default=(0.0, 0.0), update=_panel_st_updater(row))
+            continue
+        default = list(row.get('default') or [])
+        if kind == 'SWITCH':
+            annotations[attr] = bpy.props.BoolProperty(
+                name=row['label'], default=bool(default and default[0] > 0.5),
+                update=_panel_updater(row))
+        elif kind == 'INT':
+            annotations[attr] = bpy.props.IntProperty(
+                name=row['label'], default=int(default[0]) if default else 0,
+                update=_panel_updater(row))
+        elif kind in ('VALUE', 'SLIDER'):
+            keywords = {'name': row['label'],
+                        'default': float(default[0]) if default else 0.0,
+                        'update': _panel_updater(row)}
+            if kind == 'SLIDER':
+                keywords['min'] = row['min']
+                keywords['max'] = row['max']
+            annotations[attr] = bpy.props.FloatProperty(**keywords)
+        else:
+            size = row['size']
+            fill = (default + [0.0] * 4)[:size]
+            keywords = {'name': row['label'], 'size': size,
+                        'update': _panel_updater(row)}
+            if kind == 'COLOR':
+                keywords.update(subtype='COLOR', min=0.0, max=1.0)
+                fill = [min(max(v, 0.0), 1.0) for v in fill]
+            elif kind == 'HDRCOLOR':
+                keywords.update(subtype='COLOR', min=0.0, soft_max=1.0)
+            keywords['default'] = tuple(fill)
+            annotations[attr] = bpy.props.FloatVectorProperty(**keywords)
+    group_cls = type('RURI_PG_' + PANEL_KEY, (bpy.types.PropertyGroup,),
+                     {'__annotations__': annotations})
+    bpy.utils.register_class(group_cls)
+    _PANEL_REGISTERED.append(group_cls)
+    setattr(bpy.types.Material, _PANEL_PROP, bpy.props.PointerProperty(type=group_cls))
+    for cls in _panel_classes():
+        bpy.utils.register_class(cls)
+        _PANEL_REGISTERED.append(cls)
+
+
+def _panel_unregister():
+    if hasattr(bpy.types.Material, _PANEL_PROP):
+        try:
+            delattr(bpy.types.Material, _PANEL_PROP)
+        except Exception:
+            pass
+    while _PANEL_REGISTERED:
+        cls = _PANEL_REGISTERED.pop()
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+
+
 def register():
     # 宿主注册表按**绝对路径**导入(配方给的名字):相对导入会绑死部署深度,
     # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
@@ -2230,9 +3638,11 @@ def register():
     host.register_vertex_stage(apply_vertex_stage)
     host.register_capability_rewire(rewire_capabilities)
     host.register_light_table_refresh(refresh_light_tables)
+    _panel_register()
 
 
 def unregister():
+    _panel_unregister()
     import importlib
     host = importlib.import_module('RuriRipperImporter.material_builder')
     host.unregister_graph_provider(provider)

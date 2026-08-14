@@ -929,6 +929,8 @@ def _img(name, rgba, non_color):
     img = bpy.data.images.get(name)
     if img is None:
         img = bpy.data.images.new(name, 4, 4, alpha=True)
+    # 占位身份标记:参数面板回读时据此不把中性占位当成用户绑的贴图。
+    img['ruri_placeholder'] = 1
     # 恒刷新:老会话同名旧占位(如白 _BumpMap)会被 get 命中,颜色必须跟上本次部署。
     img.generated_color = rgba
     # 色彩空间是**槽语义**,在这里定死 —— 曾经靠组内 g.tex 顺手设,贴图外提后那行
@@ -978,6 +980,28 @@ def build_RCE_F_Schlick():
     v7 = g.math('MULTIPLY', v6, v5)
     v8 = g.math('ADD', v7, v0)
     g.out_('ret', v8, False)
+
+
+def build_RCE_FoliageGradientBand():
+    t = _tree('RCE_FoliageGradientBand')
+    g = G(t)
+    v0 = g.inp('coord', False)
+    v1 = g.inp('position', False)
+    v2 = g.inp('radius', False)
+    v3 = g.inp('contrast', False)
+    v4 = g.inp('intensity', False)
+    v5 = g.math('SUBTRACT', v0, v1)
+    v6 = g.math('ABSOLUTE', v5, 0.0)
+    v7 = g.math('SUBTRACT', v6, v2)
+    v8 = g.math('MAXIMUM', v2, 0.0001)
+    v9 = g.math('DIVIDE', v7, v8)
+    v10 = g.math('SUBTRACT', 1, v9)
+    v11 = g.clampn(v10, 0, 1)
+    v12 = g.math('MAXIMUM', v3, 0.001)
+    v13 = g.math('POWER', v11, v12)
+    v14 = g.math('MULTIPLY', v13, v4)
+    v15 = g.math('SUBTRACT', 1, v14)
+    g.out_('ret', v15, False)
 
 
 def build_RCE_HgEnvBRDF():
@@ -3324,6 +3348,669 @@ def build_RCE_Z_Ruri_Endfield_Scene_ContainerWater_0():
     g.out_('o_texPrev', v57, False)
 
 
+def build_RCE_Z_Ruri_Endfield_Scene_Leaf_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Scene_Leaf_0')
+    g = G(t)
+    v0 = g.inp('s_H', True)
+    v1 = g.inp('s_L', True)
+    v2 = g.inp('s_LV', True)
+    v3 = g.inp('s_N', True)
+    v4 = g.inp('s_NoH', False)
+    v5 = g.inp('s_NoL', False)
+    v6 = g.inp('s_NoV', False)
+    v7 = g.inp('s_P', True)
+    v8 = g.inp('s_V', True)
+    v9 = g.inp('s_VoH', False)
+    v10 = g.inp('s_Lloop0', False)
+    v11 = g.inp('s_color', True)
+    v12 = g.inp('s_energy', True)
+    v13 = g.inp('s_f0', True)
+    v14 = g.inp('s_inputData_bakedGI', True)
+    v15 = g.inp('s_inputData_fogCoord', False)
+    v16 = g.inp('s_inputData_normalWS', True)
+    v17 = g.inp('s_inputData_normalizedScreenSpaceUV', True)
+    v18 = g.inp('s_inputData_positionCS', True)
+    v19 = g.inp('s_inputData_positionCS_w', False)
+    v20 = g.inp('s_inputData_positionWS', True)
+    v21 = g.inp('s_inputData_shadowCoord', True)
+    v22 = g.inp('s_inputData_shadowCoord_w', False)
+    v23 = g.inp('s_inputData_shadowMask', True)
+    v24 = g.inp('s_inputData_shadowMask_w', False)
+    v25 = g.inp('s_inputData_vertexLighting', True)
+    v26 = g.inp('s_inputData_viewDirectionWS', True)
+    v27 = g.inp('s_lightIndex', False)
+    v28 = g.inp('s_roughness', False)
+    v29 = g.inp('s_sssAmount', False)
+    v30 = g.math('LESS_THAN', v27, g.inp('r_pixelLightCount', False))
+    v31 = g.math('MULTIPLY', v10, v30)
+    v32 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v27, False)
+    g.out_('C0_AdditionalLight_position', v7, True)
+    v33 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v34 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v35 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v36 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v37 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v38 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v39 = g.mixv(v38, v1, v33)
+    v40 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v41 = g.vmath('ADD', v39, v8)
+    v42 = g.mixv(v40, v2, v41)
+    v43 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v44 = g.vmath('DOT_PRODUCT', v42, v42)
+    v45 = g.math('MAXIMUM', v44, 1E-08)
+    v46 = g.math('INVERSE_SQRT', v45, 0.0)
+    v47 = g.bc(v46)
+    v48 = g.vmath('MULTIPLY', v42, v47)
+    v49 = g.mixv(v43, v0, v48)
+    v50 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v51 = g.vmath('DOT_PRODUCT', v39, v3)
+    v52 = g.clampn(v51)
+    v53 = g.mixf(v50, v5, v52)
+    v54 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v55 = g.vmath('DOT_PRODUCT', v3, v49)
+    v56 = g.clampn(v55)
+    v57 = g.mixf(v54, v4, v56)
+    v58 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v59 = g.vmath('DOT_PRODUCT', v8, v49)
+    v60 = g.clampn(v59)
+    v61 = g.mixf(v58, v9, v60)
+    v62 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v63 = g.math('MULTIPLY', v28, v28)
+    v64 = g.math('MULTIPLY', v28, v28)
+    v65 = g.math('MULTIPLY', v63, v64)
+    v66 = g.math('MINIMUM', v6, 1)
+    v67 = g.math('MULTIPLY', v57, -1.0)
+    v68 = g.math('MULTIPLY_ADD', v57, v65, v67)
+    v69 = g.math('MULTIPLY_ADD', v68, v57, 1)
+    v70 = g.math('MULTIPLY', v53, -1.0)
+    v71 = g.math('MULTIPLY_ADD', v70, v65, v53)
+    v72 = g.math('MULTIPLY_ADD', v71, v53, v65)
+    v73 = g.math('SQRT', v72, 0.0)
+    v74 = g.math('MULTIPLY', v66, v73)
+    v75 = g.math('MULTIPLY', v66, -1.0)
+    v76 = g.math('MULTIPLY_ADD', v75, v65, v66)
+    v77 = g.math('MULTIPLY_ADD', v76, v66, v65)
+    v78 = g.math('SQRT', v77, 0.0)
+    v79 = g.math('MULTIPLY', v53, v78)
+    v80 = g.math('ADD', v74, v79)
+    v81 = g.math('ADD', v80, 0.0001)
+    v82 = g.math('MULTIPLY', v69, v69)
+    v83 = g.math('DIVIDE', v65, v82)
+    v84 = g.math('DIVIDE', 0.5, v81)
+    v85 = g.math('MULTIPLY', v83, v84)
+    v86 = g.math('MULTIPLY', v61, -1.0)
+    v87 = g.math('MULTIPLY_ADD', v86, 1, 1)
+    v88 = g.math('MULTIPLY', v87, v87)
+    v89 = g.math('MULTIPLY', v88, v88)
+    v90 = g.math('MULTIPLY', v87, v89)
+    v91 = g.math('MULTIPLY', v89, -1.0)
+    v92 = g.math('MULTIPLY_ADD', v91, v87, 1)
+    v93 = g.math('MULTIPLY', 1, -1.0)
+    v94 = g.math('MULTIPLY_ADD', v28, v93, 1)
+    v95 = g.math('MULTIPLY', v94, -1.0)
+    v96 = g.math('MULTIPLY', 0.07619470357894897, -1.0)
+    v97 = g.math('MULTIPLY_ADD', v95, 0.38302600383758545, v96)
+    v98 = g.math('MULTIPLY_ADD', v94, v97, 1.049970030784607)
+    v99 = g.math('MULTIPLY_ADD', v94, v98, 0.4092549979686737)
+    v100 = g.math('MINIMUM', v99, 0.9990000128746033)
+    v101 = g.math('MULTIPLY', v100, -1.0)
+    v102 = g.math('MULTIPLY_ADD', v101, 1, 1)
+    v103 = g.math('DIVIDE', v100, v102)
+    v104 = g.vmath('SUBTRACT', (1, 1, 1), v13)
+    v105 = g.vmath('MULTIPLY', v104, (0.047619047619, 0.047619047619, 0.047619047619))
+    v106 = g.vmath('ADD', v105, v13)
+    v107 = g.vmath('MULTIPLY', v106, v106)
+    v108 = g.bc(v103)
+    v109 = g.vmath('MULTIPLY', v108, v107)
+    v110 = g.vmath('SCALE', v106, s=-1.0)
+    v111 = g.comb(v102, v102, v102)
+    v112 = g.vmath('MULTIPLY', v110, v111)
+    v113 = g.vmath('ADD', v112, (1, 1, 1))
+    v114 = g.vmath('DIVIDE', v109, v113)
+    v115 = g.comb(v92, v92, v92)
+    v116 = g.comb(v90, v90, v90)
+    v117 = g.vmath('MULTIPLY', v13, v115)
+    v118 = g.vmath('ADD', v117, v116)
+    v119 = g.bc(v85)
+    v120 = g.vmath('MULTIPLY', v119, v118)
+    v121 = g.vmath('MINIMUM', v120, (2048, 2048, 2048))
+    v122 = g.vmath('ADD', v114, v121)
+    v123 = g.vmath('MAXIMUM', v122, (0, 0, 0))
+    v124 = g.vmath('MINIMUM', v123, (1000, 1000, 1000))
+    v125 = g.mixv(v62, v12, v124)
+    v126 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v127 = g.comb(v53, v53, v53)
+    v128 = g.bc(v53)
+    v129 = g.vmath('MULTIPLY', g.inp('r_diffuse', True), v128)
+    v130 = g.vmath('MULTIPLY', v125, v127)
+    v131 = g.vmath('ADD', v130, v129)
+    v132 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v133 = g.inp('_EnableSubsurface', False, 0.0)
+    v134 = g.math('GREATER_THAN', v133, 0.5)
+    v135 = g.vmath('DOT_PRODUCT', v39, v3)
+    v136 = g.vmath('DOT_PRODUCT', v8, v39)
+    v137 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v138 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v139 = g.math('MULTIPLY_ADD', v135, 0.6666666865348816, 0.3333333432674408)
+    v140 = g.clampn(v139, 0, 1)
+    v141 = g.math('SQRT', v140, 0.0)
+    v142 = g.math('MULTIPLY', v140, v141)
+    v143 = g.math('MULTIPLY', 1, -1.0)
+    v144 = g.math('MULTIPLY_ADD', v142, 1.6666666269302368, v143)
+    v145 = g.math('MULTIPLY_ADD', v29, v144, 1)
+    v146 = g.math('MULTIPLY', v136, -1.0)
+    v147 = g.clampn(v146, 0, 1)
+    v148 = g.math('LOGARITHM', v147, 2.0)
+    v149 = g.math('MULTIPLY', v148, 12)
+    v150 = g.math('POWER', 2.0, v149)
+    v151 = g.math('MULTIPLY', 2.9000000953674316, -1.0)
+    v152 = g.math('MULTIPLY_ADD', v29, v151, 3)
+    v153 = g.math('MULTIPLY', v150, v152)
+    v154 = g.math('MULTIPLY', v145, -1.0)
+    v155 = g.math('MULTIPLY_ADD', v154, 0.15915493667125702, 1)
+    v156 = g.math('MULTIPLY', v145, 0.15915493667125702)
+    v157 = g.math('MULTIPLY_ADD', v153, v155, v156)
+    v158 = g.math('MULTIPLY', v137, v138)
+    v159 = g.math('SUBTRACT', v135, v158)
+    v160 = g.math('ADD', v159, 2)
+    v161 = g.clampn(v160, 0, 1)
+    v162 = g.math('MULTIPLY', v157, v161)
+    v163 = g.bc(v162)
+    v164 = g.vmath('MULTIPLY', v163, g.inp('r_sssTint', True))
+    v165 = g.vmath('ADD', v131, v164)
+    v166 = g.mixv(v134, v131, v165)
+    v167 = g.mixv(v132, v131, v166)
+    v168 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v169 = g.math('MULTIPLY', v35, v36)
+    v170 = g.bc(v169)
+    v171 = g.vmath('MULTIPLY', v34, v170)
+    v172 = g.vmath('MULTIPLY', v167, v171)
+    v173 = g.vmath('ADD', v11, v172)
+    v174 = g.mixv(v168, v11, v173)
+    v175 = g.mixv(v31, v0, v49)
+    v176 = g.mixv(v31, v1, v39)
+    v177 = g.mixv(v31, v2, v42)
+    v178 = g.mixf(v31, v4, v57)
+    v179 = g.mixf(v31, v5, v53)
+    v180 = g.mixf(v31, v9, v61)
+    v181 = g.mixv(v31, v11, v174)
+    v182 = g.mixv(v31, v12, v125)
+    v183 = g.math('ADD', v27, 1)
+    g.out_('o_H', v175, True)
+    g.out_('o_L', v176, True)
+    g.out_('o_LV', v177, True)
+    g.out_('o_N', v3, True)
+    g.out_('o_NoH', v178, False)
+    g.out_('o_NoL', v179, False)
+    g.out_('o_NoV', v6, False)
+    g.out_('o_P', v7, True)
+    g.out_('o_V', v8, True)
+    g.out_('o_VoH', v180, False)
+    g.out_('o_Lloop0', v31, False)
+    g.out_('o_color', v181, True)
+    g.out_('o_energy', v182, True)
+    g.out_('o_f0', v13, True)
+    g.out_('o_inputData_bakedGI', v14, True)
+    g.out_('o_inputData_fogCoord', v15, False)
+    g.out_('o_inputData_normalWS', v16, True)
+    g.out_('o_inputData_normalizedScreenSpaceUV', v17, True)
+    g.out_('o_inputData_positionCS', v18, True)
+    g.out_('o_inputData_positionCS_w', v19, False)
+    g.out_('o_inputData_positionWS', v20, True)
+    g.out_('o_inputData_shadowCoord', v21, True)
+    g.out_('o_inputData_shadowCoord_w', v22, False)
+    g.out_('o_inputData_shadowMask', v23, True)
+    g.out_('o_inputData_shadowMask_w', v24, False)
+    g.out_('o_inputData_vertexLighting', v25, True)
+    g.out_('o_inputData_viewDirectionWS', v26, True)
+    g.out_('o_lightIndex', v183, False)
+    g.out_('o_roughness', v28, False)
+    g.out_('o_sssAmount', v29, False)
+
+
+def build_RCE_Z_Ruri_Endfield_Scene_Grass_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Scene_Grass_0')
+    g = G(t)
+    v0 = g.inp('s_H', True)
+    v1 = g.inp('s_L', True)
+    v2 = g.inp('s_LV', True)
+    v3 = g.inp('s_N', True)
+    v4 = g.inp('s_NoH', False)
+    v5 = g.inp('s_NoL', False)
+    v6 = g.inp('s_NoV', False)
+    v7 = g.inp('s_P', True)
+    v8 = g.inp('s_V', True)
+    v9 = g.inp('s_VoH', False)
+    v10 = g.inp('s_Lloop0', False)
+    v11 = g.inp('s_color', True)
+    v12 = g.inp('s_energy', True)
+    v13 = g.inp('s_f0', True)
+    v14 = g.inp('s_inputData_bakedGI', True)
+    v15 = g.inp('s_inputData_fogCoord', False)
+    v16 = g.inp('s_inputData_normalWS', True)
+    v17 = g.inp('s_inputData_normalizedScreenSpaceUV', True)
+    v18 = g.inp('s_inputData_positionCS', True)
+    v19 = g.inp('s_inputData_positionCS_w', False)
+    v20 = g.inp('s_inputData_positionWS', True)
+    v21 = g.inp('s_inputData_shadowCoord', True)
+    v22 = g.inp('s_inputData_shadowCoord_w', False)
+    v23 = g.inp('s_inputData_shadowMask', True)
+    v24 = g.inp('s_inputData_shadowMask_w', False)
+    v25 = g.inp('s_inputData_vertexLighting', True)
+    v26 = g.inp('s_inputData_viewDirectionWS', True)
+    v27 = g.inp('s_lightIndex', False)
+    v28 = g.inp('s_roughness', False)
+    v29 = g.inp('s_sssAmount', False)
+    v30 = g.math('LESS_THAN', v27, g.inp('r_pixelLightCount', False))
+    v31 = g.math('MULTIPLY', v10, v30)
+    v32 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v27, False)
+    g.out_('C0_AdditionalLight_position', v7, True)
+    v33 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v34 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v35 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v36 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v37 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v38 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v39 = g.mixv(v38, v1, v33)
+    v40 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v41 = g.vmath('ADD', v39, v8)
+    v42 = g.mixv(v40, v2, v41)
+    v43 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v44 = g.vmath('DOT_PRODUCT', v42, v42)
+    v45 = g.math('MAXIMUM', v44, 1E-08)
+    v46 = g.math('INVERSE_SQRT', v45, 0.0)
+    v47 = g.bc(v46)
+    v48 = g.vmath('MULTIPLY', v42, v47)
+    v49 = g.mixv(v43, v0, v48)
+    v50 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v51 = g.vmath('DOT_PRODUCT', v39, v3)
+    v52 = g.clampn(v51)
+    v53 = g.mixf(v50, v5, v52)
+    v54 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v55 = g.vmath('DOT_PRODUCT', v3, v49)
+    v56 = g.clampn(v55)
+    v57 = g.mixf(v54, v4, v56)
+    v58 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v59 = g.vmath('DOT_PRODUCT', v8, v49)
+    v60 = g.clampn(v59)
+    v61 = g.mixf(v58, v9, v60)
+    v62 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v63 = g.math('MULTIPLY', v28, v28)
+    v64 = g.math('MULTIPLY', v28, v28)
+    v65 = g.math('MULTIPLY', v63, v64)
+    v66 = g.math('MINIMUM', v6, 1)
+    v67 = g.math('MULTIPLY', v57, -1.0)
+    v68 = g.math('MULTIPLY_ADD', v57, v65, v67)
+    v69 = g.math('MULTIPLY_ADD', v68, v57, 1)
+    v70 = g.math('MULTIPLY', v53, -1.0)
+    v71 = g.math('MULTIPLY_ADD', v70, v65, v53)
+    v72 = g.math('MULTIPLY_ADD', v71, v53, v65)
+    v73 = g.math('SQRT', v72, 0.0)
+    v74 = g.math('MULTIPLY', v66, v73)
+    v75 = g.math('MULTIPLY', v66, -1.0)
+    v76 = g.math('MULTIPLY_ADD', v75, v65, v66)
+    v77 = g.math('MULTIPLY_ADD', v76, v66, v65)
+    v78 = g.math('SQRT', v77, 0.0)
+    v79 = g.math('MULTIPLY', v53, v78)
+    v80 = g.math('ADD', v74, v79)
+    v81 = g.math('ADD', v80, 0.0001)
+    v82 = g.math('MULTIPLY', v69, v69)
+    v83 = g.math('DIVIDE', v65, v82)
+    v84 = g.math('DIVIDE', 0.5, v81)
+    v85 = g.math('MULTIPLY', v83, v84)
+    v86 = g.math('MULTIPLY', v61, -1.0)
+    v87 = g.math('MULTIPLY_ADD', v86, 1, 1)
+    v88 = g.math('MULTIPLY', v87, v87)
+    v89 = g.math('MULTIPLY', v88, v88)
+    v90 = g.math('MULTIPLY', v87, v89)
+    v91 = g.math('MULTIPLY', v89, -1.0)
+    v92 = g.math('MULTIPLY_ADD', v91, v87, 1)
+    v93 = g.math('MULTIPLY', 1, -1.0)
+    v94 = g.math('MULTIPLY_ADD', v28, v93, 1)
+    v95 = g.math('MULTIPLY', v94, -1.0)
+    v96 = g.math('MULTIPLY', 0.07619470357894897, -1.0)
+    v97 = g.math('MULTIPLY_ADD', v95, 0.38302600383758545, v96)
+    v98 = g.math('MULTIPLY_ADD', v94, v97, 1.049970030784607)
+    v99 = g.math('MULTIPLY_ADD', v94, v98, 0.4092549979686737)
+    v100 = g.math('MINIMUM', v99, 0.9990000128746033)
+    v101 = g.math('MULTIPLY', v100, -1.0)
+    v102 = g.math('MULTIPLY_ADD', v101, 1, 1)
+    v103 = g.math('DIVIDE', v100, v102)
+    v104 = g.vmath('SUBTRACT', (1, 1, 1), v13)
+    v105 = g.vmath('MULTIPLY', v104, (0.047619047619, 0.047619047619, 0.047619047619))
+    v106 = g.vmath('ADD', v105, v13)
+    v107 = g.vmath('MULTIPLY', v106, v106)
+    v108 = g.bc(v103)
+    v109 = g.vmath('MULTIPLY', v108, v107)
+    v110 = g.vmath('SCALE', v106, s=-1.0)
+    v111 = g.comb(v102, v102, v102)
+    v112 = g.vmath('MULTIPLY', v110, v111)
+    v113 = g.vmath('ADD', v112, (1, 1, 1))
+    v114 = g.vmath('DIVIDE', v109, v113)
+    v115 = g.comb(v92, v92, v92)
+    v116 = g.comb(v90, v90, v90)
+    v117 = g.vmath('MULTIPLY', v13, v115)
+    v118 = g.vmath('ADD', v117, v116)
+    v119 = g.bc(v85)
+    v120 = g.vmath('MULTIPLY', v119, v118)
+    v121 = g.vmath('MINIMUM', v120, (2048, 2048, 2048))
+    v122 = g.vmath('ADD', v114, v121)
+    v123 = g.vmath('MAXIMUM', v122, (0, 0, 0))
+    v124 = g.vmath('MINIMUM', v123, (1000, 1000, 1000))
+    v125 = g.mixv(v62, v12, v124)
+    v126 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v127 = g.comb(v53, v53, v53)
+    v128 = g.bc(v53)
+    v129 = g.vmath('MULTIPLY', g.inp('r_diffuse', True), v128)
+    v130 = g.vmath('MULTIPLY', v125, v127)
+    v131 = g.vmath('ADD', v130, v129)
+    v132 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v133 = g.inp('_EnableSubsurface', False, 0.0)
+    v134 = g.math('GREATER_THAN', v133, 0.5)
+    v135 = g.vmath('DOT_PRODUCT', v39, v3)
+    v136 = g.vmath('DOT_PRODUCT', v8, v39)
+    v137 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v138 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v139 = g.math('MULTIPLY_ADD', v135, 0.6666666865348816, 0.3333333432674408)
+    v140 = g.clampn(v139, 0, 1)
+    v141 = g.math('SQRT', v140, 0.0)
+    v142 = g.math('MULTIPLY', v140, v141)
+    v143 = g.math('MULTIPLY', 1, -1.0)
+    v144 = g.math('MULTIPLY_ADD', v142, 1.6666666269302368, v143)
+    v145 = g.math('MULTIPLY_ADD', v29, v144, 1)
+    v146 = g.math('MULTIPLY', v136, -1.0)
+    v147 = g.clampn(v146, 0, 1)
+    v148 = g.math('LOGARITHM', v147, 2.0)
+    v149 = g.math('MULTIPLY', v148, 12)
+    v150 = g.math('POWER', 2.0, v149)
+    v151 = g.math('MULTIPLY', 2.9000000953674316, -1.0)
+    v152 = g.math('MULTIPLY_ADD', v29, v151, 3)
+    v153 = g.math('MULTIPLY', v150, v152)
+    v154 = g.math('MULTIPLY', v145, -1.0)
+    v155 = g.math('MULTIPLY_ADD', v154, 0.15915493667125702, 1)
+    v156 = g.math('MULTIPLY', v145, 0.15915493667125702)
+    v157 = g.math('MULTIPLY_ADD', v153, v155, v156)
+    v158 = g.math('MULTIPLY', v137, v138)
+    v159 = g.math('SUBTRACT', v135, v158)
+    v160 = g.math('ADD', v159, 2)
+    v161 = g.clampn(v160, 0, 1)
+    v162 = g.math('MULTIPLY', v157, v161)
+    v163 = g.bc(v162)
+    v164 = g.vmath('MULTIPLY', v163, g.inp('r_sssTint', True))
+    v165 = g.vmath('ADD', v131, v164)
+    v166 = g.mixv(v134, v131, v165)
+    v167 = g.mixv(v132, v131, v166)
+    v168 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v169 = g.math('MULTIPLY', v35, v36)
+    v170 = g.bc(v169)
+    v171 = g.vmath('MULTIPLY', v34, v170)
+    v172 = g.vmath('MULTIPLY', v167, v171)
+    v173 = g.vmath('ADD', v11, v172)
+    v174 = g.mixv(v168, v11, v173)
+    v175 = g.mixv(v31, v0, v49)
+    v176 = g.mixv(v31, v1, v39)
+    v177 = g.mixv(v31, v2, v42)
+    v178 = g.mixf(v31, v4, v57)
+    v179 = g.mixf(v31, v5, v53)
+    v180 = g.mixf(v31, v9, v61)
+    v181 = g.mixv(v31, v11, v174)
+    v182 = g.mixv(v31, v12, v125)
+    v183 = g.math('ADD', v27, 1)
+    g.out_('o_H', v175, True)
+    g.out_('o_L', v176, True)
+    g.out_('o_LV', v177, True)
+    g.out_('o_N', v3, True)
+    g.out_('o_NoH', v178, False)
+    g.out_('o_NoL', v179, False)
+    g.out_('o_NoV', v6, False)
+    g.out_('o_P', v7, True)
+    g.out_('o_V', v8, True)
+    g.out_('o_VoH', v180, False)
+    g.out_('o_Lloop0', v31, False)
+    g.out_('o_color', v181, True)
+    g.out_('o_energy', v182, True)
+    g.out_('o_f0', v13, True)
+    g.out_('o_inputData_bakedGI', v14, True)
+    g.out_('o_inputData_fogCoord', v15, False)
+    g.out_('o_inputData_normalWS', v16, True)
+    g.out_('o_inputData_normalizedScreenSpaceUV', v17, True)
+    g.out_('o_inputData_positionCS', v18, True)
+    g.out_('o_inputData_positionCS_w', v19, False)
+    g.out_('o_inputData_positionWS', v20, True)
+    g.out_('o_inputData_shadowCoord', v21, True)
+    g.out_('o_inputData_shadowCoord_w', v22, False)
+    g.out_('o_inputData_shadowMask', v23, True)
+    g.out_('o_inputData_shadowMask_w', v24, False)
+    g.out_('o_inputData_vertexLighting', v25, True)
+    g.out_('o_inputData_viewDirectionWS', v26, True)
+    g.out_('o_lightIndex', v183, False)
+    g.out_('o_roughness', v28, False)
+    g.out_('o_sssAmount', v29, False)
+
+
+def build_RCE_Z_Ruri_Endfield_Scene_Trunk_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Scene_Trunk_0')
+    g = G(t)
+    v0 = g.inp('s_H', True)
+    v1 = g.inp('s_L', True)
+    v2 = g.inp('s_LV', True)
+    v3 = g.inp('s_N', True)
+    v4 = g.inp('s_NoH', False)
+    v5 = g.inp('s_NoL', False)
+    v6 = g.inp('s_NoV', False)
+    v7 = g.inp('s_P', True)
+    v8 = g.inp('s_V', True)
+    v9 = g.inp('s_VoH', False)
+    v10 = g.inp('s_Lloop0', False)
+    v11 = g.inp('s_color', True)
+    v12 = g.inp('s_energy', True)
+    v13 = g.inp('s_f0', True)
+    v14 = g.inp('s_inputData_bakedGI', True)
+    v15 = g.inp('s_inputData_fogCoord', False)
+    v16 = g.inp('s_inputData_normalWS', True)
+    v17 = g.inp('s_inputData_normalizedScreenSpaceUV', True)
+    v18 = g.inp('s_inputData_positionCS', True)
+    v19 = g.inp('s_inputData_positionCS_w', False)
+    v20 = g.inp('s_inputData_positionWS', True)
+    v21 = g.inp('s_inputData_shadowCoord', True)
+    v22 = g.inp('s_inputData_shadowCoord_w', False)
+    v23 = g.inp('s_inputData_shadowMask', True)
+    v24 = g.inp('s_inputData_shadowMask_w', False)
+    v25 = g.inp('s_inputData_vertexLighting', True)
+    v26 = g.inp('s_inputData_viewDirectionWS', True)
+    v27 = g.inp('s_lightIndex', False)
+    v28 = g.inp('s_roughness', False)
+    v29 = g.inp('s_sssAmount', False)
+    v30 = g.math('LESS_THAN', v27, g.inp('r_pixelLightCount', False))
+    v31 = g.math('MULTIPLY', v10, v30)
+    v32 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v27, False)
+    g.out_('C0_AdditionalLight_position', v7, True)
+    v33 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v34 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v35 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v36 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v37 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v38 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v39 = g.mixv(v38, v1, v33)
+    v40 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v41 = g.vmath('ADD', v39, v8)
+    v42 = g.mixv(v40, v2, v41)
+    v43 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v44 = g.vmath('DOT_PRODUCT', v42, v42)
+    v45 = g.math('MAXIMUM', v44, 1E-08)
+    v46 = g.math('INVERSE_SQRT', v45, 0.0)
+    v47 = g.bc(v46)
+    v48 = g.vmath('MULTIPLY', v42, v47)
+    v49 = g.mixv(v43, v0, v48)
+    v50 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v51 = g.vmath('DOT_PRODUCT', v39, v3)
+    v52 = g.clampn(v51)
+    v53 = g.mixf(v50, v5, v52)
+    v54 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v55 = g.vmath('DOT_PRODUCT', v3, v49)
+    v56 = g.clampn(v55)
+    v57 = g.mixf(v54, v4, v56)
+    v58 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v59 = g.vmath('DOT_PRODUCT', v8, v49)
+    v60 = g.clampn(v59)
+    v61 = g.mixf(v58, v9, v60)
+    v62 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v63 = g.math('MULTIPLY', v28, v28)
+    v64 = g.math('MULTIPLY', v28, v28)
+    v65 = g.math('MULTIPLY', v63, v64)
+    v66 = g.math('MINIMUM', v6, 1)
+    v67 = g.math('MULTIPLY', v57, -1.0)
+    v68 = g.math('MULTIPLY_ADD', v57, v65, v67)
+    v69 = g.math('MULTIPLY_ADD', v68, v57, 1)
+    v70 = g.math('MULTIPLY', v53, -1.0)
+    v71 = g.math('MULTIPLY_ADD', v70, v65, v53)
+    v72 = g.math('MULTIPLY_ADD', v71, v53, v65)
+    v73 = g.math('SQRT', v72, 0.0)
+    v74 = g.math('MULTIPLY', v66, v73)
+    v75 = g.math('MULTIPLY', v66, -1.0)
+    v76 = g.math('MULTIPLY_ADD', v75, v65, v66)
+    v77 = g.math('MULTIPLY_ADD', v76, v66, v65)
+    v78 = g.math('SQRT', v77, 0.0)
+    v79 = g.math('MULTIPLY', v53, v78)
+    v80 = g.math('ADD', v74, v79)
+    v81 = g.math('ADD', v80, 0.0001)
+    v82 = g.math('MULTIPLY', v69, v69)
+    v83 = g.math('DIVIDE', v65, v82)
+    v84 = g.math('DIVIDE', 0.5, v81)
+    v85 = g.math('MULTIPLY', v83, v84)
+    v86 = g.math('MULTIPLY', v61, -1.0)
+    v87 = g.math('MULTIPLY_ADD', v86, 1, 1)
+    v88 = g.math('MULTIPLY', v87, v87)
+    v89 = g.math('MULTIPLY', v88, v88)
+    v90 = g.math('MULTIPLY', v87, v89)
+    v91 = g.math('MULTIPLY', v89, -1.0)
+    v92 = g.math('MULTIPLY_ADD', v91, v87, 1)
+    v93 = g.math('MULTIPLY', 1, -1.0)
+    v94 = g.math('MULTIPLY_ADD', v28, v93, 1)
+    v95 = g.math('MULTIPLY', v94, -1.0)
+    v96 = g.math('MULTIPLY', 0.07619470357894897, -1.0)
+    v97 = g.math('MULTIPLY_ADD', v95, 0.38302600383758545, v96)
+    v98 = g.math('MULTIPLY_ADD', v94, v97, 1.049970030784607)
+    v99 = g.math('MULTIPLY_ADD', v94, v98, 0.4092549979686737)
+    v100 = g.math('MINIMUM', v99, 0.9990000128746033)
+    v101 = g.math('MULTIPLY', v100, -1.0)
+    v102 = g.math('MULTIPLY_ADD', v101, 1, 1)
+    v103 = g.math('DIVIDE', v100, v102)
+    v104 = g.vmath('SUBTRACT', (1, 1, 1), v13)
+    v105 = g.vmath('MULTIPLY', v104, (0.047619047619, 0.047619047619, 0.047619047619))
+    v106 = g.vmath('ADD', v105, v13)
+    v107 = g.vmath('MULTIPLY', v106, v106)
+    v108 = g.bc(v103)
+    v109 = g.vmath('MULTIPLY', v108, v107)
+    v110 = g.vmath('SCALE', v106, s=-1.0)
+    v111 = g.comb(v102, v102, v102)
+    v112 = g.vmath('MULTIPLY', v110, v111)
+    v113 = g.vmath('ADD', v112, (1, 1, 1))
+    v114 = g.vmath('DIVIDE', v109, v113)
+    v115 = g.comb(v92, v92, v92)
+    v116 = g.comb(v90, v90, v90)
+    v117 = g.vmath('MULTIPLY', v13, v115)
+    v118 = g.vmath('ADD', v117, v116)
+    v119 = g.bc(v85)
+    v120 = g.vmath('MULTIPLY', v119, v118)
+    v121 = g.vmath('MINIMUM', v120, (2048, 2048, 2048))
+    v122 = g.vmath('ADD', v114, v121)
+    v123 = g.vmath('MAXIMUM', v122, (0, 0, 0))
+    v124 = g.vmath('MINIMUM', v123, (1000, 1000, 1000))
+    v125 = g.mixv(v62, v12, v124)
+    v126 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v127 = g.comb(v53, v53, v53)
+    v128 = g.bc(v53)
+    v129 = g.vmath('MULTIPLY', g.inp('r_diffuse', True), v128)
+    v130 = g.vmath('MULTIPLY', v125, v127)
+    v131 = g.vmath('ADD', v130, v129)
+    v132 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v133 = g.inp('_EnableSubsurface', False, 0.0)
+    v134 = g.math('GREATER_THAN', v133, 0.5)
+    v135 = g.vmath('DOT_PRODUCT', v39, v3)
+    v136 = g.vmath('DOT_PRODUCT', v8, v39)
+    v137 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v138 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v139 = g.math('MULTIPLY_ADD', v135, 0.6666666865348816, 0.3333333432674408)
+    v140 = g.clampn(v139, 0, 1)
+    v141 = g.math('SQRT', v140, 0.0)
+    v142 = g.math('MULTIPLY', v140, v141)
+    v143 = g.math('MULTIPLY', 1, -1.0)
+    v144 = g.math('MULTIPLY_ADD', v142, 1.6666666269302368, v143)
+    v145 = g.math('MULTIPLY_ADD', v29, v144, 1)
+    v146 = g.math('MULTIPLY', v136, -1.0)
+    v147 = g.clampn(v146, 0, 1)
+    v148 = g.math('LOGARITHM', v147, 2.0)
+    v149 = g.math('MULTIPLY', v148, 12)
+    v150 = g.math('POWER', 2.0, v149)
+    v151 = g.math('MULTIPLY', 2.9000000953674316, -1.0)
+    v152 = g.math('MULTIPLY_ADD', v29, v151, 3)
+    v153 = g.math('MULTIPLY', v150, v152)
+    v154 = g.math('MULTIPLY', v145, -1.0)
+    v155 = g.math('MULTIPLY_ADD', v154, 0.15915493667125702, 1)
+    v156 = g.math('MULTIPLY', v145, 0.15915493667125702)
+    v157 = g.math('MULTIPLY_ADD', v153, v155, v156)
+    v158 = g.math('MULTIPLY', v137, v138)
+    v159 = g.math('SUBTRACT', v135, v158)
+    v160 = g.math('ADD', v159, 2)
+    v161 = g.clampn(v160, 0, 1)
+    v162 = g.math('MULTIPLY', v157, v161)
+    v163 = g.bc(v162)
+    v164 = g.vmath('MULTIPLY', v163, g.inp('r_sssTint', True))
+    v165 = g.vmath('ADD', v131, v164)
+    v166 = g.mixv(v134, v131, v165)
+    v167 = g.mixv(v132, v131, v166)
+    v168 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v169 = g.math('MULTIPLY', v35, v36)
+    v170 = g.bc(v169)
+    v171 = g.vmath('MULTIPLY', v34, v170)
+    v172 = g.vmath('MULTIPLY', v167, v171)
+    v173 = g.vmath('ADD', v11, v172)
+    v174 = g.mixv(v168, v11, v173)
+    v175 = g.mixv(v31, v0, v49)
+    v176 = g.mixv(v31, v1, v39)
+    v177 = g.mixv(v31, v2, v42)
+    v178 = g.mixf(v31, v4, v57)
+    v179 = g.mixf(v31, v5, v53)
+    v180 = g.mixf(v31, v9, v61)
+    v181 = g.mixv(v31, v11, v174)
+    v182 = g.mixv(v31, v12, v125)
+    v183 = g.math('ADD', v27, 1)
+    g.out_('o_H', v175, True)
+    g.out_('o_L', v176, True)
+    g.out_('o_LV', v177, True)
+    g.out_('o_N', v3, True)
+    g.out_('o_NoH', v178, False)
+    g.out_('o_NoL', v179, False)
+    g.out_('o_NoV', v6, False)
+    g.out_('o_P', v7, True)
+    g.out_('o_V', v8, True)
+    g.out_('o_VoH', v180, False)
+    g.out_('o_Lloop0', v31, False)
+    g.out_('o_color', v181, True)
+    g.out_('o_energy', v182, True)
+    g.out_('o_f0', v13, True)
+    g.out_('o_inputData_bakedGI', v14, True)
+    g.out_('o_inputData_fogCoord', v15, False)
+    g.out_('o_inputData_normalWS', v16, True)
+    g.out_('o_inputData_normalizedScreenSpaceUV', v17, True)
+    g.out_('o_inputData_positionCS', v18, True)
+    g.out_('o_inputData_positionCS_w', v19, False)
+    g.out_('o_inputData_positionWS', v20, True)
+    g.out_('o_inputData_shadowCoord', v21, True)
+    g.out_('o_inputData_shadowCoord_w', v22, False)
+    g.out_('o_inputData_shadowMask', v23, True)
+    g.out_('o_inputData_shadowMask_w', v24, False)
+    g.out_('o_inputData_vertexLighting', v25, True)
+    g.out_('o_inputData_viewDirectionWS', v26, True)
+    g.out_('o_lightIndex', v183, False)
+    g.out_('o_roughness', v28, False)
+    g.out_('o_sssAmount', v29, False)
+
+
 def build_Ruri_Endfield_Scene_Lit():
     t = _tree('Ruri Endfield Scene Lit')
     g = G(t)
@@ -3641,11 +4328,11 @@ def build_Ruri_Endfield_Scene_Lit():
     v299 = g.math('MULTIPLY', v278, v298)
     v300 = g.sep(v279)
     v301 = g.comb(v300[0], v300[1], 0.0)
-    v302 = g.vmath('MULTIPLY', v301, (2, 2, 2))
-    v303 = g.vmath('SUBTRACT', v302, (1, 1, 1))
+    v302 = g.vmath('MULTIPLY', v301, (2, 2, 0.0))
+    v303 = g.vmath('SUBTRACT', v302, (1, 1, 0.0))
     v304 = g.inp('_DetailNormalIntensity', False, 1.0)
     v305 = g.math('MULTIPLY', v304, v299)
-    v306 = g.bc(v305)
+    v306 = g.comb(v305, v305, 0.0)
     v307 = g.vmath('MULTIPLY', v303, v306)
     v308 = g.sep(v307)
     v309 = g.comb(v308[0], v308[1], 1)
@@ -3781,12 +4468,12 @@ def build_Ruri_Endfield_Scene_Lit():
     v438 = g.sep(v20)
     v439 = g.comb(v438[0], v438[2], 0.0)
     v440 = g.inp('_Layer1Tilling', False, 1.0)
-    v441 = g.bc(v440)
+    v441 = g.comb(v440, v440, 0.0)
     v442 = g.vmath('MULTIPLY', v439, v441)
     v443 = g.math('GREATER_THAN', v434, 1.5)
-    v444 = g.bc(v440)
+    v444 = g.comb(v440, v440, 0.0)
     v445 = g.vmath('MULTIPLY', v15, v444)
-    v446 = g.bc(v440)
+    v446 = g.comb(v440, v440, 0.0)
     v447 = g.vmath('MULTIPLY', v0, v446)
     v448 = g.mixv(v443, v447, v445)
     v449 = g.mixv(v437, v448, v442)
@@ -4143,7 +4830,7 @@ def build_Ruri_Endfield_Scene_Lit():
     v796 = g.vmath('ADD', v795, v794)
     v797 = g.math('MAXIMUM', v680, v708)
     v798 = g.inp('_EmissiveMapTilling', False, 0.0)
-    v799 = g.bc(v798)
+    v799 = g.comb(v798, v798, 0.0)
     v800 = g.vmath('MULTIPLY', v796, v799)
     v801 = g.mixv(v797, v796, v800)
     g.out_('F16_EmissiveMap_uv', v801, True)
@@ -4228,8 +4915,8 @@ def build_Ruri_Endfield_Scene_Lit():
     v880 = g.vmath('NORMALIZE', v879)
     v881 = g.sep(v880)
     v882 = g.comb(v881[0], v881[1], 0.0)
-    v883 = g.vmath('MULTIPLY', v882, (0.5, 0.5, 0.5))
-    v884 = g.vmath('ADD', v883, (0.5, 0.5, 0.5))
+    v883 = g.vmath('MULTIPLY', v882, (0.5, 0.5, 0.0))
+    v884 = g.vmath('ADD', v883, (0.5, 0.5, 0.0))
     g.out_('F17_MatcapMap_uv', v884, True)
     v885 = g.inp('F17_MatcapMap', True, (1.0, 1.0, 1.0))
     v886 = g.inp('F17_MatcapMap_alpha', False, 1.0)
@@ -4312,10 +4999,10 @@ def build_Ruri_Endfield_Scene_Lit():
     v962 = g.math('SUBTRACT', 1.0, v937)
     v963 = g.inp('_GlobalMipBias', True, (0.0, 0.0, 0.0))
     v964 = g.sep(v963)
-    v965 = g.bc(v964[1])
+    v965 = g.comb(v964[1], v964[1], 0.0)
     v966 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v965)
     v967 = g.math('SUBTRACT', 1.0, v937)
-    v968 = g.bc(v964[1])
+    v968 = g.comb(v964[1], v964[1], 0.0)
     v969 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v968)
     v970 = g.math('SUBTRACT', 1.0, v937)
     v971 = g.inp('_ParallaxMarchNum', False, 3.0)
@@ -4341,7 +5028,7 @@ def build_Ruri_Endfield_Scene_Lit():
     v991 = g.math('MULTIPLY', v989, v990)
     v992 = g.comb(v986, v991, 0.0)
     v993 = g.math('SUBTRACT', 1.0, v937)
-    v994 = g.bc(v974)
+    v994 = g.comb(v974, v974, 0.0)
     v995 = g.vmath('MULTIPLY', v994, v992)
     v996 = g.math('SUBTRACT', 1.0, v937)
     v997 = g.math('SUBTRACT', 1, v974)
@@ -4396,7 +5083,7 @@ def build_Ruri_Endfield_Scene_Lit():
     v1032 = g.vmath('ADD', v1031, v1017)
     v1033 = g.vmath('ADD', v1014, v1032)
     v1034 = g.inp('_ParallaxTilling', False, 1.0)
-    v1035 = g.bc(v1034)
+    v1035 = g.comb(v1034, v1034, 0.0)
     v1036 = g.vmath('MULTIPLY', v1033, v1035)
     v1037 = g.math('SUBTRACT', 1.0, v937)
     g.out_('F19_ParallaxMap_uv', v1036, True)
@@ -4524,7 +5211,7 @@ def build_Ruri_Endfield_Scene_Lit():
     v1159 = g.math('SUBTRACT', 1.0, v937)
     v1160 = g.math('MAXIMUM', 0.10000000149011612, v1148)
     v1161 = g.math('SUBTRACT', 1.0, v937)
-    v1162 = g.bc(v1160)
+    v1162 = g.comb(v1160, v1160, 0.0)
     v1163 = g.vmath('DIVIDE', v1152, v1162)
     v1164 = g.math('SUBTRACT', 1.0, v937)
     v1165 = g.comb(v1158, v1156, 0.0)
@@ -5273,11 +5960,11 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v301 = g.math('MULTIPLY', v280, v300)
     v302 = g.sep(v281)
     v303 = g.comb(v302[0], v302[1], 0.0)
-    v304 = g.vmath('MULTIPLY', v303, (2, 2, 2))
-    v305 = g.vmath('SUBTRACT', v304, (1, 1, 1))
+    v304 = g.vmath('MULTIPLY', v303, (2, 2, 0.0))
+    v305 = g.vmath('SUBTRACT', v304, (1, 1, 0.0))
     v306 = g.inp('_DetailNormalIntensity', False, 1.0)
     v307 = g.math('MULTIPLY', v306, v301)
-    v308 = g.bc(v307)
+    v308 = g.comb(v307, v307, 0.0)
     v309 = g.vmath('MULTIPLY', v305, v308)
     v310 = g.sep(v309)
     v311 = g.comb(v310[0], v310[1], 1)
@@ -5413,12 +6100,12 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v440 = g.sep(v20)
     v441 = g.comb(v440[0], v440[2], 0.0)
     v442 = g.inp('_Layer1Tilling', False, 1.0)
-    v443 = g.bc(v442)
+    v443 = g.comb(v442, v442, 0.0)
     v444 = g.vmath('MULTIPLY', v441, v443)
     v445 = g.math('GREATER_THAN', v436, 1.5)
-    v446 = g.bc(v442)
+    v446 = g.comb(v442, v442, 0.0)
     v447 = g.vmath('MULTIPLY', v15, v446)
-    v448 = g.bc(v442)
+    v448 = g.comb(v442, v442, 0.0)
     v449 = g.vmath('MULTIPLY', v0, v448)
     v450 = g.mixv(v445, v449, v447)
     v451 = g.mixv(v439, v450, v444)
@@ -5775,7 +6462,7 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v798 = g.vmath('ADD', v797, v796)
     v799 = g.math('MAXIMUM', v682, v710)
     v800 = g.inp('_EmissiveMapTilling', False, 0.0)
-    v801 = g.bc(v800)
+    v801 = g.comb(v800, v800, 0.0)
     v802 = g.vmath('MULTIPLY', v798, v801)
     v803 = g.mixv(v799, v798, v802)
     g.out_('F16_EmissiveMap_uv', v803, True)
@@ -5860,8 +6547,8 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v882 = g.vmath('NORMALIZE', v881)
     v883 = g.sep(v882)
     v884 = g.comb(v883[0], v883[1], 0.0)
-    v885 = g.vmath('MULTIPLY', v884, (0.5, 0.5, 0.5))
-    v886 = g.vmath('ADD', v885, (0.5, 0.5, 0.5))
+    v885 = g.vmath('MULTIPLY', v884, (0.5, 0.5, 0.0))
+    v886 = g.vmath('ADD', v885, (0.5, 0.5, 0.0))
     g.out_('F17_MatcapMap_uv', v886, True)
     v887 = g.inp('F17_MatcapMap', True, (1.0, 1.0, 1.0))
     v888 = g.inp('F17_MatcapMap_alpha', False, 1.0)
@@ -5944,10 +6631,10 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v964 = g.math('SUBTRACT', 1.0, v939)
     v965 = g.inp('_GlobalMipBias', True, (0.0, 0.0, 0.0))
     v966 = g.sep(v965)
-    v967 = g.bc(v966[1])
+    v967 = g.comb(v966[1], v966[1], 0.0)
     v968 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v967)
     v969 = g.math('SUBTRACT', 1.0, v939)
-    v970 = g.bc(v966[1])
+    v970 = g.comb(v966[1], v966[1], 0.0)
     v971 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v970)
     v972 = g.math('SUBTRACT', 1.0, v939)
     v973 = g.inp('_ParallaxMarchNum', False, 3.0)
@@ -5973,7 +6660,7 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v993 = g.math('MULTIPLY', v991, v992)
     v994 = g.comb(v988, v993, 0.0)
     v995 = g.math('SUBTRACT', 1.0, v939)
-    v996 = g.bc(v976)
+    v996 = g.comb(v976, v976, 0.0)
     v997 = g.vmath('MULTIPLY', v996, v994)
     v998 = g.math('SUBTRACT', 1.0, v939)
     v999 = g.math('SUBTRACT', 1, v976)
@@ -6028,7 +6715,7 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v1034 = g.vmath('ADD', v1033, v1019)
     v1035 = g.vmath('ADD', v1016, v1034)
     v1036 = g.inp('_ParallaxTilling', False, 1.0)
-    v1037 = g.bc(v1036)
+    v1037 = g.comb(v1036, v1036, 0.0)
     v1038 = g.vmath('MULTIPLY', v1035, v1037)
     v1039 = g.math('SUBTRACT', 1.0, v939)
     g.out_('F19_ParallaxMap_uv', v1038, True)
@@ -6156,7 +6843,7 @@ def build_Ruri_Endfield_Scene_LitTransparent():
     v1161 = g.math('SUBTRACT', 1.0, v939)
     v1162 = g.math('MAXIMUM', 0.10000000149011612, v1150)
     v1163 = g.math('SUBTRACT', 1.0, v939)
-    v1164 = g.bc(v1162)
+    v1164 = g.comb(v1162, v1162, 0.0)
     v1165 = g.vmath('DIVIDE', v1154, v1164)
     v1166 = g.math('SUBTRACT', 1.0, v939)
     v1167 = g.comb(v1160, v1158, 0.0)
@@ -6907,11 +7594,11 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v303 = g.math('MULTIPLY', v282, v302)
     v304 = g.sep(v283)
     v305 = g.comb(v304[0], v304[1], 0.0)
-    v306 = g.vmath('MULTIPLY', v305, (2, 2, 2))
-    v307 = g.vmath('SUBTRACT', v306, (1, 1, 1))
+    v306 = g.vmath('MULTIPLY', v305, (2, 2, 0.0))
+    v307 = g.vmath('SUBTRACT', v306, (1, 1, 0.0))
     v308 = g.inp('_DetailNormalIntensity', False, 1.0)
     v309 = g.math('MULTIPLY', v308, v303)
-    v310 = g.bc(v309)
+    v310 = g.comb(v309, v309, 0.0)
     v311 = g.vmath('MULTIPLY', v307, v310)
     v312 = g.sep(v311)
     v313 = g.comb(v312[0], v312[1], 1)
@@ -7047,12 +7734,12 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v442 = g.sep(v20)
     v443 = g.comb(v442[0], v442[2], 0.0)
     v444 = g.inp('_Layer1Tilling', False, 1.0)
-    v445 = g.bc(v444)
+    v445 = g.comb(v444, v444, 0.0)
     v446 = g.vmath('MULTIPLY', v443, v445)
     v447 = g.math('GREATER_THAN', v438, 1.5)
-    v448 = g.bc(v444)
+    v448 = g.comb(v444, v444, 0.0)
     v449 = g.vmath('MULTIPLY', v15, v448)
-    v450 = g.bc(v444)
+    v450 = g.comb(v444, v444, 0.0)
     v451 = g.vmath('MULTIPLY', v0, v450)
     v452 = g.mixv(v447, v451, v449)
     v453 = g.mixv(v441, v452, v446)
@@ -7409,7 +8096,7 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v800 = g.vmath('ADD', v799, v798)
     v801 = g.math('MAXIMUM', v684, v712)
     v802 = g.inp('_EmissiveMapTilling', False, 0.0)
-    v803 = g.bc(v802)
+    v803 = g.comb(v802, v802, 0.0)
     v804 = g.vmath('MULTIPLY', v800, v803)
     v805 = g.mixv(v801, v800, v804)
     g.out_('F16_EmissiveMap_uv', v805, True)
@@ -7494,8 +8181,8 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v884 = g.vmath('NORMALIZE', v883)
     v885 = g.sep(v884)
     v886 = g.comb(v885[0], v885[1], 0.0)
-    v887 = g.vmath('MULTIPLY', v886, (0.5, 0.5, 0.5))
-    v888 = g.vmath('ADD', v887, (0.5, 0.5, 0.5))
+    v887 = g.vmath('MULTIPLY', v886, (0.5, 0.5, 0.0))
+    v888 = g.vmath('ADD', v887, (0.5, 0.5, 0.0))
     g.out_('F17_MatcapMap_uv', v888, True)
     v889 = g.inp('F17_MatcapMap', True, (1.0, 1.0, 1.0))
     v890 = g.inp('F17_MatcapMap_alpha', False, 1.0)
@@ -7578,10 +8265,10 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v966 = g.math('SUBTRACT', 1.0, v941)
     v967 = g.inp('_GlobalMipBias', True, (0.0, 0.0, 0.0))
     v968 = g.sep(v967)
-    v969 = g.bc(v968[1])
+    v969 = g.comb(v968[1], v968[1], 0.0)
     v970 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v969)
     v971 = g.math('SUBTRACT', 1.0, v941)
-    v972 = g.bc(v968[1])
+    v972 = g.comb(v968[1], v968[1], 0.0)
     v973 = g.vmath('MULTIPLY', (0.0, 0.0, 0.0), v972)
     v974 = g.math('SUBTRACT', 1.0, v941)
     v975 = g.inp('_ParallaxMarchNum', False, 3.0)
@@ -7607,7 +8294,7 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v995 = g.math('MULTIPLY', v993, v994)
     v996 = g.comb(v990, v995, 0.0)
     v997 = g.math('SUBTRACT', 1.0, v941)
-    v998 = g.bc(v978)
+    v998 = g.comb(v978, v978, 0.0)
     v999 = g.vmath('MULTIPLY', v998, v996)
     v1000 = g.math('SUBTRACT', 1.0, v941)
     v1001 = g.math('SUBTRACT', 1, v978)
@@ -7662,7 +8349,7 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v1036 = g.vmath('ADD', v1035, v1021)
     v1037 = g.vmath('ADD', v1018, v1036)
     v1038 = g.inp('_ParallaxTilling', False, 1.0)
-    v1039 = g.bc(v1038)
+    v1039 = g.comb(v1038, v1038, 0.0)
     v1040 = g.vmath('MULTIPLY', v1037, v1039)
     v1041 = g.math('SUBTRACT', 1.0, v941)
     g.out_('F19_ParallaxMap_uv', v1040, True)
@@ -7790,7 +8477,7 @@ def build_Ruri_Endfield_Scene_LitHLod():
     v1163 = g.math('SUBTRACT', 1.0, v941)
     v1164 = g.math('MAXIMUM', 0.10000000149011612, v1152)
     v1165 = g.math('SUBTRACT', 1.0, v941)
-    v1166 = g.bc(v1164)
+    v1166 = g.comb(v1164, v1164, 0.0)
     v1167 = g.vmath('DIVIDE', v1156, v1166)
     v1168 = g.math('SUBTRACT', 1.0, v941)
     v1169 = g.comb(v1162, v1160, 0.0)
@@ -8583,7 +9270,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v156 = g.inp('F5_NormalMap_alpha', False, 1.0)
     v157 = g.sep(v155)
     v158 = g.comb(v157[0], v157[1], 0.0)
-    v159 = g.vmath('MULTIPLY', v158, (2, 2, 2))
+    v159 = g.vmath('MULTIPLY', v158, (2, 2, 0.0))
     v160 = g.vmath('SUBTRACT', v159, (1, 1, 0.0))
     v161 = g.sep(v160)
     v162 = g.math('ABSOLUTE', v161[0], 0.0)
@@ -8594,7 +9281,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v167 = g.mixf(v166, v161[1], 0)
     v168 = g.comb(v164, v167, 0.0)
     v169 = g.inp('_NormalScale', False, 0.0)
-    v170 = g.bc(v169)
+    v170 = g.comb(v169, v169, 0.0)
     v171 = g.vmath('MULTIPLY', v168, v170)
     v172 = g.sep(v11)
     v173 = g.math('MULTIPLY', v154, v172[0])
@@ -8628,7 +9315,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v201 = g.vmath('DOT_PRODUCT', v200[0], v197)
     v202 = g.comb(v199, v201, 0.0)
     v203 = g.vmath('ADD', v202, (1, 1, 0.0))
-    v204 = g.vmath('MULTIPLY', v203, (0.5, 0.5, 0.5))
+    v204 = g.vmath('MULTIPLY', v203, (0.5, 0.5, 0.0))
     g.out_('F6_MatcapMap_uv', v204, True)
     v205 = g.inp('F6_MatcapMap', True, (1.0, 1.0, 1.0))
     v206 = g.inp('F6_MatcapMap_alpha', False, 1.0)
@@ -8695,7 +9382,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v264 = g.mixv(v263, v0, v14)
     v265 = g.math('SUBTRACT', 1.0, v253)
     v266 = g.inp('_ParallaxNoiseMapTilling', False, 0.0)
-    v267 = g.bc(v266)
+    v267 = g.comb(v266, v266, 0.0)
     v268 = g.vmath('MULTIPLY', v264, v267)
     v269 = g.math('SUBTRACT', 1.0, v253)
     v270 = g.math('SUBTRACT', 1.0, v253)
@@ -8707,17 +9394,17 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v276 = g.math('SUBTRACT', 1.0, v253)
     v277 = g.comb(v261[0], v261[1], 0.0)
     v278 = g.math('ADD', v261[2], 0.41999998688697815)
-    v279 = g.bc(v278)
+    v279 = g.comb(v278, v278, 0.0)
     v280 = g.vmath('DIVIDE', v277, v279)
     v281 = g.math('MAXIMUM', v261[2], 0.0010000000474974513)
-    v282 = g.bc(v281)
+    v282 = g.comb(v281, v281, 0.0)
     v283 = g.vmath('DIVIDE', v280, v282)
     v284 = g.math('MULTIPLY', 1, -1.0)
     v285 = g.inp('_ParallaxStrength', False, 0.0)
     v286 = g.math('MULTIPLY', v284, v285)
-    v287 = g.bc(v286)
+    v287 = g.comb(v286, v286, 0.0)
     v288 = g.vmath('MULTIPLY', v283, v287)
-    v289 = g.bc(v275)
+    v289 = g.comb(v275, v275, 0.0)
     v290 = g.vmath('MULTIPLY', v288, v289)
     v291 = g.math('SUBTRACT', 1.0, v253)
     v292 = g.math('SUBTRACT', 1, v275)
@@ -8763,13 +9450,13 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v318 = g.math('ADD', v317, v308)
     v319 = g.math('SUBTRACT', v318, v312)
     v320 = g.math('DIVIDE', v316, v319)
-    v321 = g.bc(v320)
+    v321 = g.comb(v320, v320, 0.0)
     v322 = g.vmath('MULTIPLY', v290, v321)
     v323 = g.vmath('ADD', v310, v322)
     v324 = g.math('SUBTRACT', 1.0, v253)
     v325 = g.vmath('ADD', v264, v323)
     v326 = g.inp('_ParallaxTilling', False, 1.0)
-    v327 = g.bc(v326)
+    v327 = g.comb(v326, v326, 0.0)
     v328 = g.vmath('MULTIPLY', v325, v327)
     g.out_('F9_ParallaxMap_uv', v328, True)
     v329 = g.inp('F9_ParallaxMap', True, (1.0, 1.0, 1.0))
@@ -8960,15 +9647,15 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v513 = g.inp('F10_RefractTex_alpha', False, 1.0)
     v514 = g.sep(v512)
     v515 = g.comb(v514[0], v514[1], 0.0)
-    v516 = g.vmath('MULTIPLY', v515, (2, 2, 2))
+    v516 = g.vmath('MULTIPLY', v515, (2, 2, 0.0))
     v517 = g.vmath('SUBTRACT', v516, (1, 1, 0.0))
     v518 = g.inp('_RefractTexIntensity', False, 0.01)
-    v519 = g.bc(v518)
+    v519 = g.comb(v518, v518, 0.0)
     v520 = g.vmath('MULTIPLY', v517, v519)
     v521 = g.inp('_UseCustomRefractTex', False, 0.0)
     v522 = g.mixv(v521, v504, v520)
     v523 = g.vmath('ADD', v29, v522)
-    v524 = g.vmath('MULTIPLY', v522, (0.25, 0.25, 0.25))
+    v524 = g.vmath('MULTIPLY', v522, (0.25, 0.25, 0.0))
     v525 = g.vmath('ADD', v29, v524)
     v526 = g.inp('_ZBufferParams', True, (9999.0, 1.0, 9.999))
     v527 = g.inp('_ZBufferParams_w', False, 0.001)
@@ -9014,7 +9701,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v566 = g.sep(v564)
     v567 = g.comb(v566[0], v566[1], 0.0)
     v568 = g.inp('_IceRefractionStrength', False, 1.0)
-    v569 = g.bc(v568)
+    v569 = g.comb(v568, v568, 0.0)
     v570 = g.vmath('MULTIPLY', v202, v569)
     v571 = g.vmath('ADD', v567, v570)
     v572 = g.inp('_IceRefractionColor', True, (1.0, 1.0, 1.0))
@@ -9027,7 +9714,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v579 = g.bc(v578)
     v580 = g.vmath('MULTIPLY', v577, v579)
     v581 = g.inp('_IceOpacityMapTilling', False, 1.0)
-    v582 = g.bc(v581)
+    v582 = g.comb(v581, v581, 0.0)
     v583 = g.vmath('MULTIPLY', v0, v582)
     g.out_('F12_IceOpacityMap_uv', v583, True)
     v584 = g.inp('F12_IceOpacityMap', True, (1.0, 1.0, 1.0))
@@ -9068,12 +9755,12 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v618 = g.sep(v615)
     v619 = g.math('MULTIPLY', v616, v618[0])
     v620 = g.comb(v619, v618[1], 0.0)
-    v621 = g.vmath('MULTIPLY', v620, (2, 2, 2))
+    v621 = g.vmath('MULTIPLY', v620, (2, 2, 0.0))
     v622 = g.vmath('SUBTRACT', v621, (1, 1, 0.0))
-    v623 = g.bc(v617)
+    v623 = g.comb(v617, v617, 0.0)
     v624 = g.vmath('MULTIPLY', v622, v623)
-    v625 = g.vmath('MULTIPLY', v624, (0.4000000059604645, 0.4000000059604645, 0.4000000059604645))
-    v626 = g.vmath('MULTIPLY', v604, (0.5, 0.5, 0.5))
+    v625 = g.vmath('MULTIPLY', v624, (0.4000000059604645, 0.4000000059604645, 0.0))
+    v626 = g.vmath('MULTIPLY', v604, (0.5, 0.5, 0.0))
     v627 = g.comb(v602[2], v601, 0.0)
     v628 = g.vmath('ADD', v626, v627)
     v629 = g.math('MULTIPLY', 0.6000000238418579, -1.0)
@@ -9088,12 +9775,12 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v637 = g.sep(v635)
     v638 = g.math('MULTIPLY', v636, v637[0])
     v639 = g.comb(v638, v637[1], 0.0)
-    v640 = g.vmath('MULTIPLY', v639, (2, 2, 2))
+    v640 = g.vmath('MULTIPLY', v639, (2, 2, 0.0))
     v641 = g.vmath('SUBTRACT', v640, (1, 1, 0.0))
-    v642 = g.bc(v617)
+    v642 = g.comb(v617, v617, 0.0)
     v643 = g.vmath('MULTIPLY', v641, v642)
-    v644 = g.vmath('MULTIPLY', v643, (0.4000000059604645, 0.4000000059604645, 0.4000000059604645))
-    v645 = g.vmath('MULTIPLY', v604, (0.25, 0.25, 0.25))
+    v644 = g.vmath('MULTIPLY', v643, (0.4000000059604645, 0.4000000059604645, 0.0))
+    v645 = g.vmath('MULTIPLY', v604, (0.25, 0.25, 0.0))
     v646 = g.comb(v602[2], v601, 0.0)
     v647 = g.vmath('ADD', v645, v646)
     v648 = g.math('MULTIPLY', v609, 0.4000000059604645)
@@ -9107,11 +9794,11 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v655 = g.sep(v653)
     v656 = g.math('MULTIPLY', v654, v655[0])
     v657 = g.comb(v656, v655[1], 0.0)
-    v658 = g.vmath('MULTIPLY', v657, (2, 2, 2))
+    v658 = g.vmath('MULTIPLY', v657, (2, 2, 0.0))
     v659 = g.vmath('SUBTRACT', v658, (1, 1, 0.0))
-    v660 = g.bc(v617)
+    v660 = g.comb(v617, v617, 0.0)
     v661 = g.vmath('MULTIPLY', v659, v660)
-    v662 = g.vmath('MULTIPLY', v661, (0.20000000298023224, 0.20000000298023224, 0.20000000298023224))
+    v662 = g.vmath('MULTIPLY', v661, (0.20000000298023224, 0.20000000298023224, 0.0))
     v663 = g.inp('_DisplacementTex_ST', True, (1.0, 1.0, 0.0))
     v664 = g.inp('_DisplacementTex_ST_w', False, 0.0)
     v665 = g.sep(v663)
@@ -9138,7 +9825,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v685 = g.vmath('ADD', v625, v644)
     v686 = g.vmath('ADD', v685, v662)
     v687 = g.inp('_NormalMapBlendWeight', False, 0.5)
-    v688 = g.bc(v687)
+    v688 = g.comb(v687, v687, 0.0)
     v689 = g.vmath('MULTIPLY', v686, v688)
     v690 = g.inp('_DisplacementNormalStrength', False, 0.5)
     v691 = g.bc(v690)
@@ -9146,7 +9833,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v693 = g.sep(v692)
     v694 = g.comb(v693[0], v693[1], 0.0)
     v695 = g.math('SUBTRACT', 1, v687)
-    v696 = g.bc(v695)
+    v696 = g.comb(v695, v695, 0.0)
     v697 = g.vmath('MULTIPLY', v694, v696)
     v698 = g.vmath('ADD', v689, v697)
     v699 = g.sep(v698)
@@ -9249,7 +9936,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v794 = g.math('MULTIPLY', v757, 0.5)
     v795 = g.math('COSINE', v794, 0.0)
     v796 = g.comb(v793, v795, 0.0)
-    v797 = g.vmath('MULTIPLY', v796, (0.019999999552965164, 0.019999999552965164, 0.019999999552965164))
+    v797 = g.vmath('MULTIPLY', v796, (0.019999999552965164, 0.019999999552965164, 0.0))
     v798 = g.vmath('ADD', v791, v797)
     g.out_('F18_WaterCausticMap_uv', v798, True)
     v799 = g.inp('F18_WaterCausticMap', True, (1.0, 1.0, 1.0))
@@ -9418,9 +10105,9 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v961 = g.sep(v959)
     v962 = g.math('MULTIPLY', v960, v961[0])
     v963 = g.comb(v962, v961[1], 0.0)
-    v964 = g.vmath('MULTIPLY', v963, (2, 2, 2))
+    v964 = g.vmath('MULTIPLY', v963, (2, 2, 0.0))
     v965 = g.vmath('SUBTRACT', v964, (1, 1, 0.0))
-    v966 = g.vmath('MULTIPLY', v604, (0.5, 0.5, 0.5))
+    v966 = g.vmath('MULTIPLY', v604, (0.5, 0.5, 0.0))
     v967 = g.comb(v602[2], v601, 0.0)
     v968 = g.vmath('ADD', v966, v967)
     v969 = g.math('MULTIPLY', 0.30000001192092896, -1.0)
@@ -9435,14 +10122,14 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v977 = g.sep(v975)
     v978 = g.math('MULTIPLY', v976, v977[0])
     v979 = g.comb(v978, v977[1], 0.0)
-    v980 = g.vmath('MULTIPLY', v979, (2, 2, 2))
+    v980 = g.vmath('MULTIPLY', v979, (2, 2, 0.0))
     v981 = g.vmath('SUBTRACT', v980, (1, 1, 0.0))
-    v982 = g.bc(v617)
+    v982 = g.comb(v617, v617, 0.0)
     v983 = g.vmath('MULTIPLY', v965, v982)
-    v984 = g.vmath('MULTIPLY', v983, (0.5, 0.5, 0.5))
-    v985 = g.bc(v617)
+    v984 = g.vmath('MULTIPLY', v983, (0.5, 0.5, 0.0))
+    v985 = g.comb(v617, v617, 0.0)
     v986 = g.vmath('MULTIPLY', v981, v985)
-    v987 = g.vmath('MULTIPLY', v986, (0.20000000298023224, 0.20000000298023224, 0.20000000298023224))
+    v987 = g.vmath('MULTIPLY', v986, (0.20000000298023224, 0.20000000298023224, 0.0))
     v988 = g.vmath('ADD', v984, v987)
     v989 = g.vmath('DOT_PRODUCT', v965, v965)
     v990 = g.clampn(v989)
@@ -9518,7 +10205,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v1058 = g.math('MULTIPLY', v1031, 0.5)
     v1059 = g.math('COSINE', v1058, 0.0)
     v1060 = g.comb(v1057, v1059, 0.0)
-    v1061 = g.vmath('MULTIPLY', v1060, (0.019999999552965164, 0.019999999552965164, 0.019999999552965164))
+    v1061 = g.vmath('MULTIPLY', v1060, (0.019999999552965164, 0.019999999552965164, 0.0))
     v1062 = g.vmath('ADD', v1055, v1061)
     g.out_('F22_WaterCausticMap_uv', v1062, True)
     v1063 = g.inp('F22_WaterCausticMap', True, (1.0, 1.0, 1.0))
@@ -9639,7 +10326,7 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     v1178 = g.math('MINIMUM', v1173, v1177)
     v1179 = g.math('MULTIPLY', v1178, v1172[0])
     v1180 = g.math('ADD', v1179, v1172[1])
-    v1181 = g.bc(v1180)
+    v1181 = g.comb(v1180, v1180, 0.0)
     v1182 = g.vmath('MULTIPLY', v1171, v1181)
     v1183 = g.comb(v1172[2], v1169, 0.0)
     v1184 = g.vmath('ADD', v1182, v1183)
@@ -9768,8 +10455,2280 @@ def build_Ruri_Endfield_Scene_ContainerWater():
     g.out_('__clip', v113, False)
 
 
+def build_Ruri_Endfield_Scene_Leaf():
+    t = _tree('Ruri Endfield Scene Leaf')
+    g = G(t)
+    v0 = g.inp('input_uv', True)
+    v1 = g.inp('input_positionWS', True)
+    v2 = g.inp('input_positionOS', True)
+    v3 = g.inp('input_normalWS', True)
+    v4 = g.inp('input_tangentWS', True)
+    v5 = g.inp('input_tangentWS_w', False)
+    v6 = g.inp('input_voxelUV', True)
+    v7 = g.inp('input_voxelLitColor', True)
+    v8 = g.inp('input_staticLightmapUV', True)
+    v9 = g.inp('input_positionNDC', True)
+    v10 = g.inp('input_positionNDC_w', False)
+    v11 = g.inp('input_color', True)
+    v12 = g.inp('input_color_w', False)
+    v13 = g.inp('input_voxelSliceMaterial', True)
+    v14 = g.inp('input_uv1', True)
+    v15 = g.inp('input_uv2', True)
+    v16 = g.inp('input_voxelBlockLight', True)
+    v17 = g.inp('input_positionCS', True)
+    v18 = g.inp('input_positionCS_w', False)
+    v19 = g.inp('facing', False)
+    v20 = g.b2u(v1, point=True)
+    v21 = g.b2u(v3, point=False)
+    v22 = g.b2u(v4, point=False)
+    g.out_('F0_BaseMap_uv', v0, True)
+    v23 = g.inp('F0_BaseMap', True, (1.0, 1.0, 1.0))
+    v24 = g.inp('F0_BaseMap_alpha', False, 1.0)
+    v25 = g.vmath('NORMALIZE', v21)
+    v26 = g.b2u(g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT'), point=True)
+    v27 = g.vmath('SUBTRACT', v26, v20)
+    v28 = g.vmath('NORMALIZE', v27)
+    v29 = g.texco().outputs['Window']
+    g.out_('C0_AmbientIrradiance_normal', v25, True)
+    v30 = g.inp('C0_AmbientIrradiance', True, (0.0, 0.0, 0.0))
+    v31 = g.inp('_TwoSidedNormal', False, 1.0)
+    v32 = g.math('GREATER_THAN', v31, 0.5)
+    v33 = g.math('LESS_THAN', v19, 0)
+    v34 = g.math('MULTIPLY', v32, v33)
+    v35 = g.vmath('SCALE', v25, s=-1.0)
+    v36 = g.mixv(v34, v25, v35)
+    v37 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
+    v38 = g.inp('_BaseColor_w', False, 1.0)
+    v39 = g.vmath('MULTIPLY', v23, v37)
+    v40 = g.math('MULTIPLY', v24, v38)
+    v41 = g.sep(v13)
+    v42 = g.math('ROUND', v41[0], 0.0)
+    v43 = g.math('TRUNC', v42, 0.0)
+    v44 = g.math('COMPARE', v43, 65535, 1e-05)
+    v45 = g.inp('_UseVoxelAtlas', False, 0.0)
+    g.out_('F1_VoxelAtlas_uv', v6, True)
+    v46 = g.inp('F1_VoxelAtlas', True, (1.0, 1.0, 1.0))
+    v47 = g.inp('F1_VoxelAtlas_alpha', False, 1.0)
+    v48 = g.vmath('MULTIPLY', v46, v11)
+    v49 = g.mixv(v44, v48, v11)
+    v50 = g.vmath('MULTIPLY', v39, v49)
+    v51 = g.inp('_UseCutoff', False, 0.0)
+    v52 = g.mixf(v44, v47, 1)
+    v53 = g.math('MULTIPLY', v40, v52)
+    v54 = g.mixf(v51, v40, v53)
+    v55 = g.inp('_UseVertexColor', False, 0.0)
+    v56 = g.vmath('MULTIPLY', v39, v11)
+    v57 = g.mixv(v55, v39, v56)
+    v58 = g.mixf(v45, v40, v54)
+    v59 = g.mixv(v45, v57, v50)
+    v60 = g.inp('_RuriVoxelLightVolumeOn', False, 0.0)
+    v61 = g.math('COMPARE', v60, 0, 1e-05)
+    v62 = g.math('SUBTRACT', 1.0, v61)
+    v63 = g.vmath('MULTIPLY', v59, v7)
+    v64 = g.bc(v63)
+    v65 = g.mixv(v62, v59, v64)
+    v66 = g.mixv(v62, (0, 0, 0), v59)
+    v67 = g.inp('_UseDitherClip', False, 0.0)
+    v68 = g.inp('_Cutoff', False, 0.5)
+    v69 = g.math('SUBTRACT', v58, v68)
+    v70 = g.math('LESS_THAN', v69, 0.0)
+    v71 = g.math('SUBTRACT', 1.0, v70)
+    v72 = g.math('MULTIPLY', 1.0, v71)
+    v73 = g.mixf(v51, 1.0, v72)
+    v74 = g.inp('_EnableAlphaTest', False, 0.0)
+    v75 = g.math('GREATER_THAN', v74, 0.5)
+    v76 = g.vmath('SUBTRACT', v14, v0)
+    v77 = g.inp('_BaseUVSet', False, 0.0)
+    v78 = g.comb(v77, v77, 0.0)
+    v79 = g.vmath('MULTIPLY', v78, v76)
+    v80 = g.vmath('ADD', v79, v0)
+    v81 = g.inp('_BaseColorMap_ST', True, (1.0, 1.0, 0.0))
+    v82 = g.inp('_BaseColorMap_ST_w', False, 0.0)
+    v83 = g.sep(v81)
+    v84 = g.comb(v83[0], v83[1], 0.0)
+    v85 = g.comb(v83[2], v82, 0.0)
+    v86 = g.vmath('MULTIPLY', v80, v84)
+    v87 = g.vmath('ADD', v86, v85)
+    v88 = g.inp('_BasePbrMapUVSet', False, 0.0)
+    v89 = g.comb(v88, v88, 0.0)
+    v90 = g.vmath('MULTIPLY', v89, v76)
+    v91 = g.vmath('ADD', v90, v0)
+    v92 = g.inp('_NormalMap_ST', True, (1.0, 1.0, 0.0))
+    v93 = g.inp('_NormalMap_ST_w', False, 0.0)
+    v94 = g.sep(v92)
+    v95 = g.comb(v94[0], v94[1], 0.0)
+    v96 = g.comb(v94[2], v93, 0.0)
+    v97 = g.vmath('MULTIPLY', v91, v95)
+    v98 = g.vmath('ADD', v97, v96)
+    g.out_('F2_BaseColorMap_uv', v87, True)
+    v99 = g.inp('F2_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v100 = g.inp('F2_BaseColorMap_alpha', False, 1.0)
+    g.out_('F3_NormalMap_uv', v98, True)
+    v101 = g.inp('F3_NormalMap', True, (1.0, 1.0, 1.0))
+    v102 = g.inp('F3_NormalMap_alpha', False, 1.0)
+    v103 = g.inp('_AlphaMaskChannel', False, 0.0)
+    v104 = g.math('MULTIPLY', v100, -1.0)
+    v105 = g.math('ADD', v104, v102)
+    v106 = g.math('MULTIPLY_ADD', v103, v105, v100)
+    v107 = g.math('MULTIPLY', v106, v38)
+    v108 = g.inp('_AlphaClipThreshold', False, 0.5)
+    v109 = g.math('SUBTRACT', v107, v108)
+    v110 = g.math('LESS_THAN', v109, 0.0)
+    v111 = g.math('SUBTRACT', 1.0, v110)
+    v112 = g.math('MULTIPLY', v73, v111)
+    v113 = g.mixf(v75, v73, v112)
+    v114 = g.inp('_RoughnessIntensity', False, 0.5)
+    v115 = g.inp('_MetallicIntensity', False, 0.0)
+    v116 = g.inp('_OcclusionIntensity', False, 1.0)
+    v117 = g.inp('_SpecularIntensity', False, 1.0)
+    v118 = g.math('COMPARE', v60, 0, 1e-05)
+    v119 = g.math('SUBTRACT', 1.0, v118)
+    v120 = g.math('MAXIMUM', v45, v55)
+    v121 = g.math('SUBTRACT', 1.0, v120)
+    v122 = g.inp('_RuriRadianceMode', False, 0.0)
+    v123 = g.math('COMPARE', v122, 0, 1e-05)
+    v124 = g.math('MULTIPLY', v55, v123)
+    v125 = g.inp('_VoxelEmissionScale', False, 4.0)
+    v126 = g.math('MULTIPLY', v12, v125)
+    v127 = g.mixf(v124, 0.0, v126)
+    v128 = g.mixf(v124, 0.0, 1.0)
+    v129 = g.math('SUBTRACT', 1.0, v128)
+    v130 = g.mixf(v129, v127, 0)
+    v131 = g.mixf(v129, v128, 1.0)
+    v132 = g.vmath('NORMALIZE', v21)
+    v133 = g.vmath('SUBTRACT', v14, v0)
+    v134 = g.comb(v77, v77, 0.0)
+    v135 = g.vmath('MULTIPLY', v134, v133)
+    v136 = g.vmath('ADD', v135, v0)
+    v137 = g.comb(v83[0], v83[1], 0.0)
+    v138 = g.comb(v83[2], v82, 0.0)
+    v139 = g.vmath('MULTIPLY', v136, v137)
+    v140 = g.vmath('ADD', v139, v138)
+    v141 = g.comb(v88, v88, 0.0)
+    v142 = g.vmath('MULTIPLY', v141, v133)
+    v143 = g.vmath('ADD', v142, v0)
+    v144 = g.comb(v94[0], v94[1], 0.0)
+    v145 = g.comb(v94[2], v93, 0.0)
+    v146 = g.vmath('MULTIPLY', v143, v144)
+    v147 = g.vmath('ADD', v146, v145)
+    g.out_('F4_BaseColorMap_uv', v140, True)
+    v148 = g.inp('F4_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v149 = g.inp('F4_BaseColorMap_alpha', False, 1.0)
+    g.out_('F5_NormalMap_uv', v147, True)
+    v150 = g.inp('F5_NormalMap', True, (1.0, 1.0, 1.0))
+    v151 = g.inp('F5_NormalMap_alpha', False, 1.0)
+    v152 = g.math('MULTIPLY', v58, v149)
+    v153 = g.sep(v11)
+    v154 = g.clampn(v153[0], 0, 1)
+    v155 = g.vmath('MULTIPLY', v148, v37)
+    v156 = g.inp('_BaseColorBrighterScale', False, 1.0)
+    v157 = g.bc(v156)
+    v158 = g.vmath('MULTIPLY', v155, v157)
+    v159 = g.vmath('MAXIMUM', v158, (0, 0, 0))
+    v160 = g.vmath('MINIMUM', v159, (1, 1, 1))
+    v161 = g.inp('_BaseColorTintCover', False, 0.0)
+    v162 = g.mixv(v161, v160, v37)
+    v163 = g.inp('_EnableNormalMap', False, 0.0)
+    v164 = g.math('GREATER_THAN', v163, 0.5)
+    v165 = g.math('MAXIMUM', 0, v164)
+    v166 = g.sep(v150)
+    v167 = g.math('MULTIPLY_ADD', v166[0], 2, -1)
+    v168 = g.math('MULTIPLY_ADD', v166[1], 2, -1)
+    v169 = g.mixf(v165, 0.5, v166[2])
+    v170 = g.mixf(v165, 0, v167)
+    v171 = g.mixf(v165, 0, v168)
+    v172 = g.mixf(v165, 1, v151)
+    v173 = g.inp('_NormalScale', False, 0.0)
+    v174 = g.math('MULTIPLY', v170, v173)
+    v175 = g.math('MULTIPLY', v171, v173)
+    v176 = g.vmath('DOT_PRODUCT', v36, v21)
+    v177 = g.math('LESS_THAN', v176, 0)
+    v178 = g.mixf(v177, 1, -1)
+    v179 = g.comb(v170, v171, 0.0)
+    v180 = g.comb(v170, v171, 0.0)
+    v181 = g.vmath('DOT_PRODUCT', v179, v180)
+    v182 = g.math('MINIMUM', v181, 1)
+    v183 = g.math('SUBTRACT', 1, v182)
+    v184 = g.math('SQRT', v183, 0.0)
+    v185 = g.math('MAXIMUM', v184, 1.0000000168623835E-16)
+    v186 = g.math('MULTIPLY', v185, v178)
+    v187 = g.math('GREATER_THAN', v5, 0)
+    v188 = g.mixf(v187, -1, 1)
+    v189 = g.vmath('CROSS_PRODUCT', v21, v22)
+    v190 = g.bc(v188)
+    v191 = g.vmath('MULTIPLY', v190, v189)
+    v192 = g.bc(v186)
+    v193 = g.vmath('MULTIPLY', v21, v192)
+    v194 = g.bc(v174)
+    v195 = g.vmath('MULTIPLY', v22, v194)
+    v196 = g.vmath('ADD', v193, v195)
+    v197 = g.bc(v175)
+    v198 = g.vmath('MULTIPLY', v191, v197)
+    v199 = g.vmath('ADD', v196, v198)
+    v200 = g.vmath('NORMALIZE', v199)
+    v201 = g.inp('_BendNormalUpward', False, 0.0)
+    v202 = g.math('GREATER_THAN', v201, 0)
+    v203 = g.math('MULTIPLY', 0, v202)
+    v204 = g.mixv(v201, v200, (0, 1, 0))
+    v205 = g.vmath('NORMALIZE', v204)
+    v206 = g.mixv(v203, v200, v205)
+    v207 = g.inp('_RoughnessMin', False, 0.0)
+    v208 = g.inp('_RoughnessMax', False, 1.0)
+    v209 = g.mixf(v169, v207, v208)
+    v210 = g.clampn(v209, 0, 1)
+    v211 = g.inp('_Metallic', False, 0.0)
+    v212 = g.inp('_BaseTextureMapCount', False, 0.0)
+    v213 = g.math('SUBTRACT', v212, 1)
+    v214 = g.clampn(v213, 0, 1)
+    v215 = g.mixf(v214, 0, v211)
+    v216 = g.mixf(0, 0, v215)
+    v217 = g.inp('_PorosityFactorX', False, 0.2)
+    v218 = g.inp('_PorosityFactorZ', False, 0.0)
+    v219 = g.inp('_PorosityFactorY', False, 0.4)
+    v220 = g.math('MULTIPLY_ADD', v218, v216, v219)
+    v221 = g.math('MULTIPLY_ADD', v217, v210, v220)
+    v222 = g.clampn(v221, 0, 1)
+    v223 = g.math('MULTIPLY', v222, 0.95)
+    v224 = g.math('ADD', v223, 0.05)
+    v225 = g.inp('_OcclusionStrength', False, 1.0)
+    v226 = g.mixf(v225, 1, v154)
+    v227 = g.clampn(v226, 0, 1)
+    v228 = g.mixf(v225, 1, 1)
+    v229 = g.inp('_TrunkVertexAoStrength', False, 1.0)
+    v230 = g.mixf(v229, 1, v154)
+    v231 = g.math('MULTIPLY', v228, v230)
+    v232 = g.mixf(0, v227, v231)
+    v233 = g.inp('_EnableVerticalNormalBoostAO', False, 0.0)
+    v234 = g.math('GREATER_THAN', v233, 0.5)
+    v235 = g.sep(v21)
+    v236 = g.inp('_VerticalNormalThreshold', False, 0.0)
+    v237 = g.math('SUBTRACT', v235[1], v236)
+    v238 = g.math('SUBTRACT', 1, v236)
+    v239 = g.math('MAXIMUM', v238, 0.0001)
+    v240 = g.math('DIVIDE', v237, v239)
+    v241 = g.clampn(v240, 0, 1)
+    v242 = g.inp('_VerticalNormalBoostAO', False, 0.0)
+    v243 = g.math('MULTIPLY', v241, v242)
+    v244 = g.math('SUBTRACT', 1, v243)
+    v245 = g.math('MULTIPLY', v232, v244)
+    v246 = g.mixf(v234, v232, v245)
+    v247 = g.clampn(v246, 0, 1)
+    v248 = g.inp('_TransmissionDistanceFade', False, 0.0)
+    v249 = g.math('GREATER_THAN', v248, 0.5)
+    v250 = g.vmath('DISTANCE', v20, v26)
+    v251 = g.math('SUBTRACT', 60, v250)
+    v252 = g.math('DIVIDE', v251, 10)
+    v253 = g.clampn(v252, 0, 1)
+    v254 = g.mixf(v249, 1, v253)
+    v255 = g.inp('_Transmission', False, 0.2)
+    v256 = g.math('MULTIPLY', v255, v254)
+    v257 = g.math('MULTIPLY', v256, v172)
+    v258 = g.inp('_AoAffectTransmissionStart', False, 0.0)
+    v259 = g.inp('_AoAffectTransmissionRange', False, 0.01)
+    v260 = g.math('SUBTRACT', v246, v258)
+    v261 = g.math('MAXIMUM', v259, 0.0001)
+    v262 = g.math('DIVIDE', v260, v261)
+    v263 = g.clampn(v262, 0, 1)
+    v264 = g.math('MULTIPLY', v257, v263)
+    v265 = g.inp('_SubsurfaceIntensity', False, 0.0)
+    v266 = g.math('MULTIPLY', v265, v172)
+    v267 = g.inp('_AoAffectSubsurfaceStart', False, 0.0)
+    v268 = g.inp('_AoAffectSubsurfaceRange', False, 0.01)
+    v269 = g.math('SUBTRACT', v246, v267)
+    v270 = g.math('MAXIMUM', v268, 0.0001)
+    v271 = g.math('DIVIDE', v269, v270)
+    v272 = g.clampn(v271, 0, 1)
+    v273 = g.math('MULTIPLY', v266, v272)
+    v274 = g.math('MAXIMUM', v264, v273)
+    v275 = g.clampn(v274, 0, 1)
+    v276 = g.inp('_FakeDirectionalShadowStrength', False, 0.0)
+    v277 = g.math('GREATER_THAN', v276, 0)
+    v278 = g.vmath('NORMALIZE', v21)
+    v279 = g.inp('_DiffuseUseVertexNormal', False, 1.0)
+    v280 = g.mixv(v279, v206, v278)
+    v281 = g.inp('_MainLightPosition', True, (0.0, 0.0, 0.0))
+    v282 = g.inp('_MainLightPosition_w', False, 0.0)
+    v283 = g.vmath('SCALE', v281, s=-1.0)
+    v284 = g.vmath('DOT_PRODUCT', v280, v283)
+    v285 = g.math('MULTIPLY_ADD', v284, 0.5, 0.5)
+    v286 = g.inp('_FakeDirectionalShadowPow', False, 1.0)
+    v287 = g.math('POWER', v285, v286)
+    v288 = g.math('MULTIPLY', v287, v276)
+    v289 = g.math('SUBTRACT', 1, v288)
+    v290 = g.clampn(v289, 0, 1)
+    v291 = g.inp('_OcclusionShadow', False, 0.0)
+    v292 = g.mixf(v291, 1, v246)
+    v293 = g.mixf(v292, 1, v290)
+    v294 = g.bc(v293)
+    v295 = g.vmath('MULTIPLY', v162, v294)
+    v296 = g.mixv(v277, v162, v295)
+    v297 = g.math('SUBTRACT', 1.0, 0)
+    v298 = g.inp('_EnableCanopyColorRamp', False, 0.0)
+    v299 = g.math('GREATER_THAN', v298, 0.5)
+    v300 = g.math('MULTIPLY', v297, v299)
+    v301 = g.sep(v2)
+    v302 = g.clampn(v301[1], 0, 1)
+    v303 = g.inp('_CanopyRampStartAtTop', False, 0.0)
+    v304 = g.math('GREATER_THAN', v303, 0.5)
+    v305 = g.math('SUBTRACT', 1, v302)
+    v306 = g.mixf(v304, v302, v305)
+    v307 = g.inp('_CanopyRampRange', False, 0.0)
+    v308 = g.math('SUBTRACT', v306, v307)
+    v309 = g.inp('_CanopyRampTransitionRange', False, 0.01)
+    v310 = g.math('MAXIMUM', v309, 0.0001)
+    v311 = g.math('DIVIDE', v308, v310)
+    v312 = g.clampn(v311, 0, 1)
+    v313 = g.inp('_CanopyRampIntensity', False, 1.0)
+    v314 = g.math('MULTIPLY', v312, v313)
+    v315 = g.inp('_CanopyRampColor', True, (1.0, 1.0, 1.0))
+    v316 = g.inp('_CanopyRampColor_w', False, 1.0)
+    v317 = g.inp('_CanopyRampColorBrighterScale', False, 1.0)
+    v318 = g.bc(v317)
+    v319 = g.vmath('MULTIPLY', v315, v318)
+    v320 = g.vmath('MAXIMUM', v319, (0, 0, 0))
+    v321 = g.vmath('MINIMUM', v320, (1, 1, 1))
+    v322 = g.vmath('MULTIPLY', v296, v321)
+    v323 = g.inp('_CanopyRampColorCover', False, 0.0)
+    v324 = g.mixv(v323, v322, v321)
+    v325 = g.mixv(v314, v296, v324)
+    v326 = g.mixv(v300, v296, v325)
+    v327 = g.math('SUBTRACT', 1.0, 0)
+    v328 = g.inp('_EnableAoTuneColor', False, 0.0)
+    v329 = g.math('GREATER_THAN', v328, 0.5)
+    v330 = g.math('MULTIPLY', v327, v329)
+    v331 = g.inp('_FlipAoMask', False, 0.0)
+    v332 = g.math('GREATER_THAN', v331, 0.5)
+    v333 = g.math('SUBTRACT', 1, v154)
+    v334 = g.mixf(v332, v154, v333)
+    v335 = g.inp('_AoMaskTuneColorRampStart', False, 0.0)
+    v336 = g.math('SUBTRACT', v334, v335)
+    v337 = g.inp('_AoMaskTuneColorRampRange', False, 0.2)
+    v338 = g.math('MAXIMUM', v337, 0.0001)
+    v339 = g.math('DIVIDE', v336, v338)
+    v340 = g.clampn(v339, 0, 1)
+    v341 = g.inp('_AoMaskTuneColorIntensity', False, 1.0)
+    v342 = g.math('MULTIPLY', v340, v341)
+    v343 = g.inp('_AoMaskTuneColor', True, (1.0, 1.0, 1.0))
+    v344 = g.inp('_AoMaskTuneColor_w', False, 1.0)
+    v345 = g.inp('_AoMaskTuneColorBrighterScale', False, 1.0)
+    v346 = g.bc(v345)
+    v347 = g.vmath('MULTIPLY', v343, v346)
+    v348 = g.vmath('MAXIMUM', v347, (0, 0, 0))
+    v349 = g.vmath('MINIMUM', v348, (1, 1, 1))
+    v350 = g.vmath('MULTIPLY', v326, v349)
+    v351 = g.inp('_AoMaskTuneColorCover', False, 0.0)
+    v352 = g.mixv(v351, v350, v349)
+    v353 = g.mixv(v342, v326, v352)
+    v354 = g.mixv(v330, v326, v353)
+    v355 = g.mixf(v330, v314, v342)
+    v356 = g.math('SUBTRACT', 1.0, 0)
+    v357 = g.inp('_EnableBlendColor', False, 0.0)
+    v358 = g.math('GREATER_THAN', v357, 0.5)
+    v359 = g.math('MULTIPLY', v356, v358)
+    v360 = g.inp('_BlendWithVertexNormal', False, 0.0)
+    v361 = g.math('GREATER_THAN', v360, 0.5)
+    v362 = g.vmath('NORMALIZE', v21)
+    v363 = g.mixv(v361, v206, v362)
+    v364 = g.sep(v363)
+    v365 = g.math('MULTIPLY_ADD', v364[1], 0.5, 0.5)
+    v366 = g.inp('_BlendNormalAdd', False, 0.0)
+    v367 = g.math('ADD', v365, v366)
+    v368 = g.clampn(v367, 0, 1)
+    v369 = g.inp('_BlendColor', True, (1.0, 1.0, 1.0))
+    v370 = g.inp('_BlendColor_w', False, 1.0)
+    v371 = g.vmath('MULTIPLY', v354, v369)
+    v372 = g.inp('_BlendNormalPower', False, 1.0)
+    v373 = g.math('MAXIMUM', v372, 0.001)
+    v374 = g.math('POWER', v368, v373)
+    v375 = g.mixv(v374, v354, v371)
+    v376 = g.mixv(v359, v354, v375)
+    v377 = g.mixf(v359, v355, v368)
+    v378 = g.inp('_EnableTrunkRamp', False, 0.0)
+    v379 = g.math('GREATER_THAN', v378, 0.5)
+    v380 = g.math('MULTIPLY', 0, v379)
+    v381 = g.clampn(v301[1], 0, 1)
+    v382 = g.inp('_TrunkRampRange', False, 0.0)
+    v383 = g.math('SUBTRACT', v382, v381)
+    v384 = g.inp('_TrunkRampTransitionRange', False, 0.01)
+    v385 = g.math('MAXIMUM', v384, 0.0001)
+    v386 = g.math('DIVIDE', v383, v385)
+    v387 = g.clampn(v386, 0, 1)
+    v388 = g.inp('_TrunkRampIntensity', False, 1.0)
+    v389 = g.math('MULTIPLY', v387, v388)
+    v390 = g.inp('_TrunkRampColor', True, (1.0, 1.0, 1.0))
+    v391 = g.inp('_TrunkRampColor_w', False, 1.0)
+    v392 = g.vmath('MULTIPLY', v376, v390)
+    v393 = g.mixv(v389, v376, v392)
+    v394 = g.mixv(v380, v376, v393)
+    v395 = g.mixf(v380, v306, v381)
+    v396 = g.mixf(v380, v377, v389)
+    v397 = g.inp('_EnableEmissiveMap', False, 0.0)
+    v398 = g.math('GREATER_THAN', v397, 0.5)
+    v399 = g.inp('_EmissiveUVSet', False, 0.0)
+    v400 = g.math('GREATER_THAN', v399, 0.5)
+    v401 = g.mixv(v400, v0, v14)
+    v402 = g.inp('_EmissiveMap_ST', True, (1.0, 1.0, 0.0))
+    v403 = g.inp('_EmissiveMap_ST_w', False, 0.0)
+    v404 = g.sep(v402)
+    v405 = g.comb(v404[0], v404[1], 0.0)
+    v406 = g.comb(v404[2], v403, 0.0)
+    v407 = g.vmath('MULTIPLY', v401, v405)
+    v408 = g.vmath('ADD', v407, v406)
+    g.out_('F6_EmissiveMap_uv', v408, True)
+    v409 = g.inp('F6_EmissiveMap', True, (1.0, 1.0, 1.0))
+    v410 = g.inp('F6_EmissiveMap_alpha', False, 1.0)
+    v411 = g.inp('_EmissiveMaskChannel', False, 0.0)
+    v412 = g.math('LESS_THAN', v411, 0.5)
+    v413 = g.sep(v409)
+    v414 = g.inp('_EmissiveColorR', True, (0.0, 0.0, 0.0))
+    v415 = g.inp('_EmissiveColorR_w', False, 1.0)
+    v416 = g.bc(v413[0])
+    v417 = g.vmath('MULTIPLY', v416, v414)
+    v418 = g.inp('_EmissiveColorG', True, (0.0, 0.0, 0.0))
+    v419 = g.inp('_EmissiveColorG_w', False, 0.0)
+    v420 = g.bc(v413[1])
+    v421 = g.vmath('MULTIPLY', v420, v418)
+    v422 = g.vmath('ADD', v417, v421)
+    v423 = g.inp('_EmissiveColorB', True, (0.0, 0.0, 0.0))
+    v424 = g.inp('_EmissiveColorB_w', False, 0.0)
+    v425 = g.bc(v413[2])
+    v426 = g.vmath('MULTIPLY', v425, v423)
+    v427 = g.vmath('ADD', v422, v426)
+    v428 = g.inp('_EmissiveColorA', True, (0.0, 0.0, 0.0))
+    v429 = g.inp('_EmissiveColorA_w', False, 0.0)
+    v430 = g.bc(v410)
+    v431 = g.vmath('MULTIPLY', v430, v428)
+    v432 = g.vmath('ADD', v427, v431)
+    v433 = g.math('LESS_THAN', v411, 1.5)
+    v434 = g.vmath('MULTIPLY', v409, v414)
+    v435 = g.bc(v149)
+    v436 = g.vmath('MULTIPLY', v435, v414)
+    v437 = g.mixv(v433, v436, v434)
+    v438 = g.mixv(v412, v437, v432)
+    v439 = g.inp('_AlbedoAffectEmissive', False, 1.0)
+    v440 = g.math('LESS_THAN', v439, 0.5)
+    v441 = g.vmath('MULTIPLY', v438, v394)
+    v442 = g.mixv(v440, v438, v441)
+    v443 = g.mixv(v398, (0, 0, 0), v442)
+    v444 = g.inp('_EnableVertColorEmissive', False, 0.0)
+    v445 = g.math('GREATER_THAN', v444, 0.5)
+    v446 = g.inp('_VertColorEmissiveChannelVector', True, (1.0, 0.0, 0.0))
+    v447 = g.inp('_VertColorEmissiveChannelVector_w', False, 0.0)
+    v448 = g.vmath('DOT_PRODUCT', v11, v446)
+    v449 = g.inp('_VertColorEmissiveFlip', False, 0.0)
+    v450 = g.math('GREATER_THAN', v449, 0.5)
+    v451 = g.math('SUBTRACT', 1, v448)
+    v452 = g.mixf(v450, v448, v451)
+    v453 = g.inp('_VertColorEmissiveBias', False, 0.0)
+    v454 = g.math('ADD', v452, v453)
+    v455 = g.clampn(v454, 0, 1)
+    v456 = g.inp('_VertColorEmissiveColor', True, (0.0, 0.0, 0.0))
+    v457 = g.inp('_VertColorEmissiveColor_w', False, 1.0)
+    v458 = g.bc(v455)
+    v459 = g.vmath('MULTIPLY', v456, v458)
+    v460 = g.inp('_VertColorEmissiveAlbedoAffect', False, 1.0)
+    v461 = g.math('LESS_THAN', v460, 0.5)
+    v462 = g.vmath('MULTIPLY', v459, v394)
+    v463 = g.mixv(v461, v459, v462)
+    v464 = g.vmath('ADD', v443, v463)
+    v465 = g.mixv(v445, v443, v464)
+    v466 = g.mixf(v445, v396, v455)
+    v467 = g.inp('_CrossCardViewCulling', False, 0.0)
+    v468 = g.math('GREATER_THAN', v467, 0.5)
+    v469 = g.vmath('SUBTRACT', v26, v20)
+    v470 = g.vmath('NORMALIZE', v469)
+    v471 = g.vmath('NORMALIZE', v21)
+    v472 = g.vmath('DOT_PRODUCT', v471, v470)
+    v473 = g.math('ABSOLUTE', v472, 0.0)
+    v474 = g.inp('_CrossCardViewCullingThreshold', False, 0.4)
+    v475 = g.math('SUBTRACT', v473, v474)
+    v476 = g.inp('_CrossCardViewCullingFadeValue', False, 0.5)
+    v477 = g.math('MAXIMUM', v476, 0.0001)
+    v478 = g.math('DIVIDE', v475, v477)
+    v479 = g.clampn(v478, 0, 1)
+    v480 = g.math('MULTIPLY', v152, v479)
+    v481 = g.mixf(v468, v152, v480)
+    v482 = g.mixf(v121, v58, v481)
+    v483 = g.mixv(v121, v65, v394)
+    v484 = g.mixf(v121, v114, v210)
+    v485 = g.mixf(v121, v115, v216)
+    v486 = g.mixf(v121, v116, v247)
+    v487 = g.mixf(v121, v117, v224)
+    v488 = g.mixv(v121, v36, v206)
+    v489 = g.mixf(v121, 0.0, v275)
+    v490 = g.mixv(v121, (0.0, 0.0, 0.0), v162)
+    v491 = g.mixv(v121, (0, 0, 0), v465)
+    v492 = g.mixv(v121, v132, v206)
+    v493 = g.comb(v487, v487, v487)
+    v494 = g.math('SUBTRACT', 1, v484)
+    v495 = g.vmath('NORMALIZE', v488)
+    v496 = g.vmath('DOT_PRODUCT', v495, v28)
+    v497 = g.math('MAXIMUM', v496, 0)
+    v498 = g.math('MULTIPLY', 0.08, v487)
+    v499 = g.math('MULTIPLY', 0.08, v487)
+    v500 = g.math('MULTIPLY', 0.08, v487)
+    v501 = g.comb(v498, v499, v500)
+    v502 = g.mixv(v485, v501, v483)
+    v503 = g.math('SUBTRACT', 1, v485)
+    v504 = g.bc(v503)
+    v505 = g.vmath('MULTIPLY', v483, v504)
+    v506 = g.inp('_UseThinFilm', False, 0.0)
+    v507 = g.math('GREATER_THAN', v506, 0.5)
+    v508 = g.inp('_ThinFilmIOR', False, 1.4)
+    v509 = g.inp('_ThinFilmThickness', False, 0.5)
+    v510 = g.math('MULTIPLY', v509, 1000)
+    v511 = g.inp('M_PI', False, 0.0)
+    v512 = g.group_named('RCE_RuriEvalIridescence', [('outsideIor', 1), ('eta2', v508), ('cosTheta1', v497), ('iridescenceThickness', v510), ('baseF0', v502), ('M_PI', v511)])
+    v513 = g.inp('_ThinFilmWeight', False, 0.0)
+    v514 = g.inp('_ThinFilmIntensity', False, 1.0)
+    v515 = g.math('MULTIPLY', v513, v514)
+    v516 = g.clampn(v515)
+    v517 = g.mixv(v516, v502, v512[0])
+    v518 = g.mixv(v507, v502, v517)
+    v519 = g.inp('_SubsurfaceShadingMode', False, 0.0)
+    v520 = g.math('LESS_THAN', v519, 0.5)
+    v521 = g.inp('_SubsurfaceColor', True, (0.8, 0.8, 0.8))
+    v522 = g.inp('_SubsurfaceColor_w', False, 1.0)
+    v523 = g.vmath('MULTIPLY', v521, v483)
+    v524 = g.mixv(v520, v523, v521)
+    v525 = g.inp('_MaxSubsurfaceThickness', False, 1.0)
+    v526 = g.inp('_UseSubsurfaceThicknessMap', False, 0.0)
+    v527 = g.math('GREATER_THAN', v526, 0.5)
+    v528 = g.inp('_MinSubsurfaceThickness', False, 0.0)
+    g.out_('F7_SubsurfaceMap_uv', v0, True)
+    v529 = g.inp('F7_SubsurfaceMap', True, (1.0, 1.0, 1.0))
+    v530 = g.inp('F7_SubsurfaceMap_alpha', False, 1.0)
+    v531 = g.sep(v529)
+    v532 = g.mixf(v531[0], v528, v525)
+    v533 = g.mixf(v527, v525, v532)
+    v534 = g.group_named('RCE_HgEnvBRDF', [('roughness', v484), ('NoV', v497), ('f0', v518)])
+    v535 = g.vmath('SCALE', v28, s=-1.0)
+    v536 = g.vmath('DOT_PRODUCT', v495, v535)
+    v537 = g.math('MULTIPLY', 2.0, v536)
+    v538 = g.vmath('SCALE', v495, s=v537)
+    v539 = g.vmath('SUBTRACT', v535, v538)
+    v540 = g.inp('_UseCustomIBL', False, 0.0)
+    v541 = g.math('GREATER_THAN', v540, 0.5)
+    v542 = g.math('MULTIPLY', 0.7, v484)
+    v543 = g.math('SUBTRACT', 1.7, v542)
+    v544 = g.math('MULTIPLY', v484, v543)
+    v545 = g.math('MULTIPLY', v544, 6)
+    v546 = g.u2b(v539)
+    g.out_('F8_IBL_CustomIBL_dir', v546, True)
+    g.out_('F8_IBL_CustomIBL_mip', v545, False)
+    v547 = g.inp('F8_IBL_CustomIBL', True, (0.2159, 0.2159, 0.2159))
+    v548 = g.inp('F8_IBL_CustomIBL_alpha', False, 1.0)
+    v549 = g.inp('_CustomIBLIntensity', False, 1.0)
+    v550 = g.bc(v549)
+    v551 = g.vmath('MULTIPLY', v547, v550)
+    g.out_('C1_SpecularRadiance_direction', v539, True)
+    g.out_('C1_SpecularRadiance_position', v20, True)
+    g.out_('C1_SpecularRadiance_roughness', v484, False)
+    v552 = g.inp('C1_SpecularRadiance', True, (0.2159, 0.2159, 0.2159))
+    v553 = g.mixv(v541, v552, v551)
+    v554 = g.inp('_PlanarReflection', False, 0.0)
+    v555 = g.math('GREATER_THAN', v554, 0.5)
+    g.out_('F9_PlanarReflectionTexture_uv', v29, True)
+    v556 = g.inp('F9_PlanarReflectionTexture', True, (1.0, 1.0, 1.0))
+    v557 = g.inp('F9_PlanarReflectionTexture_alpha', False, 1.0)
+    v558 = g.inp('_PlanarReflectionTint', True, (1.0, 1.0, 1.0))
+    v559 = g.inp('_PlanarReflectionTint_w', False, 1.0)
+    v560 = g.vmath('MULTIPLY', v556, v558)
+    v561 = g.mixv(v559, v553, v560)
+    v562 = g.mixv(v555, v553, v561)
+    v563 = g.inp('_EnableSubsurface', False, 0.0)
+    v564 = g.math('GREATER_THAN', v563, 0.5)
+    v565 = g.inp('_SubsurfaceIndirect', False, 1.0)
+    v566 = g.comb(v565, v565, v565)
+    v567 = g.vmath('MULTIPLY', v524, v566)
+    v568 = g.vmath('ADD', v567, v505)
+    v569 = g.mixv(v564, v505, v568)
+    v570 = g.vmath('MULTIPLY', v569, v30)
+    v571 = g.bc(v486)
+    v572 = g.vmath('MULTIPLY', v570, v571)
+    v573 = g.inp('_EnvironmentGlobalParams0', True, (1.67, 1.5, 1.0))
+    v574 = g.inp('_EnvironmentGlobalParams0_w', False, 0.0)
+    v575 = g.sep(v573)
+    v576 = g.bc(v575[0])
+    v577 = g.vmath('MULTIPLY', v572, v576)
+    v578 = g.comb(v534[0], v534[0], v534[0])
+    v579 = g.comb(v534[1], v534[1], v534[1])
+    v580 = g.vmath('MULTIPLY', v518, v578)
+    v581 = g.vmath('ADD', v580, v579)
+    v582 = g.vmath('MULTIPLY', v581, v562)
+    v583 = g.bc(v575[1])
+    v584 = g.vmath('MULTIPLY', v582, v583)
+    v585 = g.vmath('ADD', v577, v584)
+    v586 = g.inp('C2_MainLight_direction', True, (0.0, 0.0, 0.0))
+    v587 = g.inp('C2_MainLight_color', True, (0.0, 0.0, 0.0))
+    v588 = g.inp('C2_MainLight_distanceAttenuation', False, 0.0)
+    v589 = g.inp('C2_MainLight_shadowAttenuation', False, 0.0)
+    v590 = g.inp('C2_MainLight_layerMask', False, 0.0)
+    v591 = g.inp('_MainLightOcclusionProbes', True, (0.0, 0.0, 0.0))
+    v592 = g.inp('_MainLightOcclusionProbes_w', False, 0.0)
+    v593 = g.vmath('ADD', v586, v28)
+    v594 = g.vmath('DOT_PRODUCT', v593, v593)
+    v595 = g.math('MAXIMUM', v594, 1E-08)
+    v596 = g.math('INVERSE_SQRT', v595, 0.0)
+    v597 = g.bc(v596)
+    v598 = g.vmath('MULTIPLY', v593, v597)
+    v599 = g.vmath('DOT_PRODUCT', v586, v495)
+    v600 = g.clampn(v599)
+    v601 = g.vmath('DOT_PRODUCT', v495, v598)
+    v602 = g.clampn(v601)
+    v603 = g.vmath('DOT_PRODUCT', v28, v598)
+    v604 = g.clampn(v603)
+    v605 = g.group_named('RCE_HgDirectLightEnergy', [('roughness', v484), ('f0', v518), ('NoL', v600), ('NoH', v602), ('NoV', v497), ('VoH', v604)])
+    v606 = g.math('MULTIPLY', v588, 1.0)
+    v607 = g.comb(v600, v600, v600)
+    v608 = g.bc(v600)
+    v609 = g.vmath('MULTIPLY', v505, v608)
+    v610 = g.vmath('MULTIPLY', v605[0], v607)
+    v611 = g.vmath('ADD', v610, v609)
+    v612 = g.math('GREATER_THAN', v563, 0.5)
+    v613 = g.vmath('DOT_PRODUCT', v586, v495)
+    v614 = g.vmath('DOT_PRODUCT', v28, v586)
+    v615 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v616 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v617 = g.group_named('RCE_HgSssLobe', [('amount', v533), ('rawNoL', v613), ('VdotL', v614), ('selfShadowBias', v615), ('enableSelfShadowBias', v616)])
+    v618 = g.bc(v617[0])
+    v619 = g.vmath('MULTIPLY', v618, v524)
+    v620 = g.vmath('ADD', v611, v619)
+    v621 = g.mixv(v612, v611, v620)
+    v622 = g.bc(v606)
+    v623 = g.vmath('MULTIPLY', v587, v622)
+    v624 = g.vmath('MULTIPLY', v621, v623)
+    v625 = g.vmath('ADD', v585, v624)
+    v626 = g.inp('C3_AdditionalLightCount', False, 0.0)
+    v627 = g.math('SUBTRACT', v626, 0)
+    v628 = g.math('CEIL', v627, 0.0)
+    v629 = g.math('MAXIMUM', v628, 0.0)
+    g.out_('Z0_it', v629, False)
+    g.out_('Z0_s_H', v598, True)
+    g.out_('Z0_s_L', v586, True)
+    g.out_('Z0_s_LV', v593, True)
+    g.out_('Z0_s_N', v495, True)
+    g.out_('Z0_s_NoH', v602, False)
+    g.out_('Z0_s_NoL', v600, False)
+    g.out_('Z0_s_NoV', v497, False)
+    g.out_('Z0_s_P', v20, True)
+    g.out_('Z0_s_V', v28, True)
+    g.out_('Z0_s_VoH', v604, False)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_color', v625, True)
+    g.out_('Z0_s_energy', v605[0], True)
+    g.out_('Z0_s_f0', v518, True)
+    g.out_('Z0_s_inputData_bakedGI', v30, True)
+    g.out_('Z0_s_inputData_fogCoord', 0, False)
+    g.out_('Z0_s_inputData_normalWS', v488, True)
+    g.out_('Z0_s_inputData_normalizedScreenSpaceUV', v29, True)
+    g.out_('Z0_s_inputData_positionCS', v17, True)
+    g.out_('Z0_s_inputData_positionCS_w', v18, False)
+    g.out_('Z0_s_inputData_positionWS', v20, True)
+    g.out_('Z0_s_inputData_shadowCoord', (0.0, 0.0, 0.0), True)
+    g.out_('Z0_s_inputData_shadowCoord_w', 0.0, False)
+    g.out_('Z0_s_inputData_shadowMask', (1, 1, 1), True)
+    g.out_('Z0_s_inputData_shadowMask_w', 1, False)
+    g.out_('Z0_s_inputData_vertexLighting', (0, 0, 0), True)
+    g.out_('Z0_s_inputData_viewDirectionWS', v28, True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_roughness', v484, False)
+    g.out_('Z0_s_sssAmount', v533, False)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_diffuse', v505, True)
+    g.out_('Z0_r_sssTint', v524, True)
+    g.out_('Z0_r_pixelLightCount', v626, False)
+    v630 = g.inp('Z0_o_H', True)
+    v631 = g.inp('Z0_o_L', True)
+    v632 = g.inp('Z0_o_LV', True)
+    v633 = g.inp('Z0_o_N', True)
+    v634 = g.inp('Z0_o_NoH', False)
+    v635 = g.inp('Z0_o_NoL', False)
+    v636 = g.inp('Z0_o_NoV', False)
+    v637 = g.inp('Z0_o_P', True)
+    v638 = g.inp('Z0_o_V', True)
+    v639 = g.inp('Z0_o_VoH', False)
+    v640 = g.inp('Z0_o_Lloop0', False)
+    v641 = g.inp('Z0_o_color', True)
+    v642 = g.inp('Z0_o_energy', True)
+    v643 = g.inp('Z0_o_f0', True)
+    v644 = g.inp('Z0_o_inputData_bakedGI', True)
+    v645 = g.inp('Z0_o_inputData_fogCoord', False)
+    v646 = g.inp('Z0_o_inputData_normalWS', True)
+    v647 = g.inp('Z0_o_inputData_normalizedScreenSpaceUV', True)
+    v648 = g.inp('Z0_o_inputData_positionCS', True)
+    v649 = g.inp('Z0_o_inputData_positionCS_w', False)
+    v650 = g.inp('Z0_o_inputData_positionWS', True)
+    v651 = g.inp('Z0_o_inputData_shadowCoord', True)
+    v652 = g.inp('Z0_o_inputData_shadowCoord_w', False)
+    v653 = g.inp('Z0_o_inputData_shadowMask', True)
+    v654 = g.inp('Z0_o_inputData_shadowMask_w', False)
+    v655 = g.inp('Z0_o_inputData_vertexLighting', True)
+    v656 = g.inp('Z0_o_inputData_viewDirectionWS', True)
+    v657 = g.inp('Z0_o_lightIndex', False)
+    v658 = g.inp('Z0_o_roughness', False)
+    v659 = g.inp('Z0_o_sssAmount', False)
+    v660 = g.vmath('ADD', v641, v491)
+    v661 = g.math('COMPARE', v60, 0, 1e-05)
+    v662 = g.math('SUBTRACT', 1.0, v661)
+    v663 = g.vmath('SUBTRACT', v20, v26)
+    v664 = g.inp('_RuriVoxelSizeMeters', False, 0.0)
+    v665 = g.bc(v664)
+    v666 = g.vmath('DIVIDE', v663, v665)
+    v667 = g.vmath('ADD', v483, v660)
+    v668 = g.vmath('LENGTH', v666)
+    v669 = g.sep(v666)
+    v670 = g.comb(v669[0], v669[2], 0.0)
+    v671 = g.vmath('LENGTH', v670)
+    v672 = g.math('ABSOLUTE', v669[1], 0.0)
+    v673 = g.math('MAXIMUM', v671, v672)
+    v674 = g.inp('_RuriFogEnvironmentalStart', False, 0.0)
+    v675 = g.inp('_RuriFogEnvironmentalEnd', False, 0.0)
+    v676 = g.inp('_RuriFogRenderDistanceStart', False, 0.0)
+    v677 = g.inp('_RuriFogRenderDistanceEnd', False, 0.0)
+    v678 = g.inp('_RuriFogColor', True, (0.0, 0.0, 0.0))
+    v679 = g.inp('_RuriFogColor_w', False, 0.0)
+    v680 = g.group_named('RCE_RuriApplyFog', [('inColor', v667), ('inColor_w', 1), ('sphericalVertexDistance', v668), ('cylindricalVertexDistance', v673), ('environmentalStart', v674), ('environmentalEnd', v675), ('renderDistanceStart', v676), ('renderDistanceEnd', v677), ('fogColor', v678), ('fogColor_w', v679)])
+    v681 = g.mixv(v662, v660, v680[0])
+    g.out_('ret_gBuffer0', v681, True)
+    g.out_('ret_gBuffer0_w', v482, False)
+    g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer1_w', 0.0, False)
+    g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer2_w', 0.0, False)
+    g.out_('ret_color', v660, True)
+    g.out_('ret_color_w', v482, False)
+    g.out_('ret_depth', 0.0, False)
+    g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
+    g.out_('ret_shadowMask_w', 0.0, False)
+    g.out_('ret_meshRenderingLayers', 0.0, False)
+    g.out_('__clip', v113, False)
+
+
+def build_Ruri_Endfield_Scene_Grass():
+    t = _tree('Ruri Endfield Scene Grass')
+    g = G(t)
+    v0 = g.inp('input_uv', True)
+    v1 = g.inp('input_positionWS', True)
+    v2 = g.inp('input_positionOS', True)
+    v3 = g.inp('input_normalWS', True)
+    v4 = g.inp('input_tangentWS', True)
+    v5 = g.inp('input_tangentWS_w', False)
+    v6 = g.inp('input_voxelUV', True)
+    v7 = g.inp('input_voxelLitColor', True)
+    v8 = g.inp('input_staticLightmapUV', True)
+    v9 = g.inp('input_positionNDC', True)
+    v10 = g.inp('input_positionNDC_w', False)
+    v11 = g.inp('input_color', True)
+    v12 = g.inp('input_color_w', False)
+    v13 = g.inp('input_voxelSliceMaterial', True)
+    v14 = g.inp('input_uv1', True)
+    v15 = g.inp('input_uv2', True)
+    v16 = g.inp('input_voxelBlockLight', True)
+    v17 = g.inp('input_positionCS', True)
+    v18 = g.inp('input_positionCS_w', False)
+    v19 = g.inp('facing', False)
+    v20 = g.b2u(v1, point=True)
+    v21 = g.b2u(v3, point=False)
+    v22 = g.b2u(v4, point=False)
+    g.out_('F0_BaseMap_uv', v0, True)
+    v23 = g.inp('F0_BaseMap', True, (1.0, 1.0, 1.0))
+    v24 = g.inp('F0_BaseMap_alpha', False, 1.0)
+    v25 = g.vmath('NORMALIZE', v21)
+    v26 = g.b2u(g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT'), point=True)
+    v27 = g.vmath('SUBTRACT', v26, v20)
+    v28 = g.vmath('NORMALIZE', v27)
+    v29 = g.texco().outputs['Window']
+    g.out_('C0_AmbientIrradiance_normal', v25, True)
+    v30 = g.inp('C0_AmbientIrradiance', True, (0.0, 0.0, 0.0))
+    v31 = g.inp('_TwoSidedNormal', False, 1.0)
+    v32 = g.math('GREATER_THAN', v31, 0.5)
+    v33 = g.math('LESS_THAN', v19, 0)
+    v34 = g.math('MULTIPLY', v32, v33)
+    v35 = g.vmath('SCALE', v25, s=-1.0)
+    v36 = g.mixv(v34, v25, v35)
+    v37 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
+    v38 = g.inp('_BaseColor_w', False, 1.0)
+    v39 = g.vmath('MULTIPLY', v23, v37)
+    v40 = g.math('MULTIPLY', v24, v38)
+    v41 = g.sep(v13)
+    v42 = g.math('ROUND', v41[0], 0.0)
+    v43 = g.math('TRUNC', v42, 0.0)
+    v44 = g.math('COMPARE', v43, 65535, 1e-05)
+    v45 = g.inp('_UseVoxelAtlas', False, 0.0)
+    g.out_('F1_VoxelAtlas_uv', v6, True)
+    v46 = g.inp('F1_VoxelAtlas', True, (1.0, 1.0, 1.0))
+    v47 = g.inp('F1_VoxelAtlas_alpha', False, 1.0)
+    v48 = g.vmath('MULTIPLY', v46, v11)
+    v49 = g.mixv(v44, v48, v11)
+    v50 = g.vmath('MULTIPLY', v39, v49)
+    v51 = g.inp('_UseCutoff', False, 0.0)
+    v52 = g.mixf(v44, v47, 1)
+    v53 = g.math('MULTIPLY', v40, v52)
+    v54 = g.mixf(v51, v40, v53)
+    v55 = g.inp('_UseVertexColor', False, 0.0)
+    v56 = g.vmath('MULTIPLY', v39, v11)
+    v57 = g.mixv(v55, v39, v56)
+    v58 = g.mixf(v45, v40, v54)
+    v59 = g.mixv(v45, v57, v50)
+    v60 = g.inp('_RuriVoxelLightVolumeOn', False, 0.0)
+    v61 = g.math('COMPARE', v60, 0, 1e-05)
+    v62 = g.math('SUBTRACT', 1.0, v61)
+    v63 = g.vmath('MULTIPLY', v59, v7)
+    v64 = g.bc(v63)
+    v65 = g.mixv(v62, v59, v64)
+    v66 = g.mixv(v62, (0, 0, 0), v59)
+    v67 = g.inp('_UseDitherClip', False, 0.0)
+    v68 = g.inp('_Cutoff', False, 0.5)
+    v69 = g.math('SUBTRACT', v58, v68)
+    v70 = g.math('LESS_THAN', v69, 0.0)
+    v71 = g.math('SUBTRACT', 1.0, v70)
+    v72 = g.math('MULTIPLY', 1.0, v71)
+    v73 = g.mixf(v51, 1.0, v72)
+    v74 = g.inp('_EnableAlphaTest', False, 0.0)
+    v75 = g.math('GREATER_THAN', v74, 0.5)
+    v76 = g.vmath('SUBTRACT', v14, v0)
+    v77 = g.inp('_BaseUVSet', False, 0.0)
+    v78 = g.comb(v77, v77, 0.0)
+    v79 = g.vmath('MULTIPLY', v78, v76)
+    v80 = g.vmath('ADD', v79, v0)
+    v81 = g.inp('_BaseColorMap_ST', True, (1.0, 1.0, 0.0))
+    v82 = g.inp('_BaseColorMap_ST_w', False, 0.0)
+    v83 = g.sep(v81)
+    v84 = g.comb(v83[0], v83[1], 0.0)
+    v85 = g.comb(v83[2], v82, 0.0)
+    v86 = g.vmath('MULTIPLY', v80, v84)
+    v87 = g.vmath('ADD', v86, v85)
+    v88 = g.inp('_BasePbrMapUVSet', False, 0.0)
+    v89 = g.comb(v88, v88, 0.0)
+    v90 = g.vmath('MULTIPLY', v89, v76)
+    v91 = g.vmath('ADD', v90, v0)
+    v92 = g.inp('_NormalMap_ST', True, (1.0, 1.0, 0.0))
+    v93 = g.inp('_NormalMap_ST_w', False, 0.0)
+    v94 = g.sep(v92)
+    v95 = g.comb(v94[0], v94[1], 0.0)
+    v96 = g.comb(v94[2], v93, 0.0)
+    v97 = g.vmath('MULTIPLY', v91, v95)
+    v98 = g.vmath('ADD', v97, v96)
+    g.out_('F2_BaseColorMap_uv', v87, True)
+    v99 = g.inp('F2_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v100 = g.inp('F2_BaseColorMap_alpha', False, 1.0)
+    g.out_('F3_NormalMap_uv', v98, True)
+    v101 = g.inp('F3_NormalMap', True, (1.0, 1.0, 1.0))
+    v102 = g.inp('F3_NormalMap_alpha', False, 1.0)
+    v103 = g.inp('_AlphaMaskChannel', False, 0.0)
+    v104 = g.math('MULTIPLY', v100, -1.0)
+    v105 = g.math('ADD', v104, v102)
+    v106 = g.math('MULTIPLY_ADD', v103, v105, v100)
+    v107 = g.math('MULTIPLY', v106, v38)
+    v108 = g.inp('_AlphaClipThreshold', False, 0.5)
+    v109 = g.math('SUBTRACT', v107, v108)
+    v110 = g.math('LESS_THAN', v109, 0.0)
+    v111 = g.math('SUBTRACT', 1.0, v110)
+    v112 = g.math('MULTIPLY', v73, v111)
+    v113 = g.mixf(v75, v73, v112)
+    v114 = g.inp('_RoughnessIntensity', False, 0.5)
+    v115 = g.inp('_MetallicIntensity', False, 0.0)
+    v116 = g.inp('_OcclusionIntensity', False, 1.0)
+    v117 = g.inp('_SpecularIntensity', False, 1.0)
+    v118 = g.math('COMPARE', v60, 0, 1e-05)
+    v119 = g.math('SUBTRACT', 1.0, v118)
+    v120 = g.math('MAXIMUM', v45, v55)
+    v121 = g.math('SUBTRACT', 1.0, v120)
+    v122 = g.inp('_RuriRadianceMode', False, 0.0)
+    v123 = g.math('COMPARE', v122, 0, 1e-05)
+    v124 = g.math('MULTIPLY', v55, v123)
+    v125 = g.inp('_VoxelEmissionScale', False, 4.0)
+    v126 = g.math('MULTIPLY', v12, v125)
+    v127 = g.mixf(v124, 0.0, v126)
+    v128 = g.mixf(v124, 0.0, 1.0)
+    v129 = g.math('SUBTRACT', 1.0, v128)
+    v130 = g.mixf(v129, v127, 0)
+    v131 = g.mixf(v129, v128, 1.0)
+    v132 = g.vmath('NORMALIZE', v21)
+    v133 = g.vmath('SUBTRACT', v14, v0)
+    v134 = g.comb(v77, v77, 0.0)
+    v135 = g.vmath('MULTIPLY', v134, v133)
+    v136 = g.vmath('ADD', v135, v0)
+    v137 = g.comb(v83[0], v83[1], 0.0)
+    v138 = g.comb(v83[2], v82, 0.0)
+    v139 = g.vmath('MULTIPLY', v136, v137)
+    v140 = g.vmath('ADD', v139, v138)
+    v141 = g.comb(v88, v88, 0.0)
+    v142 = g.vmath('MULTIPLY', v141, v133)
+    v143 = g.vmath('ADD', v142, v0)
+    v144 = g.comb(v94[0], v94[1], 0.0)
+    v145 = g.comb(v94[2], v93, 0.0)
+    v146 = g.vmath('MULTIPLY', v143, v144)
+    v147 = g.vmath('ADD', v146, v145)
+    g.out_('F4_BaseColorMap_uv', v140, True)
+    v148 = g.inp('F4_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v149 = g.inp('F4_BaseColorMap_alpha', False, 1.0)
+    g.out_('F5_NormalMap_uv', v147, True)
+    v150 = g.inp('F5_NormalMap', True, (1.0, 1.0, 1.0))
+    v151 = g.inp('F5_NormalMap_alpha', False, 1.0)
+    v152 = g.math('MULTIPLY', v58, v149)
+    v153 = g.sep(v11)
+    v154 = g.clampn(v153[0], 0, 1)
+    v155 = g.vmath('MULTIPLY', v148, v37)
+    v156 = g.inp('_BaseColorBrighterScale', False, 1.0)
+    v157 = g.bc(v156)
+    v158 = g.vmath('MULTIPLY', v155, v157)
+    v159 = g.vmath('MAXIMUM', v158, (0, 0, 0))
+    v160 = g.vmath('MINIMUM', v159, (1, 1, 1))
+    v161 = g.inp('_BaseColorTintCover', False, 0.0)
+    v162 = g.mixv(v161, v160, v37)
+    v163 = g.inp('_EnableNormalMap', False, 0.0)
+    v164 = g.math('GREATER_THAN', v163, 0.5)
+    v165 = g.math('MAXIMUM', 0, v164)
+    v166 = g.sep(v150)
+    v167 = g.math('MULTIPLY_ADD', v166[0], 2, -1)
+    v168 = g.math('MULTIPLY_ADD', v166[1], 2, -1)
+    v169 = g.mixf(v165, 0.5, v166[2])
+    v170 = g.mixf(v165, 0, v167)
+    v171 = g.mixf(v165, 0, v168)
+    v172 = g.mixf(v165, 1, v151)
+    v173 = g.inp('_NormalScale', False, 0.0)
+    v174 = g.math('MULTIPLY', v170, v173)
+    v175 = g.math('MULTIPLY', v171, v173)
+    v176 = g.vmath('DOT_PRODUCT', v36, v21)
+    v177 = g.math('LESS_THAN', v176, 0)
+    v178 = g.mixf(v177, 1, -1)
+    v179 = g.comb(v170, v171, 0.0)
+    v180 = g.comb(v170, v171, 0.0)
+    v181 = g.vmath('DOT_PRODUCT', v179, v180)
+    v182 = g.math('MINIMUM', v181, 1)
+    v183 = g.math('SUBTRACT', 1, v182)
+    v184 = g.math('SQRT', v183, 0.0)
+    v185 = g.math('MAXIMUM', v184, 1.0000000168623835E-16)
+    v186 = g.math('MULTIPLY', v185, v178)
+    v187 = g.math('GREATER_THAN', v5, 0)
+    v188 = g.mixf(v187, -1, 1)
+    v189 = g.vmath('CROSS_PRODUCT', v21, v22)
+    v190 = g.bc(v188)
+    v191 = g.vmath('MULTIPLY', v190, v189)
+    v192 = g.bc(v186)
+    v193 = g.vmath('MULTIPLY', v21, v192)
+    v194 = g.bc(v174)
+    v195 = g.vmath('MULTIPLY', v22, v194)
+    v196 = g.vmath('ADD', v193, v195)
+    v197 = g.bc(v175)
+    v198 = g.vmath('MULTIPLY', v191, v197)
+    v199 = g.vmath('ADD', v196, v198)
+    v200 = g.vmath('NORMALIZE', v199)
+    v201 = g.inp('_BendNormalUpward', False, 0.0)
+    v202 = g.math('GREATER_THAN', v201, 0)
+    v203 = g.math('MULTIPLY', 1, v202)
+    v204 = g.mixv(v201, v200, (0, 1, 0))
+    v205 = g.vmath('NORMALIZE', v204)
+    v206 = g.mixv(v203, v200, v205)
+    v207 = g.inp('_RoughnessMin', False, 0.0)
+    v208 = g.inp('_RoughnessMax', False, 1.0)
+    v209 = g.mixf(v169, v207, v208)
+    v210 = g.clampn(v209, 0, 1)
+    v211 = g.inp('_Metallic', False, 0.0)
+    v212 = g.inp('_BaseTextureMapCount', False, 0.0)
+    v213 = g.math('SUBTRACT', v212, 1)
+    v214 = g.clampn(v213, 0, 1)
+    v215 = g.mixf(v214, 0, v211)
+    v216 = g.mixf(0, 0, v215)
+    v217 = g.inp('_PorosityFactorX', False, 0.2)
+    v218 = g.inp('_PorosityFactorZ', False, 0.0)
+    v219 = g.inp('_PorosityFactorY', False, 0.4)
+    v220 = g.math('MULTIPLY_ADD', v218, v216, v219)
+    v221 = g.math('MULTIPLY_ADD', v217, v210, v220)
+    v222 = g.clampn(v221, 0, 1)
+    v223 = g.math('MULTIPLY', v222, 0.95)
+    v224 = g.math('ADD', v223, 0.05)
+    v225 = g.inp('_OcclusionStrength', False, 1.0)
+    v226 = g.mixf(v225, 1, v154)
+    v227 = g.clampn(v226, 0, 1)
+    v228 = g.mixf(v225, 1, 1)
+    v229 = g.inp('_TrunkVertexAoStrength', False, 1.0)
+    v230 = g.mixf(v229, 1, v154)
+    v231 = g.math('MULTIPLY', v228, v230)
+    v232 = g.mixf(0, v227, v231)
+    v233 = g.inp('_EnableVerticalNormalBoostAO', False, 0.0)
+    v234 = g.math('GREATER_THAN', v233, 0.5)
+    v235 = g.sep(v21)
+    v236 = g.inp('_VerticalNormalThreshold', False, 0.0)
+    v237 = g.math('SUBTRACT', v235[1], v236)
+    v238 = g.math('SUBTRACT', 1, v236)
+    v239 = g.math('MAXIMUM', v238, 0.0001)
+    v240 = g.math('DIVIDE', v237, v239)
+    v241 = g.clampn(v240, 0, 1)
+    v242 = g.inp('_VerticalNormalBoostAO', False, 0.0)
+    v243 = g.math('MULTIPLY', v241, v242)
+    v244 = g.math('SUBTRACT', 1, v243)
+    v245 = g.math('MULTIPLY', v232, v244)
+    v246 = g.mixf(v234, v232, v245)
+    v247 = g.sep(v0)
+    v248 = g.inp('_AoPosition', False, 0.0)
+    v249 = g.inp('_AoRadius', False, 0.1)
+    v250 = g.inp('_AoContrast', False, 0.2)
+    v251 = g.inp('_AoIntensity', False, 0.2)
+    v252 = g.group_named('RCE_FoliageGradientBand', [('coord', v247[1]), ('position', v248), ('radius', v249), ('contrast', v250), ('intensity', v251)])
+    v253 = g.math('MULTIPLY', v246, v252[0])
+    v254 = g.clampn(v253, 0, 1)
+    v255 = g.inp('_TransmissionDistanceFade', False, 0.0)
+    v256 = g.math('GREATER_THAN', v255, 0.5)
+    v257 = g.vmath('DISTANCE', v20, v26)
+    v258 = g.math('SUBTRACT', 60, v257)
+    v259 = g.math('DIVIDE', v258, 10)
+    v260 = g.clampn(v259, 0, 1)
+    v261 = g.mixf(v256, 1, v260)
+    v262 = g.inp('_Transmission', False, 0.2)
+    v263 = g.math('MULTIPLY', v262, v261)
+    v264 = g.math('MULTIPLY', v263, v172)
+    v265 = g.inp('_AoAffectTransmissionStart', False, 0.0)
+    v266 = g.inp('_AoAffectTransmissionRange', False, 0.01)
+    v267 = g.math('SUBTRACT', v253, v265)
+    v268 = g.math('MAXIMUM', v266, 0.0001)
+    v269 = g.math('DIVIDE', v267, v268)
+    v270 = g.clampn(v269, 0, 1)
+    v271 = g.math('MULTIPLY', v264, v270)
+    v272 = g.inp('_SubsurfaceIntensity', False, 0.0)
+    v273 = g.math('MULTIPLY', v272, v172)
+    v274 = g.inp('_AoAffectSubsurfaceStart', False, 0.0)
+    v275 = g.inp('_AoAffectSubsurfaceRange', False, 0.01)
+    v276 = g.math('SUBTRACT', v253, v274)
+    v277 = g.math('MAXIMUM', v275, 0.0001)
+    v278 = g.math('DIVIDE', v276, v277)
+    v279 = g.clampn(v278, 0, 1)
+    v280 = g.math('MULTIPLY', v273, v279)
+    v281 = g.inp('_DirPosition', False, 0.0)
+    v282 = g.inp('_DirRadius', False, 0.1)
+    v283 = g.inp('_DirContrast', False, 0.2)
+    v284 = g.inp('_MaskOnTransmission', False, 1.0)
+    v285 = g.math('SUBTRACT', 1, v284)
+    v286 = g.group_named('RCE_FoliageGradientBand', [('coord', v247[1]), ('position', v281), ('radius', v282), ('contrast', v283), ('intensity', v285)])
+    v287 = g.math('MULTIPLY', v271, v286[0])
+    v288 = g.math('MAXIMUM', v287, v280)
+    v289 = g.clampn(v288, 0, 1)
+    v290 = g.inp('_FakeDirectionalShadowStrength', False, 0.0)
+    v291 = g.math('GREATER_THAN', v290, 0)
+    v292 = g.vmath('NORMALIZE', v21)
+    v293 = g.inp('_DiffuseUseVertexNormal', False, 1.0)
+    v294 = g.mixv(v293, v206, v292)
+    v295 = g.inp('_MainLightPosition', True, (0.0, 0.0, 0.0))
+    v296 = g.inp('_MainLightPosition_w', False, 0.0)
+    v297 = g.vmath('SCALE', v295, s=-1.0)
+    v298 = g.vmath('DOT_PRODUCT', v294, v297)
+    v299 = g.math('MULTIPLY_ADD', v298, 0.5, 0.5)
+    v300 = g.inp('_FakeDirectionalShadowPow', False, 1.0)
+    v301 = g.math('POWER', v299, v300)
+    v302 = g.math('MULTIPLY', v301, v290)
+    v303 = g.math('SUBTRACT', 1, v302)
+    v304 = g.clampn(v303, 0, 1)
+    v305 = g.inp('_OcclusionShadow', False, 0.0)
+    v306 = g.mixf(v305, 1, v253)
+    v307 = g.mixf(v306, 1, v304)
+    v308 = g.bc(v307)
+    v309 = g.vmath('MULTIPLY', v162, v308)
+    v310 = g.mixv(v291, v162, v309)
+    v311 = g.math('SUBTRACT', 1.0, 0)
+    v312 = g.inp('_EnableCanopyColorRamp', False, 0.0)
+    v313 = g.math('GREATER_THAN', v312, 0.5)
+    v314 = g.math('MULTIPLY', v311, v313)
+    v315 = g.sep(v2)
+    v316 = g.clampn(v315[1], 0, 1)
+    v317 = g.inp('_CanopyRampStartAtTop', False, 0.0)
+    v318 = g.math('GREATER_THAN', v317, 0.5)
+    v319 = g.math('SUBTRACT', 1, v316)
+    v320 = g.mixf(v318, v316, v319)
+    v321 = g.inp('_CanopyRampRange', False, 0.0)
+    v322 = g.math('SUBTRACT', v320, v321)
+    v323 = g.inp('_CanopyRampTransitionRange', False, 0.01)
+    v324 = g.math('MAXIMUM', v323, 0.0001)
+    v325 = g.math('DIVIDE', v322, v324)
+    v326 = g.clampn(v325, 0, 1)
+    v327 = g.inp('_CanopyRampIntensity', False, 1.0)
+    v328 = g.math('MULTIPLY', v326, v327)
+    v329 = g.inp('_CanopyRampColor', True, (1.0, 1.0, 1.0))
+    v330 = g.inp('_CanopyRampColor_w', False, 1.0)
+    v331 = g.inp('_CanopyRampColorBrighterScale', False, 1.0)
+    v332 = g.bc(v331)
+    v333 = g.vmath('MULTIPLY', v329, v332)
+    v334 = g.vmath('MAXIMUM', v333, (0, 0, 0))
+    v335 = g.vmath('MINIMUM', v334, (1, 1, 1))
+    v336 = g.vmath('MULTIPLY', v310, v335)
+    v337 = g.inp('_CanopyRampColorCover', False, 0.0)
+    v338 = g.mixv(v337, v336, v335)
+    v339 = g.mixv(v328, v310, v338)
+    v340 = g.mixv(v314, v310, v339)
+    v341 = g.math('SUBTRACT', 1.0, 0)
+    v342 = g.inp('_EnableAoTuneColor', False, 0.0)
+    v343 = g.math('GREATER_THAN', v342, 0.5)
+    v344 = g.math('MULTIPLY', v341, v343)
+    v345 = g.inp('_FlipAoMask', False, 0.0)
+    v346 = g.math('GREATER_THAN', v345, 0.5)
+    v347 = g.math('SUBTRACT', 1, v154)
+    v348 = g.mixf(v346, v154, v347)
+    v349 = g.inp('_AoMaskTuneColorRampStart', False, 0.0)
+    v350 = g.math('SUBTRACT', v348, v349)
+    v351 = g.inp('_AoMaskTuneColorRampRange', False, 0.2)
+    v352 = g.math('MAXIMUM', v351, 0.0001)
+    v353 = g.math('DIVIDE', v350, v352)
+    v354 = g.clampn(v353, 0, 1)
+    v355 = g.inp('_AoMaskTuneColorIntensity', False, 1.0)
+    v356 = g.math('MULTIPLY', v354, v355)
+    v357 = g.inp('_AoMaskTuneColor', True, (1.0, 1.0, 1.0))
+    v358 = g.inp('_AoMaskTuneColor_w', False, 1.0)
+    v359 = g.inp('_AoMaskTuneColorBrighterScale', False, 1.0)
+    v360 = g.bc(v359)
+    v361 = g.vmath('MULTIPLY', v357, v360)
+    v362 = g.vmath('MAXIMUM', v361, (0, 0, 0))
+    v363 = g.vmath('MINIMUM', v362, (1, 1, 1))
+    v364 = g.vmath('MULTIPLY', v340, v363)
+    v365 = g.inp('_AoMaskTuneColorCover', False, 0.0)
+    v366 = g.mixv(v365, v364, v363)
+    v367 = g.mixv(v356, v340, v366)
+    v368 = g.mixv(v344, v340, v367)
+    v369 = g.mixf(v344, v328, v356)
+    v370 = g.math('SUBTRACT', 1.0, 0)
+    v371 = g.inp('_EnableBlendColor', False, 0.0)
+    v372 = g.math('GREATER_THAN', v371, 0.5)
+    v373 = g.math('MULTIPLY', v370, v372)
+    v374 = g.inp('_BlendWithVertexNormal', False, 0.0)
+    v375 = g.math('GREATER_THAN', v374, 0.5)
+    v376 = g.vmath('NORMALIZE', v21)
+    v377 = g.mixv(v375, v206, v376)
+    v378 = g.sep(v377)
+    v379 = g.math('MULTIPLY_ADD', v378[1], 0.5, 0.5)
+    v380 = g.inp('_BlendNormalAdd', False, 0.0)
+    v381 = g.math('ADD', v379, v380)
+    v382 = g.clampn(v381, 0, 1)
+    v383 = g.inp('_BlendColor', True, (1.0, 1.0, 1.0))
+    v384 = g.inp('_BlendColor_w', False, 1.0)
+    v385 = g.vmath('MULTIPLY', v368, v383)
+    v386 = g.inp('_BlendNormalPower', False, 1.0)
+    v387 = g.math('MAXIMUM', v386, 0.001)
+    v388 = g.math('POWER', v382, v387)
+    v389 = g.mixv(v388, v368, v385)
+    v390 = g.mixv(v373, v368, v389)
+    v391 = g.mixf(v373, v369, v382)
+    v392 = g.inp('_EnableTrunkRamp', False, 0.0)
+    v393 = g.math('GREATER_THAN', v392, 0.5)
+    v394 = g.math('MULTIPLY', 0, v393)
+    v395 = g.clampn(v315[1], 0, 1)
+    v396 = g.inp('_TrunkRampRange', False, 0.0)
+    v397 = g.math('SUBTRACT', v396, v395)
+    v398 = g.inp('_TrunkRampTransitionRange', False, 0.01)
+    v399 = g.math('MAXIMUM', v398, 0.0001)
+    v400 = g.math('DIVIDE', v397, v399)
+    v401 = g.clampn(v400, 0, 1)
+    v402 = g.inp('_TrunkRampIntensity', False, 1.0)
+    v403 = g.math('MULTIPLY', v401, v402)
+    v404 = g.inp('_TrunkRampColor', True, (1.0, 1.0, 1.0))
+    v405 = g.inp('_TrunkRampColor_w', False, 1.0)
+    v406 = g.vmath('MULTIPLY', v390, v404)
+    v407 = g.mixv(v403, v390, v406)
+    v408 = g.mixv(v394, v390, v407)
+    v409 = g.mixf(v394, v320, v395)
+    v410 = g.mixf(v394, v391, v403)
+    v411 = g.inp('_DirIntensity', False, 0.2)
+    v412 = g.inp('_MaskOnDiffuse', False, 1.0)
+    v413 = g.math('MULTIPLY', v411, v412)
+    v414 = g.group_named('RCE_FoliageGradientBand', [('coord', v247[1]), ('position', v281), ('radius', v282), ('contrast', v283), ('intensity', v413)])
+    v415 = g.bc(v414[0])
+    v416 = g.vmath('MULTIPLY', v408, v415)
+    v417 = g.inp('_EnableEmissiveMap', False, 0.0)
+    v418 = g.math('GREATER_THAN', v417, 0.5)
+    v419 = g.inp('_EmissiveUVSet', False, 0.0)
+    v420 = g.math('GREATER_THAN', v419, 0.5)
+    v421 = g.mixv(v420, v0, v14)
+    v422 = g.inp('_EmissiveMap_ST', True, (1.0, 1.0, 0.0))
+    v423 = g.inp('_EmissiveMap_ST_w', False, 0.0)
+    v424 = g.sep(v422)
+    v425 = g.comb(v424[0], v424[1], 0.0)
+    v426 = g.comb(v424[2], v423, 0.0)
+    v427 = g.vmath('MULTIPLY', v421, v425)
+    v428 = g.vmath('ADD', v427, v426)
+    g.out_('F6_EmissiveMap_uv', v428, True)
+    v429 = g.inp('F6_EmissiveMap', True, (1.0, 1.0, 1.0))
+    v430 = g.inp('F6_EmissiveMap_alpha', False, 1.0)
+    v431 = g.inp('_EmissiveMaskChannel', False, 0.0)
+    v432 = g.math('LESS_THAN', v431, 0.5)
+    v433 = g.sep(v429)
+    v434 = g.inp('_EmissiveColorR', True, (0.0, 0.0, 0.0))
+    v435 = g.inp('_EmissiveColorR_w', False, 1.0)
+    v436 = g.bc(v433[0])
+    v437 = g.vmath('MULTIPLY', v436, v434)
+    v438 = g.inp('_EmissiveColorG', True, (0.0, 0.0, 0.0))
+    v439 = g.inp('_EmissiveColorG_w', False, 0.0)
+    v440 = g.bc(v433[1])
+    v441 = g.vmath('MULTIPLY', v440, v438)
+    v442 = g.vmath('ADD', v437, v441)
+    v443 = g.inp('_EmissiveColorB', True, (0.0, 0.0, 0.0))
+    v444 = g.inp('_EmissiveColorB_w', False, 0.0)
+    v445 = g.bc(v433[2])
+    v446 = g.vmath('MULTIPLY', v445, v443)
+    v447 = g.vmath('ADD', v442, v446)
+    v448 = g.inp('_EmissiveColorA', True, (0.0, 0.0, 0.0))
+    v449 = g.inp('_EmissiveColorA_w', False, 0.0)
+    v450 = g.bc(v430)
+    v451 = g.vmath('MULTIPLY', v450, v448)
+    v452 = g.vmath('ADD', v447, v451)
+    v453 = g.math('LESS_THAN', v431, 1.5)
+    v454 = g.vmath('MULTIPLY', v429, v434)
+    v455 = g.bc(v149)
+    v456 = g.vmath('MULTIPLY', v455, v434)
+    v457 = g.mixv(v453, v456, v454)
+    v458 = g.mixv(v432, v457, v452)
+    v459 = g.inp('_AlbedoAffectEmissive', False, 1.0)
+    v460 = g.math('LESS_THAN', v459, 0.5)
+    v461 = g.vmath('MULTIPLY', v458, v416)
+    v462 = g.mixv(v460, v458, v461)
+    v463 = g.mixv(v418, (0, 0, 0), v462)
+    v464 = g.inp('_EnableVertColorEmissive', False, 0.0)
+    v465 = g.math('GREATER_THAN', v464, 0.5)
+    v466 = g.inp('_VertColorEmissiveChannelVector', True, (1.0, 0.0, 0.0))
+    v467 = g.inp('_VertColorEmissiveChannelVector_w', False, 0.0)
+    v468 = g.vmath('DOT_PRODUCT', v11, v466)
+    v469 = g.inp('_VertColorEmissiveFlip', False, 0.0)
+    v470 = g.math('GREATER_THAN', v469, 0.5)
+    v471 = g.math('SUBTRACT', 1, v468)
+    v472 = g.mixf(v470, v468, v471)
+    v473 = g.inp('_VertColorEmissiveBias', False, 0.0)
+    v474 = g.math('ADD', v472, v473)
+    v475 = g.clampn(v474, 0, 1)
+    v476 = g.inp('_VertColorEmissiveColor', True, (0.0, 0.0, 0.0))
+    v477 = g.inp('_VertColorEmissiveColor_w', False, 1.0)
+    v478 = g.bc(v475)
+    v479 = g.vmath('MULTIPLY', v476, v478)
+    v480 = g.inp('_VertColorEmissiveAlbedoAffect', False, 1.0)
+    v481 = g.math('LESS_THAN', v480, 0.5)
+    v482 = g.vmath('MULTIPLY', v479, v416)
+    v483 = g.mixv(v481, v479, v482)
+    v484 = g.vmath('ADD', v463, v483)
+    v485 = g.mixv(v465, v463, v484)
+    v486 = g.mixf(v465, v410, v475)
+    v487 = g.inp('_CrossCardViewCulling', False, 0.0)
+    v488 = g.math('GREATER_THAN', v487, 0.5)
+    v489 = g.vmath('SUBTRACT', v26, v20)
+    v490 = g.vmath('NORMALIZE', v489)
+    v491 = g.vmath('NORMALIZE', v21)
+    v492 = g.vmath('DOT_PRODUCT', v491, v490)
+    v493 = g.math('ABSOLUTE', v492, 0.0)
+    v494 = g.inp('_CrossCardViewCullingThreshold', False, 0.4)
+    v495 = g.math('SUBTRACT', v493, v494)
+    v496 = g.inp('_CrossCardViewCullingFadeValue', False, 0.5)
+    v497 = g.math('MAXIMUM', v496, 0.0001)
+    v498 = g.math('DIVIDE', v495, v497)
+    v499 = g.clampn(v498, 0, 1)
+    v500 = g.math('MULTIPLY', v152, v499)
+    v501 = g.mixf(v488, v152, v500)
+    v502 = g.mixf(v121, v58, v501)
+    v503 = g.mixv(v121, v65, v416)
+    v504 = g.mixf(v121, v114, v210)
+    v505 = g.mixf(v121, v115, v216)
+    v506 = g.mixf(v121, v116, v254)
+    v507 = g.mixf(v121, v117, v224)
+    v508 = g.mixv(v121, v36, v206)
+    v509 = g.mixf(v121, 0.0, v289)
+    v510 = g.mixv(v121, (0.0, 0.0, 0.0), v162)
+    v511 = g.mixv(v121, (0, 0, 0), v485)
+    v512 = g.mixv(v121, v132, v206)
+    v513 = g.comb(v507, v507, v507)
+    v514 = g.math('SUBTRACT', 1, v504)
+    v515 = g.vmath('NORMALIZE', v508)
+    v516 = g.vmath('DOT_PRODUCT', v515, v28)
+    v517 = g.math('MAXIMUM', v516, 0)
+    v518 = g.math('MULTIPLY', 0.08, v507)
+    v519 = g.math('MULTIPLY', 0.08, v507)
+    v520 = g.math('MULTIPLY', 0.08, v507)
+    v521 = g.comb(v518, v519, v520)
+    v522 = g.mixv(v505, v521, v503)
+    v523 = g.math('SUBTRACT', 1, v505)
+    v524 = g.bc(v523)
+    v525 = g.vmath('MULTIPLY', v503, v524)
+    v526 = g.inp('_UseThinFilm', False, 0.0)
+    v527 = g.math('GREATER_THAN', v526, 0.5)
+    v528 = g.inp('_ThinFilmIOR', False, 1.4)
+    v529 = g.inp('_ThinFilmThickness', False, 0.5)
+    v530 = g.math('MULTIPLY', v529, 1000)
+    v531 = g.inp('M_PI', False, 0.0)
+    v532 = g.group_named('RCE_RuriEvalIridescence', [('outsideIor', 1), ('eta2', v528), ('cosTheta1', v517), ('iridescenceThickness', v530), ('baseF0', v522), ('M_PI', v531)])
+    v533 = g.inp('_ThinFilmWeight', False, 0.0)
+    v534 = g.inp('_ThinFilmIntensity', False, 1.0)
+    v535 = g.math('MULTIPLY', v533, v534)
+    v536 = g.clampn(v535)
+    v537 = g.mixv(v536, v522, v532[0])
+    v538 = g.mixv(v527, v522, v537)
+    v539 = g.inp('_SubsurfaceShadingMode', False, 0.0)
+    v540 = g.math('LESS_THAN', v539, 0.5)
+    v541 = g.inp('_SubsurfaceColor', True, (0.8, 0.8, 0.8))
+    v542 = g.inp('_SubsurfaceColor_w', False, 1.0)
+    v543 = g.vmath('MULTIPLY', v541, v503)
+    v544 = g.mixv(v540, v543, v541)
+    v545 = g.inp('_MaxSubsurfaceThickness', False, 1.0)
+    v546 = g.inp('_UseSubsurfaceThicknessMap', False, 0.0)
+    v547 = g.math('GREATER_THAN', v546, 0.5)
+    v548 = g.inp('_MinSubsurfaceThickness', False, 0.0)
+    g.out_('F7_SubsurfaceMap_uv', v0, True)
+    v549 = g.inp('F7_SubsurfaceMap', True, (1.0, 1.0, 1.0))
+    v550 = g.inp('F7_SubsurfaceMap_alpha', False, 1.0)
+    v551 = g.sep(v549)
+    v552 = g.mixf(v551[0], v548, v545)
+    v553 = g.mixf(v547, v545, v552)
+    v554 = g.group_named('RCE_HgEnvBRDF', [('roughness', v504), ('NoV', v517), ('f0', v538)])
+    v555 = g.vmath('SCALE', v28, s=-1.0)
+    v556 = g.vmath('DOT_PRODUCT', v515, v555)
+    v557 = g.math('MULTIPLY', 2.0, v556)
+    v558 = g.vmath('SCALE', v515, s=v557)
+    v559 = g.vmath('SUBTRACT', v555, v558)
+    v560 = g.inp('_UseCustomIBL', False, 0.0)
+    v561 = g.math('GREATER_THAN', v560, 0.5)
+    v562 = g.math('MULTIPLY', 0.7, v504)
+    v563 = g.math('SUBTRACT', 1.7, v562)
+    v564 = g.math('MULTIPLY', v504, v563)
+    v565 = g.math('MULTIPLY', v564, 6)
+    v566 = g.u2b(v559)
+    g.out_('F8_IBL_CustomIBL_dir', v566, True)
+    g.out_('F8_IBL_CustomIBL_mip', v565, False)
+    v567 = g.inp('F8_IBL_CustomIBL', True, (0.2159, 0.2159, 0.2159))
+    v568 = g.inp('F8_IBL_CustomIBL_alpha', False, 1.0)
+    v569 = g.inp('_CustomIBLIntensity', False, 1.0)
+    v570 = g.bc(v569)
+    v571 = g.vmath('MULTIPLY', v567, v570)
+    g.out_('C1_SpecularRadiance_direction', v559, True)
+    g.out_('C1_SpecularRadiance_position', v20, True)
+    g.out_('C1_SpecularRadiance_roughness', v504, False)
+    v572 = g.inp('C1_SpecularRadiance', True, (0.2159, 0.2159, 0.2159))
+    v573 = g.mixv(v561, v572, v571)
+    v574 = g.inp('_PlanarReflection', False, 0.0)
+    v575 = g.math('GREATER_THAN', v574, 0.5)
+    g.out_('F9_PlanarReflectionTexture_uv', v29, True)
+    v576 = g.inp('F9_PlanarReflectionTexture', True, (1.0, 1.0, 1.0))
+    v577 = g.inp('F9_PlanarReflectionTexture_alpha', False, 1.0)
+    v578 = g.inp('_PlanarReflectionTint', True, (1.0, 1.0, 1.0))
+    v579 = g.inp('_PlanarReflectionTint_w', False, 1.0)
+    v580 = g.vmath('MULTIPLY', v576, v578)
+    v581 = g.mixv(v579, v573, v580)
+    v582 = g.mixv(v575, v573, v581)
+    v583 = g.inp('_EnableSubsurface', False, 0.0)
+    v584 = g.math('GREATER_THAN', v583, 0.5)
+    v585 = g.inp('_SubsurfaceIndirect', False, 1.0)
+    v586 = g.comb(v585, v585, v585)
+    v587 = g.vmath('MULTIPLY', v544, v586)
+    v588 = g.vmath('ADD', v587, v525)
+    v589 = g.mixv(v584, v525, v588)
+    v590 = g.vmath('MULTIPLY', v589, v30)
+    v591 = g.bc(v506)
+    v592 = g.vmath('MULTIPLY', v590, v591)
+    v593 = g.inp('_EnvironmentGlobalParams0', True, (1.67, 1.5, 1.0))
+    v594 = g.inp('_EnvironmentGlobalParams0_w', False, 0.0)
+    v595 = g.sep(v593)
+    v596 = g.bc(v595[0])
+    v597 = g.vmath('MULTIPLY', v592, v596)
+    v598 = g.comb(v554[0], v554[0], v554[0])
+    v599 = g.comb(v554[1], v554[1], v554[1])
+    v600 = g.vmath('MULTIPLY', v538, v598)
+    v601 = g.vmath('ADD', v600, v599)
+    v602 = g.vmath('MULTIPLY', v601, v582)
+    v603 = g.bc(v595[1])
+    v604 = g.vmath('MULTIPLY', v602, v603)
+    v605 = g.vmath('ADD', v597, v604)
+    v606 = g.inp('C2_MainLight_direction', True, (0.0, 0.0, 0.0))
+    v607 = g.inp('C2_MainLight_color', True, (0.0, 0.0, 0.0))
+    v608 = g.inp('C2_MainLight_distanceAttenuation', False, 0.0)
+    v609 = g.inp('C2_MainLight_shadowAttenuation', False, 0.0)
+    v610 = g.inp('C2_MainLight_layerMask', False, 0.0)
+    v611 = g.inp('_MainLightOcclusionProbes', True, (0.0, 0.0, 0.0))
+    v612 = g.inp('_MainLightOcclusionProbes_w', False, 0.0)
+    v613 = g.vmath('ADD', v606, v28)
+    v614 = g.vmath('DOT_PRODUCT', v613, v613)
+    v615 = g.math('MAXIMUM', v614, 1E-08)
+    v616 = g.math('INVERSE_SQRT', v615, 0.0)
+    v617 = g.bc(v616)
+    v618 = g.vmath('MULTIPLY', v613, v617)
+    v619 = g.vmath('DOT_PRODUCT', v606, v515)
+    v620 = g.clampn(v619)
+    v621 = g.vmath('DOT_PRODUCT', v515, v618)
+    v622 = g.clampn(v621)
+    v623 = g.vmath('DOT_PRODUCT', v28, v618)
+    v624 = g.clampn(v623)
+    v625 = g.group_named('RCE_HgDirectLightEnergy', [('roughness', v504), ('f0', v538), ('NoL', v620), ('NoH', v622), ('NoV', v517), ('VoH', v624)])
+    v626 = g.math('MULTIPLY', v608, 1.0)
+    v627 = g.comb(v620, v620, v620)
+    v628 = g.bc(v620)
+    v629 = g.vmath('MULTIPLY', v525, v628)
+    v630 = g.vmath('MULTIPLY', v625[0], v627)
+    v631 = g.vmath('ADD', v630, v629)
+    v632 = g.math('GREATER_THAN', v583, 0.5)
+    v633 = g.vmath('DOT_PRODUCT', v606, v515)
+    v634 = g.vmath('DOT_PRODUCT', v28, v606)
+    v635 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v636 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v637 = g.group_named('RCE_HgSssLobe', [('amount', v553), ('rawNoL', v633), ('VdotL', v634), ('selfShadowBias', v635), ('enableSelfShadowBias', v636)])
+    v638 = g.bc(v637[0])
+    v639 = g.vmath('MULTIPLY', v638, v544)
+    v640 = g.vmath('ADD', v631, v639)
+    v641 = g.mixv(v632, v631, v640)
+    v642 = g.bc(v626)
+    v643 = g.vmath('MULTIPLY', v607, v642)
+    v644 = g.vmath('MULTIPLY', v641, v643)
+    v645 = g.vmath('ADD', v605, v644)
+    v646 = g.inp('C3_AdditionalLightCount', False, 0.0)
+    v647 = g.math('SUBTRACT', v646, 0)
+    v648 = g.math('CEIL', v647, 0.0)
+    v649 = g.math('MAXIMUM', v648, 0.0)
+    g.out_('Z0_it', v649, False)
+    g.out_('Z0_s_H', v618, True)
+    g.out_('Z0_s_L', v606, True)
+    g.out_('Z0_s_LV', v613, True)
+    g.out_('Z0_s_N', v515, True)
+    g.out_('Z0_s_NoH', v622, False)
+    g.out_('Z0_s_NoL', v620, False)
+    g.out_('Z0_s_NoV', v517, False)
+    g.out_('Z0_s_P', v20, True)
+    g.out_('Z0_s_V', v28, True)
+    g.out_('Z0_s_VoH', v624, False)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_color', v645, True)
+    g.out_('Z0_s_energy', v625[0], True)
+    g.out_('Z0_s_f0', v538, True)
+    g.out_('Z0_s_inputData_bakedGI', v30, True)
+    g.out_('Z0_s_inputData_fogCoord', 0, False)
+    g.out_('Z0_s_inputData_normalWS', v508, True)
+    g.out_('Z0_s_inputData_normalizedScreenSpaceUV', v29, True)
+    g.out_('Z0_s_inputData_positionCS', v17, True)
+    g.out_('Z0_s_inputData_positionCS_w', v18, False)
+    g.out_('Z0_s_inputData_positionWS', v20, True)
+    g.out_('Z0_s_inputData_shadowCoord', (0.0, 0.0, 0.0), True)
+    g.out_('Z0_s_inputData_shadowCoord_w', 0.0, False)
+    g.out_('Z0_s_inputData_shadowMask', (1, 1, 1), True)
+    g.out_('Z0_s_inputData_shadowMask_w', 1, False)
+    g.out_('Z0_s_inputData_vertexLighting', (0, 0, 0), True)
+    g.out_('Z0_s_inputData_viewDirectionWS', v28, True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_roughness', v504, False)
+    g.out_('Z0_s_sssAmount', v553, False)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_diffuse', v525, True)
+    g.out_('Z0_r_sssTint', v544, True)
+    g.out_('Z0_r_pixelLightCount', v646, False)
+    v650 = g.inp('Z0_o_H', True)
+    v651 = g.inp('Z0_o_L', True)
+    v652 = g.inp('Z0_o_LV', True)
+    v653 = g.inp('Z0_o_N', True)
+    v654 = g.inp('Z0_o_NoH', False)
+    v655 = g.inp('Z0_o_NoL', False)
+    v656 = g.inp('Z0_o_NoV', False)
+    v657 = g.inp('Z0_o_P', True)
+    v658 = g.inp('Z0_o_V', True)
+    v659 = g.inp('Z0_o_VoH', False)
+    v660 = g.inp('Z0_o_Lloop0', False)
+    v661 = g.inp('Z0_o_color', True)
+    v662 = g.inp('Z0_o_energy', True)
+    v663 = g.inp('Z0_o_f0', True)
+    v664 = g.inp('Z0_o_inputData_bakedGI', True)
+    v665 = g.inp('Z0_o_inputData_fogCoord', False)
+    v666 = g.inp('Z0_o_inputData_normalWS', True)
+    v667 = g.inp('Z0_o_inputData_normalizedScreenSpaceUV', True)
+    v668 = g.inp('Z0_o_inputData_positionCS', True)
+    v669 = g.inp('Z0_o_inputData_positionCS_w', False)
+    v670 = g.inp('Z0_o_inputData_positionWS', True)
+    v671 = g.inp('Z0_o_inputData_shadowCoord', True)
+    v672 = g.inp('Z0_o_inputData_shadowCoord_w', False)
+    v673 = g.inp('Z0_o_inputData_shadowMask', True)
+    v674 = g.inp('Z0_o_inputData_shadowMask_w', False)
+    v675 = g.inp('Z0_o_inputData_vertexLighting', True)
+    v676 = g.inp('Z0_o_inputData_viewDirectionWS', True)
+    v677 = g.inp('Z0_o_lightIndex', False)
+    v678 = g.inp('Z0_o_roughness', False)
+    v679 = g.inp('Z0_o_sssAmount', False)
+    v680 = g.vmath('ADD', v661, v511)
+    v681 = g.math('COMPARE', v60, 0, 1e-05)
+    v682 = g.math('SUBTRACT', 1.0, v681)
+    v683 = g.vmath('SUBTRACT', v20, v26)
+    v684 = g.inp('_RuriVoxelSizeMeters', False, 0.0)
+    v685 = g.bc(v684)
+    v686 = g.vmath('DIVIDE', v683, v685)
+    v687 = g.vmath('ADD', v503, v680)
+    v688 = g.vmath('LENGTH', v686)
+    v689 = g.sep(v686)
+    v690 = g.comb(v689[0], v689[2], 0.0)
+    v691 = g.vmath('LENGTH', v690)
+    v692 = g.math('ABSOLUTE', v689[1], 0.0)
+    v693 = g.math('MAXIMUM', v691, v692)
+    v694 = g.inp('_RuriFogEnvironmentalStart', False, 0.0)
+    v695 = g.inp('_RuriFogEnvironmentalEnd', False, 0.0)
+    v696 = g.inp('_RuriFogRenderDistanceStart', False, 0.0)
+    v697 = g.inp('_RuriFogRenderDistanceEnd', False, 0.0)
+    v698 = g.inp('_RuriFogColor', True, (0.0, 0.0, 0.0))
+    v699 = g.inp('_RuriFogColor_w', False, 0.0)
+    v700 = g.group_named('RCE_RuriApplyFog', [('inColor', v687), ('inColor_w', 1), ('sphericalVertexDistance', v688), ('cylindricalVertexDistance', v693), ('environmentalStart', v694), ('environmentalEnd', v695), ('renderDistanceStart', v696), ('renderDistanceEnd', v697), ('fogColor', v698), ('fogColor_w', v699)])
+    v701 = g.mixv(v682, v680, v700[0])
+    g.out_('ret_gBuffer0', v701, True)
+    g.out_('ret_gBuffer0_w', v502, False)
+    g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer1_w', 0.0, False)
+    g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer2_w', 0.0, False)
+    g.out_('ret_color', v680, True)
+    g.out_('ret_color_w', v502, False)
+    g.out_('ret_depth', 0.0, False)
+    g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
+    g.out_('ret_shadowMask_w', 0.0, False)
+    g.out_('ret_meshRenderingLayers', 0.0, False)
+    g.out_('__clip', v113, False)
+
+
+def build_Ruri_Endfield_Scene_Trunk():
+    t = _tree('Ruri Endfield Scene Trunk')
+    g = G(t)
+    v0 = g.inp('input_uv', True)
+    v1 = g.inp('input_positionWS', True)
+    v2 = g.inp('input_positionOS', True)
+    v3 = g.inp('input_normalWS', True)
+    v4 = g.inp('input_tangentWS', True)
+    v5 = g.inp('input_tangentWS_w', False)
+    v6 = g.inp('input_voxelUV', True)
+    v7 = g.inp('input_voxelLitColor', True)
+    v8 = g.inp('input_staticLightmapUV', True)
+    v9 = g.inp('input_positionNDC', True)
+    v10 = g.inp('input_positionNDC_w', False)
+    v11 = g.inp('input_color', True)
+    v12 = g.inp('input_color_w', False)
+    v13 = g.inp('input_voxelSliceMaterial', True)
+    v14 = g.inp('input_uv1', True)
+    v15 = g.inp('input_uv2', True)
+    v16 = g.inp('input_voxelBlockLight', True)
+    v17 = g.inp('input_positionCS', True)
+    v18 = g.inp('input_positionCS_w', False)
+    v19 = g.inp('facing', False)
+    v20 = g.b2u(v1, point=True)
+    v21 = g.b2u(v3, point=False)
+    v22 = g.b2u(v4, point=False)
+    g.out_('F0_BaseMap_uv', v0, True)
+    v23 = g.inp('F0_BaseMap', True, (1.0, 1.0, 1.0))
+    v24 = g.inp('F0_BaseMap_alpha', False, 1.0)
+    v25 = g.vmath('NORMALIZE', v21)
+    v26 = g.b2u(g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT'), point=True)
+    v27 = g.vmath('SUBTRACT', v26, v20)
+    v28 = g.vmath('NORMALIZE', v27)
+    v29 = g.texco().outputs['Window']
+    g.out_('C0_AmbientIrradiance_normal', v25, True)
+    v30 = g.inp('C0_AmbientIrradiance', True, (0.0, 0.0, 0.0))
+    v31 = g.inp('_TwoSidedNormal', False, 1.0)
+    v32 = g.math('GREATER_THAN', v31, 0.5)
+    v33 = g.math('LESS_THAN', v19, 0)
+    v34 = g.math('MULTIPLY', v32, v33)
+    v35 = g.vmath('SCALE', v25, s=-1.0)
+    v36 = g.mixv(v34, v25, v35)
+    v37 = g.inp('_BaseColor', True, (1.0, 1.0, 1.0))
+    v38 = g.inp('_BaseColor_w', False, 1.0)
+    v39 = g.vmath('MULTIPLY', v23, v37)
+    v40 = g.math('MULTIPLY', v24, v38)
+    v41 = g.sep(v13)
+    v42 = g.math('ROUND', v41[0], 0.0)
+    v43 = g.math('TRUNC', v42, 0.0)
+    v44 = g.math('COMPARE', v43, 65535, 1e-05)
+    v45 = g.inp('_UseVoxelAtlas', False, 0.0)
+    g.out_('F1_VoxelAtlas_uv', v6, True)
+    v46 = g.inp('F1_VoxelAtlas', True, (1.0, 1.0, 1.0))
+    v47 = g.inp('F1_VoxelAtlas_alpha', False, 1.0)
+    v48 = g.vmath('MULTIPLY', v46, v11)
+    v49 = g.mixv(v44, v48, v11)
+    v50 = g.vmath('MULTIPLY', v39, v49)
+    v51 = g.inp('_UseCutoff', False, 0.0)
+    v52 = g.mixf(v44, v47, 1)
+    v53 = g.math('MULTIPLY', v40, v52)
+    v54 = g.mixf(v51, v40, v53)
+    v55 = g.inp('_UseVertexColor', False, 0.0)
+    v56 = g.vmath('MULTIPLY', v39, v11)
+    v57 = g.mixv(v55, v39, v56)
+    v58 = g.mixf(v45, v40, v54)
+    v59 = g.mixv(v45, v57, v50)
+    v60 = g.inp('_RuriVoxelLightVolumeOn', False, 0.0)
+    v61 = g.math('COMPARE', v60, 0, 1e-05)
+    v62 = g.math('SUBTRACT', 1.0, v61)
+    v63 = g.vmath('MULTIPLY', v59, v7)
+    v64 = g.bc(v63)
+    v65 = g.mixv(v62, v59, v64)
+    v66 = g.mixv(v62, (0, 0, 0), v59)
+    v67 = g.inp('_UseDitherClip', False, 0.0)
+    v68 = g.inp('_Cutoff', False, 0.5)
+    v69 = g.math('SUBTRACT', v58, v68)
+    v70 = g.math('LESS_THAN', v69, 0.0)
+    v71 = g.math('SUBTRACT', 1.0, v70)
+    v72 = g.math('MULTIPLY', 1.0, v71)
+    v73 = g.mixf(v51, 1.0, v72)
+    v74 = g.inp('_EnableAlphaTest', False, 0.0)
+    v75 = g.math('GREATER_THAN', v74, 0.5)
+    v76 = g.vmath('SUBTRACT', v14, v0)
+    v77 = g.inp('_BaseUVSet', False, 0.0)
+    v78 = g.comb(v77, v77, 0.0)
+    v79 = g.vmath('MULTIPLY', v78, v76)
+    v80 = g.vmath('ADD', v79, v0)
+    v81 = g.inp('_BaseColorMap_ST', True, (1.0, 1.0, 0.0))
+    v82 = g.inp('_BaseColorMap_ST_w', False, 0.0)
+    v83 = g.sep(v81)
+    v84 = g.comb(v83[0], v83[1], 0.0)
+    v85 = g.comb(v83[2], v82, 0.0)
+    v86 = g.vmath('MULTIPLY', v80, v84)
+    v87 = g.vmath('ADD', v86, v85)
+    v88 = g.inp('_BasePbrMapUVSet', False, 0.0)
+    v89 = g.comb(v88, v88, 0.0)
+    v90 = g.vmath('MULTIPLY', v89, v76)
+    v91 = g.vmath('ADD', v90, v0)
+    v92 = g.inp('_NormalMap_ST', True, (1.0, 1.0, 0.0))
+    v93 = g.inp('_NormalMap_ST_w', False, 0.0)
+    v94 = g.sep(v92)
+    v95 = g.comb(v94[0], v94[1], 0.0)
+    v96 = g.comb(v94[2], v93, 0.0)
+    v97 = g.vmath('MULTIPLY', v91, v95)
+    v98 = g.vmath('ADD', v97, v96)
+    g.out_('F2_BaseColorMap_uv', v87, True)
+    v99 = g.inp('F2_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v100 = g.inp('F2_BaseColorMap_alpha', False, 1.0)
+    g.out_('F3_NormalMap_uv', v98, True)
+    v101 = g.inp('F3_NormalMap', True, (1.0, 1.0, 1.0))
+    v102 = g.inp('F3_NormalMap_alpha', False, 1.0)
+    v103 = g.inp('_AlphaMaskChannel', False, 0.0)
+    v104 = g.math('MULTIPLY', v100, -1.0)
+    v105 = g.math('ADD', v104, v102)
+    v106 = g.math('MULTIPLY_ADD', v103, v105, v100)
+    v107 = g.math('MULTIPLY', v106, v38)
+    v108 = g.inp('_AlphaClipThreshold', False, 0.5)
+    v109 = g.math('SUBTRACT', v107, v108)
+    v110 = g.math('LESS_THAN', v109, 0.0)
+    v111 = g.math('SUBTRACT', 1.0, v110)
+    v112 = g.math('MULTIPLY', v73, v111)
+    v113 = g.mixf(v75, v73, v112)
+    v114 = g.inp('_RoughnessIntensity', False, 0.5)
+    v115 = g.inp('_MetallicIntensity', False, 0.0)
+    v116 = g.inp('_OcclusionIntensity', False, 1.0)
+    v117 = g.inp('_SpecularIntensity', False, 1.0)
+    v118 = g.math('COMPARE', v60, 0, 1e-05)
+    v119 = g.math('SUBTRACT', 1.0, v118)
+    v120 = g.math('MAXIMUM', v45, v55)
+    v121 = g.math('SUBTRACT', 1.0, v120)
+    v122 = g.inp('_RuriRadianceMode', False, 0.0)
+    v123 = g.math('COMPARE', v122, 0, 1e-05)
+    v124 = g.math('MULTIPLY', v55, v123)
+    v125 = g.inp('_VoxelEmissionScale', False, 4.0)
+    v126 = g.math('MULTIPLY', v12, v125)
+    v127 = g.mixf(v124, 0.0, v126)
+    v128 = g.mixf(v124, 0.0, 1.0)
+    v129 = g.math('SUBTRACT', 1.0, v128)
+    v130 = g.mixf(v129, v127, 0)
+    v131 = g.mixf(v129, v128, 1.0)
+    v132 = g.vmath('NORMALIZE', v21)
+    v133 = g.vmath('SUBTRACT', v14, v0)
+    v134 = g.comb(v77, v77, 0.0)
+    v135 = g.vmath('MULTIPLY', v134, v133)
+    v136 = g.vmath('ADD', v135, v0)
+    v137 = g.comb(v83[0], v83[1], 0.0)
+    v138 = g.comb(v83[2], v82, 0.0)
+    v139 = g.vmath('MULTIPLY', v136, v137)
+    v140 = g.vmath('ADD', v139, v138)
+    v141 = g.comb(v88, v88, 0.0)
+    v142 = g.vmath('MULTIPLY', v141, v133)
+    v143 = g.vmath('ADD', v142, v0)
+    v144 = g.comb(v94[0], v94[1], 0.0)
+    v145 = g.comb(v94[2], v93, 0.0)
+    v146 = g.vmath('MULTIPLY', v143, v144)
+    v147 = g.vmath('ADD', v146, v145)
+    g.out_('F4_BaseColorMap_uv', v140, True)
+    v148 = g.inp('F4_BaseColorMap', True, (1.0, 1.0, 1.0))
+    v149 = g.inp('F4_BaseColorMap_alpha', False, 1.0)
+    g.out_('F5_NormalMap_uv', v147, True)
+    v150 = g.inp('F5_NormalMap', True, (1.0, 1.0, 1.0))
+    v151 = g.inp('F5_NormalMap_alpha', False, 1.0)
+    v152 = g.math('MULTIPLY', v58, v149)
+    v153 = g.sep(v11)
+    v154 = g.clampn(v153[0], 0, 1)
+    v155 = g.vmath('MULTIPLY', v148, v37)
+    v156 = g.inp('_BaseColorBrighterScale', False, 1.0)
+    v157 = g.bc(v156)
+    v158 = g.vmath('MULTIPLY', v155, v157)
+    v159 = g.vmath('MAXIMUM', v158, (0, 0, 0))
+    v160 = g.vmath('MINIMUM', v159, (1, 1, 1))
+    v161 = g.inp('_BaseColorTintCover', False, 0.0)
+    v162 = g.mixv(v161, v160, v37)
+    v163 = g.inp('_EnableNormalMap', False, 0.0)
+    v164 = g.math('GREATER_THAN', v163, 0.5)
+    v165 = g.math('MAXIMUM', 1, v164)
+    g.out_('F6_MROMap_uv', v147, True)
+    v166 = g.inp('F6_MROMap', True, (1.0, 1.0, 1.0))
+    v167 = g.inp('F6_MROMap_alpha', False, 1.0)
+    v168 = g.sep(v166)
+    v169 = g.sep(v150)
+    v170 = g.math('MULTIPLY', v169[0], v151)
+    v171 = g.math('MULTIPLY_ADD', v170, 2, -1)
+    v172 = g.math('MULTIPLY_ADD', v169[1], 2, -1)
+    v173 = g.inp('_NormalScale', False, 0.0)
+    v174 = g.math('MULTIPLY', v171, v173)
+    v175 = g.math('MULTIPLY', v172, v173)
+    v176 = g.vmath('DOT_PRODUCT', v36, v21)
+    v177 = g.math('LESS_THAN', v176, 0)
+    v178 = g.mixf(v177, 1, -1)
+    v179 = g.comb(v171, v172, 0.0)
+    v180 = g.comb(v171, v172, 0.0)
+    v181 = g.vmath('DOT_PRODUCT', v179, v180)
+    v182 = g.math('MINIMUM', v181, 1)
+    v183 = g.math('SUBTRACT', 1, v182)
+    v184 = g.math('SQRT', v183, 0.0)
+    v185 = g.math('MAXIMUM', v184, 1.0000000168623835E-16)
+    v186 = g.math('MULTIPLY', v185, v178)
+    v187 = g.math('GREATER_THAN', v5, 0)
+    v188 = g.mixf(v187, -1, 1)
+    v189 = g.vmath('CROSS_PRODUCT', v21, v22)
+    v190 = g.bc(v188)
+    v191 = g.vmath('MULTIPLY', v190, v189)
+    v192 = g.bc(v186)
+    v193 = g.vmath('MULTIPLY', v21, v192)
+    v194 = g.bc(v174)
+    v195 = g.vmath('MULTIPLY', v22, v194)
+    v196 = g.vmath('ADD', v193, v195)
+    v197 = g.bc(v175)
+    v198 = g.vmath('MULTIPLY', v191, v197)
+    v199 = g.vmath('ADD', v196, v198)
+    v200 = g.vmath('NORMALIZE', v199)
+    v201 = g.inp('_BendNormalUpward', False, 0.0)
+    v202 = g.math('GREATER_THAN', v201, 0)
+    v203 = g.math('MULTIPLY', 0, v202)
+    v204 = g.mixv(v201, v200, (0, 1, 0))
+    v205 = g.vmath('NORMALIZE', v204)
+    v206 = g.mixv(v203, v200, v205)
+    v207 = g.inp('_RoughnessMin', False, 0.0)
+    v208 = g.inp('_RoughnessMax', False, 1.0)
+    v209 = g.mixf(v168[1], v207, v208)
+    v210 = g.clampn(v209, 0, 1)
+    v211 = g.inp('_Metallic', False, 0.0)
+    v212 = g.inp('_BaseTextureMapCount', False, 0.0)
+    v213 = g.math('SUBTRACT', v212, 1)
+    v214 = g.clampn(v213, 0, 1)
+    v215 = g.mixf(v214, v168[0], v211)
+    v216 = g.mixf(1, 0, v215)
+    v217 = g.inp('_PorosityFactorX', False, 0.2)
+    v218 = g.inp('_PorosityFactorZ', False, 0.0)
+    v219 = g.inp('_PorosityFactorY', False, 0.4)
+    v220 = g.math('MULTIPLY_ADD', v218, v216, v219)
+    v221 = g.math('MULTIPLY_ADD', v217, v210, v220)
+    v222 = g.clampn(v221, 0, 1)
+    v223 = g.math('MULTIPLY', v222, 0.95)
+    v224 = g.math('ADD', v223, 0.05)
+    v225 = g.inp('_OcclusionStrength', False, 1.0)
+    v226 = g.mixf(v225, 1, v154)
+    v227 = g.clampn(v226, 0, 1)
+    v228 = g.mixf(v225, 1, v168[2])
+    v229 = g.inp('_TrunkVertexAoStrength', False, 1.0)
+    v230 = g.mixf(v229, 1, v154)
+    v231 = g.math('MULTIPLY', v228, v230)
+    v232 = g.mixf(1, v227, v231)
+    v233 = g.inp('_EnableVerticalNormalBoostAO', False, 0.0)
+    v234 = g.math('GREATER_THAN', v233, 0.5)
+    v235 = g.sep(v21)
+    v236 = g.inp('_VerticalNormalThreshold', False, 0.0)
+    v237 = g.math('SUBTRACT', v235[1], v236)
+    v238 = g.math('SUBTRACT', 1, v236)
+    v239 = g.math('MAXIMUM', v238, 0.0001)
+    v240 = g.math('DIVIDE', v237, v239)
+    v241 = g.clampn(v240, 0, 1)
+    v242 = g.inp('_VerticalNormalBoostAO', False, 0.0)
+    v243 = g.math('MULTIPLY', v241, v242)
+    v244 = g.math('SUBTRACT', 1, v243)
+    v245 = g.math('MULTIPLY', v232, v244)
+    v246 = g.mixf(v234, v232, v245)
+    v247 = g.clampn(v246, 0, 1)
+    v248 = g.inp('_TransmissionDistanceFade', False, 0.0)
+    v249 = g.math('GREATER_THAN', v248, 0.5)
+    v250 = g.vmath('DISTANCE', v20, v26)
+    v251 = g.math('SUBTRACT', 60, v250)
+    v252 = g.math('DIVIDE', v251, 10)
+    v253 = g.clampn(v252, 0, 1)
+    v254 = g.mixf(v249, 1, v253)
+    v255 = g.inp('_Transmission', False, 0.2)
+    v256 = g.math('MULTIPLY', v255, v254)
+    v257 = g.math('MULTIPLY', v256, 0)
+    v258 = g.inp('_AoAffectTransmissionStart', False, 0.0)
+    v259 = g.inp('_AoAffectTransmissionRange', False, 0.01)
+    v260 = g.math('SUBTRACT', v246, v258)
+    v261 = g.math('MAXIMUM', v259, 0.0001)
+    v262 = g.math('DIVIDE', v260, v261)
+    v263 = g.clampn(v262, 0, 1)
+    v264 = g.math('MULTIPLY', v257, v263)
+    v265 = g.inp('_SubsurfaceIntensity', False, 0.0)
+    v266 = g.math('MULTIPLY', v265, 0)
+    v267 = g.inp('_AoAffectSubsurfaceStart', False, 0.0)
+    v268 = g.inp('_AoAffectSubsurfaceRange', False, 0.01)
+    v269 = g.math('SUBTRACT', v246, v267)
+    v270 = g.math('MAXIMUM', v268, 0.0001)
+    v271 = g.math('DIVIDE', v269, v270)
+    v272 = g.clampn(v271, 0, 1)
+    v273 = g.math('MULTIPLY', v266, v272)
+    v274 = g.math('MAXIMUM', v264, v273)
+    v275 = g.clampn(v274, 0, 1)
+    v276 = g.inp('_FakeDirectionalShadowStrength', False, 0.0)
+    v277 = g.math('GREATER_THAN', v276, 0)
+    v278 = g.vmath('NORMALIZE', v21)
+    v279 = g.inp('_DiffuseUseVertexNormal', False, 1.0)
+    v280 = g.mixv(v279, v206, v278)
+    v281 = g.inp('_MainLightPosition', True, (0.0, 0.0, 0.0))
+    v282 = g.inp('_MainLightPosition_w', False, 0.0)
+    v283 = g.vmath('SCALE', v281, s=-1.0)
+    v284 = g.vmath('DOT_PRODUCT', v280, v283)
+    v285 = g.math('MULTIPLY_ADD', v284, 0.5, 0.5)
+    v286 = g.inp('_FakeDirectionalShadowPow', False, 1.0)
+    v287 = g.math('POWER', v285, v286)
+    v288 = g.math('MULTIPLY', v287, v276)
+    v289 = g.math('SUBTRACT', 1, v288)
+    v290 = g.clampn(v289, 0, 1)
+    v291 = g.inp('_OcclusionShadow', False, 0.0)
+    v292 = g.mixf(v291, 1, v246)
+    v293 = g.mixf(v292, 1, v290)
+    v294 = g.bc(v293)
+    v295 = g.vmath('MULTIPLY', v162, v294)
+    v296 = g.mixv(v277, v162, v295)
+    v297 = g.math('SUBTRACT', 1.0, 1)
+    v298 = g.inp('_EnableCanopyColorRamp', False, 0.0)
+    v299 = g.math('GREATER_THAN', v298, 0.5)
+    v300 = g.math('MULTIPLY', v297, v299)
+    v301 = g.sep(v2)
+    v302 = g.clampn(v301[1], 0, 1)
+    v303 = g.inp('_CanopyRampStartAtTop', False, 0.0)
+    v304 = g.math('GREATER_THAN', v303, 0.5)
+    v305 = g.math('SUBTRACT', 1, v302)
+    v306 = g.mixf(v304, v302, v305)
+    v307 = g.inp('_CanopyRampRange', False, 0.0)
+    v308 = g.math('SUBTRACT', v306, v307)
+    v309 = g.inp('_CanopyRampTransitionRange', False, 0.01)
+    v310 = g.math('MAXIMUM', v309, 0.0001)
+    v311 = g.math('DIVIDE', v308, v310)
+    v312 = g.clampn(v311, 0, 1)
+    v313 = g.inp('_CanopyRampIntensity', False, 1.0)
+    v314 = g.math('MULTIPLY', v312, v313)
+    v315 = g.inp('_CanopyRampColor', True, (1.0, 1.0, 1.0))
+    v316 = g.inp('_CanopyRampColor_w', False, 1.0)
+    v317 = g.inp('_CanopyRampColorBrighterScale', False, 1.0)
+    v318 = g.bc(v317)
+    v319 = g.vmath('MULTIPLY', v315, v318)
+    v320 = g.vmath('MAXIMUM', v319, (0, 0, 0))
+    v321 = g.vmath('MINIMUM', v320, (1, 1, 1))
+    v322 = g.vmath('MULTIPLY', v296, v321)
+    v323 = g.inp('_CanopyRampColorCover', False, 0.0)
+    v324 = g.mixv(v323, v322, v321)
+    v325 = g.mixv(v314, v296, v324)
+    v326 = g.mixv(v300, v296, v325)
+    v327 = g.math('SUBTRACT', 1.0, 1)
+    v328 = g.inp('_EnableAoTuneColor', False, 0.0)
+    v329 = g.math('GREATER_THAN', v328, 0.5)
+    v330 = g.math('MULTIPLY', v327, v329)
+    v331 = g.inp('_FlipAoMask', False, 0.0)
+    v332 = g.math('GREATER_THAN', v331, 0.5)
+    v333 = g.math('SUBTRACT', 1, v154)
+    v334 = g.mixf(v332, v154, v333)
+    v335 = g.inp('_AoMaskTuneColorRampStart', False, 0.0)
+    v336 = g.math('SUBTRACT', v334, v335)
+    v337 = g.inp('_AoMaskTuneColorRampRange', False, 0.2)
+    v338 = g.math('MAXIMUM', v337, 0.0001)
+    v339 = g.math('DIVIDE', v336, v338)
+    v340 = g.clampn(v339, 0, 1)
+    v341 = g.inp('_AoMaskTuneColorIntensity', False, 1.0)
+    v342 = g.math('MULTIPLY', v340, v341)
+    v343 = g.inp('_AoMaskTuneColor', True, (1.0, 1.0, 1.0))
+    v344 = g.inp('_AoMaskTuneColor_w', False, 1.0)
+    v345 = g.inp('_AoMaskTuneColorBrighterScale', False, 1.0)
+    v346 = g.bc(v345)
+    v347 = g.vmath('MULTIPLY', v343, v346)
+    v348 = g.vmath('MAXIMUM', v347, (0, 0, 0))
+    v349 = g.vmath('MINIMUM', v348, (1, 1, 1))
+    v350 = g.vmath('MULTIPLY', v326, v349)
+    v351 = g.inp('_AoMaskTuneColorCover', False, 0.0)
+    v352 = g.mixv(v351, v350, v349)
+    v353 = g.mixv(v342, v326, v352)
+    v354 = g.mixv(v330, v326, v353)
+    v355 = g.mixf(v330, v314, v342)
+    v356 = g.math('SUBTRACT', 1.0, 1)
+    v357 = g.inp('_EnableBlendColor', False, 0.0)
+    v358 = g.math('GREATER_THAN', v357, 0.5)
+    v359 = g.math('MULTIPLY', v356, v358)
+    v360 = g.inp('_BlendWithVertexNormal', False, 0.0)
+    v361 = g.math('GREATER_THAN', v360, 0.5)
+    v362 = g.vmath('NORMALIZE', v21)
+    v363 = g.mixv(v361, v206, v362)
+    v364 = g.sep(v363)
+    v365 = g.math('MULTIPLY_ADD', v364[1], 0.5, 0.5)
+    v366 = g.inp('_BlendNormalAdd', False, 0.0)
+    v367 = g.math('ADD', v365, v366)
+    v368 = g.clampn(v367, 0, 1)
+    v369 = g.inp('_BlendColor', True, (1.0, 1.0, 1.0))
+    v370 = g.inp('_BlendColor_w', False, 1.0)
+    v371 = g.vmath('MULTIPLY', v354, v369)
+    v372 = g.inp('_BlendNormalPower', False, 1.0)
+    v373 = g.math('MAXIMUM', v372, 0.001)
+    v374 = g.math('POWER', v368, v373)
+    v375 = g.mixv(v374, v354, v371)
+    v376 = g.mixv(v359, v354, v375)
+    v377 = g.mixf(v359, v355, v368)
+    v378 = g.inp('_EnableTrunkRamp', False, 0.0)
+    v379 = g.math('GREATER_THAN', v378, 0.5)
+    v380 = g.math('MULTIPLY', 1, v379)
+    v381 = g.clampn(v301[1], 0, 1)
+    v382 = g.inp('_TrunkRampRange', False, 0.0)
+    v383 = g.math('SUBTRACT', v382, v381)
+    v384 = g.inp('_TrunkRampTransitionRange', False, 0.01)
+    v385 = g.math('MAXIMUM', v384, 0.0001)
+    v386 = g.math('DIVIDE', v383, v385)
+    v387 = g.clampn(v386, 0, 1)
+    v388 = g.inp('_TrunkRampIntensity', False, 1.0)
+    v389 = g.math('MULTIPLY', v387, v388)
+    v390 = g.inp('_TrunkRampColor', True, (1.0, 1.0, 1.0))
+    v391 = g.inp('_TrunkRampColor_w', False, 1.0)
+    v392 = g.vmath('MULTIPLY', v376, v390)
+    v393 = g.mixv(v389, v376, v392)
+    v394 = g.mixv(v380, v376, v393)
+    v395 = g.mixf(v380, v306, v381)
+    v396 = g.mixf(v380, v377, v389)
+    v397 = g.inp('_EnableEmissiveMap', False, 0.0)
+    v398 = g.math('GREATER_THAN', v397, 0.5)
+    v399 = g.inp('_EmissiveUVSet', False, 0.0)
+    v400 = g.math('GREATER_THAN', v399, 0.5)
+    v401 = g.mixv(v400, v0, v14)
+    v402 = g.inp('_EmissiveMap_ST', True, (1.0, 1.0, 0.0))
+    v403 = g.inp('_EmissiveMap_ST_w', False, 0.0)
+    v404 = g.sep(v402)
+    v405 = g.comb(v404[0], v404[1], 0.0)
+    v406 = g.comb(v404[2], v403, 0.0)
+    v407 = g.vmath('MULTIPLY', v401, v405)
+    v408 = g.vmath('ADD', v407, v406)
+    g.out_('F7_EmissiveMap_uv', v408, True)
+    v409 = g.inp('F7_EmissiveMap', True, (1.0, 1.0, 1.0))
+    v410 = g.inp('F7_EmissiveMap_alpha', False, 1.0)
+    v411 = g.inp('_EmissiveMaskChannel', False, 0.0)
+    v412 = g.math('LESS_THAN', v411, 0.5)
+    v413 = g.sep(v409)
+    v414 = g.inp('_EmissiveColorR', True, (0.0, 0.0, 0.0))
+    v415 = g.inp('_EmissiveColorR_w', False, 1.0)
+    v416 = g.bc(v413[0])
+    v417 = g.vmath('MULTIPLY', v416, v414)
+    v418 = g.inp('_EmissiveColorG', True, (0.0, 0.0, 0.0))
+    v419 = g.inp('_EmissiveColorG_w', False, 0.0)
+    v420 = g.bc(v413[1])
+    v421 = g.vmath('MULTIPLY', v420, v418)
+    v422 = g.vmath('ADD', v417, v421)
+    v423 = g.inp('_EmissiveColorB', True, (0.0, 0.0, 0.0))
+    v424 = g.inp('_EmissiveColorB_w', False, 0.0)
+    v425 = g.bc(v413[2])
+    v426 = g.vmath('MULTIPLY', v425, v423)
+    v427 = g.vmath('ADD', v422, v426)
+    v428 = g.inp('_EmissiveColorA', True, (0.0, 0.0, 0.0))
+    v429 = g.inp('_EmissiveColorA_w', False, 0.0)
+    v430 = g.bc(v410)
+    v431 = g.vmath('MULTIPLY', v430, v428)
+    v432 = g.vmath('ADD', v427, v431)
+    v433 = g.math('LESS_THAN', v411, 1.5)
+    v434 = g.vmath('MULTIPLY', v409, v414)
+    v435 = g.bc(v149)
+    v436 = g.vmath('MULTIPLY', v435, v414)
+    v437 = g.mixv(v433, v436, v434)
+    v438 = g.mixv(v412, v437, v432)
+    v439 = g.inp('_AlbedoAffectEmissive', False, 1.0)
+    v440 = g.math('LESS_THAN', v439, 0.5)
+    v441 = g.vmath('MULTIPLY', v438, v394)
+    v442 = g.mixv(v440, v438, v441)
+    v443 = g.mixv(v398, (0, 0, 0), v442)
+    v444 = g.inp('_EnableVertColorEmissive', False, 0.0)
+    v445 = g.math('GREATER_THAN', v444, 0.5)
+    v446 = g.inp('_VertColorEmissiveChannelVector', True, (1.0, 0.0, 0.0))
+    v447 = g.inp('_VertColorEmissiveChannelVector_w', False, 0.0)
+    v448 = g.vmath('DOT_PRODUCT', v11, v446)
+    v449 = g.inp('_VertColorEmissiveFlip', False, 0.0)
+    v450 = g.math('GREATER_THAN', v449, 0.5)
+    v451 = g.math('SUBTRACT', 1, v448)
+    v452 = g.mixf(v450, v448, v451)
+    v453 = g.inp('_VertColorEmissiveBias', False, 0.0)
+    v454 = g.math('ADD', v452, v453)
+    v455 = g.clampn(v454, 0, 1)
+    v456 = g.inp('_VertColorEmissiveColor', True, (0.0, 0.0, 0.0))
+    v457 = g.inp('_VertColorEmissiveColor_w', False, 1.0)
+    v458 = g.bc(v455)
+    v459 = g.vmath('MULTIPLY', v456, v458)
+    v460 = g.inp('_VertColorEmissiveAlbedoAffect', False, 1.0)
+    v461 = g.math('LESS_THAN', v460, 0.5)
+    v462 = g.vmath('MULTIPLY', v459, v394)
+    v463 = g.mixv(v461, v459, v462)
+    v464 = g.vmath('ADD', v443, v463)
+    v465 = g.mixv(v445, v443, v464)
+    v466 = g.mixf(v445, v396, v455)
+    v467 = g.inp('_CrossCardViewCulling', False, 0.0)
+    v468 = g.math('GREATER_THAN', v467, 0.5)
+    v469 = g.vmath('SUBTRACT', v26, v20)
+    v470 = g.vmath('NORMALIZE', v469)
+    v471 = g.vmath('NORMALIZE', v21)
+    v472 = g.vmath('DOT_PRODUCT', v471, v470)
+    v473 = g.math('ABSOLUTE', v472, 0.0)
+    v474 = g.inp('_CrossCardViewCullingThreshold', False, 0.4)
+    v475 = g.math('SUBTRACT', v473, v474)
+    v476 = g.inp('_CrossCardViewCullingFadeValue', False, 0.5)
+    v477 = g.math('MAXIMUM', v476, 0.0001)
+    v478 = g.math('DIVIDE', v475, v477)
+    v479 = g.clampn(v478, 0, 1)
+    v480 = g.math('MULTIPLY', v152, v479)
+    v481 = g.mixf(v468, v152, v480)
+    v482 = g.mixf(v121, v58, v481)
+    v483 = g.mixv(v121, v65, v394)
+    v484 = g.mixf(v121, v114, v210)
+    v485 = g.mixf(v121, v115, v216)
+    v486 = g.mixf(v121, v116, v247)
+    v487 = g.mixf(v121, v117, v224)
+    v488 = g.mixv(v121, v36, v206)
+    v489 = g.mixf(v121, 0.0, v275)
+    v490 = g.mixv(v121, (0.0, 0.0, 0.0), v162)
+    v491 = g.mixv(v121, (0, 0, 0), v465)
+    v492 = g.mixv(v121, v132, v206)
+    v493 = g.comb(v487, v487, v487)
+    v494 = g.math('SUBTRACT', 1, v484)
+    v495 = g.vmath('NORMALIZE', v488)
+    v496 = g.vmath('DOT_PRODUCT', v495, v28)
+    v497 = g.math('MAXIMUM', v496, 0)
+    v498 = g.math('MULTIPLY', 0.08, v487)
+    v499 = g.math('MULTIPLY', 0.08, v487)
+    v500 = g.math('MULTIPLY', 0.08, v487)
+    v501 = g.comb(v498, v499, v500)
+    v502 = g.mixv(v485, v501, v483)
+    v503 = g.math('SUBTRACT', 1, v485)
+    v504 = g.bc(v503)
+    v505 = g.vmath('MULTIPLY', v483, v504)
+    v506 = g.inp('_UseThinFilm', False, 0.0)
+    v507 = g.math('GREATER_THAN', v506, 0.5)
+    v508 = g.inp('_ThinFilmIOR', False, 1.4)
+    v509 = g.inp('_ThinFilmThickness', False, 0.5)
+    v510 = g.math('MULTIPLY', v509, 1000)
+    v511 = g.inp('M_PI', False, 0.0)
+    v512 = g.group_named('RCE_RuriEvalIridescence', [('outsideIor', 1), ('eta2', v508), ('cosTheta1', v497), ('iridescenceThickness', v510), ('baseF0', v502), ('M_PI', v511)])
+    v513 = g.inp('_ThinFilmWeight', False, 0.0)
+    v514 = g.inp('_ThinFilmIntensity', False, 1.0)
+    v515 = g.math('MULTIPLY', v513, v514)
+    v516 = g.clampn(v515)
+    v517 = g.mixv(v516, v502, v512[0])
+    v518 = g.mixv(v507, v502, v517)
+    v519 = g.inp('_SubsurfaceShadingMode', False, 0.0)
+    v520 = g.math('LESS_THAN', v519, 0.5)
+    v521 = g.inp('_SubsurfaceColor', True, (0.8, 0.8, 0.8))
+    v522 = g.inp('_SubsurfaceColor_w', False, 1.0)
+    v523 = g.vmath('MULTIPLY', v521, v483)
+    v524 = g.mixv(v520, v523, v521)
+    v525 = g.inp('_MaxSubsurfaceThickness', False, 1.0)
+    v526 = g.inp('_UseSubsurfaceThicknessMap', False, 0.0)
+    v527 = g.math('GREATER_THAN', v526, 0.5)
+    v528 = g.inp('_MinSubsurfaceThickness', False, 0.0)
+    g.out_('F8_SubsurfaceMap_uv', v0, True)
+    v529 = g.inp('F8_SubsurfaceMap', True, (1.0, 1.0, 1.0))
+    v530 = g.inp('F8_SubsurfaceMap_alpha', False, 1.0)
+    v531 = g.sep(v529)
+    v532 = g.mixf(v531[0], v528, v525)
+    v533 = g.mixf(v527, v525, v532)
+    v534 = g.group_named('RCE_HgEnvBRDF', [('roughness', v484), ('NoV', v497), ('f0', v518)])
+    v535 = g.vmath('SCALE', v28, s=-1.0)
+    v536 = g.vmath('DOT_PRODUCT', v495, v535)
+    v537 = g.math('MULTIPLY', 2.0, v536)
+    v538 = g.vmath('SCALE', v495, s=v537)
+    v539 = g.vmath('SUBTRACT', v535, v538)
+    v540 = g.inp('_UseCustomIBL', False, 0.0)
+    v541 = g.math('GREATER_THAN', v540, 0.5)
+    v542 = g.math('MULTIPLY', 0.7, v484)
+    v543 = g.math('SUBTRACT', 1.7, v542)
+    v544 = g.math('MULTIPLY', v484, v543)
+    v545 = g.math('MULTIPLY', v544, 6)
+    v546 = g.u2b(v539)
+    g.out_('F9_IBL_CustomIBL_dir', v546, True)
+    g.out_('F9_IBL_CustomIBL_mip', v545, False)
+    v547 = g.inp('F9_IBL_CustomIBL', True, (0.2159, 0.2159, 0.2159))
+    v548 = g.inp('F9_IBL_CustomIBL_alpha', False, 1.0)
+    v549 = g.inp('_CustomIBLIntensity', False, 1.0)
+    v550 = g.bc(v549)
+    v551 = g.vmath('MULTIPLY', v547, v550)
+    g.out_('C1_SpecularRadiance_direction', v539, True)
+    g.out_('C1_SpecularRadiance_position', v20, True)
+    g.out_('C1_SpecularRadiance_roughness', v484, False)
+    v552 = g.inp('C1_SpecularRadiance', True, (0.2159, 0.2159, 0.2159))
+    v553 = g.mixv(v541, v552, v551)
+    v554 = g.inp('_PlanarReflection', False, 0.0)
+    v555 = g.math('GREATER_THAN', v554, 0.5)
+    g.out_('F10_PlanarReflectionTexture_uv', v29, True)
+    v556 = g.inp('F10_PlanarReflectionTexture', True, (1.0, 1.0, 1.0))
+    v557 = g.inp('F10_PlanarReflectionTexture_alpha', False, 1.0)
+    v558 = g.inp('_PlanarReflectionTint', True, (1.0, 1.0, 1.0))
+    v559 = g.inp('_PlanarReflectionTint_w', False, 1.0)
+    v560 = g.vmath('MULTIPLY', v556, v558)
+    v561 = g.mixv(v559, v553, v560)
+    v562 = g.mixv(v555, v553, v561)
+    v563 = g.inp('_EnableSubsurface', False, 0.0)
+    v564 = g.math('GREATER_THAN', v563, 0.5)
+    v565 = g.inp('_SubsurfaceIndirect', False, 1.0)
+    v566 = g.comb(v565, v565, v565)
+    v567 = g.vmath('MULTIPLY', v524, v566)
+    v568 = g.vmath('ADD', v567, v505)
+    v569 = g.mixv(v564, v505, v568)
+    v570 = g.vmath('MULTIPLY', v569, v30)
+    v571 = g.bc(v486)
+    v572 = g.vmath('MULTIPLY', v570, v571)
+    v573 = g.inp('_EnvironmentGlobalParams0', True, (1.67, 1.5, 1.0))
+    v574 = g.inp('_EnvironmentGlobalParams0_w', False, 0.0)
+    v575 = g.sep(v573)
+    v576 = g.bc(v575[0])
+    v577 = g.vmath('MULTIPLY', v572, v576)
+    v578 = g.comb(v534[0], v534[0], v534[0])
+    v579 = g.comb(v534[1], v534[1], v534[1])
+    v580 = g.vmath('MULTIPLY', v518, v578)
+    v581 = g.vmath('ADD', v580, v579)
+    v582 = g.vmath('MULTIPLY', v581, v562)
+    v583 = g.bc(v575[1])
+    v584 = g.vmath('MULTIPLY', v582, v583)
+    v585 = g.vmath('ADD', v577, v584)
+    v586 = g.inp('C2_MainLight_direction', True, (0.0, 0.0, 0.0))
+    v587 = g.inp('C2_MainLight_color', True, (0.0, 0.0, 0.0))
+    v588 = g.inp('C2_MainLight_distanceAttenuation', False, 0.0)
+    v589 = g.inp('C2_MainLight_shadowAttenuation', False, 0.0)
+    v590 = g.inp('C2_MainLight_layerMask', False, 0.0)
+    v591 = g.inp('_MainLightOcclusionProbes', True, (0.0, 0.0, 0.0))
+    v592 = g.inp('_MainLightOcclusionProbes_w', False, 0.0)
+    v593 = g.vmath('ADD', v586, v28)
+    v594 = g.vmath('DOT_PRODUCT', v593, v593)
+    v595 = g.math('MAXIMUM', v594, 1E-08)
+    v596 = g.math('INVERSE_SQRT', v595, 0.0)
+    v597 = g.bc(v596)
+    v598 = g.vmath('MULTIPLY', v593, v597)
+    v599 = g.vmath('DOT_PRODUCT', v586, v495)
+    v600 = g.clampn(v599)
+    v601 = g.vmath('DOT_PRODUCT', v495, v598)
+    v602 = g.clampn(v601)
+    v603 = g.vmath('DOT_PRODUCT', v28, v598)
+    v604 = g.clampn(v603)
+    v605 = g.group_named('RCE_HgDirectLightEnergy', [('roughness', v484), ('f0', v518), ('NoL', v600), ('NoH', v602), ('NoV', v497), ('VoH', v604)])
+    v606 = g.math('MULTIPLY', v588, 1.0)
+    v607 = g.comb(v600, v600, v600)
+    v608 = g.bc(v600)
+    v609 = g.vmath('MULTIPLY', v505, v608)
+    v610 = g.vmath('MULTIPLY', v605[0], v607)
+    v611 = g.vmath('ADD', v610, v609)
+    v612 = g.math('GREATER_THAN', v563, 0.5)
+    v613 = g.vmath('DOT_PRODUCT', v586, v495)
+    v614 = g.vmath('DOT_PRODUCT', v28, v586)
+    v615 = g.inp('_SubsurfaceSelfShadowBias', False, 0.0)
+    v616 = g.inp('_SubsurfaceEnableSelfShadowBias', False, 0.0)
+    v617 = g.group_named('RCE_HgSssLobe', [('amount', v533), ('rawNoL', v613), ('VdotL', v614), ('selfShadowBias', v615), ('enableSelfShadowBias', v616)])
+    v618 = g.bc(v617[0])
+    v619 = g.vmath('MULTIPLY', v618, v524)
+    v620 = g.vmath('ADD', v611, v619)
+    v621 = g.mixv(v612, v611, v620)
+    v622 = g.bc(v606)
+    v623 = g.vmath('MULTIPLY', v587, v622)
+    v624 = g.vmath('MULTIPLY', v621, v623)
+    v625 = g.vmath('ADD', v585, v624)
+    v626 = g.inp('C3_AdditionalLightCount', False, 0.0)
+    v627 = g.math('SUBTRACT', v626, 0)
+    v628 = g.math('CEIL', v627, 0.0)
+    v629 = g.math('MAXIMUM', v628, 0.0)
+    g.out_('Z0_it', v629, False)
+    g.out_('Z0_s_H', v598, True)
+    g.out_('Z0_s_L', v586, True)
+    g.out_('Z0_s_LV', v593, True)
+    g.out_('Z0_s_N', v495, True)
+    g.out_('Z0_s_NoH', v602, False)
+    g.out_('Z0_s_NoL', v600, False)
+    g.out_('Z0_s_NoV', v497, False)
+    g.out_('Z0_s_P', v20, True)
+    g.out_('Z0_s_V', v28, True)
+    g.out_('Z0_s_VoH', v604, False)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_color', v625, True)
+    g.out_('Z0_s_energy', v605[0], True)
+    g.out_('Z0_s_f0', v518, True)
+    g.out_('Z0_s_inputData_bakedGI', v30, True)
+    g.out_('Z0_s_inputData_fogCoord', 0, False)
+    g.out_('Z0_s_inputData_normalWS', v488, True)
+    g.out_('Z0_s_inputData_normalizedScreenSpaceUV', v29, True)
+    g.out_('Z0_s_inputData_positionCS', v17, True)
+    g.out_('Z0_s_inputData_positionCS_w', v18, False)
+    g.out_('Z0_s_inputData_positionWS', v20, True)
+    g.out_('Z0_s_inputData_shadowCoord', (0.0, 0.0, 0.0), True)
+    g.out_('Z0_s_inputData_shadowCoord_w', 0.0, False)
+    g.out_('Z0_s_inputData_shadowMask', (1, 1, 1), True)
+    g.out_('Z0_s_inputData_shadowMask_w', 1, False)
+    g.out_('Z0_s_inputData_vertexLighting', (0, 0, 0), True)
+    g.out_('Z0_s_inputData_viewDirectionWS', v28, True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_roughness', v484, False)
+    g.out_('Z0_s_sssAmount', v533, False)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_diffuse', v505, True)
+    g.out_('Z0_r_sssTint', v524, True)
+    g.out_('Z0_r_pixelLightCount', v626, False)
+    v630 = g.inp('Z0_o_H', True)
+    v631 = g.inp('Z0_o_L', True)
+    v632 = g.inp('Z0_o_LV', True)
+    v633 = g.inp('Z0_o_N', True)
+    v634 = g.inp('Z0_o_NoH', False)
+    v635 = g.inp('Z0_o_NoL', False)
+    v636 = g.inp('Z0_o_NoV', False)
+    v637 = g.inp('Z0_o_P', True)
+    v638 = g.inp('Z0_o_V', True)
+    v639 = g.inp('Z0_o_VoH', False)
+    v640 = g.inp('Z0_o_Lloop0', False)
+    v641 = g.inp('Z0_o_color', True)
+    v642 = g.inp('Z0_o_energy', True)
+    v643 = g.inp('Z0_o_f0', True)
+    v644 = g.inp('Z0_o_inputData_bakedGI', True)
+    v645 = g.inp('Z0_o_inputData_fogCoord', False)
+    v646 = g.inp('Z0_o_inputData_normalWS', True)
+    v647 = g.inp('Z0_o_inputData_normalizedScreenSpaceUV', True)
+    v648 = g.inp('Z0_o_inputData_positionCS', True)
+    v649 = g.inp('Z0_o_inputData_positionCS_w', False)
+    v650 = g.inp('Z0_o_inputData_positionWS', True)
+    v651 = g.inp('Z0_o_inputData_shadowCoord', True)
+    v652 = g.inp('Z0_o_inputData_shadowCoord_w', False)
+    v653 = g.inp('Z0_o_inputData_shadowMask', True)
+    v654 = g.inp('Z0_o_inputData_shadowMask_w', False)
+    v655 = g.inp('Z0_o_inputData_vertexLighting', True)
+    v656 = g.inp('Z0_o_inputData_viewDirectionWS', True)
+    v657 = g.inp('Z0_o_lightIndex', False)
+    v658 = g.inp('Z0_o_roughness', False)
+    v659 = g.inp('Z0_o_sssAmount', False)
+    v660 = g.vmath('ADD', v641, v491)
+    v661 = g.math('COMPARE', v60, 0, 1e-05)
+    v662 = g.math('SUBTRACT', 1.0, v661)
+    v663 = g.vmath('SUBTRACT', v20, v26)
+    v664 = g.inp('_RuriVoxelSizeMeters', False, 0.0)
+    v665 = g.bc(v664)
+    v666 = g.vmath('DIVIDE', v663, v665)
+    v667 = g.vmath('ADD', v483, v660)
+    v668 = g.vmath('LENGTH', v666)
+    v669 = g.sep(v666)
+    v670 = g.comb(v669[0], v669[2], 0.0)
+    v671 = g.vmath('LENGTH', v670)
+    v672 = g.math('ABSOLUTE', v669[1], 0.0)
+    v673 = g.math('MAXIMUM', v671, v672)
+    v674 = g.inp('_RuriFogEnvironmentalStart', False, 0.0)
+    v675 = g.inp('_RuriFogEnvironmentalEnd', False, 0.0)
+    v676 = g.inp('_RuriFogRenderDistanceStart', False, 0.0)
+    v677 = g.inp('_RuriFogRenderDistanceEnd', False, 0.0)
+    v678 = g.inp('_RuriFogColor', True, (0.0, 0.0, 0.0))
+    v679 = g.inp('_RuriFogColor_w', False, 0.0)
+    v680 = g.group_named('RCE_RuriApplyFog', [('inColor', v667), ('inColor_w', 1), ('sphericalVertexDistance', v668), ('cylindricalVertexDistance', v673), ('environmentalStart', v674), ('environmentalEnd', v675), ('renderDistanceStart', v676), ('renderDistanceEnd', v677), ('fogColor', v678), ('fogColor_w', v679)])
+    v681 = g.mixv(v662, v660, v680[0])
+    g.out_('ret_gBuffer0', v681, True)
+    g.out_('ret_gBuffer0_w', v482, False)
+    g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer1_w', 0.0, False)
+    g.out_('ret_gBuffer2', (0.0, 0.0, 0.0), True)
+    g.out_('ret_gBuffer2_w', 0.0, False)
+    g.out_('ret_color', v660, True)
+    g.out_('ret_color_w', v482, False)
+    g.out_('ret_depth', 0.0, False)
+    g.out_('ret_shadowMask', (0.0, 0.0, 0.0), True)
+    g.out_('ret_shadowMask_w', 0.0, False)
+    g.out_('ret_meshRenderingLayers', 0.0, False)
+    g.out_('__clip', v113, False)
+
+
 SHARED_GROUPS = [
     ('RCE_F_Schlick', build_RCE_F_Schlick),
+    ('RCE_FoliageGradientBand', build_RCE_FoliageGradientBand),
     ('RCE_HgEnvBRDF', build_RCE_HgEnvBRDF),
     ('RCE_HgEnvBRDFApproxDFG', build_RCE_HgEnvBRDFApproxDFG),
     ('RCE_HgDirectLightEnergy', build_RCE_HgDirectLightEnergy),
@@ -9797,6 +12756,9 @@ SHARED_GROUPS = [
     ('RCE_Z_Ruri_Endfield_Scene_LitHLod_0', build_RCE_Z_Ruri_Endfield_Scene_LitHLod_0),
     ('RCE_Z_Ruri_Endfield_Scene_LitHLod_1', build_RCE_Z_Ruri_Endfield_Scene_LitHLod_1),
     ('RCE_Z_Ruri_Endfield_Scene_ContainerWater_0', build_RCE_Z_Ruri_Endfield_Scene_ContainerWater_0),
+    ('RCE_Z_Ruri_Endfield_Scene_Leaf_0', build_RCE_Z_Ruri_Endfield_Scene_Leaf_0),
+    ('RCE_Z_Ruri_Endfield_Scene_Grass_0', build_RCE_Z_Ruri_Endfield_Scene_Grass_0),
+    ('RCE_Z_Ruri_Endfield_Scene_Trunk_0', build_RCE_Z_Ruri_Endfield_Scene_Trunk_0),
 ]
 
 PARTS = {
@@ -9808,6 +12770,9 @@ PARTS = {
     'LitHLod': ('Ruri Endfield Scene LitHLod', build_Ruri_Endfield_Scene_LitHLod),
     'Unlit': ('Ruri Endfield Scene Unlit', build_Ruri_Endfield_Scene_Unlit),
     'ContainerWater': ('Ruri Endfield Scene ContainerWater', build_Ruri_Endfield_Scene_ContainerWater),
+    'Leaf': ('Ruri Endfield Scene Leaf', build_Ruri_Endfield_Scene_Leaf),
+    'Grass': ('Ruri Endfield Scene Grass', build_Ruri_Endfield_Scene_Grass),
+    'Trunk': ('Ruri Endfield Scene Trunk', build_Ruri_Endfield_Scene_Trunk),
 }
 
 CASCADE = {
@@ -9819,6 +12784,9 @@ CASCADE = {
     'LitHLod': 5,
     'Unlit': 2,
     'ContainerWater': 4,
+    'Leaf': 4,
+    'Grass': 4,
+    'Trunk': 4,
 }
 
 FETCHES = {
@@ -10011,6 +12979,43 @@ FETCHES = {
         {'sock': 'F22_WaterCausticMap', 'slot': '_WaterCausticMap', 'depth': 0, 'non_color': True, 'extension': 'MIRROR', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
         {'sock': 'F23_IBL_ReflectionProbeCube', 'slot': 'IBL_ReflectionProbeCube', 'depth': 1, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
     ],
+    'Leaf': [
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F9_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+    ],
+    'Grass': [
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F9_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+    ],
+    'Trunk': [
+        {'sock': 'F0_BaseMap', 'slot': '_BaseMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F1_VoxelAtlas', 'slot': '_VoxelAtlas', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F2_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F3_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F4_BaseColorMap', 'slot': '_BaseColorMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F5_NormalMap', 'slot': '_NormalMap', 'depth': 0, 'non_color': True, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F6_MROMap', 'slot': '_MROMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F7_EmissiveMap', 'slot': '_EmissiveMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F8_SubsurfaceMap', 'slot': '_SubsurfaceMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+        {'sock': 'F9_IBL_CustomIBL', 'slot': 'IBL_CustomIBL', 'depth': 1, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': True, 'mip': True, 'derivative_mip': True, 'neutral': (0.2159, 0.2159, 0.2159), 'neutral_alpha': 1.0},
+        {'sock': 'F10_PlanarReflectionTexture', 'slot': '_PlanarReflectionTexture', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
+    ],
 }
 
 ZONES = {
@@ -10147,6 +13152,39 @@ ZONES = {
              {'sock': 'F0_ParallaxNoiseMap', 'slot': '_ParallaxNoiseMap', 'depth': 0, 'non_color': False, 'extension': 'REPEAT', 'point': False, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
     ],
+    'Leaf': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Scene_Leaf_0', 'depth': 2, 'cascade': 2,
+         'states': [('H', True), ('L', True), ('LV', True), ('N', True), ('NoH', False), ('NoL', False), ('NoV', False), ('P', True), ('V', True), ('VoH', False), ('Lloop0', False), ('color', True), ('energy', True), ('f0', True), ('inputData_bakedGI', True), ('inputData_fogCoord', False), ('inputData_normalWS', True), ('inputData_normalizedScreenSpaceUV', True), ('inputData_positionCS', True), ('inputData_positionCS_w', False), ('inputData_positionWS', True), ('inputData_shadowCoord', True), ('inputData_shadowCoord_w', False), ('inputData_shadowMask', True), ('inputData_shadowMask_w', False), ('inputData_vertexLighting', True), ('inputData_viewDirectionWS', True), ('lightIndex', False), ('roughness', False), ('sssAmount', False)],
+         'reads': [('__done', False), ('diffuse', True), ('sssTint', True), ('pixelLightCount', False)],
+         'uniforms': [('_EnableSubsurface', 0, 0.0, 0.0), ('_SubsurfaceSelfShadowBias', 0, 0.0, 0.0), ('_SubsurfaceEnableSelfShadowBias', 0, 0.0, 0.0)],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
+    ],
+    'Grass': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Scene_Grass_0', 'depth': 2, 'cascade': 2,
+         'states': [('H', True), ('L', True), ('LV', True), ('N', True), ('NoH', False), ('NoL', False), ('NoV', False), ('P', True), ('V', True), ('VoH', False), ('Lloop0', False), ('color', True), ('energy', True), ('f0', True), ('inputData_bakedGI', True), ('inputData_fogCoord', False), ('inputData_normalWS', True), ('inputData_normalizedScreenSpaceUV', True), ('inputData_positionCS', True), ('inputData_positionCS_w', False), ('inputData_positionWS', True), ('inputData_shadowCoord', True), ('inputData_shadowCoord_w', False), ('inputData_shadowMask', True), ('inputData_shadowMask_w', False), ('inputData_vertexLighting', True), ('inputData_viewDirectionWS', True), ('lightIndex', False), ('roughness', False), ('sssAmount', False)],
+         'reads': [('__done', False), ('diffuse', True), ('sssTint', True), ('pixelLightCount', False)],
+         'uniforms': [('_EnableSubsurface', 0, 0.0, 0.0), ('_SubsurfaceSelfShadowBias', 0, 0.0, 0.0), ('_SubsurfaceEnableSelfShadowBias', 0, 0.0, 0.0)],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
+    ],
+    'Trunk': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Scene_Trunk_0', 'depth': 2, 'cascade': 2,
+         'states': [('H', True), ('L', True), ('LV', True), ('N', True), ('NoH', False), ('NoL', False), ('NoV', False), ('P', True), ('V', True), ('VoH', False), ('Lloop0', False), ('color', True), ('energy', True), ('f0', True), ('inputData_bakedGI', True), ('inputData_fogCoord', False), ('inputData_normalWS', True), ('inputData_normalizedScreenSpaceUV', True), ('inputData_positionCS', True), ('inputData_positionCS_w', False), ('inputData_positionWS', True), ('inputData_shadowCoord', True), ('inputData_shadowCoord_w', False), ('inputData_shadowMask', True), ('inputData_shadowMask_w', False), ('inputData_vertexLighting', True), ('inputData_viewDirectionWS', True), ('lightIndex', False), ('roughness', False), ('sssAmount', False)],
+         'reads': [('__done', False), ('diffuse', True), ('sssTint', True), ('pixelLightCount', False)],
+         'uniforms': [('_EnableSubsurface', 0, 0.0, 0.0), ('_SubsurfaceSelfShadowBias', 0, 0.0, 0.0), ('_SubsurfaceEnableSelfShadowBias', 0, 0.0, 0.0)],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
+    ],
 }
 
 CAPABILITIES = {
@@ -10192,17 +13230,35 @@ CAPABILITIES = {
     'ContainerWater': [
         {'sock': 'C0_AmbientIrradiance', 'cap': 'AmbientIrradiance', 'depth': 0, 'query': {'normal': True}, 'results': {'': True}, 'result': 'linear irradiance'},
     ],
+    'Leaf': [
+        {'sock': 'C0_AmbientIrradiance', 'cap': 'AmbientIrradiance', 'depth': 0, 'query': {'normal': True}, 'results': {'': True}, 'result': 'linear irradiance'},
+        {'sock': 'C1_SpecularRadiance', 'cap': 'SpecularRadiance', 'depth': 1, 'query': {'direction': True, 'position': True, 'roughness': False}, 'results': {'': True}, 'result': 'linear radiance'},
+        {'sock': 'C2_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C3_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
+    ],
+    'Grass': [
+        {'sock': 'C0_AmbientIrradiance', 'cap': 'AmbientIrradiance', 'depth': 0, 'query': {'normal': True}, 'results': {'': True}, 'result': 'linear irradiance'},
+        {'sock': 'C1_SpecularRadiance', 'cap': 'SpecularRadiance', 'depth': 1, 'query': {'direction': True, 'position': True, 'roughness': False}, 'results': {'': True}, 'result': 'linear radiance'},
+        {'sock': 'C2_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C3_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
+    ],
+    'Trunk': [
+        {'sock': 'C0_AmbientIrradiance', 'cap': 'AmbientIrradiance', 'depth': 0, 'query': {'normal': True}, 'results': {'': True}, 'result': 'linear irradiance'},
+        {'sock': 'C1_SpecularRadiance', 'cap': 'SpecularRadiance', 'depth': 1, 'query': {'direction': True, 'position': True, 'roughness': False}, 'results': {'': True}, 'result': 'linear radiance'},
+        {'sock': 'C2_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C3_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
+    ],
 }
 
 DEFAULT_PART = 'Lit'
-STAMP = '4e9e6d5caa228453'
+STAMP = 'e2892d86d68c6881'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
 VERTEX_PARTS = {
 }
 
-KNOWN_PARTS = {'Lit', 'LitForward', 'LitTransparent', 'LitEffect', 'LitEffectBlend', 'LitHLod', 'Unlit', 'ContainerWater'}
+KNOWN_PARTS = {'Lit', 'LitForward', 'LitTransparent', 'LitEffect', 'LitEffectBlend', 'LitHLod', 'Unlit', 'ContainerWater', 'Leaf', 'Grass', 'Trunk'}
 VTX_MODIFIER = 'Ruri Endfield Scene Vertex'
 VTX_TREE_PREFIX = 'Ruri Endfield Scene Vertex '
 OUTLINE_TEMPLATE = 'Ruri Endfield Scene Outline'
@@ -10585,12 +13641,22 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
     g._set(stmap.inputs['Vector'], tc.outputs['UV'])
     olattr = g._nd('ShaderNodeAttribute')
     olattr.attribute_name = 'ruri_outline'
+    # 对象空间位置 varying(树冠/树干高度渐变消费):texco Object 已是对象空间,
+    # 只差导入换轴的逆(Unity(x,y,z)=Blender(x,z,y))——入口 b2u 只管 WORLD varying,
+    # OS 量在接线处换,免得混进世界系换轴的 WORLD→OBJECT 一步。
+    os_sep = g._nd('ShaderNodeSeparateXYZ')
+    g._set(os_sep.inputs['Vector'], tc.outputs['Object'])
+    os_comb = g._nd('ShaderNodeCombineXYZ')
+    g._set(os_comb.inputs['X'], os_sep.outputs['X'])
+    g._set(os_comb.inputs['Y'], os_sep.outputs['Z'])
+    g._set(os_comb.inputs['Z'], os_sep.outputs['Y'])
     wires = {
         '_RuriOutlineShellGate': olattr.outputs['Fac'],
         'input_uv': stmap.outputs['Vector'],
         'input_uv1': uv1.outputs['UV'],
         'input_normalWS': geo.outputs['Normal'],
         'input_positionWS': geo.outputs['Position'],
+        'input_positionOS': os_comb.outputs['Vector'],
         'input_tangentWS': tan_ws,
         'input_tangentWS_w': tan_sign.outputs['Fac'],
         'input_color': col.outputs['Color'],
@@ -11077,16 +14143,19 @@ def apply_vertex_stage(objects=None, camera=None):
 #   全部键,「键存在」证明不了任何事(实锤:cloth 全带 _SkinRimOffScale,整套布料
 #   被吃成 Face 跑脸部 SDF,全身发暗)。解析不到 = 闭包丢依赖,响亮报错,禁止猜。
 PART_META = {
-    'Lit': {'id': 0, 'transparent': False, 'shader': 'HGRP/Lit', 'discriminator': None},
-    'LitForward': {'id': 1, 'transparent': False, 'shader': 'HGRP/LitForward', 'discriminator': None},
-    'LitTransparent': {'id': 2, 'transparent': True, 'shader': 'HGRP/LitTransparent', 'discriminator': None},
-    'LitEffect': {'id': 3, 'transparent': True, 'shader': 'HGRP/LitEffect', 'discriminator': None},
-    'LitEffectBlend': {'id': 4, 'transparent': True, 'shader': 'HGRP/LitEffectBlend', 'discriminator': None},
-    'LitHLod': {'id': 5, 'transparent': False, 'shader': 'HGRP/LitHLod', 'discriminator': None},
-    'Unlit': {'id': 6, 'transparent': False, 'shader': 'HGRP/Unlit', 'discriminator': None},
-    'ContainerWater': {'id': 7, 'transparent': True, 'shader': 'HGRP/Effect/VFXContainerWater', 'discriminator': None},
+    'Lit': {'id': 0, 'transparent': False, 'shader': 'HGRP/Lit', 'aliases': (), 'discriminator': None},
+    'LitForward': {'id': 1, 'transparent': False, 'shader': 'HGRP/LitForward', 'aliases': (), 'discriminator': None},
+    'LitTransparent': {'id': 2, 'transparent': True, 'shader': 'HGRP/LitTransparent', 'aliases': (), 'discriminator': None},
+    'LitEffect': {'id': 3, 'transparent': True, 'shader': 'HGRP/LitEffect', 'aliases': (), 'discriminator': None},
+    'LitEffectBlend': {'id': 4, 'transparent': True, 'shader': 'Hidden/HGRP/LitEffectBlend', 'aliases': (), 'discriminator': None},
+    'LitHLod': {'id': 5, 'transparent': False, 'shader': 'HGRP/LitHLOD', 'aliases': (), 'discriminator': None},
+    'Unlit': {'id': 6, 'transparent': False, 'shader': 'HGRP/Unlit', 'aliases': ('HGRP/UnlitSubShaderLOD', ), 'discriminator': None},
+    'ContainerWater': {'id': 7, 'transparent': True, 'shader': 'HGRP/Effect/VFXContainerWater', 'aliases': (), 'discriminator': None},
+    'Leaf': {'id': 8, 'transparent': False, 'shader': 'HGRP/Foliage/Leaf', 'aliases': ('HGRP/Foliage/TreeFoliageCardMeshLod', 'HGRP/Foliage/TreeFoliageBillboardLod', ), 'discriminator': None},
+    'Grass': {'id': 9, 'transparent': False, 'shader': 'HGRP/Foliage/Grass', 'aliases': ('HGRP/Foliage/Grass Cardmesh Lod', 'HGRP/Foliage/Grass Billboard Lod', ), 'discriminator': None},
+    'Trunk': {'id': 10, 'transparent': False, 'shader': 'HGRP/Foliage/Trunk', 'aliases': (), 'discriminator': None},
 }
-NON_SHADING_SHADERS = ('HGRP/LitDepthOnly', 'HGRP/LitShadowCaster', )
+NON_SHADING_SHADERS = ('HGRP/LitDepthOnly', 'HGRP/LitShadowCaster', 'HGRP/Foliage/FoliageOccluder', 'HGRP/Foliage/FoliageInteractiveCollider', )
 
 CULL_PROPERTY = '_CullMode'
 CULL_FIXED = 2
@@ -11094,8 +14163,6 @@ GLOBALS = {
     '_Time': {'role': 'time', 'type': 'VECTOR4', 'default': (0.0, 0.0, 0.0), 'default_w': 0.0},
     '_ZBufferParams': {'role': 'zbuffer', 'type': 'VECTOR4', 'default': (9999.0, 1.0, 9.999), 'default_w': 0.001},
 }
-_shader_name_cache = {}
-
 
 def _cull_mode(props):
     """材质的 Unity Cull 值,按**本家族真源自己的属性名**读 —— `Cull [<名>]` 逐 shader
@@ -11114,42 +14181,30 @@ def _cull_mode(props):
 
 
 def _shader_name(builder, props):
-    """m_Shader 引用的 shader 自称名(闭包内该资产文本的 Shader \"...\" 行)。"""
-    ref = props.shader_ref if isinstance(props.shader_ref, dict) else None
-    guid = (ref or {}).get('guid')
-    if not guid:
-        return None
-    guid = guid.lower()
-    if guid in _shader_name_cache:
-        return _shader_name_cache[guid]
-    name = None
-    text = builder.db._text(guid)
-    if text:
-        head = text.lstrip()
-        if head.startswith('Shader'):
-            first = head.split('\n', 1)[0]
-            q = first.find('"')
-            if q >= 0:
-                name = first[q + 1:first.find('"', q + 1)]
-    _shader_name_cache[guid] = name
-    return name
+    """m_Shader 的自称名 —— 唯一解析面在宿主(builder.shader_display_name):
+    闭包内 shader 资产的 Shader \"...\" 行。本模块自己不解析、不缓存 ——
+    两个生成栈各解析一遍就是同一语义两处真源。"""
+    return builder.shader_display_name(props)
 
 
 def _variant(builder, props):
     """(part 名, part id);非本风格/非着色 shader 返回 None(宿主落兜底材质)。
-    同 shader 多 part 时按 discriminator 开关分流(如 Fur 的 _UseCharacterFur)。"""
+    同 shader 多 part 时按 discriminator 开关分流(如 Fur 的 _UseCharacterFur);
+    aliases = 与本 part 共用同一表面的其它 shader 自称名(游戏按 LOD/批次切出的
+    同表面资产,如 Grass ↔ Grass Cardmesh Lod),认领等价、共用同一棵树。"""
     name = _shader_name(builder, props)
     if name is None:
         ref = props.shader_ref if isinstance(props.shader_ref, dict) else {}
-        print('[ruri-uber] !! 0DAY: material {0} 的 shader 引用 {1} 在闭包里解析不到 '
-              '—— 闭包丢了 shader 依赖,拒绝按指纹猜'.format(props.name, ref.get('guid')), flush=True)
+        print('[ruri-uber] !! 0DAY: material {0} 的 m_Shader {1}/{2} 解析不出自称名 '
+              '(闭包无此资产,引擎内置注册表也不认识)—— 拒绝按指纹猜,交宿主兜底'
+              .format(props.name, ref.get('guid'), ref.get('fileID')), flush=True)
         return None
     if name in NON_SHADING_SHADERS:
         print('[ruri-uber] {0} 用 {1}(非着色 part),不认领'.format(props.name, name), flush=True)
         return None
     fallback = None
     for part, meta in PART_META.items():
-        if meta['shader'] != name:
+        if meta['shader'] != name and name not in meta['aliases']:
             continue
         disc = meta['discriminator']
         if disc is None:
@@ -11301,6 +14356,7 @@ def provider(builder, props):
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
     print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} insts={5}'.format(
         name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(insts)), flush=True)
+    panel_sync(mat)
     return mat
 
 
@@ -11363,6 +14419,1368 @@ def refresh_light_tables():
     return touched
 
 
+# ============================ 材质参数面板 ============================
+# 参数面 = 从 C# 声明([ShaderProperty]/[MaterialTexture]/[ShaderPropertyHeader])反射派生的
+# **接口**,不是对节点树的遍历——平坦、分组、带量程、带功能门。此表是它的逐字投影。
+PANEL_KEY = 'ruri_scene_uber_endfield'
+PANEL_TITLE = 'Ruri_EndfieldScene_Uber 参数'
+_PANEL_PROP = 'ruri_panel_' + PANEL_KEY
+INTERFACE = [
+    {'name': '基础', 'gate': None, 'rows': [
+        {'name': '_RefractTex', 'label': '自定义折射贴图', 'kind': 'TEXTURE'},
+        {'name': '_WaterNormalMap', 'label': '水面法线贴图', 'kind': 'TEXTURE'},
+        {'name': '_WaterCausticMap', 'label': '水波纹贴图', 'kind': 'TEXTURE'},
+        {'name': '_DisplacementTex', 'label': '置换贴图', 'kind': 'TEXTURE'},
+        {'name': '_IceNormalMap', 'label': '冰块法线贴图', 'kind': 'TEXTURE'},
+        {'name': '_IceOpacityMap', 'label': '冰块不透明度贴图', 'kind': 'TEXTURE'},
+        {'name': '_BaseMap', 'label': 'Albedo', 'kind': 'TEXTURE', 'st_node': 'RuriBaseMapST'},
+        {'name': '_BaseColorMap', 'label': 'Base Color Map', 'kind': 'TEXTURE'},
+        {'name': '_BumpMap', 'label': 'Normal Map', 'kind': 'TEXTURE'},
+        {'name': '_MaskMap', 'label': 'Mask Map', 'kind': 'TEXTURE'},
+        {'name': '_EmissiveMap', 'label': 'Emissive Map', 'kind': 'TEXTURE'},
+        {'name': '_LayerBlendMaskMap', 'label': 'Layer Blend Mask (R)', 'kind': 'TEXTURE'},
+        {'name': '_Layer1BaseMap', 'label': 'Layer1 Base (RGB)', 'kind': 'TEXTURE'},
+        {'name': '_Layer1BumpMap', 'label': 'Layer1 NRO (RG=N B=Rough A=AO)', 'kind': 'TEXTURE'},
+        {'name': '_BaseHeightMap', 'label': 'Base Height (R)', 'kind': 'TEXTURE'},
+        {'name': '_MatcapMap', 'label': 'Matcap Map', 'kind': 'TEXTURE'},
+        {'name': '_MacroNormalMap', 'label': 'Macro Normal', 'kind': 'TEXTURE'},
+        {'name': '_DetailMap', 'label': 'Detail Map (RG=N B=Rough A)', 'kind': 'TEXTURE'},
+        {'name': '_OffsetTex', 'label': 'Offset Tex (R)', 'kind': 'TEXTURE'},
+        {'name': '_OffsetMaskTex', 'label': 'Offset Mask Tex (R)', 'kind': 'TEXTURE'},
+        {'name': '_SubsurfaceMap', 'label': 'Subsurface Thickness (R)', 'kind': 'TEXTURE'},
+        {'name': '_ParallaxMap', 'label': 'Parallax Map', 'kind': 'TEXTURE'},
+        {'name': '_ILMMap', 'label': 'ILM Map', 'kind': 'TEXTURE'},
+        {'name': '_MetalMatcap', 'label': 'Metal Matcap', 'kind': 'TEXTURE'},
+        {'name': '_AddMatcapMap', 'label': 'Add Matcap', 'kind': 'TEXTURE'},
+        {'name': '_BurstTex', 'label': '爆发效果贴图 Burst Texture', 'kind': 'TEXTURE'},
+        {'name': '_ColorRamp', 'label': 'Color Ramp', 'kind': 'TEXTURE'},
+        {'name': '_DenierMap', 'label': 'Denier Map', 'kind': 'TEXTURE'},
+        {'name': '_DyeingTex', 'label': 'Dyeing Map', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex1', 'label': 'HightLightTex 1', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex2', 'label': 'HightLightTex 2', 'kind': 'TEXTURE'},
+        {'name': '_HighLightTex3', 'label': 'HightLightTex 3', 'kind': 'TEXTURE'},
+        {'name': '_BaseTex', 'label': 'Base Tex', 'kind': 'TEXTURE'},
+        {'name': '_DissolveTex', 'label': 'Dissolve Tex', 'kind': 'TEXTURE'},
+        {'name': '_ScenePartID', 'label': 'Scene Part (0=Lit 1=Forward 2=Transparent 3=Effect 4=EffectBlend 5=HLod 6=Unlit)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_BaseColor', 'label': 'Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BumpScale', 'label': 'Normal Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_RoughnessIntensity', 'label': 'Roughness Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_MetallicIntensity', 'label': 'Metallic Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_OcclusionIntensity', 'label': 'Occlusion Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_SpecularIntensity', 'label': 'Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_UseCutoff', 'label': 'UseCutoff', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Cutoff', 'label': 'Alpha Cutoff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseReceiveShadows', 'label': 'Allow Receive Shadows', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseMaskMap', 'label': 'Use Mask Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveIntensity', 'label': 'Emissive Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 20.0, 'default': [0.0]},
+        {'name': '_UseDitherClip', 'label': 'UseDitherClip', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DitherAlpha', 'label': 'Dither Alpha Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_TessellationFactor', 'label': 'Tessellation Factor', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 64.0, 'default': [16.0]},
+        {'name': '_TessellationMinDist', 'label': 'Min Distance', 'kind': 'VALUE', 'size': 1, 'default': [10.0]},
+        {'name': '_TessellationMaxDist', 'label': 'Max Distance', 'kind': 'VALUE', 'size': 1, 'default': [50.0]},
+        {'name': '_BaseColorTintCover', 'label': 'Base Color Tint Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BaseColorBrighterScale', 'label': 'Base Color Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_RoughnessMin', 'label': 'Roughness Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_RoughnessMax', 'label': 'Roughness Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_OcclusionStrength', 'label': 'Occlusion Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_TwoSidedNormal', 'label': 'Two Sided Flip Backface Normal', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_BaseTextureMapCount', 'label': 'Base Texture Map Count (0=Three)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseCustomIBL', 'label': 'Use Custom IBL', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CustomIBLIntensity', 'label': 'Custom IBL Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_UseEmissiveMap', 'label': 'Use Emissive Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveColor', 'label': 'Emissive Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EmissiveMaskChannel', 'label': 'Emissive Mask Channel', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AlbedoAffectEmissive', 'label': 'Albedo Not Affect Emissive', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_UseThinFilm', 'label': 'Use Thin Film', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ThinFilmIntensity', 'label': 'Thin Film Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_LayerBlend', 'label': 'Use Layer Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendType', 'label': 'Blend Type (0=VtxColor 1=Mask 2=WorldTop)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_LayerBlendMaskType', 'label': 'Mask Source (0=MaskR else=NROA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendMaskUVType', 'label': 'Mask UV (0=UV1 1=UV0)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendUVType', 'label': 'Layer UV (0=UV0 1=WorldXZ 2=UV2)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_TopBlendThreshold', 'label': 'Top Blend Threshold', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_TopBlendSmoothness', 'label': 'Top Blend Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.5]},
+        {'name': '_TopBlendWithBumpMap', 'label': 'Top Blend With Bump', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Layer1Tilling', 'label': 'Layer1 Tilling', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_Layer1TintColor', 'label': 'Layer1 Tint', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Layer1BumpScale', 'label': 'Layer1 Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_Layer1BaseNormalIntensity', 'label': 'Layer1 Base Normal Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LayerMetallicType', 'label': 'Layer Metallic (0=Slider else=BaseA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_Layer1Metallic', 'label': 'Layer1 Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Layer1AOStrength', 'label': 'Layer1 AO Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_Layer1Saturation', 'label': 'Layer1 Saturation', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 0.0, 'default': [0.0]},
+        {'name': '_Layer1ColorBrighterScale', 'label': 'Layer1 Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_LayerBlendHeight', 'label': 'Layer Height Blend', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_LayerBlendHeightTransition', 'label': 'Height Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoise', 'label': 'Layer Noise Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LayerBlendNoiseLevel', 'label': 'Noise Level', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LayerBlendNoiseThreshold', 'label': 'Noise Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoiseNormalStrength', 'label': 'Noise Normal Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_LayerBlendNoiseNormalSmoothness', 'label': 'Noise Normal Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_LayerBlendVerticalFlowThreshold', 'label': 'Vertical Flow Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableEmissiveAnimSweep', 'label': 'Emissive Anim Sweep', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveSweepSpeed', 'label': 'Sweep Speed', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [3.0]},
+        {'name': '_EmissiveSweepInterval', 'label': 'Sweep Interval', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [3.0]},
+        {'name': '_EmissiveSweepWidth', 'label': 'Sweep Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 10.0, 'default': [0.8]},
+        {'name': '_EmissiveSweepFalloff', 'label': 'Sweep Falloff', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_EmissiveSweepRandom', 'label': 'Sweep Random Per Position', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveSweepAlbedoScale', 'label': 'Sweep Albedo Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_PlanarReflection', 'label': 'Use Planar Reflection', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PlanarReflectionTint', 'label': 'Planar Reflection Tint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnableUVAnimation', 'label': 'Enable UV Animation', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UVAnimationSpeed', 'label': 'UV Anim Speed (xy=UV0 zw=UV1)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnableEmissiveAnim', 'label': 'Enable Emissive Anim', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveAnimSpeed', 'label': 'Emissive Anim Speed', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 80.0, 'default': [0.0]},
+        {'name': '_EmissiveAnimInterval', 'label': 'Emissive Anim Interval', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_EmissiveMinBrightness', 'label': 'Emissive Min Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+        {'name': '_EmissiveAnimRandom', 'label': 'Emissive Anim Random', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EnableEmissiveAnimFlicker', 'label': 'Enable Emissive Flicker', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_BrightDarkRatio', 'label': 'Flicker Bright/Dark Ratio', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 0.99, 'default': [0.15]},
+        {'name': '_EnableRandomFlicker', 'label': 'Flicker Random Per Object', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_EnableMatcap', 'label': 'Enable Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MatcapMapStrength', 'label': 'Matcap Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_UseMacroNormalMap', 'label': 'Use Macro Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MacroNormalMapScale', 'label': 'Macro Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_EnableDetailMap', 'label': 'Enable Detail Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailMode', 'label': 'Detail Mode (0=AlbedoTint+R 1=R+AO)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailMaskMode', 'label': 'Detail Mask (0=All 1=DetailA 2=BaseA)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DetailNormalIntensity', 'label': 'Detail Normal Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_DetailOverlayColor', 'label': 'Detail Overlay Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DetailBaseColorBrighterScale', 'label': 'Detail Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_DetailPBRIntensity', 'label': 'Detail PBR Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DetailFalloffStart', 'label': 'Detail Falloff Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 800.0, 'default': [750.0]},
+        {'name': '_DetailFalloffEnd', 'label': 'Detail Falloff End', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 800.0, 'default': [800.0]},
+        {'name': '_UseVertexOffset', 'label': 'Use Vertex Offset', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetSpeed', 'label': 'Offset Speed (xy=time zw=scroll)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetDir', 'label': 'Offset Dir (xyz axis)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetSwitchDir', 'label': 'Offset Space (0=Obj 1=World 2=Normal)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetIntensity', 'label': 'Offset Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_Bi_Offset', 'label': 'Bi-Directional Offset', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetUVSet', 'label': 'Offset UV (0=UV0 1=UV1)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexColorMask', 'label': 'Use VertexColor.a Mask', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexOffsetMask', 'label': 'Use Offset Mask Tex', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_OffsetMaskSpeed', 'label': 'Offset Mask Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_OffsetMaskPower', 'label': 'Offset Mask Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_EnableTriChannelMask', 'label': 'Enable Tri-Channel Mask (uses MaskMap RGB)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MaskAlbedoR', 'label': 'Mask R Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MaskAlbedoG', 'label': 'Mask G Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 1.0]},
+        {'name': '_MaskAlbedoB', 'label': 'Mask B Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 1.0]},
+        {'name': '_MaskRScale', 'label': 'Mask R Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskGScale', 'label': 'Mask G Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskBScale', 'label': 'Mask B Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_MaskROffset', 'label': 'Mask R Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskGOffset', 'label': 'Mask G Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskBOffset', 'label': 'Mask B Offset', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskRoghnessR', 'label': 'Mask R Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskRoghnessG', 'label': 'Mask G Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskRoghnessB', 'label': 'Mask B Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.25]},
+        {'name': '_MaskMetallicR', 'label': 'Mask R Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskMetallicG', 'label': 'Mask G Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskMetallicB', 'label': 'Mask B Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableSubsurface', 'label': 'Enable Subsurface', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceShadingMode', 'label': 'SSS Mode (0=Default 1=BaseColor)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MinSubsurfaceThickness', 'label': 'Min Thickness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaxSubsurfaceThickness', 'label': 'Max Thickness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SubsurfaceWrapNoLBias', 'label': 'Wrap NoL Bias', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_SubsurfaceIndirect', 'label': 'Subsurface Indirect', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_UseSubsurfaceThicknessMap', 'label': 'Use Thickness Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceThicknessMapChannel', 'label': 'Thickness Channel', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_EnableParallaxMap', 'label': 'Enable Parallax Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxMappingType', 'label': 'Parallax Mode (0=Emissive 1=PBR)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxStrength', 'label': 'Parallax Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ParallaxTilling', 'label': 'Parallax Tilling', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [1.0]},
+        {'name': '_ParallaxColor', 'label': 'Parallax Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_ParallaxColorDark', 'label': 'Parallax Color Dark', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_EmissionTint', 'label': 'Emission Tint (x Albedo)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SubsurfaceColor', 'label': 'Subsurface Color', 'kind': 'COLOR', 'size': 4, 'default': [0.8, 0.8, 0.8, 1.0]},
+        {'name': '_ThinFilmWeight', 'label': 'Thin Film Weight', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ThinFilmThickness', 'label': 'Thin Film Thickness (um)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_ThinFilmIOR', 'label': 'Thin Film IOR', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.4]},
+        {'name': '_PorosityFactorX', 'label': 'Porosity Factor X (x Roughness)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_PorosityFactorY', 'label': 'Porosity Factor Y', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_PorosityFactorZ', 'label': 'Porosity Factor Z (x Metallic)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 0.0, 'default': [0.0]},
+        {'name': '_DisableVerticalFlow', 'label': 'Disable Vertical Flow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EffectIntensity', 'label': 'Effect Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_HLodFade', 'label': 'HLod Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableNormalMap', 'label': 'Foliage Normal Map Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Reflectance', 'label': 'Reflectance', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DiffuseUseVertexNormal', 'label': 'Diffuse Use Vertex Normal', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_BendNormalUpward', 'label': 'Bend Normal Upward', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Transmission', 'label': 'Transmission', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_TransmissionDistanceFade', 'label': 'Transmission Distance Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SubsurfaceIntensity', 'label': 'Subsurface Intensity (Foliage)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableBroadLeafTransmission', 'label': 'Broad Leaf Transmission', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_backfaceGiIntensity', 'label': 'Backface GI Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_FrontfaceIndirectDiffuse', 'label': 'Frontface Indirect Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_BackfaceIndirectDiffuse', 'label': 'Backface Indirect Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_AoAffectTransmissionStart', 'label': 'AO To Transmission Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoAffectTransmissionRange', 'label': 'AO To Transmission Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.01]},
+        {'name': '_AoAffectSubsurfaceStart', 'label': 'AO To Subsurface Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoAffectSubsurfaceRange', 'label': 'AO To Subsurface Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.01]},
+        {'name': '_FakeDirectionalShadowStrength', 'label': 'Fake Directional Shadow Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_FakeDirectionalShadowPow', 'label': 'Fake Directional Shadow Pow', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 5.0, 'default': [1.0]},
+        {'name': '_OcclusionShadow', 'label': 'Occlusion Affects Shadow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableVerticalNormalBoostAO', 'label': 'Vertical Normal Boost AO Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VerticalNormalThreshold', 'label': 'Vertical Normal Threshold', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VerticalNormalBoostAO', 'label': 'Vertical Normal Boost AO', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VerticalNormalAffectShadow', 'label': 'Vertical Normal Affect Shadow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableCanopyColorRamp', 'label': 'Canopy Color Ramp Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CanopyRampStartAtTop', 'label': 'Canopy Ramp Start At Top', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CanopyRampColor', 'label': 'Canopy Ramp Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CanopyRampColorBrighterScale', 'label': 'Canopy Ramp Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_CanopyRampIntensity', 'label': 'Canopy Ramp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_CanopyRampRange', 'label': 'Canopy Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_CanopyRampTransitionRange', 'label': 'Canopy Ramp Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.01]},
+        {'name': '_CanopyRampColorCover', 'label': 'Canopy Ramp Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableAoTuneColor', 'label': 'AO Mask Tune Color Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FlipAoMask', 'label': 'Flip AO Mask', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AoMaskTuneColor', 'label': 'AO Tune Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_AoMaskTuneColorBrighterScale', 'label': 'AO Tune Brighter', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_AoMaskTuneColorIntensity', 'label': 'AO Tune Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_AoMaskTuneColorRampStart', 'label': 'AO Tune Ramp Start', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.99, 'default': [0.0]},
+        {'name': '_AoMaskTuneColorRampRange', 'label': 'AO Tune Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.9, 'default': [0.2]},
+        {'name': '_AoMaskTuneColorCover', 'label': 'AO Tune Cover', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableBlendColor', 'label': 'Blend Color Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_BlendColor', 'label': 'Blend Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BlendNormalAdd', 'label': 'Blend Normal Add', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BlendNormalPower', 'label': 'Blend Normal Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.3, 'max': 15.0, 'default': [1.0]},
+        {'name': '_BlendWithVertexNormal', 'label': 'Blend With Vertex Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DirIntensity', 'label': 'Dir Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_DirContrast', 'label': 'Dir Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.2]},
+        {'name': '_DirPosition', 'label': 'Dir Position', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DirRadius', 'label': 'Dir Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DirParams', 'label': 'Dir Params', 'kind': 'VECTOR', 'size': 4, 'default': [0.1, 1.0, 0.8, 99.0]},
+        {'name': '_MaskOnDiffuse', 'label': 'Mask On Diffuse', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_MaskOnTransmission', 'label': 'Mask On Transmission', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_AoIntensity', 'label': 'Foliage AO Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_AoContrast', 'label': 'Foliage AO Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.2]},
+        {'name': '_AoPosition', 'label': 'Foliage AO Position', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AoRadius', 'label': 'Foliage AO Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.1]},
+        {'name': '_AoParams', 'label': 'Foliage AO Params', 'kind': 'VECTOR', 'size': 4, 'default': [0.1, 1.0, 0.8, 99.0]},
+        {'name': '_TrunkVertexAoStrength', 'label': 'Trunk Vertex AO Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableTrunkRamp', 'label': 'Trunk Ramp Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TrunkRampColor', 'label': 'Trunk Ramp Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_TrunkRampIntensity', 'label': 'Trunk Ramp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_TrunkRampRange', 'label': 'Trunk Ramp Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_TrunkRampTransitionRange', 'label': 'Trunk Ramp Transition', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.01]},
+        {'name': '_EnableVertColorEmissive', 'label': 'Vertex Color Emissive Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertColorEmissiveChannelVector', 'label': 'Vertex Color Emissive Channel Vector', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_VertColorEmissiveBias', 'label': 'Vertex Color Emissive Bias', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_VertColorEmissiveFlip', 'label': 'Vertex Color Emissive Flip', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertColorEmissiveColor', 'label': 'Vertex Color Emissive Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_VertColorEmissiveAlbedoAffect', 'label': 'Vertex Color Emissive Albedo Affect', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_EnableEmissiveMap', 'label': 'Foliage Emissive Map Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveColorR', 'label': 'Emissive Color R', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CrossCardViewCulling', 'label': 'Cross Card View Culling', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CrossCardViewCullingThreshold', 'label': 'Cross Card Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_CrossCardViewCullingFadeValue', 'label': 'Cross Card Fade Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseVertexColor', 'label': 'Use Vertex Color (Voxel Albedo)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVoxelAtlas', 'label': 'Use Voxel Atlas (Block Textures)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VoxelEmissionScale', 'label': 'Voxel Emission Scale', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_RuriHeldRadiance', 'label': 'Held Item Radiance (Eye Lightmap)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_RuriHeldLightLevels', 'label': 'Held Eye Light Levels (Block, Sky)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 15.0, 0.0, 0.0]},
+        {'name': '_EffectPartID', 'label': 'Effect Part ID', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SurfaceType', 'label': 'Surface Type', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_AlphaClipThreshold', 'label': 'Alpha Clip Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_UseAlphaTest', 'label': 'Use Alpha Test', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_IgnorePostExposure', 'label': 'Ignore Post Exposure', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_CullMode', 'label': 'Cull Mode', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_ExposureWithMiscParams', 'label': 'Exposure (y = post exposure)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXParams1', 'label': 'VFX Grade (rgb = tint, w = saturation)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Use_VerexTexColorAsOpacity', 'label': '用顶点色控制Opacity', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Specular', 'label': 'Specular (Default 0.5)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_Roughness', 'label': '粗糙度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MatCapIgnorePostExposure', 'label': 'Matcap 不受自动曝光影响', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_RefractionIOR', 'label': '散射IOR', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_RefractionColor', 'label': '折射颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionFresnelColor', 'label': '折射菲涅尔颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionStrength', 'label': '折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_UseFresnel', 'label': 'Use Fresnel', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelColor', 'label': '菲涅尔颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_FresnelBias', 'label': '菲涅尔偏移', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_FresnelAffectOpacity', 'label': '菲涅尔影响透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FresnelPower', 'label': 'Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_Use_VerexGAsFresnelOpacity', 'label': '使用顶点色G通道控制菲涅尔强度', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelUseMeshNormal', 'label': '菲涅尔效果使用模型法线', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FresnelFlip', 'label': '翻转菲涅尔区域', 'kind': 'SWITCH', 'size': 1, 'default': [0.001]},
+        {'name': '_EnableGlassRefraction', 'label': '玻璃折射', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseCustomRefractTex', 'label': '折射类型 (0=折射率 1=自定义贴图)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_RefractTint', 'label': '折射染色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RefractionContribution', 'label': '折射贡献', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_RefractThickness', 'label': '厚度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_IsShell', 'label': '玻璃类型 (0=实心 1=壳)', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_IoR', 'label': '折射率 IoR', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_RefractTexIntensity', 'label': '折射贴图强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_RefractBrightness', 'label': '折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnableGlassRim', 'label': '玻璃边缘高光', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassRimColor', 'label': '玻璃边缘颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_GlassRimPower', 'label': '玻璃边缘幂次', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 50.0, 'default': [1.0]},
+        {'name': '_GlassRimStrength', 'label': '玻璃边缘强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimRoughnessScale', 'label': '玻璃边缘粗糙度缩放', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimRefractionPower', 'label': '玻璃边缘折射幂次', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_GlassRimRefractionStrength', 'label': '玻璃边缘折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_GlassRimUseMask', 'label': '使用边缘遮罩', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassRimMaskChannel', 'label': '边缘遮罩通道', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseVertexColorAsRimMask', 'label': '使用顶点色作为边缘遮罩', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GlassMaskOpacity', 'label': '玻璃遮罩不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.995]},
+        {'name': '_EnableIce', 'label': '冰块效果', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_IceRefractionColor', 'label': '冰块折射颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_IceRefractionBrightness', 'label': '冰块折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceRefractionStrength', 'label': '冰块折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceRefractionMipBias', 'label': '冰块折射采样Mip偏移', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_IceOpacityMapTilling', 'label': '冰块不透明度贴图平铺', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 20.0, 'default': [1.0]},
+        {'name': '_IceOpacityThreshold', 'label': '冰块不透明度阈值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_EnableContainerWater', 'label': '容器液体效果', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_WaterShallowColor', 'label': '浅水颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterDeepColor', 'label': '深水颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterRefractionColor', 'label': '水折射颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterScatteringColor', 'label': '散射颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterAbsorptionColor', 'label': '吸收颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterSurfaceNormalScale', 'label': '水面法线强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_WaterNormalSpeed', 'label': '水面波动速度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.01]},
+        {'name': '_WaterFresnelPower', 'label': '水面菲涅尔强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_WaterReflectionStrength', 'label': '水面反射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_WaterRefractionStrength', 'label': '水面折射强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_WaterRefractionBrightness', 'label': '水面折射亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCupRadius', 'label': '杯体半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterMeniscusWidth', 'label': 'Meniscus宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterBaseOpacity', 'label': '基础不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityDepthFactor', 'label': '深度不透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityFresnelFactor', 'label': '菲涅尔不透明度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityMinimum', 'label': '最小不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterOpacityMaximum', 'label': '最大不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterEdgeOpacity', 'label': '边缘不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterTurbidity', 'label': '浑浊度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCausticStrength', 'label': '水波纹强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterCausticSpeed', 'label': '水波纹速度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_IceballRadius', 'label': '冰球半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IceballWaterlineWidth', 'label': '冰球水线宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_IcePosition', 'label': '冰块位置', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DisplacementNormalStrength', 'label': '置换法线强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_NormalMapBlendWeight', 'label': '法线贴图混合权重', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_WaterStrokeDistance', 'label': '描边距离', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0395]},
+        {'name': '_WaterStrokeWidth', 'label': '描边宽度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0001, 'max': 0.1, 'default': [0.0352]},
+        {'name': '_WaterStrokeColor', 'label': '描边颜色', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_WaterStrokeOpacity', 'label': '描边不透明度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_WaterStrokeSoftness', 'label': '描边边缘柔和度', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 0.1, 'default': [0.0025]},
+        {'name': '_ParallaxIgnorePostExposure', 'label': 'Parallax Ignore Post Exposure', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_ShadowReceiverPartID', 'label': 'Shadow Receiver Part ID', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexStretchNoiseOffset', 'label': 'Vertex Stretch Noise Offset', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexStretchMinMax', 'label': 'Vertex Stretch MinMax', 'kind': 'VECTOR', 'size': 4, 'default': [0.8, 1.0, 0.0, 0.0]},
+        {'name': '_VertexStretchNoiseScale', 'label': 'Vertex Stretch Noise Scale', 'kind': 'VALUE', 'size': 1, 'default': [3.0]},
+        {'name': '_VertexStretchDirection', 'label': 'Vertex Stretch Direction', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 0.0, 0.0]},
+        {'name': '_VertexStretchIntensity', 'label': 'Vertex Stretch Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.4, 'default': [0.0]},
+        {'name': '_CatchZOffset', 'label': 'ZOffset', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SwitchToMultiply', 'label': '切换正片叠底叠加模式', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MainLightIntensity', 'label': '灯光强度', 'kind': 'VALUE', 'size': 1, 'default': [0.2]},
+        {'name': '_UseTimelineEffect', 'label': '使用时间线效果 Use Timeline Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TimelineSaturation', 'label': '时间线饱和度 Timeline Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineContrast', 'label': '时间线对比度 Timeline Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineBrightness', 'label': '时间线亮度 Timeline Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_TimelineColorTint', 'label': '时间线颜色色调 Timeline Color Tint', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_UseCharacterWeatherAdjust', 'label': '使用角色天气调整 Use Weather Adjust', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Weather_lightColorCh', 'label': '天气光照颜色 Weather Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_Weather_DarkSideValueCh', 'label': '天气暗面值 Weather Dark Side Value', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseScriptColorAdjust', 'label': '使用脚本颜色调整 Use Script Color Adjust', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DayNightValue', 'label': '夜晚渐变', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MainLightColorLimit', 'label': 'Main Light Color Limit', 'kind': 'VALUE', 'size': 1, 'default': [1.29688]},
+        {'name': '_DebugSaturation', 'label': '调试饱和度 Debug Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugContrast', 'label': '调试对比度 Debug Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugBrightness', 'label': '调试亮度 Debug Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AdditionalSpecularIntensity', 'label': 'Additional Light Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.29688]},
+        {'name': '_BackRimLightIntensityClamp', 'label': 'Back Rim Light Intensity Clamp', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_WetIntensity', 'label': 'Wet Intensity', 'kind': 'VALUE', 'size': 1, 'default': [0.39844]},
+        {'name': '_WetSpecularIntensity', 'label': 'Wet Specular Intensity', 'kind': 'VALUE', 'size': 1, 'default': [1.1875]},
+        {'name': '_PhotoMode', 'label': '照片模式 Photo Mode', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_CharLightIntensity', 'label': '角色光照强度 Character Light Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_UseFakeLightDir', 'label': '使用假光照方向 Use Fake Light Direction', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FakeLightDir', 'label': '假光照方向 Fake Light Direction', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 0.0]},
+        {'name': '_UseFakeLightColor', 'label': '使用假光照颜色 Use Fake Light Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FakeLightColor', 'label': '假光照颜色 Fake Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DarkFaceSmoothness', 'label': '暗面平滑度 Dark Face Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DarkFaceThreshold', 'label': '暗面阈值 Dark Face Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_DarkFaceColor', 'label': '暗面颜色 Dark Face Color', 'kind': 'COLOR', 'size': 4, 'default': [0.5, 0.5, 0.5, 1.0]},
+        {'name': '_BrightFaceColor', 'label': '亮面颜色 Bright Face Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ScriptBackRimIntensity', 'label': '脚本背面边缘光强度 Script Back Rim Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ScriptBackFresnelMin', 'label': '脚本背面菲涅尔最小值 Script Back Fresnel Min', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_ScriptBackFresnelMax', 'label': '脚本背面菲涅尔最大值 Script Back Fresnel Max', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_BurstFrePow', 'label': '爆发菲涅尔幂 Burst Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_BurstFreColor', 'label': '爆发菲涅尔颜色 Burst Fresnel Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BurstPoint', 'label': '爆发点 Burst Point', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_BurstRadius', 'label': '爆发半径 Burst Radius', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_BurstHardness', 'label': '爆发硬度 Burst Hardness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ForwardWS', 'label': '脸正面朝向（需要脚本控制）', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, -1.0, 0.0]},
+        {'name': '_LeftWS', 'label': '脸左侧朝向（需要脚本控制）', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_AnisotropyBias', 'label': 'Anisotropy Bias', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+        {'name': '_AnisotropyHueColor', 'label': 'Anisotropy Hue', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_SpecularExponent', 'label': '高光宽窄', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 500.0, 'default': [50.0]},
+        {'name': '_SpecularColor', 'label': '高光颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SiwaFresnelMax', 'label': '丝袜菲涅尔最大值', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SiwaFresnelMin', 'label': '丝袜菲涅尔最小值', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_SiwaColor', 'label': '丝袜颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SiwaBlackWhiteExchange', 'label': '黑白丝袜质感转换', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropySmoothness', 'label': 'Anisotropy Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.5, 'default': [0.2]},
+        {'name': '_DiffuseColorInfluence', 'label': '固有色影响自发光颜色', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_EmissiveGetRampEffect', 'label': '自发光区域受Ramp影响', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissiveRampMode', 'label': '  自发光区域Ramp跟随区域', 'kind': 'VALUE', 'size': 1, 'default': [3.0]},
+        {'name': '_RimColor', 'label': '边缘光颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimIntensity', 'label': '边缘光强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [0.0]},
+        {'name': '_RimMainLightRatio', 'label': '主光源颜色影响强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+        {'name': '_FresnelMin', 'label': '边缘光最小值', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.45]},
+        {'name': '_FresnelMax', 'label': '边缘光最大值', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.55]},
+        {'name': '_BackRimIntensity', 'label': '边缘光（背光）强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_BackFresnelMin', 'label': '背面菲涅尔最小值 Back Fresnel Min', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.5]},
+        {'name': '_BackFresnelMax', 'label': '背面菲涅尔最大值 Back Fresnel Max', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AddMatCapOn', 'label': '启用附加Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MetalMapOff', 'label': '关闭ILM金属度(仅附加Matcap部分)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AddMatcapBrightness', 'label': '附加Matcap亮度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 50.0, 'default': [1.0]},
+        {'name': '_SkinColor', 'label': '皮肤透色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_AOIntensity', 'label': '环境光遮蔽强度 AO Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AOColorSaturation', 'label': 'AO颜色饱和度 AO Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_DebugDiffseLayer', 'label': 'Debug 漫反射层', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DebugSpecularLayer', 'label': 'Debug 高光层', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_ReverseRoughness', 'label': '使用光滑度（替换ILM粗糙度）', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_RimLightColor', 'label': '边缘光颜色 Rim Light Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimLightStrength', 'label': '边缘光强度 Rim Light Strength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 5.0, 'default': [1.0]},
+        {'name': '_FresnelPow', 'label': '菲涅尔幂 Fresnel Power', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_ColorMinR', 'label': '头发过渡颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ColorMaxR', 'label': '头发颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_PartColor', 'label': '挑染颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RampColor', 'label': 'Ramp颜色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_RimLightColorRatio', 'label': '固有色颜色影响强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_RimMaskVal', 'label': '边缘光遮罩值 Rim Mask Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_PaintHighlightDayColor', 'label': '高光颜色(G通道)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HorizontalAmount2', 'label': 'Horizontal Amount', 'kind': 'VALUE', 'size': 1, 'default': [4.0]},
+        {'name': '_VerticalAmount2', 'label': 'Vertical Amount', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_ColorMin', 'label': 'Color Min', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ColorMax', 'label': 'Color Max', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Min', 'label': 'Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Max', 'label': 'Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_ColorG', 'label': 'Color(G)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_GLerpIntensity', 'label': 'Color(G) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ColorB', 'label': 'Color(B)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_BLerpIntensity', 'label': 'Color(B) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ColorA', 'label': 'Color(A)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ALerpIntensity', 'label': 'Color(A) Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_RotateAngle1', 'label': 'Anim Rotate Angle 1', 'kind': 'SLIDER', 'size': 1, 'min': -180.0, 'max': 180.0, 'default': [0.0]},
+        {'name': '_RotateAngle2', 'label': 'Anim Rotate Angle 2', 'kind': 'SLIDER', 'size': 1, 'min': -180.0, 'max': 180.0, 'default': [0.0]},
+        {'name': '_HighLightColor1', 'label': 'Hight Light Color 1', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HighLightColor2', 'label': 'Hight Light Color 2', 'kind': 'COLOR', 'size': 4, 'default': [0.4392, 0.8352, 1.0, 1.0]},
+        {'name': '_ScaleX1', 'label': 'Scale X 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleY1', 'label': 'Scale Y 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleX2', 'label': 'Scale X 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ScaleY2', 'label': 'Scale Y 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.2, 'max': 2.0, 'default': [1.0]},
+        {'name': '_HighlightIntensity1', 'label': 'Intensity 1', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [2.0]},
+        {'name': '_HighlightIntensity2', 'label': 'Intensity 2', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.06]},
+        {'name': '_HighlightIntensity3', 'label': 'Intensity 3', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_Range', 'label': 'Range', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SpecularFlipHorizontal', 'label': 'Flip Horizontal', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DarkColor', 'label': 'Dark Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DayColor', 'label': 'Day Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorR', 'label': '眼影 (R)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorG', 'label': '腮红 (G)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_DyeingColorB', 'label': '唇彩 (B)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_DyeingColorA', 'label': '睫毛反光 (A)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_MaskColor02', 'label': '下睫毛 (0.2)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor03', 'label': '眼白牙齿 (0.4)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor04', 'label': '舌头 (0.3)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor05', 'label': '口腔牙床 (0.5)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor06', 'label': '睫毛描边 (0.6)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor07', 'label': 'NPC眼睛 (0.7)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_MaskColor08', 'label': 'NPC眉毛 (0.8)', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_AMin', 'label': 'Min', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AMax', 'label': 'Max', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DyeingColorAMin', 'label': '上睫毛 Min', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_DyeingColorAMax', 'label': '上睫毛 Max', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HighLightMoveDistance2', 'label': 'High Light Move Distance', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.02, 'default': [0.02]},
+        {'name': '_UseTestLightDir', 'label': 'Use Test Light Direction ?', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_TestAngle', 'label': 'Test Light Angle', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 360.0, 'default': [0.0]},
+        {'name': '_ExpThreshold', 'label': 'Exp Threshold', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_ExpIntensity', 'label': 'Exp Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 100.0, 'default': [0.0]},
+        {'name': '_MainUVSet', 'label': 'Main UV Set', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MainSwitchUV', 'label': 'Main UV Switcher', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_MainTexUVRotate', 'label': 'MainTex UV Rotate', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_UseGridLine', 'label': 'Use Grid Line', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_GridLineWidth', 'label': 'Grid Line Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.1, 'max': 15.0, 'default': [1.0]},
+        {'name': '_UseDissolve', 'label': 'Use Dissolve', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DissolveAmount', 'label': 'Dissolve Amount', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_DissolveEdgeWidth', 'label': 'Dissolve Edge Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_DissolveEdgeColor', 'label': 'Dissolve Edge Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ShadowColor', 'label': 'Shadow Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CircleFade', 'label': 'Circle Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CircleFadeDistance', 'label': 'Circle Fade Distance', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_CircleFadeSmoothness', 'label': 'Circle Fade Smoothness', 'kind': 'VALUE', 'size': 1, 'default': [0.2]},
+        {'name': '_DisableSceneShadow', 'label': 'Disable Scene Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisableCharacterSelfShadow', 'label': 'Disable Character Self Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CapsuleAoColor', 'label': 'Capsule AO Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '引擎全局 CP', 'gate': None, 'rows': [
+        {'name': '_CharacterParams0', 'label': 'CP0 (.y=主光系数 .z=环境阴影系数 .w=环境光系数)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.9, 0.8, 0.8]},
+        {'name': '_CharacterParams1', 'label': 'CP1 (.x=brightMix .y=shadowStr .z=忽略主光阴影 .w=方向覆写量)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 0.0]},
+        {'name': '_CharacterParams2', 'label': 'CP2 (阴影色倾向 rgb，皮肤以外)', 'kind': 'VECTOR', 'size': 4, 'default': [0.7830188, 0.8293082, 1.0, 0.0]},
+        {'name': '_CharacterParams3', 'label': 'CP3 (阴影色倾向 rgb，皮肤)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.78114647, 0.68490565, 0.0]},
+        {'name': '_CharacterParams4', 'label': 'CP4 (主光自定义颜色 rgb，皮肤)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CharacterParams5', 'label': 'CP5 (主光自定义颜色 rgb，皮肤以外)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CharacterParams6', 'label': 'CP6 (环境光方向 = charGlobalAmbientParam0)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 4.371139E-08, 0.0]},
+        {'name': '_CharacterParams7', 'label': 'CP7 (环境光系数 = charGlobalAmbientParam1)', 'kind': 'VECTOR', 'size': 4, 'default': [0.15, 1.5, 0.5, 0.0]},
+        {'name': '_CharacterParams8', 'label': 'CP8 (skin spec color rgb + .w=intensity)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CharacterParams9', 'label': 'CP9 (skin spec .xy=dir .z=tint .w=width)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 1.0, 0.0, 0.4]},
+        {'name': '_CharacterParams10', 'label': 'CP10 (height darken control)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_RuriCharacterEnvironmentEffect', 'label': '环境效果量 (.x=雨 .y=水位量 .z=浸润 .w=雪)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_RuriCharacterEnvironmentWater', 'label': '环境效果水面 (.x=世界高度)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams11', 'label': 'CP11 (方向覆写 xyz + .w=明暗交界线偏移)', 'kind': 'VECTOR', 'size': 4, 'default': [-0.433, 0.5, 0.75, -0.4]},
+        {'name': '_CharacterParams12', 'label': 'CP12 (.x=灯光手动控制 .y=主光色覆写量 .z=shadowGate .w=exposureBlend)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams13', 'label': 'CP13 (.w=GGX specular toggle)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_CharacterParams14', 'label': 'CP14 (secondary spec color rgb + .w=intensity)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_CharacterParams15', 'label': 'CP15 (.z=SDF secondary threshold)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnvironmentGlobalParams0', 'label': 'EnvGlobalParams0', 'kind': 'VECTOR', 'size': 4, 'default': [1.67, 1.5, 1.0, 0.0]},
+        {'name': '_ExposureParams', 'label': 'ExposureParams', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': '朝向与压暗', 'gate': None, 'rows': [
+        {'name': '_FaceForward', 'label': 'Face Forward (World)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 1.0, 0.0]},
+        {'name': '_FaceRight', 'label': 'Face Right (World)', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_HairDarkenParams', 'label': 'Hair Darken (x=offsetX y=darken z=offsetZ w=minDarken)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': 'PBR 基础', 'gate': None, 'rows': [
+        {'name': '_MetallicGlossMap', 'label': 'RGBA:Metal,Spec,Shadow,Smooth', 'kind': 'TEXTURE'},
+        {'name': '_UseMetallicGlossMap', 'label': 'Use MetallicGlossMap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_Metallic', 'label': 'Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_Smoothness', 'label': 'Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+    ]},
+    {'name': '自发光', 'gate': None, 'rows': [
+        {'name': '_EmissionBrightness', 'label': 'Emission Brightness', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': 'Ramp', 'gate': None, 'rows': [
+        {'name': '_DiffRampMap', 'label': 'Diffuse Ramp', 'kind': 'TEXTURE'},
+        {'name': '_SpecRampMap', 'label': 'Specular Ramp', 'kind': 'TEXTURE'},
+        {'name': '_UseDiffRampMap', 'label': 'Diffuse Ramp', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseSpecRampMap', 'label': 'Specular Ramp', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecRampIridescentMode', 'label': '彩虹色模式(镭射塑料请勾选)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '阴影色', 'gate': None, 'rows': [
+        {'name': '_ShadowLutTex', 'label': 'Shadow Color Lut', 'kind': 'TEXTURE'},
+        {'name': '_UseShadowLutTex', 'label': 'Use Shadow Color LUT Tex', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ShadowColorBrightness', 'label': 'Shadow Color Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_ShadowColorSaturation', 'label': 'Shadow Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+    ]},
+    {'name': '脸部 SDF/表情', 'gate': None, 'rows': [
+        {'name': '_SDFMask', 'label': 'RimMask/SDFMask/FlatSHMask', 'kind': 'TEXTURE'},
+        {'name': '_SDFLightmap', 'label': 'SDF Lightmap', 'kind': 'TEXTURE'},
+        {'name': '_EmotionMap', 'label': 'Emotion Map', 'kind': 'TEXTURE'},
+        {'name': '_HighlightMap', 'label': 'HighlightMap', 'kind': 'TEXTURE'},
+        {'name': '_UseSDFLightmap', 'label': 'Use SDF Lightmap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseEmotionMap', 'label': 'Use Emotion Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmotionIndex', 'label': 'Emotion Index', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [0.0]},
+        {'name': '_EmotionBlend', 'label': 'Emotion Blend', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_SDFRimColor', 'label': 'Skin Rim Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SkinRimOffScale', 'label': 'Skin Rim Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [0.5]},
+        {'name': '_FaceRimOffScale', 'label': 'Face Rim Scale (SDF Area)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [1.0]},
+        {'name': '_FaceHighlightMap', 'label': 'Use Face Highlight Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_HighlightMapVector', 'label': 'HighlightMap Vector', 'kind': 'VECTOR', 'size': 4, 'default': [0.04, -0.01, 0.0, 0.0]},
+    ]},
+    {'name': '脸部贴花', 'gate': None, 'rows': [
+        {'name': '_FaceDecalTintColor', 'label': 'Face Decal Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_FaceDecalCenterX', 'label': 'Face Decal Center X', 'kind': 'SLIDER', 'size': 1, 'min': -0.5, 'max': 0.5, 'default': [0.0]},
+        {'name': '_FaceDecalCenterY', 'label': 'Face Decal Center Y', 'kind': 'SLIDER', 'size': 1, 'min': -0.5, 'max': 0.5, 'default': [0.0]},
+        {'name': '_FaceDecalInvertX', 'label': 'Face Decal Invert X', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalInvertY', 'label': 'Face Decal Invert Y', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalSize', 'label': 'Face Decal Size', 'kind': 'SLIDER', 'size': 1, 'min': 0.05, 'max': 2.0, 'default': [0.2]},
+        {'name': '_FaceDecalRotation', 'label': 'Face Decal Rotation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FaceDecalMirrorMode', 'label': 'Face Decal Mirror Mode', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_FaceDecalMirrorSplit', 'label': 'Face Decal Mirror Split', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_FaceDecalBrightnessMask', 'label': 'Face Decal Brightness Mask', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.7]},
+    ]},
+    {'name': '眼睛 Matcap', 'gate': None, 'rows': [
+        {'name': '_MatcapTex', 'label': 'Matcap', 'kind': 'TEXTURE'},
+        {'name': '_UseMatcap', 'label': 'Use Matcap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EyeHighLight', 'label': 'Eye High Light', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_MatcapNormalScale', 'label': 'Matcap Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.5, 'default': [1.0]},
+        {'name': '_MatcapColor', 'label': 'Matcap Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EyeHighLightColor', 'label': 'High Light Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [2.0, 2.0, 2.0, 1.0]},
+        {'name': '_EyeScatteringColor', 'label': 'Scattering Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EyeTintColor', 'label': 'Eye Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '头发高光/描线', 'gate': None, 'rows': [
+        {'name': '_SplitNormalMap', 'label': 'Hair Normal Map', 'kind': 'TEXTURE'},
+        {'name': '_StrokeMap', 'label': 'Stroke Map(R:anisotropy G:specular offset)', 'kind': 'TEXTURE'},
+        {'name': '_LineMap', 'label': 'Line Map', 'kind': 'TEXTURE'},
+        {'name': '_UseSpecBumpMap', 'label': 'Split Diffuse / Specular Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecBumpScale', 'label': 'Spec Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_StrokeOn', 'label': 'Use Stroke Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SpecularLine', 'label': 'SpecularLine', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DrawUnderBrow', 'label': 'Draw Under Brow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropyValue', 'label': 'Anisotropy Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.35]},
+        {'name': '_AnisotropyValue2', 'label': 'Anisotropy Value2', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.4]},
+        {'name': '_AnisotropyDirX', 'label': 'Anisotropy Direction X', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyIntensity', 'label': 'Anisotropy Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_AnisotropyEdgeFade', 'label': 'Anisotropy Edge Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 10.0, 'default': [1.0]},
+        {'name': '_AnisotropyRange2', 'label': 'Anisotropy Range2', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyColor2', 'label': 'Anisotropy Color2', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_StrokeScale', 'label': 'Stroke Scale', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_UseLineMap', 'label': 'Use Line Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_LineAmount', 'label': 'Line Amount', 'kind': 'VALUE', 'size': 1, 'default': [300.0]},
+        {'name': '_LineValue', 'label': 'Line Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineRange', 'label': 'Line Range', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineIntensity', 'label': 'Line Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_LineSaturation', 'label': 'Line Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_HairBaseTintColor', 'label': 'Hair Base Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_HairAddTintColor', 'label': 'Hair Add Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '皮毛', 'gate': '_UseCharacterFur', 'rows': [
+        {'name': '_UseCharacterFur', 'label': 'Use CharacterFur', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurMap', 'label': 'Fur Noise', 'kind': 'TEXTURE'},
+        {'name': '_FurDirMap', 'label': '毛发方向(RG)疏密(B)长短(A)', 'kind': 'TEXTURE'},
+        {'name': '_FurDyeMap', 'label': '皮毛染色', 'kind': 'TEXTURE'},
+        {'name': '_FurDyeEnable', 'label': '使用皮毛染色功能', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurDyeIntensity', 'label': '染色强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurLengthIntensity', 'label': '毛发长度', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 6.0, 'default': [1.0]},
+        {'name': '_FurCutoffStart', 'label': '发根CutOff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurCutoffEnd', 'label': '发尾CutOff', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurAO', 'label': '发根AO', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_FurEdgeFade', 'label': '边缘平滑过度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurGravityStrength', 'label': '重力强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_FurTTIntensity', 'label': '直射光透光强度', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_FurDirMapEnable', 'label': '使用毛发方向贴图(RG)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurColorEnable', 'label': '使用尖端调色', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurColor', 'label': '尖端调色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_FurSharpen', 'label': '皮毛尖锐', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_FurNoise', 'label': '皮毛叠加噪声', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '清漆', 'gate': '_ClearCoat', 'rows': [
+        {'name': '_ClearCoat', 'label': 'ClearCoat Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ClearCoatMask', 'label': 'ClearCoat Mask', 'kind': 'TEXTURE'},
+        {'name': '_ClearCoatColor', 'label': 'ClearCoat Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ClearCoatSmoothness', 'label': 'ClearCoat Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.95]},
+        {'name': '_ClearCoatMetallic', 'label': 'ClearCoat Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ClearCoatNormalMode', 'label': 'ClearCoat Normal', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '视差', 'gate': '_UseParallax', 'rows': [
+        {'name': '_UseParallax', 'label': 'Use Parallax', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxTex', 'label': 'Parallax Tex', 'kind': 'TEXTURE'},
+        {'name': '_ParallaxUseNormal', 'label': 'Parallax Use Normal Map', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ParallaxMarchNum', 'label': 'Parallax March Num', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 5.0, 'default': [3.0]},
+        {'name': '_ParallaxScale', 'label': 'Parallax Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+    ]},
+    {'name': '丝袜', 'gate': '_SilkStockings', 'rows': [
+        {'name': '_SilkStockings', 'label': 'Silk Stockings', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SilkStockingsMask', 'label': '丝袜遮罩', 'kind': 'TEXTURE'},
+        {'name': '_SilkStockingsColor', 'label': '丝袜边缘颜色', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 1.0]},
+        {'name': '_SilkStockingsSpecularInt', 'label': '丝袜高光强度Remap', 'kind': 'VALUE', 'size': 1, 'default': [5.0]},
+        {'name': '_SilkStockingsSpecularValue', 'label': '丝袜高光位置偏移', 'kind': 'SLIDER', 'size': 1, 'min': -2.0, 'max': 2.0, 'default': [2.0]},
+        {'name': '_SilkStockingsAnisoDirection', 'label': '丝袜锐利度G', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_SilkStockingsDryColor', 'label': '丝袜常态偏色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SilkStockingsWetColor', 'label': '丝袜湿润偏色', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_SilkStockingsMinAffect', 'label': '丝袜最浅覆盖', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.49, 'default': [0.05]},
+        {'name': '_SilkStockingsMaxAffect', 'label': '丝袜最深覆盖', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 0.9, 'default': [0.9]},
+        {'name': '_SilkStockingsAdvance', 'label': '丝袜高级模式(使用贴图)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_SilkStockingsSpecularMinAtMinWetness', 'label': '丝袜高光干燥态最小值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_SilkStockingsSpecularFalloff', 'label': '丝袜高光透肉衰减值', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.8]},
+        {'name': '_SilkStockingsRainWetMaskScale', 'label': '丝袜浸润内置遮罩影响', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.7]},
+        {'name': '_SilkStockingsAlbedoAffectType', 'label': '浸润或水下时透肉or压暗', 'kind': 'SLIDER', 'size': 1, 'min': -0.9, 'max': 0.5, 'default': [0.5]},
+    ]},
+    {'name': '各向异性', 'gate': '_UseAnisotropy', 'rows': [
+        {'name': '_UseAnisotropy', 'label': 'Use Anisotropy', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_AnisotropyUseGeometryTangent', 'label': '使用模型切线', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_AnisotropyDirectionMain', 'label': '基础各项异性高光方向', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyIntensityMultiplier', 'label': '基础各项异性高光强度系数', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_AnisotropyDirectionAdditional', 'label': '第二层各向异性方向', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyOffsetAdditional', 'label': '第二层各向异性位置偏移', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_AnisotropyColorAdditional', 'label': '第二层各向异性颜色', 'kind': 'COLOR', 'size': 4, 'default': [0.2, 0.2, 0.2, 1.0]},
+    ]},
+    {'name': 'UV2 染色', 'gate': None, 'rows': [
+        {'name': '_UseUV2Color', 'label': 'UV2 Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ExtraRootTintColor', 'label': 'Root Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ExtraDepthTintColor', 'label': 'Depth Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_ViewFade', 'label': 'View Fade', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.0]},
+    ]},
+    {'name': '捏人染色', 'gate': '_AvatarCustomizeEnable', 'rows': [
+        {'name': '_AvatarCustomizeEnable', 'label': 'Avatar System Input', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_CustomizeBaseColor', 'label': 'Customize Base Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CustomizeBaseTintColor', 'label': 'Customize Base Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_CustomizeAddTintColor', 'label': 'Customize Add Tint Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '深度淡出', 'gate': '_UseDepthFade', 'rows': [
+        {'name': '_UseDepthFade', 'label': 'Use Depth Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DepthFadeValue', 'label': 'Depth Fade Value', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_DepthFadeExp', 'label': 'Depth Fade Exp', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 50.0, 'default': [10.0]},
+    ]},
+    {'name': '侵蚀', 'gate': '_UseCharacterErosion', 'rows': [
+        {'name': '_UseCharacterErosion', 'label': 'Use Character Erosion', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ErosionMetallic', 'label': 'Erosion Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_ErosionSmoothnessBias', 'label': 'Erosion Smoothness Bias', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_ErosionNormalScale', 'label': 'Erosion Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 4.0, 'default': [1.0]},
+        {'name': '_ErosionBaseColor', 'label': 'Erosion Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.8, 0.4, 0.5, 1.0]},
+        {'name': '_ErosionUV2Tint', 'label': 'Erosion Tint UV2 Enable', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ErosionBaseRootColor', 'label': 'Erosion Base Root Color', 'kind': 'COLOR', 'size': 4, 'default': [0.1, 0.1, 0.1, 1.0]},
+        {'name': '_ErosionBaseRootColorLocation', 'label': 'Erosion Root Color Location', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.1]},
+        {'name': '_ErosionBaseRootColorSmooth', 'label': 'Erosion Root Color Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.25, 'default': [0.1]},
+        {'name': '_ErosionBaseTopColor', 'label': 'Erosion Top Color', 'kind': 'COLOR', 'size': 4, 'default': [0.75, 0.75, 0.75, 1.0]},
+        {'name': '_ErosionBaseTopColorLocation', 'label': 'Erosion Top Color Location', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.7]},
+        {'name': '_ErosionBaseTopColorSmooth', 'label': 'Erosion Top Color Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.25, 'default': [0.1]},
+        {'name': '_ErosionPatternTintColor', 'label': 'Erosion Pattern Tint Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '傀儡', 'gate': '_UsePuppet', 'rows': [
+        {'name': '_UsePuppet', 'label': 'Use Puppet Effect', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetUV2AreaMask', 'label': 'Puppet UV2 Area Mask', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetMaskLocationDown', 'label': 'Puppet Mask Location Down', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.1]},
+        {'name': '_PuppetMaskLocationTop', 'label': 'Puppet Mask Location Top', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.9, 'default': [0.5]},
+        {'name': '_PuppetMaskSmooth', 'label': 'Puppet Mask Smooth', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 0.25, 'default': [0.1]},
+        {'name': '_PuppetProceduralDCurveEnable', 'label': 'Puppet Procedural DCurve Color', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetPDCurveUVScaleSpeed', 'label': 'Puppet DCurve UV2 Scale(XY) Speed(ZW)', 'kind': 'VECTOR', 'size': 4, 'default': [120.0, 12.0, 0.0, -0.06]},
+        {'name': '_PuppetPDCurveDistortSpeed', 'label': 'Puppet DCurve Distort Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_PuppetPDCurveDistortPeriodSpeed', 'label': 'Puppet DCurve Period Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_PuppetPDCurveBaseColor', 'label': 'Puppet DCurve Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.39, 0.58, 0.7, 1.0]},
+        {'name': '_PuppetPDCurveLightColor', 'label': 'Puppet DCurve Light Color', 'kind': 'COLOR', 'size': 4, 'default': [0.57, 0.3, 0.83, 0.5]},
+        {'name': '_PuppetPDCurveEdgeColor', 'label': 'Puppet DCurve Edge Color', 'kind': 'COLOR', 'size': 4, 'default': [0.45, 0.38, 0.73, 0.5]},
+        {'name': '_PuppetPDCurveEdgeLocation', 'label': 'Puppet DCurve Edge Location(1 = Unuse)', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [0.3]},
+        {'name': '_PuppetPatternSpeed', 'label': 'Puppet Pattern Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_PuppetPatternMapUseRGB', 'label': 'Puppet Pattern Map Use RGB', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_PuppetBaseColor', 'label': 'Puppet Base Color', 'kind': 'COLOR', 'size': 4, 'default': [0.5, 0.65, 0.8, 1.0]},
+        {'name': '_PuppetPatternTintColor', 'label': 'Puppet Pattern Tint Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [0.4, 0.2, 0.94, 1.0]},
+        {'name': '_PuppetPatternTintEdgeColor', 'label': 'Puppet Pattern Tint Edge Color', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_PuppetPatternTintEdgeLocation', 'label': 'Puppet Pattern Tint Edge Location(1 = Unuse)', 'kind': 'SLIDER', 'size': 1, 'min': 0.01, 'max': 1.0, 'default': [1.0]},
+        {'name': '_PuppetMetallic', 'label': 'Puppet Metallic', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_PuppetRoughness', 'label': 'Puppet Roughness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+    ]},
+    {'name': '风格化菲涅尔', 'gate': '_EnableStylizedFresnel', 'rows': [
+        {'name': '_EnableStylizedFresnel', 'label': 'Stylized Fresnel', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_StylizedFresnelColor', 'label': 'Color(A = Emission)', 'kind': 'COLOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_StylizedFresnelPow', 'label': 'Pow', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [2.0]},
+        {'name': '_StylizedFresnelAmount', 'label': 'Amount', 'kind': 'VALUE', 'size': 1, 'default': [2.0]},
+        {'name': '_StylizedFresnelNoiseSpeed', 'label': 'Noise Speed', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_StylizedNoiseContrast', 'label': 'Noise Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+    ]},
+    {'name': '受击闪光', 'gate': '_EnableEnemyHitFlash', 'rows': [
+        {'name': '_EnableEnemyHitFlash', 'label': 'Enemy Hit Flash', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EnemyHitFlashBrightColor', 'label': 'Bright(Scanline) Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnemyHitFlashInnerRadius', 'label': '羽化内半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [0.0]},
+        {'name': '_EnemyHitFlashOuterRadius', 'label': '羽化外半径', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [2.0]},
+        {'name': '_EnemyHitFlashBrightCenter', 'label': '覆盖中心坐标,0为默认主角位置', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EnemyHitFlashFresnelColor', 'label': 'Fresnel Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_EnemyHitFlashFresnelBias', 'label': 'Fresnel Bias(Default:0)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_EnemyHitFlashFresnelAffectOpacity', 'label': 'Fresnel Affect Opacity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_EnemyHitFlashNormalScale', 'label': 'Normal Scale', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 3.0, 'default': [1.0]},
+        {'name': '_EnemyHitFlashBrightColorAdjust', 'label': 'Bright Color Adjust', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EnemyHitFlashFresnelColorAdjust', 'label': 'Fresnel Color Adjust', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': '球形抖动消隐', 'gate': '_EnableDitherSphere', 'rows': [
+        {'name': '_EnableDitherSphere', 'label': 'Enable Sphere Dither', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DitherSphereRadius', 'label': 'Dither Sphere Radius', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.3, 'default': [0.05]},
+        {'name': '_DitherSphereSmoothness', 'label': 'Dither Sphere Smoothness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 0.5, 'default': [0.2]},
+    ]},
+    {'name': 'VAT 动画', 'gate': '_UseVATMap', 'rows': [
+        {'name': '_UseVATMap', 'label': 'UseVATMap', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DebugVATFrameIndex', 'label': 'DebugVATFrame', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VATFrameIndex', 'label': 'VAT Frame Index', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+    ]},
+    {'name': 'UV 流动/呼吸', 'gate': None, 'rows': [
+        {'name': '_BaseMapUVSpeed', 'label': 'BaseMap UV Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EmissionMapUVSpeed', 'label': 'EmissionMap UV Speed', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_EmissionAlphaBrightBreath', 'label': 'Emission呼吸（A）', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_EmissionAlphaBrightBreathSpeed', 'label': 'Emission呼吸速度', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+        {'name': '_EmissionAlphaBrightBreathScaleMin', 'label': 'Emission呼吸最小亮度', 'kind': 'VALUE', 'size': 1, 'default': [0.5]},
+        {'name': '_EmissionAlphaBrightBreathScaleMax', 'label': 'Emission呼吸最大亮度', 'kind': 'VALUE', 'size': 1, 'default': [1.0]},
+    ]},
+    {'name': '顶点动画', 'gate': '_VertexAnimationEnable', 'rows': [
+        {'name': '_VertexAnimationEnable', 'label': 'Vertex Animation', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexAnimationIntensity', 'label': 'Vertex Animation Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.1]},
+        {'name': '_VertexAnimationFrequency', 'label': 'Vertex Animation Frequency', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 30.0, 'default': [0.5]},
+        {'name': '_VertexAnimationWaveLength', 'label': 'Vertex Animation WaveLength', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 20.0, 'default': [0.0]},
+        {'name': '_VertexAnimationFalloff', 'label': 'Vertex Animation Falloff', 'kind': 'SLIDER', 'size': 1, 'min': 0.1, 'max': 10.0, 'default': [1.0]},
+        {'name': '_VertexAnimationExpandOnly', 'label': 'Vertex Animation Expand Only', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VertexAnimationDirection', 'label': 'Vertex Animation Direction', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 1.0, 0.0]},
+        {'name': '_VertexAnimationNoiseIntensity', 'label': 'Vertex Animation Noise Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_VertexAnimationNoiseTiling', 'label': 'Vertex Animation Noise Tiling', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 4.0, 'default': [1.0]},
+        {'name': '_VertexAnimationNoiseFrequency', 'label': 'Vertex Animation Noise Frequency', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.2]},
+    ]},
+    {'name': '自阴影', 'gate': None, 'rows': [
+        {'name': '_DisableSelfShadow', 'label': 'Disable Self Shadow', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': '角色 VFX', 'gate': None, 'rows': [
+        {'name': '_EnableCharacterVFX', 'label': 'Character VFX', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+    ]},
+    {'name': 'VFX 合成', 'gate': None, 'rows': [
+        {'name': '_VFXSpecialMainTex', 'label': 'VFX Special Main Tex', 'kind': 'TEXTURE'},
+        {'name': '_VFXSpecialBlendTex', 'label': 'VFX Special Blend Tex', 'kind': 'TEXTURE'},
+        {'name': '_UseMask', 'label': 'Use Mask (只影响Alpha)', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseBlend', 'label': 'Use Blend', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_UseDisturb', 'label': 'Use Disturb', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VFXColor', 'label': 'VFX Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXColorIntensity', 'label': 'VFX Color Intensity (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_VFXColorAlpha', 'label': 'VFX Color Alpha (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_UseVFXMainTexAsAlpha', 'label': 'UseMainTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_VFXSpecialBlendTexRForDisturb', 'label': 'Use Blend Tex R For Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_VFXBlendTint', 'label': 'BlendTint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXSpecialParam', 'label': 'VFX Special Param(XY: MainTex, ZW: BlendTex)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_VFXFresnelColor', 'label': 'Fresnel Color', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_VFXFresnelBias', 'label': 'Fresnel Bias(Default:0)', 'kind': 'SLIDER', 'size': 1, 'min': -1.0, 'max': 2.0, 'default': [0.0]},
+        {'name': '_VFXFresnelAffectOpacity', 'label': 'Fresnel Affect Opacity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_VFXFresnelPower', 'label': 'Fresnel Power(Default:1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_VFXFresnelFlip', 'label': 'Fresnel Flip', 'kind': 'SWITCH', 'size': 1, 'default': [0.001]},
+        {'name': '_SpecialDissolveScheduleOffset', 'label': 'Dissolve Schedule Offset', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [0.0]},
+    ]},
+    {'name': '特效贴图/流动', 'gate': None, 'rows': [
+        {'name': '_MainTex', 'label': 'Main Tex', 'kind': 'TEXTURE'},
+        {'name': '_BlendTex', 'label': 'Blend Tex', 'kind': 'TEXTURE'},
+        {'name': '_MaskTex', 'label': 'Mask Tex', 'kind': 'TEXTURE'},
+        {'name': '_DisturbTex1', 'label': 'Disturb Tex 1', 'kind': 'TEXTURE'},
+        {'name': '_NormalMap', 'label': '法线图', 'kind': 'TEXTURE'},
+        {'name': '_BlendMode', 'label': 'Blend Type', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisableVertColor', 'label': 'Disable VertColor', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_InParticle', 'label': 'Use In Particle', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_VertCameraOffset', 'label': '顶点向相机偏移(单位米)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_TintColor', 'label': 'TintColor', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_TintColorIntensity', 'label': 'Tint Color Intensity (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 1.0, 'max': 100.0, 'default': [1.0]},
+        {'name': '_TintColorAlpha', 'label': 'Tint Color Alpha (Default 1)', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [1.0]},
+        {'name': '_UseMainTexAsAlpha', 'label': 'UseMainTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_MainTexUseDisturb', 'label': 'Main Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [1.0]},
+        {'name': '_MainTexUVSpeed', 'label': 'MainTexUVSpeed(XY:By Time,ZW:By Custom1.X)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_MainTexUVRotateMat', 'label': 'MainTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MainTexUVWeights', 'label': '\'_MainTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_UseMaskTexAsAlpha', 'label': 'UseMaskTexAsAlpha', 'kind': 'SWITCH', 'size': 1, 'default': [1.0]},
+        {'name': '_MaskTexUseDisturb', 'label': 'Mask Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_MaskTexUVSpeed', 'label': 'MaskTaexUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_MaskTexUVRotateMat', 'label': 'MaskTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_MaskTexUVWeights', 'label': '\'_MaskTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTexUseDisturb', 'label': 'Blend Tex Use Disturb', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.0]},
+        {'name': '_BlendTexUVSpeed', 'label': 'BlendTexUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTexUVRotateMat', 'label': 'BlendTexUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_BlendTexUVWeights', 'label': '\'_BlendTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_BlendTint', 'label': 'BlendTint', 'kind': 'HDRCOLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+        {'name': '_Bi_Disturb', 'label': 'Disturbe in 2 Direction', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbTex1Normal', 'label': 'Disturb Tex1 is Normal', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbUIntensity1', 'label': 'UIntensity1', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbVIntensity1', 'label': 'VIntensity1(Unused In Normal)', 'kind': 'VALUE', 'size': 1, 'default': [0.0]},
+        {'name': '_DisturbUVSpeed1', 'label': 'DisturbUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_DisturbUVRotateMat1', 'label': 'DisturbUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_DisturbUVWeights1', 'label': '\'_DisturbTexUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+        {'name': '_NormalMapUVSpeed', 'label': 'NormalMapUVSpeed(XY:By Time,ZW:By Custom1.Y)', 'kind': 'VECTOR', 'size': 4, 'default': [0.0, 0.0, 0.0, 0.0]},
+        {'name': '_NormalMapUVRotateMat', 'label': 'NormalMapUVRotateMat', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 1.0]},
+        {'name': '_NormalMapUVWeights', 'label': '\'_NormalMapUVWeights\'', 'kind': 'VECTOR', 'size': 4, 'default': [1.0, 0.0, 0.0, 0.0]},
+    ]},
+    {'name': '特效菲涅尔/近淡出', 'gate': None, 'rows': [
+        {'name': '_UseNearCameraFade', 'label': 'Use Near Camera Fade', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_NearCameraFadeDistanceStart', 'label': '消失距离1', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [0.001]},
+        {'name': '_NearCameraFadeDistanceEnd', 'label': '出现距离1', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [10.0]},
+        {'name': '_NearCameraFadeDistanceEnd2', 'label': '出现距离2', 'kind': 'SLIDER', 'size': 1, 'min': 0.002, 'max': 3000.0, 'default': [100.0]},
+        {'name': '_NearCameraFadeDistanceStart2', 'label': '消失距离2', 'kind': 'SLIDER', 'size': 1, 'min': 0.001, 'max': 3000.0, 'default': [120.0]},
+    ]},
+    {'name': '特效杂项', 'gate': None, 'rows': [
+        {'name': '_UseGrayAsAlpha', 'label': 'Use Gray As Alpha', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ShadowAngleRange', 'label': 'Shadow Angle Range', 'kind': 'SLIDER', 'size': 1, 'min': -0.01, 'max': 0.01, 'default': [0.0]},
+    ]},
+    {'name': '特效调色', 'gate': '_EnableVFXColorAdjustment', 'rows': [
+        {'name': '_EnableVFXColorAdjustment', 'label': 'VFX Color Adjustment', 'kind': 'SWITCH', 'size': 1, 'default': [0.0]},
+        {'name': '_ColorAdjustmentContrast', 'label': 'Color Adjustment Contrast', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ColorAdjustmentSaturation', 'label': 'Color Adjustment Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.0]},
+        {'name': '_ColorAdjustmentBrightness', 'label': 'Color Adjustment Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.5, 'max': 1.5, 'default': [1.0]},
+        {'name': '_ColorAdjustmentRimWidth', 'label': 'Color Adjustment Rim Width', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.35]},
+        {'name': '_ColorAdjustmentRimIntensity', 'label': 'Color Adjustment Rim Intensity', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 10.0, 'default': [4.0]},
+        {'name': '_ColorAdjustmentColorBlend', 'label': 'Color Adjustment Color Blend', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 0.0]},
+        {'name': '_ColorAdjustmentRimColor', 'label': 'Color Adjustment Rim Color', 'kind': 'COLOR', 'size': 4, 'default': [1.0, 1.0, 1.0, 1.0]},
+    ]},
+    {'name': '描边', 'gate': None, 'rows': [
+        {'name': '_OutlineColorBrightness', 'label': 'Outline Color Brightness', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 1.0, 'default': [0.5]},
+        {'name': '_OutlineColorSaturation', 'label': 'Outline Color Saturation', 'kind': 'SLIDER', 'size': 1, 'min': 0.0, 'max': 2.0, 'default': [1.5]},
+    ]},
+]
+
+
+_PANEL_GUARD = [False]
+_PANEL_REGISTERED = []
+
+
+def _panel_attr(name):
+    return 'p' + name
+
+
+def _panel_rows():
+    for group in INTERFACE:
+        for row in group['rows']:
+            yield row
+
+
+def _panel_insts(mat):
+    """级联组实例按建图序(ruri_inst 标记;与 rewire_capabilities 同一判据)。"""
+    nt = mat.node_tree
+    if nt is None:
+        return []
+    return sorted((n for n in nt.nodes if n.get('ruri_inst') is not None),
+                  key=lambda n: int(n['ruri_inst']))
+
+
+def _panel_vertex_nodes(mat):
+    """本材质的顶点腿克隆组实例(壳位移 + 描边)。没有顶点腿的目标返回空——
+    globals() 探测的是目标形态(该产物有没有发射顶点腿),不是运行时兜底。"""
+    prefix_v = globals().get('CLONE_V_PREFIX')
+    prefix_o = globals().get('CLONE_O_PREFIX')
+    modifier = globals().get('VTX_MODIFIER')
+    if not modifier:
+        return []
+    names = {p + mat.name for p in (prefix_v, prefix_o) if p}
+    nodes = []
+    for obj in bpy.data.objects:
+        mod = obj.modifiers.get(modifier)
+        tree = getattr(mod, 'node_group', None) if mod is not None else None
+        if tree is None:
+            continue
+        for node in tree.nodes:
+            sub = getattr(node, 'node_tree', None)
+            if sub is not None and sub.name in names:
+                nodes.append(node)
+    return nodes
+
+
+def _panel_touch(mat):
+    # 纯数据写不触发依赖图,必须自己打脏标记(rewire_capabilities 同款教训)。
+    if mat.node_tree is not None:
+        mat.node_tree.update_tag()
+    mat.update_tag()
+
+
+def _panel_write(mat, row, value):
+    """面板值 → 全部级联实例 socket + 快照字典 + 顶点腿克隆输入,一次到位。"""
+    name = row['name']
+    kind = row['kind']
+    insts = _panel_insts(mat)
+    if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+        scalar = (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)
+        for grp in insts:
+            sock = grp.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                sock.default_value = scalar
+        for node in _panel_vertex_nodes(mat):
+            sock = node.inputs.get(name)
+            if sock is not None:
+                sock.default_value = scalar
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        floats[name] = scalar
+        mat['ruri_uber_floats'] = floats
+    else:
+        vec4 = [float(v) for v in value] + [0.0] * 4
+        vec4 = vec4[:4]
+        xyz = (vec4[0], vec4[1], vec4[2])
+        for grp in insts:
+            sock = grp.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                sock.default_value = xyz
+            tail = grp.inputs.get(name + '_w')
+            if tail is not None and not tail.is_linked and row['size'] >= 4:
+                tail.default_value = vec4[3]
+        for node in _panel_vertex_nodes(mat):
+            sock = node.inputs.get(name)
+            if sock is not None:
+                try:
+                    sock.default_value = xyz
+                except (TypeError, ValueError):
+                    pass
+        colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+        colors[name] = vec4
+        mat['ruri_uber_colors'] = colors
+    _panel_touch(mat)
+
+
+def _panel_write_image(mat, row, image):
+    """贴图槽换图。清空 = 回落到该槽的中性占位图(槽语义中性,不是黑)。
+    只写本材质自有数据:链接库模板(library 非空)只读且跨材质共享,跳过。"""
+    name = row['name']
+    _images()
+    target = image if image is not None else bpy.data.images.get(name)
+    imgs = dict(mat.get('ruri_uber_images') or {})
+    if image is None:
+        imgs.pop(name, None)
+    else:
+        imgs[name] = image.name
+    mat['ruri_uber_images'] = imgs
+
+    def swap(tree, depth=0):
+        if tree is None or depth > 4 or tree.library is not None:
+            return
+        for node in tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                if target is not None:
+                    _swap_image(node, target)
+            elif node.type == 'GROUP':
+                swap(node.node_tree, depth + 1)
+
+    swapped = [0]
+    if mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                if target is not None:
+                    _swap_image(node, target)
+                    swapped[0] += 1
+            elif node.type == 'GROUP':
+                swap(node.node_tree, 1)
+    if not swapped[0] and target is not None and image is not None and mat.node_tree is not None:
+        # 建线,不只换图:导入期没绑图的槽根本没有采样节点。走导入期同一条
+        # _wire_fetch/_sample 链(FETCHES/ZONES 是唯一采样语义真源,面板不自己发明)。
+        part = mat.get('ruri_uber_part', '')
+        g = G(mat.node_tree, is_group=False)
+        ordered = _panel_insts(mat)
+        for fetch in FETCHES.get(part, ()):
+            if fetch['slot'] == name and not fetch['env']:
+                _wire_fetch(g, ordered, fetch, target)
+        for zone in ZONES.get(part, ()):
+            zone_rows = [f for f in zone['fetches'] if f['slot'] == name and not f['env']]
+            if not zone_rows:
+                continue
+            binsts = sorted((n for n in mat.node_tree.nodes if n.get('ruri_zone') == zone['sock']),
+                            key=lambda n: int(n['ruri_binst']))
+            if not binsts:
+                continue
+            for fetch in zone_rows:
+                src = binsts[fetch['depth']]
+                heads = binsts[fetch['depth'] + 1:]
+                color, alpha, _anchor = _sample(g, fetch, target, src.outputs[fetch['sock'] + '_uv'])
+                _feed(g, heads, fetch['sock'], color, alpha)
+    for group_node in _panel_vertex_nodes(mat):
+        sub = group_node.node_tree
+        if sub is None or target is None:
+            continue
+        for node in sub.nodes:
+            if node.bl_idname == 'GeometryNodeImageTexture' and _slot_of(node.label or '') == name:
+                holder = node.inputs['Image'].default_value
+                non_color = holder is not None and holder.colorspace_settings.name == 'Non-Color'
+                node.inputs['Image'].default_value = target
+                try:
+                    target.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+                except Exception:
+                    pass
+                if non_color:
+                    _fix_two_channel_layout(target)
+    _panel_touch(mat)
+
+
+def _panel_write_st(mat, row):
+    """平铺/偏移 → _ST socket 对 + 顶点期 uv 变换节点 + 描边 mask ST(同一真值三消费面)。"""
+    name = row['name']
+    pg = getattr(mat, _PANEL_PROP)
+    tiling = getattr(pg, 't' + name)
+    offset = getattr(pg, 'o' + name)
+    st_value = [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]
+    st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
+    st[name] = st_value
+    mat['ruri_uber_st'] = st
+    for grp in _panel_insts(mat):
+        sock = grp.inputs.get(name + '_ST')
+        if sock is not None and not sock.is_linked:
+            sock.default_value = (st_value[0], st_value[1], st_value[2])
+        tail = grp.inputs.get(name + '_ST_w')
+        if tail is not None and not tail.is_linked:
+            tail.default_value = st_value[3]
+    if row.get('st_node') and mat.node_tree is not None:
+        for node in mat.node_tree.nodes:
+            if node.label == row['st_node']:
+                node.inputs['Scale'].default_value = (st_value[0], st_value[1], 1.0)
+                node.inputs['Location'].default_value = (st_value[2], st_value[3], 0.0)
+        for group_node in _panel_vertex_nodes(mat):
+            scale_sock = group_node.inputs.get('mask_st_scale')
+            offset_sock = group_node.inputs.get('mask_st_offset')
+            if scale_sock is not None:
+                scale_sock.default_value = (st_value[0], st_value[1], 0.0)
+            if offset_sock is not None:
+                offset_sock.default_value = (st_value[2], st_value[3], 0.0)
+    _panel_touch(mat)
+
+
+def _panel_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write(self.id_data, row, getattr(self, _panel_attr(row['name'])))
+    return update
+
+
+def _panel_image_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write_image(self.id_data, row, getattr(self, _panel_attr(row['name'])))
+    return update
+
+
+def _panel_st_updater(row):
+    def update(self, _context):
+        if not _PANEL_GUARD[0]:
+            _panel_write_st(self.id_data, row)
+    return update
+
+
+def _panel_bound_image(mat, slot):
+    def walk(tree, depth=0):
+        if tree is None or depth > 4:
+            return None
+        for node in tree.nodes:
+            if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == slot:
+                img = node.image
+                if img is not None and not img.get('ruri_placeholder'):
+                    return img
+            elif node.type == 'GROUP':
+                hit = walk(node.node_tree, depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+    return walk(mat.node_tree)
+
+
+def panel_sync(mat):
+    """图/快照 → 面板回读(守卫防触发写路径)。provider 每次建完自动调;
+    图被外部改动后由面板刷新按钮手动触发。"""
+    pg = getattr(mat, _PANEL_PROP, None)
+    if pg is None:
+        return False
+    insts = _panel_insts(mat)
+    if not insts:
+        return False
+    first = insts[0]
+    floats = dict(mat.get('ruri_uber_floats') or {})
+    st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
+    colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+    images = dict(mat.get('ruri_uber_images') or {})
+    _PANEL_GUARD[0] = True
+    try:
+        for row in _panel_rows():
+            name = row['name']
+            attr = _panel_attr(name)
+            kind = row['kind']
+            if kind == 'TEXTURE':
+                img = bpy.data.images.get(images.get(name, ''))
+                if img is None:
+                    img = _panel_bound_image(mat, name)
+                try:
+                    setattr(pg, attr, img)
+                except Exception:
+                    pass
+                value = st.get(name)
+                if value is None:
+                    sock = first.inputs.get(name + '_ST')
+                    if sock is not None and not sock.is_linked:
+                        tail = first.inputs.get(name + '_ST_w')
+                        raw = sock.default_value
+                        value = [raw[0], raw[1], raw[2],
+                                 tail.default_value if tail is not None else 0.0]
+                if value is not None:
+                    setattr(pg, 't' + name, (value[0], value[1]))
+                    setattr(pg, 'o' + name, (value[2], value[3]))
+                continue
+            sock = first.inputs.get(name)
+            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+                value = floats.get(name)
+                if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
+                    value = sock.default_value
+                if value is None:
+                    continue
+                setattr(pg, attr, bool(value > 0.5) if kind == 'SWITCH'
+                        else int(value) if kind == 'INT' else float(value))
+            else:
+                value = colors.get(name)
+                if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
+                    tail = first.inputs.get(name + '_w')
+                    raw = sock.default_value
+                    value = [raw[0], raw[1], raw[2],
+                             tail.default_value if tail is not None and not tail.is_linked else 1.0]
+                if value is None:
+                    continue
+                spread = (list(value) + [0.0] * 4)[:row['size']]
+                setattr(pg, attr, tuple(float(x) for x in spread))
+    finally:
+        _PANEL_GUARD[0] = False
+    return True
+
+
+def _panel_slots(mat):
+    """本材质有意义的贴图槽 = .mat 绑定 ∪ 本 part 的割点表(顶层/循环体)∪ 顶点腿图节点。
+    全部按既有表判定,零平行清单。"""
+    part = mat.get('ruri_uber_part', '')
+    slots = set(dict(mat.get('ruri_uber_images') or {}).keys())
+    for fetch in FETCHES.get(part, ()):
+        slots.add(fetch['slot'])
+    for zone in ZONES.get(part, ()):
+        for fetch in zone['fetches']:
+            slots.add(fetch['slot'])
+    for group_node in _panel_vertex_nodes(mat):
+        sub = group_node.node_tree
+        if sub is None:
+            continue
+        for node in sub.nodes:
+            if node.bl_idname == 'GeometryNodeImageTexture' and node.label:
+                slots.add(_slot_of(node.label))
+    return slots
+
+
+def _panel_visible(insts, slots, row):
+    """变体折叠掉的死支参数没有 socket → 不画。判据 = 图自己,不是另一张表。"""
+    if row['kind'] == 'TEXTURE':
+        return row['name'] in slots
+    name = row['name']
+    for grp in insts:
+        if grp.inputs.get(name) is not None:
+            return True
+    return False
+
+
+def _panel_classes():
+    toggle_idname = PANEL_KEY + '.toggle_group'
+    sync_idname = PANEL_KEY + '.sync_panel'
+
+    class Toggle(bpy.types.Operator):
+        bl_idname = toggle_idname
+        bl_label = '展开/折叠分组'
+        bl_options = {'INTERNAL'}
+        group: bpy.props.IntProperty()
+
+        def execute(self, context):
+            pg = getattr(context.material, _PANEL_PROP)
+            key = '_open_%d' % self.group
+            pg[key] = 0 if pg.get(key) else 1
+            return {'FINISHED'}
+
+    class Sync(bpy.types.Operator):
+        bl_idname = sync_idname
+        bl_label = '从图同步面板'
+        bl_description = '图被重建或外部改动后,把面板回读到当前值'
+        bl_options = {'INTERNAL'}
+
+        def execute(self, context):
+            panel_sync(context.material)
+            return {'FINISHED'}
+
+    class Panel(bpy.types.Panel):
+        bl_idname = 'RURI_PT_' + PANEL_KEY
+        bl_label = PANEL_TITLE
+        bl_space_type = 'PROPERTIES'
+        bl_region_type = 'WINDOW'
+        bl_context = 'material'
+
+        @classmethod
+        def poll(cls, context):
+            mat = getattr(context, 'material', None)
+            return (mat is not None and mat.get('ruri_uber_part') is not None
+                    and getattr(mat, _PANEL_PROP, None) is not None)
+
+        def draw(self, context):
+            mat = context.material
+            pg = getattr(mat, _PANEL_PROP)
+            layout = self.layout
+            layout.use_property_split = True
+            layout.use_property_decorate = False
+            head = layout.row(align=True)
+            head.label(text='{0} · {1}'.format(mat.get('ruri_uber_part', ''),
+                                               mat.get('ruri_uber_shader', '') or ''), icon='MATERIAL')
+            head.operator(sync_idname, text='', icon='FILE_REFRESH')
+            insts = _panel_insts(mat)
+            slots = _panel_slots(mat)
+            for index, group in enumerate(INTERFACE):
+                rows = [r for r in group['rows'] if _panel_visible(insts, slots, r)]
+                if not rows:
+                    continue
+                gate = group['gate']
+                box = layout.box()
+                header = box.row(align=True)
+                opened = bool(pg.get('_open_%d' % index))
+                arrow = header.operator(toggle_idname, text='', emboss=False,
+                                        icon='TRIA_DOWN' if opened else 'TRIA_RIGHT')
+                arrow.group = index
+                header.label(text=group['name'])
+                gate_open = True
+                gate_attr = _panel_attr(gate) if gate else None
+                if gate_attr is not None and hasattr(pg, gate_attr):
+                    header.prop(pg, gate_attr, text='')
+                    gate_open = bool(getattr(pg, gate_attr))
+                if not opened:
+                    continue
+                column = box.column()
+                column.active = gate_open
+                for row in rows:
+                    if gate is not None and row['name'] == gate:
+                        continue
+                    self.draw_row(column, pg, insts, row)
+
+        def draw_row(self, column, pg, insts, row):
+            attr = _panel_attr(row['name'])
+            if row['kind'] != 'TEXTURE':
+                column.prop(pg, attr)
+                return
+            split = column.split(factor=0.4)
+            split.label(text=row['label'])
+            split.template_ID(pg, attr, open='image.open')
+            has_st = bool(row.get('st_node')) or any(
+                grp.inputs.get(row['name'] + '_ST') is not None for grp in insts)
+            if has_st:
+                sub = column.column(align=True)
+                sub.prop(pg, 't' + row['name'], text='平铺')
+                sub.prop(pg, 'o' + row['name'], text='偏移')
+
+    return Toggle, Sync, Panel
+
+
+def _panel_register():
+    """INTERFACE → PropertyGroup(动态注解)+ 面板 + 操作符。幂等:先卸旧再注册。"""
+    _panel_unregister()
+    annotations = {}
+    for row in _panel_rows():
+        attr = _panel_attr(row['name'])
+        kind = row['kind']
+        if kind == 'TEXTURE':
+            annotations[attr] = bpy.props.PointerProperty(
+                type=bpy.types.Image, name=row['label'], update=_panel_image_updater(row))
+            annotations['t' + row['name']] = bpy.props.FloatVectorProperty(
+                name='平铺', size=2, default=(1.0, 1.0), update=_panel_st_updater(row))
+            annotations['o' + row['name']] = bpy.props.FloatVectorProperty(
+                name='偏移', size=2, default=(0.0, 0.0), update=_panel_st_updater(row))
+            continue
+        default = list(row.get('default') or [])
+        if kind == 'SWITCH':
+            annotations[attr] = bpy.props.BoolProperty(
+                name=row['label'], default=bool(default and default[0] > 0.5),
+                update=_panel_updater(row))
+        elif kind == 'INT':
+            annotations[attr] = bpy.props.IntProperty(
+                name=row['label'], default=int(default[0]) if default else 0,
+                update=_panel_updater(row))
+        elif kind in ('VALUE', 'SLIDER'):
+            keywords = {'name': row['label'],
+                        'default': float(default[0]) if default else 0.0,
+                        'update': _panel_updater(row)}
+            if kind == 'SLIDER':
+                keywords['min'] = row['min']
+                keywords['max'] = row['max']
+            annotations[attr] = bpy.props.FloatProperty(**keywords)
+        else:
+            size = row['size']
+            fill = (default + [0.0] * 4)[:size]
+            keywords = {'name': row['label'], 'size': size,
+                        'update': _panel_updater(row)}
+            if kind == 'COLOR':
+                keywords.update(subtype='COLOR', min=0.0, max=1.0)
+                fill = [min(max(v, 0.0), 1.0) for v in fill]
+            elif kind == 'HDRCOLOR':
+                keywords.update(subtype='COLOR', min=0.0, soft_max=1.0)
+            keywords['default'] = tuple(fill)
+            annotations[attr] = bpy.props.FloatVectorProperty(**keywords)
+    group_cls = type('RURI_PG_' + PANEL_KEY, (bpy.types.PropertyGroup,),
+                     {'__annotations__': annotations})
+    bpy.utils.register_class(group_cls)
+    _PANEL_REGISTERED.append(group_cls)
+    setattr(bpy.types.Material, _PANEL_PROP, bpy.props.PointerProperty(type=group_cls))
+    for cls in _panel_classes():
+        bpy.utils.register_class(cls)
+        _PANEL_REGISTERED.append(cls)
+
+
+def _panel_unregister():
+    if hasattr(bpy.types.Material, _PANEL_PROP):
+        try:
+            delattr(bpy.types.Material, _PANEL_PROP)
+        except Exception:
+            pass
+    while _PANEL_REGISTERED:
+        cls = _PANEL_REGISTERED.pop()
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+
+
 def register():
     # 宿主注册表按**绝对路径**导入(配方给的名字):相对导入会绑死部署深度,
     # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
@@ -11373,9 +15791,11 @@ def register():
     host.register_vertex_stage(apply_vertex_stage)
     host.register_capability_rewire(rewire_capabilities)
     host.register_light_table_refresh(refresh_light_tables)
+    _panel_register()
 
 
 def unregister():
+    _panel_unregister()
     import importlib
     host = importlib.import_module('RuriRipperImporter.material_builder')
     host.unregister_graph_provider(provider)
