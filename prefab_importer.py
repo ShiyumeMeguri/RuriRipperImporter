@@ -14,7 +14,7 @@ from mathutils import Matrix
 # prefab UnityFile) that appear in almost every function below.
 try:
     from . import (armature_builder, coordinate, animation_builder,
-                   material_builder, mesh_builder)
+                   light_units, material_builder, mesh_builder)
     from .RuriRipperPyBridge.unity import (asset_db, clip_curves,
                                       clip_paths as clip_repair, discovery,
                                       mesh_decoder, prefab as prefab_scan, skinning)
@@ -22,6 +22,7 @@ except ImportError:  # standalone (non-package) testing
     import armature_builder
     import coordinate
     import animation_builder
+    import light_units
     import material_builder
     import mesh_builder
     from RuriRipperPyBridge.unity import (asset_db, clip_curves,
@@ -43,6 +44,11 @@ DEFAULT_OPTIONS = {
     "flip_v": False,
     "import_shadow_proxies": False,
     "import_empties": False,
+    # The frame-level exposure the source pipeline applies to all scene radiance
+    # and Blender does not (see light_units). 1.0 = state none. A host that knows
+    # the environment being reproduced puts ITS number here, and every light this
+    # import builds is converted through it -- one channel, no globals.
+    "pre_exposure": 1.0,
     # Which game this import is of (the upstream GameType member). The host knows it;
     # the importer only stamps what it is told, so nothing here names a game.
     "source_game": "",
@@ -412,7 +418,7 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
             report.cameras.append(obj)
             content.setdefault(camera.node.file_id, obj)
         for light in prefab_scan.iter_lights(prefab, go_to_node, options):
-            obj = _light_object(light)
+            obj = _light_object(light, options)
             report.lights.append(obj)
             content.setdefault(light.node.file_id, obj)
         _build_object_tree(context, nodes, maps["roots"], content, options, top_level, report)
@@ -595,11 +601,12 @@ def _camera_object(camera):
     return obj
 
 
-def _light_object(light):
-    kind = {0: "SPOT", 1: "SUN", 2: "POINT"}.get(light.type, "AREA")
+def _light_object(light, options):
+    kind = light_units.blender_type(light.type)
     data = bpy.data.lights.new(light.name, kind)
     data.color = light.color
-    data.energy = light.intensity
+    data.energy = light_units.energy_for(light.type, light.intensity, light.area_size,
+                                         options["pre_exposure"])
     if kind == "SPOT":
         data.spot_size = math.radians(light.spot_angle)
         if light.spot_angle > 0.0:

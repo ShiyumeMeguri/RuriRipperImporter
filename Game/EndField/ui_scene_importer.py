@@ -3,10 +3,15 @@
 Three things arrive, each straight out of the stage's own assets and none of them
 invented here:
 
-``HGEnvironmentPhase``   the sun -- direction, colour temperature, and an
-                         intensity that is already pre-exposed the way the game
-                         pre-exposes it (see ``_sun``), plus the sky's own
-                         ambient SH as the world colour.
+``HGEnvironmentPhase``   the sun -- direction, colour temperature, intensity --
+                         plus the sky's own ambient SH as the world colour, and
+                         the stage's own frame EXPOSURE, which every radiance
+                         above is written through (see ``pre_exposure``). The
+                         exposure is not optional decoration: the game displays
+                         ``radiance * preExposure`` and this add-on reproduces
+                         the game's tone mapper, so radiance handed over raw
+                         arrives thousands of times too bright and clips white
+                         before any grade can see it.
 ``HGCharacterVolume``    the character-lighting overrides, pushed onto every
                          Endfield uber material in the scene as its
                          ``_CharacterParams*`` inputs (see BINDINGS -- which
@@ -26,7 +31,7 @@ import bpy
 import numpy
 from mathutils import Vector
 
-from ... import coordinate, material_builder, prefab_importer
+from ... import coordinate, light_units, material_builder, prefab_importer
 from . import datasets, ui_scene_state
 
 STAGE_COLLECTION = "Endfield UI Stage"
@@ -38,6 +43,7 @@ MAIN_CAMERA_TAG = "MainCamera"
 # a world colour, one input of a shader group.
 LIGHT_DIRECTION = "light.direction"
 LIGHT_ENERGY = "light.energy"
+LIGHT_PRE_EXPOSURE = "light.preExposure"
 LIGHT_ANGLE = "light.angle"
 LIGHT_COLOR = "light.color"
 LIGHT_TEMPERATURE = "light.temperature"
@@ -75,23 +81,54 @@ def _scalar(value):
     return float(value)
 
 
+def pre_exposure(env_data):
+    """The stage's own frame exposure, or 1.0 when it states none.
+
+    The game multiplies ALL scene radiance by this before tone mapping, and this
+    add-on ports the tone mapper itself into the compositor -- so the exposure
+    has to be in the values the compositor RECEIVES. A stage that carries no
+    usable number (zero, absent, negative) states no exposure rather than a
+    black scene, and the caller says so out loud instead of silently rendering
+    something thousands of times too bright."""
+    for binding in datasets.ui_bindings():
+        if binding["target"] != LIGHT_PRE_EXPOSURE:
+            continue
+        value = _resolve(env_data, binding["source"])
+        if value is None:
+            continue
+        scalar = _scalar(value)
+        return scalar if scalar > 0.0 else 1.0
+    return 1.0
+
+
 def apply_environment(context, env_data, name="Endfield Sun"):
     """Build/replace the stage's sun and world from its own environment asset,
     one published binding at a time. Nothing here knows which field of the
-    asset means what -- only how to write a Blender light and a world."""
-    sun = None
+    asset means what -- only how to write a Blender light and a world.
+
+    Every radiance the stage states (the sun's energy, the sky's ambient) is
+    written PRE-EXPOSED, by the stage's own exposure -- see ``pre_exposure``.
+    The bindings are collected before anything is written because energy and
+    exposure are one product: applying them as they arrive would make the
+    result depend on the row order of a data table."""
+    exposure = pre_exposure(env_data)
+    values = {}
     for binding in datasets.ui_bindings():
         target = binding["target"]
         if not (target.startswith("light.") or target.startswith("world.")):
             continue
         value = _resolve(env_data, binding["source"])
-        if value is None:
-            continue
-        if target == WORLD_COLOR:
-            _world(context, value)
-            continue
-        sun = sun or _sun(context, name)
-        _write_light(sun, target, value)
+        if value is not None:
+            values[target] = value
+
+    if WORLD_COLOR in values:
+        _world(context, values.pop(WORLD_COLOR), exposure)
+    values.pop(LIGHT_PRE_EXPOSURE, None)
+    if not values:
+        return None
+    sun = _sun(context, name)
+    for target, value in values.items():
+        _write_light(sun, target, value, exposure)
     return sun
 
 
@@ -110,14 +147,17 @@ def _sun(context, name):
     return obj
 
 
-def _write_light(obj, target, value):
+def _write_light(obj, target, value, exposure):
     """One binding onto the sun.
 
     A direction is the direction the light TRAVELS, already resolved by the game
     from its pitch/yaw; Blender's sun shines down its own -Z, so the object
-    simply tracks that vector. Energy goes in unchanged: both sides divide by pi
-    for the Lambert term, so the two agree without a fudge factor. A colour
-    temperature travels as Kelvin, which Blender carries on the light itself."""
+    simply tracks that vector. The intensity crosses as a directional
+    irradiance, which is 1:1 (both sides divide by pi for the Lambert term --
+    the game even stores the quotient, ``directIntensityDividePi``), times the
+    stage's own pre-exposure -- see light_units for why the exposure belongs in
+    the value rather than in view_settings. A colour temperature travels as
+    Kelvin, which Blender carries on the light itself."""
     data = obj.data
     if target == LIGHT_DIRECTION:
         if not isinstance(value, dict):
@@ -131,7 +171,7 @@ def _write_light(obj, target, value):
             obj.rotation_mode = "QUATERNION"
             obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
     elif target == LIGHT_ENERGY:
-        data.energy = _scalar(value)
+        data.energy = light_units.directional_energy(_scalar(value), exposure)
     elif target == LIGHT_ANGLE:
         data.angle = 2.0 * _scalar(value)
     elif target == LIGHT_COLOR:
@@ -146,15 +186,18 @@ def _write_light(obj, target, value):
             data.temperature = _scalar(value)
 
 
-def _world(context, ambient):
+def _world(context, ambient, exposure):
     """The stage's ambient, as the DC term of its own baked sky SH.
 
     Only the constant term is used: the character shader takes its ambient from
     the character volume rather than the world, so what the world owes the scene
-    is the backdrop level, and that is sh[0] per channel."""
+    is the backdrop level, and that is sh[0] per channel. Pre-exposed by the same
+    factor as the sun -- an exposure that reached one and not the other would
+    change the balance between them, which is worse than applying neither."""
     if not isinstance(ambient, dict):
         return None
-    channels = [float(ambient.get("sh[{0:2d}]".format(base), 0.0)) for base in (0, 9, 18)]
+    channels = [float(ambient.get("sh[{0:2d}]".format(base), 0.0)) * exposure
+                for base in (0, 9, 18)]
     world = context.scene.world
     if world is None:
         world = bpy.data.worlds.new("Endfield UI Stage")
