@@ -852,21 +852,28 @@ def import_asset(context, path, options=None):
     return import_prefab(context, path, options)
 
 
-def _armature_of(obj):
-    """The armature ``obj`` stands for: itself, or -- for a mesh -- the rig that
-    actually drives it (its Armature modifier's object first, the binding truth;
-    an armature parent as the structural fallback)."""
+def armature_of(obj):
+    """The armature ``obj`` stands for -- the ONE rule every flow in this add-on
+    resolves a rig by, so "which skeleton did I pick" never means two things.
+
+    An Armature MODIFIER pointing at a rig IS the binding, so selecting a mesh
+    that carries one is exactly as good as selecting the skeleton itself: that
+    is what the user is looking at and clicking on, and requiring the rig object
+    to be picked out of the outliner instead is a demand with no meaning behind
+    it. An armature PARENT is the structural fallback, for something hung off a
+    bone with no modifier of its own.
+
+    Deliberately not gated on obj.type == "MESH": a curve, a lattice or any
+    other deformable carries the same modifier and means the same thing by it."""
     if obj is None:
         return None
     if obj.type == "ARMATURE":
         return obj
-    if obj.type == "MESH":
-        for modifier in obj.modifiers:
-            if modifier.type == "ARMATURE" and modifier.object is not None:
-                return modifier.object
-        if obj.parent is not None and obj.parent.type == "ARMATURE":
-            return obj.parent
-    return None
+    for modifier in getattr(obj, "modifiers", ()):
+        if modifier.type == "ARMATURE" and modifier.object is not None:
+            return modifier.object
+    parent = obj.parent
+    return parent if parent is not None and parent.type == "ARMATURE" else None
 
 
 def find_target_armature(context):
@@ -874,10 +881,10 @@ def find_target_armature(context):
     armature, or the armature a selected mesh is bound to), else the single
     rig the selection resolves to, else the scene's single armature. None when
     nothing resolves or the choice is ambiguous -- the caller words the error."""
-    active = _armature_of(getattr(context, "active_object", None))
+    active = armature_of(getattr(context, "active_object", None))
     if active is not None:
         return active
-    selected = {_armature_of(obj) for obj in getattr(context, "selected_objects", ())}
+    selected = {armature_of(obj) for obj in getattr(context, "selected_objects", ())}
     selected.discard(None)
     if len(selected) == 1:
         return next(iter(selected))

@@ -226,20 +226,15 @@ def _parent_to_bone(obj, armature, bone_name):
 
 
 def find_armature(context, name=""):
-    """The rig a later flow should act on: the named one, else the active object's,
-    else the only one in the scene."""
+    """The rig a later flow should act on: the named one, else whatever the
+    selection resolves to under the add-on's ONE rig rule
+    (prefab_importer.find_target_armature) -- so a skinned mesh stands for its
+    skeleton here exactly as it does everywhere else."""
     if name:
         found = bpy.data.objects.get(name)
         if found is not None and found.type == "ARMATURE":
             return found
-    active = context.view_layer.objects.active if context.view_layer else None
-    if active is not None:
-        if active.type == "ARMATURE":
-            return active
-        if active.parent is not None and active.parent.type == "ARMATURE":
-            return active.parent
-    armatures = [obj for obj in context.scene.objects if obj.type == "ARMATURE"]
-    return armatures[0] if len(armatures) == 1 else None
+    return prefab_importer.find_target_armature(context)
 
 
 def mesh_children(armature):
