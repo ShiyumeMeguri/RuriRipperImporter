@@ -623,14 +623,50 @@ def _drive(sock, obj, data_path, expr='v', extra=None):
     driver.expression = expr
 
 
-def _light_vector(g, light, column, label):
-    """灯物体世界矩阵的一列 → 一个 CombineXYZ,逐分量挂驱动器。
-    column=2 取旋转 Z 轴(Blender 灯沿本地 -Z 照射,故「指向光源」是 +Z);column=3 取平移(灯位置)。"""
+def _drive_transform(sock, obj, transform_type):
+    """socket ← 物体变换通道,走驱动器的 **TRANSFORMS 变量** —— 这是 Blender 读物体变换的
+    正规通道,依赖图按它建边、求值序有保证。曾用 SINGLE_PROP 直读 matrix_world[i][j]:
+    headless 求值序下矩阵还没算好,读到的是单位阵(灯位=0,整条附加光方向全错,实锤)。"""
+    fcurve = sock.driver_add('default_value')
+    driver = fcurve.driver
+    driver.type = 'SCRIPTED'
+    for old in list(driver.variables):
+        driver.variables.remove(old)
+    var = driver.variables.new()
+    var.name = 'v'
+    var.type = 'TRANSFORMS'
+    var.targets[0].id = obj
+    var.targets[0].transform_type = transform_type
+    var.targets[0].transform_space = 'WORLD_SPACE'
+    driver.expression = 'v'
+
+
+def _light_pos(g, light, label):
+    """灯的世界位置(TRANSFORMS LOC_*,动灯实时跟)。"""
     node = g._nd('ShaderNodeCombineXYZ')
     node.label = label
-    for i in range(3):
-        _drive(node.inputs[i], light, 'matrix_world[%d][%d]' % (i, column))
+    for i, tt in enumerate(('LOC_X', 'LOC_Y', 'LOC_Z')):
+        _drive_transform(node.inputs[i], light, tt)
     return node.outputs[0]
+
+
+def _light_axis(g, light, label):
+    """灯的世界 +Z 轴(指向光源;灯沿本地 -Z 照射)。世界欧拉角经 TRANSFORMS 驱动,
+    (0,0,1) 按 XYZ 序在图里用原生 VectorRotate 逐轴旋转 —— 全程 Blender 原生件。"""
+    rot = g._nd('ShaderNodeCombineXYZ')
+    rot.label = label
+    for i, tt in enumerate(('ROT_X', 'ROT_Y', 'ROT_Z')):
+        _drive_transform(rot.inputs[i], light, tt)
+    rx, ry, rz = g.sep(rot.outputs[0])
+    v = (0.0, 0.0, 1.0)
+    for axis_vec, angle in (((1.0, 0.0, 0.0), rx), ((0.0, 1.0, 0.0), ry), ((0.0, 0.0, 1.0), rz)):
+        nd = g._nd('ShaderNodeVectorRotate')
+        nd.rotation_type = 'AXIS_ANGLE'
+        g._set(nd.inputs['Vector'], v)
+        g._set(nd.inputs['Axis'], axis_vec)
+        g._set(nd.inputs['Angle'], angle)
+        v = nd.outputs[0]
+    return v
 
 
 def _cap_main_light(g, query, ctx):
@@ -664,9 +700,9 @@ def _cap_main_light(g, query, ctx):
             'layerMask': 1.0,
         }
     if light.data.type == 'SUN':
-        to_light = _light_vector(g, light, 2, 'RuriMainLightAxis')
+        to_light = _light_axis(g, light, 'RuriMainLightAxis')
     else:
-        to_light = g.vmath('SUBTRACT', _light_vector(g, light, 3, 'RuriMainLightPos'),
+        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
                            g.geo().outputs['Position'])
     tint = g._nd('ShaderNodeCombineXYZ')
     tint.label = 'RuriMainLightColor'
@@ -681,6 +717,78 @@ def _cap_main_light(g, query, ctx):
     }
 
 
+def _additional_lights(material):
+    """附加光 = 场景里除主光以外的所有可见灯,按名字定序。
+
+    「除主光以外」按对象取,不按类型:主光可能是场景 SUN,也可能是本材质自己覆盖的那盏。
+    定序按名字而不是枚举序 —— 场景里加删别的对象不该让灯的下标跳位。"""
+    main = _override_light(material) or _scene_sun()
+    lights = [o for o in bpy.context.scene.objects
+              if o.type == 'LIGHT' and o.visible_get() and o is not main]
+    return sorted(lights, key=lambda o: o.name)
+
+
+def _cap_additional_light_count(g, query, ctx):
+    """有几盏附加光 —— 装配期数得出来,直接给常量。这个值喂的是灯循环的迭代数socket。"""
+    _ = (g, query)
+    return {'': float(len(_additional_lights(ctx.get('material'))))}
+
+
+def _light_record(g, light):
+    """一盏灯的四个叶子,全部原生取自灯物体本身(驱动器绑活值,转灯换色实时跟)。
+
+    SUN 是平行光:方向恒为灯的 +Z 轴,无距离衰减。
+    POINT/SPOT/AREA 的方向随着色点变,按 归一化(灯位 − 着色点) 算;距离衰减取
+    **平方反比** —— 那正是 Blender 自己的灯遵循的落衰,不是自造公式(URP 那条额外的
+    range 窗口在 Blender 没有对应物:灯没有「范围」这个属性,故不编一个出来)。"""
+    tint = g._nd('ShaderNodeCombineXYZ')
+    tint.label = 'RuriLightColor_' + light.name
+    for i in range(3):
+        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
+    if light.data.type == 'SUN':
+        to_light = _light_axis(g, light, 'RuriLightAxis_' + light.name)
+        attenuation = 1.0
+    else:
+        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriLightPos_' + light.name),
+                           g.geo().outputs['Position'])
+        distance2 = g.vmath('DOT_PRODUCT', to_light, to_light)
+        attenuation = g.math('DIVIDE', 1.0, g.math('MAXIMUM', distance2, 1e-4))
+        if light.data.type == 'SPOT':
+            # 聚光锥 = Blender 自己的语义:spot_size 全角、spot_blend 内缘软化,
+            # cos 经驱动器算在灯数据上(动灯即时跟),锥内外过渡用 smoothstep(与 Cycles 同式)。
+            axis = g.vmath('NORMALIZE', _light_axis(g, light, 'RuriSpotAxis_' + light.name))
+            cone = g._nd('ShaderNodeCombineXYZ')
+            cone.label = 'RuriSpotCone_' + light.name
+            _drive(cone.inputs[0], light, 'data.spot_size', expr='cos(v / 2)')
+            _drive(cone.inputs[1], light, 'data.spot_size', expr='cos(v * (1 - e) / 2)',
+                   extra=('e', 'data.spot_blend'))
+            cos_outer, cos_inner, _cz = g.sep(cone.outputs[0])
+            cone_cos = g.vmath('DOT_PRODUCT', g.vmath('NORMALIZE', to_light), axis)
+            t = g.clampn(g.math('DIVIDE', g.math('SUBTRACT', cone_cos, cos_outer),
+                                g.math('MAXIMUM', g.math('SUBTRACT', cos_inner, cos_outer), 1e-4)))
+            smooth = g.math('MULTIPLY', g.math('MULTIPLY', t, t),
+                            g.math('SUBTRACT', 3.0, g.math('MULTIPLY', 2.0, t)))
+            attenuation = g.math('MULTIPLY', attenuation, smooth)
+    return {
+        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
+        'color': tint.outputs[0],
+        'distanceAttenuation': attenuation,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _cap_additional_light(g, query, ctx):
+    """附加光的**元素列表**(集合能力,Arity 槽)。
+
+    按什么下标选哪盏是**数学面**的事:选择链生成在共享树里,repeat zone 内逐迭代取对 ——
+    这里只回答「第 k 盏是谁」,一句选择逻辑都没有。旧的兑现面 select 链已删:
+    它在循环里必然全错(下标是 zone 内迭代变量,导出到组接口只剩最后一圈的值,
+    每圈都会选到同一盏灯)。超出槽位的灯不发光,装配器如实打印。"""
+    _ = query
+    return [_light_record(g, light) for light in _additional_lights(ctx.get('material'))]
+
+
 # 能力身份 → {引擎: 建图器}。建图器契约:答得出 → (值, w值) 二元组;答不出 → None。
 # '*' = 所有引擎同一答案(世界环境对 EEVEE 与 Cycles 是同一份数据:
 # 本腿的材质出口是 Emission + Transparent,两个引擎都不会给表面送任何接收光,间接光只能自取)。
@@ -688,6 +796,8 @@ CAP_BUILDERS = {
     'AmbientIrradiance': {'*': _cap_ambient_irradiance},
     'SpecularRadiance': {'*': _cap_specular_radiance},
     'MainLight': {'*': _cap_main_light},
+    'AdditionalLightCount': {'*': _cap_additional_light_count},
+    'AdditionalLight': {'*': _cap_additional_light},
 }
 
 
@@ -891,7 +1001,7 @@ ZONES = {
 
 CAPABILITIES = {
     'ShadowReceiver': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
     ],
 }
 
@@ -1182,22 +1292,35 @@ def _wire_capability(g, insts, cap, ctx):
     if answer is None:
         print('[ruri-cap] {0}: {1} 本场景答不出 → 缺席值'.format(engine, cap['cap']), flush=True)
         return
-    missing = [leaf for leaf in cap['results'] if leaf not in answer]
-    if missing:
-        # 半份答案比没有答案更坏:接上去的图看着对、算出来是错的。
-        raise RuntimeError('[ruri-cap] {0}: 建图器少答了结果叶 {1}'.format(cap['cap'], missing))
     for nd in g.t.nodes:
         if nd.as_pointer() not in before:
             nd['ruri_cap'] = cap['cap']   # 重接时按这个标记精确回收
-    for leaf, value in answer.items():
-        name = cap['sock'] + ('_' + leaf if leaf else '')
-        for c in heads:
-            s = c.inputs.get(name)
-            if s is not None:
-                g._set(s, value)
+    def _feed_record(record, prefix):
+        missing = [leaf for leaf in cap['results'] if leaf not in record]
+        if missing:
+            # 半份答案比没有答案更坏:接上去的图看着对、算出来是错的。
+            raise RuntimeError('[ruri-cap] {0}: 建图器少答了结果叶 {1}'.format(cap['cap'], missing))
+        for leaf, value in record.items():
+            name = prefix + ('_' + leaf if leaf else '')
+            for c in heads:
+                s = c.inputs.get(name)
+                if s is not None:
+                    g._set(s, value)
+    arity = cap.get('arity', 1)
+    if arity > 1:
+        # 集合能力:数据面只按槽位灌元素(第 k 槽 = 第 k 个),选择在数学面早就生成好了。
+        if not isinstance(answer, (list, tuple)):
+            raise RuntimeError('[ruri-cap] {0}: 集合能力的建图器必须返回列表'.format(cap['cap']))
+        if len(answer) > arity:
+            print('[ruri-cap] {0}: {1} 个元素 > {2} 个槽位,超出的不参与'.format(
+                cap['cap'], len(answer), arity), flush=True)
+        for k, record in enumerate(answer[:arity]):
+            _feed_record(record, cap['sock'] + '_' + str(k))
+        return
+    _feed_record(answer, cap['sock'])
 
 
-def _wire_zone(g, insts, zone, images, inst_sink, part):
+def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
     feed = insts[zone['depth']]
     heads = insts[zone['depth'] + 1:]
     body_tpl = bpy.data.node_groups[zone['body']]
@@ -1227,6 +1350,8 @@ def _wire_zone(g, insts, zone, images, inst_sink, part):
             out = feed.outputs.get(zone['sock'] + '_r_' + rname)
             if sock is not None and out is not None:
                 g._set(sock, out)
+    for c in zone['capabilities']:
+        _wire_capability(g, binsts, c, ctx)
     for f in zone['fetches']:
         src = binsts[f['depth']]
         heads = binsts[f['depth'] + 1:]
@@ -1312,7 +1437,7 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
     for c in CAPABILITIES.get(part, ()):
         _wire_capability(g, insts, c, {'material': mat})
     for z in ZONES.get(part, ()):
-        _wire_zone(g, insts, z, images, all_insts, part)
+        _wire_zone(g, insts, z, images, all_insts, part, {'material': mat})
     if anchor is not None:
         nt.nodes.active = anchor
         anchor.select = True
