@@ -56,6 +56,33 @@ UNITY_AVATAR_PROP = "ruri_unity_avatar"
 UNITY_GAME_PROP = "ruri_source_game"
 
 
+def stamp_rig(arm_obj, paths):
+    """Record the Unity rig identity -- {transform path: {"bone", "local"}} -- on the
+    armature OBJECT (see UNITY_RIG_PROP).
+
+    THE one writer: every code path that builds an armature out of Unity data owes
+    the same stamp, and a second copy of this encoding is how a rig ends up carrying
+    a shape the reader does not accept. See read_rig for the other half."""
+    if arm_obj is None:
+        return
+    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": paths}, separators=(",", ":"))
+
+
+def read_rig(arm_obj):
+    """The rig identity stamped on an armature, or None when it carries none (built
+    by another tool, or by a build older than the stamping)."""
+    if arm_obj is None:
+        return None
+    raw = arm_obj.get(UNITY_RIG_PROP)
+    if not raw:
+        return None
+    try:
+        paths = json.loads(str(raw))["paths"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return paths if isinstance(paths, dict) else None
+
+
 def stamp_avatar(arm_obj, avatar_data):
     """Bake an Avatar document tree (a parsed Avatar object's ``.data``) onto the armature."""
     if arm_obj is None or not avatar_data:
@@ -235,7 +262,7 @@ def build_armature(context, unity_file, name="UnityArmature"):
         if bone_name and node.path:
             local = [v for row in node.local for v in row]
             stamped[node.path] = {"bone": bone_name, "local": local}
-    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": stamped}, separators=(",", ":"))
+    stamp_rig(arm_obj, stamped)
 
     return arm_obj, {
         "nodes": nodes,
@@ -358,7 +385,7 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
             continue
         stamped[path] = {"bone": bone_name,
                          "local": [v for row in locals_[index] for v in row]}
-    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": stamped}, separators=(",", ":"))
+    stamp_rig(arm_obj, stamped)
     stamp_avatar(arm_obj, avatar_doc.data)
     return arm_obj
 
@@ -391,11 +418,17 @@ class SkeletonBinder:
     names via skinning.resolve_bone_paths, or kept hash-named as a last resort.
 
     The rig is one armature OBJECT carrying the top-level root yaw; its bones stay
-    in pure-C armature space. Generic: the caller supplies the avatar tables."""
+    in pure-C armature space. Generic: the caller supplies the avatar tables.
 
-    def __init__(self, name, world_rests=None, paths=None, leaf_names=()):
+    The result is a first-class animation target, not a display-only rig: it carries
+    the same Unity rig identity (and, when the caller hands one over, the same Avatar
+    document) a shipped prefab's armature gets, so a clip attaches to an assembled
+    character exactly as it does to a shipped one -- see stamp_rig."""
+
+    def __init__(self, name, world_rests=None, paths=None, leaf_names=(), avatar_data=None):
         self.name = name
         self._leaves = [str(n) for n in (leaf_names or ()) if n]
+        self._avatar_data = avatar_data
         self.armature = None
         self._world_rest = {}      # crc32(path) -> Unity world rest 4x4 (numpy), aligned
         self._path_by_hash = {}    # crc32(path) -> full path
@@ -505,6 +538,7 @@ class SkeletonBinder:
             # A rebuilt skeleton is a top-level import object: the root yaw rides
             # on the object; its bones stay in pure-C armature space.
             self.armature.matrix_world = coordinate.root_matrix()
+            stamp_avatar(self.armature, self._avatar_data)
 
         previous = context.view_layer.objects.active
         context.view_layer.objects.active = self.armature
@@ -551,6 +585,42 @@ class SkeletonBinder:
 
         bpy.ops.object.mode_set(mode="OBJECT")
         context.view_layer.objects.active = previous
+        # Stamped after every growth, not once by the caller: a part that extends
+        # the rig extends its identity too, and an assembler that forgot the final
+        # call would leave a rig no animation can bind to.
+        self._stamp_rig()
+
+    def _stamp_rig(self):
+        """The Unity rig identity for what is on the rig right now: per bone, the
+        transform path it IS and its Unity-space LOCAL rest.
+
+        ``local`` is relative to the bone's PARENT ON THIS RIG, which is what a
+        clip's local TRS is relative to and what build_action's delta composes
+        along. The alignment a part is merged under cancels out of it: a part's
+        own bones and the shared bone it hangs by are offset by the same matrix."""
+        if self.armature is None:
+            return
+        stamped = {}
+        for key, bone_name in self._hash_to_bone.items():
+            path = self._path_by_hash.get(key)
+            world = self._world_rest.get(key)
+            if not path or world is None:
+                continue
+            parent = self._parent_rest(path)
+            local = world if parent is None else np.linalg.inv(parent) @ world
+            stamped[path] = {"bone": bone_name,
+                             "local": [float(value) for row in local for value in row]}
+        stamp_rig(self.armature, stamped)
+
+    def _parent_rest(self, path):
+        """The world rest of the bone _parent_bone parents ``path`` to, or None when
+        it is a root of this rig."""
+        segments = path.split("/")
+        for cut in range(len(segments) - 1, 0, -1):
+            key = _crc32("/".join(segments[:cut]))
+            if key in self._hash_to_bone:
+                return self._world_rest.get(key)
+        return None
 
     def _with_ancestors(self, keys):
         """``keys`` plus every ancestor hash their paths imply, recording each
@@ -616,6 +686,7 @@ def graft_armature(context, target, source):
               if bone.name not in target_names and subtree_has_weight(bone)]
     if to_add:
         _graft_bones(context, target, source, to_add)
+    _merge_identity(target, source, {bone.name for bone in to_add})
 
     for obj in driven:
         world = obj.matrix_world.copy()
@@ -626,6 +697,30 @@ def graft_armature(context, target, source):
         obj.matrix_world = world
 
     _remove_armature_and_empty_parents(source)
+
+
+def _merge_identity(target, source, added_names):
+    """Fold the source rig's Unity identity into the target's as its bones come
+    across: the paths of the bones actually grafted (a shared joint keeps the
+    target's own entry, being the same joint), and the Avatar document when the
+    source carries one and the target does not.
+
+    The source object is deleted at the end of the graft, so an identity left on
+    it is an identity destroyed -- and a clip that binds by the grafted part's own
+    transform path would find nothing on the rig that now owns those bones."""
+    source_paths = read_rig(source)
+    if source_paths:
+        merged = read_rig(target) or {}
+        for path, entry in source_paths.items():
+            if entry.get("bone") in added_names and path not in merged:
+                merged[path] = entry
+        stamp_rig(target, merged)
+    if read_avatar_json(target) is None:
+        raw = read_avatar_json(source)
+        if raw is not None:
+            target[UNITY_AVATAR_PROP] = raw
+    if not read_game(target):
+        stamp_game(target, read_game(source))
 
 
 def _graft_bones(context, target, source, bones):

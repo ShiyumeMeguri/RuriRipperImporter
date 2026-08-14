@@ -779,7 +779,6 @@ def maps_from_stamped_armature(arm_obj):
     armature this addon ever built, in any session, without the character
     import's live state. Returns None for armatures with no stamp (imported
     by something else, or by a build older than the stamping)."""
-    import json as _json
     from mathutils import Matrix
 
     try:
@@ -787,12 +786,8 @@ def maps_from_stamped_armature(arm_obj):
     except ImportError:
         import armature_builder
 
-    raw = arm_obj.get(armature_builder.UNITY_RIG_PROP)
-    if not raw:
-        return None
-    try:
-        stamped = _json.loads(raw)["paths"]
-    except (ValueError, KeyError, TypeError):
+    stamped = armature_builder.read_rig(arm_obj)
+    if not stamped:
         return None
 
     nodes = {}

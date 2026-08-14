@@ -348,8 +348,8 @@ def _avatar_skeleton(db, avatar_file):
 
 
 def _templet_skeleton(info):
-    """``(world_rests, paths, leaf_names)`` for an npc's shared skeleton, read from
-    the avatar template the manifest names.
+    """``(world_rests, paths, leaf_names, avatar_data)`` for an npc's shared
+    skeleton, read from the avatar template the manifest names.
 
     The skeleton is the Avatar asset the template's own bundle carries: its
     ``m_AvatarSkeleton`` + ``m_AvatarSkeletonPose`` are the whole rig's STANDING
@@ -363,11 +363,11 @@ def _templet_skeleton(info):
     thousand other assets -- never the whole closure."""
     templet = (info.get("avatar_templet") or "").rsplit("/", 1)[-1]
     if not templet:
-        return {}, [], []
+        return {}, [], [], None
     stem = "data_npc_avatartemplet_" + templet.lower()
     rows = datasets.named_rows(stem)
     if not rows:
-        return {}, [], []
+        return {}, [], [], None
     from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
     cab = rows[0]["cab"]
     try:
@@ -377,26 +377,30 @@ def _templet_skeleton(info):
         keys = [graph.key(index) for index in graph.indices_of_class(avatar_id)]
         keys += [graph.key(index) for index in graph.find(mono_behaviour_id, stem)]
         if not keys:
-            return {}, [], []
+            return {}, [], [], None
         assets, _r, _s, _c, _sc = cabmap_state.BRIDGE.import_cabs(
             [cab], export_asset_keys=sorted(set(keys)))
     except Exception:
-        return {}, [], []
+        return {}, [], [], None
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
 
-    world_rests, paths, leaves = {}, [], []
+    world_rests, paths, leaves, avatar_data = {}, [], [], None
     for guid in db.all_guids():
         loaded = db.load_guid(guid)
         if loaded is None:
             continue
-        if not world_rests and loaded.first("Avatar") is not None:
+        avatar_doc = loaded.first("Avatar")
+        if not world_rests and avatar_doc is not None:
             world_rests, paths = _avatar_skeleton(db, loaded)
+            # The whole document travels with the rig, exactly as a shipped
+            # character's does: it is what a muscle-encoded clip solves against.
+            avatar_data = avatar_doc.data
             continue
         doc = loaded.first("MonoBehaviour")
         if doc is not None and "bonePathsStr" in (doc.data or {}):
             leaves = [str(name) for name in (doc.data.get("bonePathsStr") or [])]
-    return world_rests, paths, leaves
+    return world_rests, paths, leaves, avatar_data
 
 
 def _avatar_mesh_cab(info):
@@ -734,7 +738,7 @@ class RURI_OT_roster_load(bpy.types.Operator):
             return {"CANCELLED"}
 
         options = context.scene.ruri_cabmap.as_options()
-        world_rests, paths, leaf_names = _templet_skeleton(info)
+        world_rests, paths, leaf_names, avatar_data = _templet_skeleton(info)
         if not world_rests:
             self.report({"WARNING"}, "'{0}' names avatar template '{1}', which is not in the "
                                      "loaded cabmap -- its meshes have no skeleton to bind to.".format(
@@ -744,14 +748,18 @@ class RURI_OT_roster_load(bpy.types.Operator):
         # Every mesh a slot names is skinned onto ONE shared skeleton (the template
         # avatar's standing pose): body/hair/tail authored standing, face/ear at
         # their own origin, each aligned onto that skeleton by the binder.
-        binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names)
+        binder = armature_builder.SkeletonBinder(entry.key, world_rests, paths, leaf_names,
+                                                 avatar_data)
         materials_by_mesh = _npc_materials(context, info, entry.key)
         imported_any = False
         for cab, meshes in hits:
             if _import_part(context, cab, binder, options, meshes, materials_by_mesh):
                 imported_any = True
         # The binder builds its rig itself rather than through the prefab
-        # importer, so the game identity is stamped at this call site.
+        # importer, so the game identity is stamped at this call site. The Unity
+        # rig identity is NOT: the binder owes that one itself, per growth (see
+        # SkeletonBinder._stamp_rig) -- an assembled npc that only gets it here
+        # would lose it for every part loaded after the last stamp.
         armature_builder.stamp_game(binder.armature, options.get("source_game"))
 
         if not imported_any:
