@@ -135,6 +135,89 @@ def rewire_capabilities(materials=None):
                if mat is not None and any(rewire(mat) for rewire in CAPABILITY_REWIRES))
 
 
+# ---- Automatic re-answer when the light set changes ----
+# A Blender light takes effect the moment it exists; a Ruri material's light
+# wiring is assembled data, so without this it would go stale until someone
+# pressed a button -- which native lights never need. The handler makes the
+# wiring follow the scene: whenever the SET of lights changes (add / remove /
+# rename / type / visibility) or the world datablock is swapped, every
+# registered module re-answers its materials. Movement, colour and energy stay
+# live through drivers and need nothing.
+#
+# Cost discipline: the depsgraph ticks on every user interaction, so the
+# handler first gates on "did this batch touch a light / collection / world"
+# (a few isinstance checks over depsgraph.updates), and only then compares the
+# full signature. Re-entrancy (our own rewiring triggers another tick) is
+# killed by updating the signature BEFORE rewiring: the echo tick compares
+# equal and returns.
+
+_light_set_signature = None
+
+
+def _light_set(scene):
+    sig = []
+    for obj in scene.objects:
+        if obj.type == 'LIGHT':
+            try:
+                visible = obj.visible_get()
+            except Exception:
+                visible = not obj.hide_viewport
+            sig.append((obj.name, obj.data.type, visible))
+    sig.sort()
+    world = scene.world.name_full if scene.world is not None else None
+    return (tuple(sig), world)
+
+
+def _lights_maybe_touched(depsgraph):
+    for update in depsgraph.updates:
+        block = update.id
+        if isinstance(block, (bpy.types.Light, bpy.types.World, bpy.types.Scene, bpy.types.Collection)):
+            return True
+        if isinstance(block, bpy.types.Object) and getattr(block, 'type', '') == 'LIGHT':
+            return True
+    return False
+
+
+@bpy.app.handlers.persistent
+def _on_depsgraph_update(scene, depsgraph):
+    global _light_set_signature
+    if not CAPABILITY_REWIRES or not _lights_maybe_touched(depsgraph):
+        return
+    signature = _light_set(scene)
+    if signature == _light_set_signature:
+        return
+    _light_set_signature = signature
+    count = rewire_capabilities()
+    if count:
+        print("[ruri-cap] light set changed -> re-answered {0} material(s)".format(count), flush=True)
+
+
+@bpy.app.handlers.persistent
+def _on_load_post(_path):
+    # Prime the signature on file load WITHOUT rewiring: a saved file's materials
+    # were wired against the lights it was saved with; rebuilding identical
+    # wiring on every open would be churn, not correctness.
+    global _light_set_signature
+    scene = bpy.context.scene
+    _light_set_signature = _light_set(scene) if scene is not None else None
+
+
+def register_light_watch():
+    from bpy.app import handlers
+    if _on_depsgraph_update not in handlers.depsgraph_update_post:
+        handlers.depsgraph_update_post.append(_on_depsgraph_update)
+    if _on_load_post not in handlers.load_post:
+        handlers.load_post.append(_on_load_post)
+
+
+def unregister_light_watch():
+    from bpy.app import handlers
+    if _on_depsgraph_update in handlers.depsgraph_update_post:
+        handlers.depsgraph_update_post.remove(_on_depsgraph_update)
+    if _on_load_post in handlers.load_post:
+        handlers.load_post.remove(_on_load_post)
+
+
 # Post stages, same contract again, except that a stage is the generated MODULE
 # rather than one function: post-processing owns scene-level state (the
 # compositor tree, the view transform), so it has to be able to hand that state

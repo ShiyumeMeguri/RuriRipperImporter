@@ -178,8 +178,9 @@ class RURI_OT_main_light_clear(bpy.types.Operator):
 class RURI_OT_main_light_refresh(bpy.types.Operator):
     bl_idname = "ruri.main_light_refresh"
     bl_label = "Re-answer Lighting"
-    bl_description = ("Rebuild how every Ruri material reads the scene's light and world. "
-                      "Needed after adding or removing a sun, or swapping the world")
+    bl_description = ("Force-rebuild how every Ruri material reads the scene's lights and world. "
+                      "Adding/removing lights re-answers automatically; this button is only for "
+                      "edits the watcher cannot see, e.g. rewiring the world's own node tree")
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -301,8 +302,11 @@ _CLASSES = (
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    # 灯集合自动重接:加/删/改类型/换世界即生效,与原生灯同手感(见 material_builder 注)。
+    material_builder.register_light_watch()
 
 
 def unregister():
+    material_builder.unregister_light_watch()
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
