@@ -25,6 +25,7 @@
 #  · 不可发射函数落零值桩,清单见同目录 _BLENDER_UNSUPPORTED.md。
 # =============================================================================
 
+import math
 import os
 
 import bpy
@@ -734,59 +735,113 @@ def _cap_additional_light_count(g, query, ctx):
     return {'': float(len(_additional_lights(ctx.get('material'))))}
 
 
-def _light_record(g, light):
-    """一盏灯的四个叶子,全部原生取自灯物体本身(驱动器绑活值,转灯换色实时跟)。
+LIGHT_TABLE_ROWS = 4
 
-    SUN 是平行光:方向恒为灯的 +Z 轴,无距离衰减。
-    POINT/SPOT/AREA 的方向随着色点变,按 归一化(灯位 − 着色点) 算;距离衰减取
-    **平方反比** —— 那正是 Blender 自己的灯遵循的落衰,不是自造公式(URP 那条额外的
-    range 窗口在 Blender 没有对应物:灯没有「范围」这个属性,故不编一个出来)。"""
-    tint = g._nd('ShaderNodeCombineXYZ')
-    tint.label = 'RuriLightColor_' + light.name
-    for i in range(3):
-        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
-    if light.data.type == 'SUN':
-        to_light = _light_axis(g, light, 'RuriLightAxis_' + light.name)
-        attenuation = 1.0
-    else:
-        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriLightPos_' + light.name),
-                           g.geo().outputs['Position'])
-        distance2 = g.vmath('DOT_PRODUCT', to_light, to_light)
-        attenuation = g.math('DIVIDE', 1.0, g.math('MAXIMUM', distance2, 1e-4))
-        if light.data.type == 'SPOT':
-            # 聚光锥 = Blender 自己的语义:spot_size 全角、spot_blend 内缘软化,
-            # cos 经驱动器算在灯数据上(动灯即时跟),锥内外过渡用 smoothstep(与 Cycles 同式)。
-            axis = g.vmath('NORMALIZE', _light_axis(g, light, 'RuriSpotAxis_' + light.name))
-            cone = g._nd('ShaderNodeCombineXYZ')
-            cone.label = 'RuriSpotCone_' + light.name
-            _drive(cone.inputs[0], light, 'data.spot_size', expr='cos(v / 2)')
-            _drive(cone.inputs[1], light, 'data.spot_size', expr='cos(v * (1 - e) / 2)',
-                   extra=('e', 'data.spot_blend'))
-            cos_outer, cos_inner, _cz = g.sep(cone.outputs[0])
-            cone_cos = g.vmath('DOT_PRODUCT', g.vmath('NORMALIZE', to_light), axis)
-            t = g.clampn(g.math('DIVIDE', g.math('SUBTRACT', cone_cos, cos_outer),
-                                g.math('MAXIMUM', g.math('SUBTRACT', cos_inner, cos_outer), 1e-4)))
-            smooth = g.math('MULTIPLY', g.math('MULTIPLY', t, t),
-                            g.math('SUBTRACT', 3.0, g.math('MULTIPLY', 2.0, t)))
-            attenuation = g.math('MULTIPLY', attenuation, smooth)
+
+def _light_table(material, lights):
+    """灯表 = 一张 **N×4 浮点图**,一列一盏灯:
+       行0 (x,y,z | 类型)   类型 0=SUN 1=POINT/AREA 2=SPOT
+       行1 (r,g,b | -)      颜色 × 能量
+       行2 (x,y,z | -)      灯的世界 +Z 轴(指向光源;SUN 的方向、SPOT 的锥轴)
+       行3 (cosOuter, cosInner, 0 | -)  聚光锥
+
+    **灯数没有上限**:图有多宽就装多少盏。图里按下标采样是固定几个节点,
+    与灯数无关 —— 这正是不设槽位数的理由(槽位制的上限是实现漏进协议的产物)。
+    灯动/换色只重写像素(实测:改像素不重建任何节点,渲染即时跟)。
+    """
+    name = 'RuriLightTable_' + (material.name if material is not None else 'Scene')
+    width = max(len(lights), 1)
+    image = bpy.data.images.get(name)
+    if image is None or tuple(image.size) != (width, LIGHT_TABLE_ROWS) or not image.is_float:
+        if image is not None:
+            bpy.data.images.remove(image)
+        image = bpy.data.images.new(name, width, LIGHT_TABLE_ROWS, float_buffer=True, alpha=True)
+    image.colorspace_settings.name = 'Non-Color'
+    rows = [[0.0] * (width * 4) for _ in range(LIGHT_TABLE_ROWS)]
+    for k, light in enumerate(lights):
+        matrix = light.matrix_world
+        kind = light.data.type
+        flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
+        axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
+        length = math.sqrt(sum(c * c for c in axis)) or 1.0
+        axis = [c / length for c in axis]
+        energy = float(light.data.energy)
+        color = [float(c) * energy for c in light.data.color]
+        if kind == 'SPOT':
+            size = float(light.data.spot_size)
+            blend = float(light.data.spot_blend)
+            cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
+        else:
+            cone = [-1.0, 1.0]
+        for row, value in (
+                (0, [matrix[0][3], matrix[1][3], matrix[2][3], flag]),
+                (1, color + [1.0]),
+                (2, axis + [1.0]),
+                (3, cone + [0.0, 1.0])):
+            rows[row][k * 4:k * 4 + 4] = value
+    flat = []
+    for row in rows:
+        flat.extend(row)
+    image.pixels = flat
+    image.update()
+    return image, width
+
+
+def _table_row(g, image, index, row, width):
+    """按下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
+    否则相邻两盏灯会被硬件混成一盏不存在的灯。"""
+    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(width))
+    node = g._nd('ShaderNodeTexImage')
+    node.image = image
+    node.interpolation = 'Closest'
+    node.extension = 'EXTEND'
+    node.label = 'RuriLightTable'
+    g._set(node.inputs['Vector'], g.comb(u, (row + 0.5) / LIGHT_TABLE_ROWS, 0.0))
+    return node.outputs['Color'], node.outputs['Alpha']
+
+
+def _cap_additional_light(g, query, ctx):
+    """第 index 盏附加光。**逐迭代**按下标查灯表,所以下标是什么值都取得对 ——
+    循环体内的割点每圈自己采一次,不存在「把下标导出去只剩最后一圈」的问题。
+
+    类型差异不靠逐灯建节点,靠表里的类型位在图里选:
+      SUN  方向 = 灯的 +Z 轴,无距离衰减;
+      其余 方向 = 归一化(灯位 − 着色点),距离衰减 = 平方反比(Blender 自己的灯就这么落衰);
+      SPOT 再乘一层原生锥(cos 半角 + spot_blend 软边,smoothstep,与 Cycles 同式)。
+    """
+    index = query.get('index')
+    lights = _additional_lights(ctx.get('material'))
+    if index is None or not lights:
+        return None
+    image, width = _light_table(ctx.get('material'), lights)
+    position, type_flag = _table_row(g, image, index, 0, width)
+    color, _ca = _table_row(g, image, index, 1, width)
+    axis, _aa = _table_row(g, image, index, 2, width)
+    cone, _oa = _table_row(g, image, index, 3, width)
+    cos_outer, cos_inner, _unused = g.sep(cone)
+
+    to_light = g.vmath('SUBTRACT', position, g.geo().outputs['Position'])
+    is_sun = g.math('SUBTRACT', 1.0, g.math('MINIMUM', type_flag, 1.0))
+    direction = g.mixv(is_sun, to_light, axis)
+
+    distance2 = g.vmath('DOT_PRODUCT', to_light, to_light)
+    attenuation = g.mixf(is_sun, g.math('DIVIDE', 1.0, g.math('MAXIMUM', distance2, 1e-4)), 1.0)
+
+    is_spot = g.math('COMPARE', type_flag, 2.0, 0.5)
+    cone_cos = g.vmath('DOT_PRODUCT', g.vmath('NORMALIZE', to_light), g.vmath('NORMALIZE', axis))
+    edge = g.clampn(g.math('DIVIDE', g.math('SUBTRACT', cone_cos, cos_outer),
+                           g.math('MAXIMUM', g.math('SUBTRACT', cos_inner, cos_outer), 1e-4)))
+    smooth = g.math('MULTIPLY', g.math('MULTIPLY', edge, edge),
+                    g.math('SUBTRACT', 3.0, g.math('MULTIPLY', 2.0, edge)))
+    attenuation = g.math('MULTIPLY', attenuation, g.mixf(is_spot, 1.0, smooth))
+
     return {
-        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
-        'color': tint.outputs[0],
+        'direction': g.b2u(g.vmath('NORMALIZE', direction)),
+        'color': color,
         'distanceAttenuation': attenuation,
         'shadowAttenuation': 1.0,
         'layerMask': 1.0,
     }
-
-
-def _cap_additional_light(g, query, ctx):
-    """附加光的**元素列表**(集合能力,Arity 槽)。
-
-    按什么下标选哪盏是**数学面**的事:选择链生成在共享树里,repeat zone 内逐迭代取对 ——
-    这里只回答「第 k 盏是谁」,一句选择逻辑都没有。旧的兑现面 select 链已删:
-    它在循环里必然全错(下标是 zone 内迭代变量,导出到组接口只剩最后一圈的值,
-    每圈都会选到同一盏灯)。超出槽位的灯不发光,装配器如实打印。"""
-    _ = query
-    return [_light_record(g, light) for light in _additional_lights(ctx.get('material'))]
 
 
 # 能力身份 → {引擎: 建图器}。建图器契约:答得出 → (值, w值) 二元组;答不出 → None。
@@ -1773,17 +1828,6 @@ def _wire_capability(g, insts, cap, ctx):
                 s = c.inputs.get(name)
                 if s is not None:
                     g._set(s, value)
-    arity = cap.get('arity', 1)
-    if arity > 1:
-        # 集合能力:数据面只按槽位灌元素(第 k 槽 = 第 k 个),选择在数学面早就生成好了。
-        if not isinstance(answer, (list, tuple)):
-            raise RuntimeError('[ruri-cap] {0}: 集合能力的建图器必须返回列表'.format(cap['cap']))
-        if len(answer) > arity:
-            print('[ruri-cap] {0}: {1} 个元素 > {2} 个槽位,超出的不参与'.format(
-                cap['cap'], len(answer), arity), flush=True)
-        for k, record in enumerate(answer[:arity]):
-            _feed_record(record, cap['sock'] + '_' + str(k))
-        return
     _feed_record(answer, cap['sock'])
 
 
@@ -1808,6 +1852,8 @@ def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
         b.node_tree = body_tpl
         binsts.append(b)
         inst_sink.append(b)
+        b['ruri_zone'] = zone['sock']   # 体实例的身份:重接体内割点要按 (zone, 序) 找回
+        b['ruri_binst'] = _i
         for item, is_vec in zone['states']:
             sock = b.inputs.get('s_' + item)
             if sock is not None:
@@ -2604,14 +2650,44 @@ def rewire_capabilities(mat):
         # 没有实例序标记 = 这张材质是旧产物,按 depth 取实例必错位。响亮说,不硬接。
         raise RuntimeError('[ruri-cap] 材质 {0} 无实例序标记(旧产物),请重新导入'.format(mat.name))
     g = G(nt, is_group=False)
+    ctx = {'material': mat}
     for row in rows:
-        _wire_capability(g, ordered, row, {'material': mat})
+        _wire_capability(g, ordered, row, ctx)
+    # 体内割点(灯就住在这儿):按 (zone, 序) 找回体实例链再接。
+    # 漏掉这段 = 上面刚把带 ruri_cap 标记的节点全删了、却只重建顶层那批,
+    # 循环里的兑现面被抹掉且永不回来(实测:第一次依赖图更新后灯全灭)。
+    for zone in ZONES.get(part, ()):
+        if not zone['capabilities']:
+            continue
+        binsts = sorted((n for n in nt.nodes if n.get('ruri_zone') == zone['sock']),
+                        key=lambda n: int(n['ruri_binst']))
+        if not binsts:
+            raise RuntimeError('[ruri-cap] 材质 {0} 的循环 {1} 无体实例标记(旧产物),请重新导入'.format(
+                mat.name, zone['sock']))
+        for row in zone['capabilities']:
+            _wire_capability(g, binsts, row, ctx)
     # 从 Python 改完节点树必须自己打脏标记:建材质那条路是 bpy 算子驱动的、
     # 依赖图顺手就重编了;这里是纯数据写,不打标记 EEVEE 会继续用旧的编译结果 ——
     # 症状是「图明明换了支、像素逐位不动」(实测换灯后三次渲染完全相同)。
     nt.update_tag()
     mat.update_tag()
     return True
+
+
+def refresh_light_tables():
+    """灯只是动了 / 换了色 / 调了能量 —— **重写灯表像素即可,一个节点都不用碰**。
+    灯集合本身没变时走这条:代价是几十个浮点写,与重建图不在一个量级。
+    (集合变了才需要重接:0 盏↔有盏会换整条兑现分支。)"""
+    touched = 0
+    for mat in bpy.data.materials:
+        if mat.get('ruri_uber_part') is None:
+            continue
+        lights = _additional_lights(mat)
+        if not lights:
+            continue
+        _light_table(mat, lights)
+        touched += 1
+    return touched
 
 
 def register():
@@ -2623,6 +2699,7 @@ def register():
     host.register_graph_provider(provider)
     host.register_vertex_stage(apply_vertex_stage)
     host.register_capability_rewire(rewire_capabilities)
+    host.register_light_table_refresh(refresh_light_tables)
 
 
 def unregister():
@@ -2631,6 +2708,7 @@ def unregister():
     host.unregister_graph_provider(provider)
     host.unregister_vertex_stage(apply_vertex_stage)
     host.unregister_capability_rewire(rewire_capabilities)
+    host.unregister_light_table_refresh(refresh_light_tables)
 
 
 # 导入即清理过时预设库(见 _prune_stale_libraries):要在 register() 之外,

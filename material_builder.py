@@ -135,37 +135,79 @@ def rewire_capabilities(materials=None):
                if mat is not None and any(rewire(mat) for rewire in CAPABILITY_REWIRES))
 
 
-# ---- Automatic re-answer when the light set changes ----
-# A Blender light takes effect the moment it exists; a Ruri material's light
-# wiring is assembled data, so without this it would go stale until someone
-# pressed a button -- which native lights never need. The handler makes the
-# wiring follow the scene: whenever the SET of lights changes (add / remove /
-# rename / type / visibility) or the world datablock is swapped, every
-# registered module re-answers its materials. Movement, colour and energy stay
-# live through drivers and need nothing.
+# ---- Light tables refresh, same registry contract ----
+# Where a rewire rebuilds fulfilment NODES, this only rewrites the light table's
+# PIXELS. The split is not an optimisation, it is what actually changed: moving
+# or recolouring a light changes table contents; adding or removing one can
+# change the graph itself (zero lights takes a different fulfilment branch).
+LIGHT_TABLE_REFRESHERS = []
+
+
+def register_light_table_refresh(refresh):
+    if refresh not in LIGHT_TABLE_REFRESHERS:
+        LIGHT_TABLE_REFRESHERS.append(refresh)
+
+
+def unregister_light_table_refresh(refresh):
+    if refresh in LIGHT_TABLE_REFRESHERS:
+        LIGHT_TABLE_REFRESHERS.remove(refresh)
+
+
+def refresh_light_tables():
+    return sum(refresh() for refresh in LIGHT_TABLE_REFRESHERS)
+
+
+# ---- Following the scene the way a native light does ----
+# A Blender light takes effect the moment it exists, and keeps up as you drag
+# it. A Ruri material reads lights as assembled data, so it has to be told --
+# by the same depsgraph channel drivers and constraints already ride on. No
+# timer, no polling, no button.
 #
-# Cost discipline: the depsgraph ticks on every user interaction, so the
-# handler first gates on "did this batch touch a light / collection / world"
-# (a few isinstance checks over depsgraph.updates), and only then compares the
-# full signature. Re-entrancy (our own rewiring triggers another tick) is
-# killed by updating the signature BEFORE rewiring: the echo tick compares
+#   structure changed (added / removed / retyped / hidden / world swapped)
+#       -> rewire: the fulfilment branch itself may differ
+#   data changed (moved / recoloured / energy / cone)
+#       -> rewrite the table pixels, touching no node at all
+#
+# Cost discipline: the depsgraph ticks on every interaction, so gate first on
+# "did this batch touch a light / world at all" (a few isinstance checks), and
+# only then build the signatures. Re-entrancy (our own edit triggers the next
+# tick) dies because the signature is stored BEFORE acting: the echo compares
 # equal and returns.
 
-_light_set_signature = None
+_light_structure = None
+_light_data = None
 
 
-def _light_set(scene):
+def _structure_of(scene):
     sig = []
     for obj in scene.objects:
-        if obj.type == 'LIGHT':
-            try:
-                visible = obj.visible_get()
-            except Exception:
-                visible = not obj.hide_viewport
-            sig.append((obj.name, obj.data.type, visible))
+        if obj.type != 'LIGHT':
+            continue
+        try:
+            visible = obj.visible_get()
+        except Exception:
+            visible = not obj.hide_viewport
+        sig.append((obj.name, obj.data.type, visible))
     sig.sort()
-    world = scene.world.name_full if scene.world is not None else None
-    return (tuple(sig), world)
+    return (tuple(sig), scene.world.name_full if scene.world is not None else None)
+
+
+def _data_of(scene):
+    sig = []
+    for obj in scene.objects:
+        if obj.type != 'LIGHT':
+            continue
+        light = obj.data
+        sig.append((
+            obj.name,
+            tuple(round(c, 5) for row in obj.matrix_world for c in row),
+            tuple(round(c, 5) for c in light.color),
+            round(light.energy, 5),
+            round(getattr(light, 'spot_size', 0.0), 5),
+            round(getattr(light, 'spot_blend', 0.0), 5),
+        ))
+    sig.sort()
+    return tuple(sig)
 
 
 def _lights_maybe_touched(depsgraph):
@@ -180,26 +222,31 @@ def _lights_maybe_touched(depsgraph):
 
 @bpy.app.handlers.persistent
 def _on_depsgraph_update(scene, depsgraph):
-    global _light_set_signature
+    global _light_structure, _light_data
     if not CAPABILITY_REWIRES or not _lights_maybe_touched(depsgraph):
         return
-    signature = _light_set(scene)
-    if signature == _light_set_signature:
+    structure = _structure_of(scene)
+    data = _data_of(scene)
+    if structure != _light_structure:
+        _light_structure, _light_data = structure, data
+        count = rewire_capabilities()
+        if count:
+            print("[ruri-cap] light set changed -> re-answered {0} material(s)".format(count), flush=True)
         return
-    _light_set_signature = signature
-    count = rewire_capabilities()
-    if count:
-        print("[ruri-cap] light set changed -> re-answered {0} material(s)".format(count), flush=True)
+    if data != _light_data:
+        _light_data = data
+        refresh_light_tables()
 
 
 @bpy.app.handlers.persistent
 def _on_load_post(_path):
-    # Prime the signature on file load WITHOUT rewiring: a saved file's materials
-    # were wired against the lights it was saved with; rebuilding identical
-    # wiring on every open would be churn, not correctness.
-    global _light_set_signature
+    # Prime both signatures on load WITHOUT acting: a saved file was wired
+    # against the lights it was saved with, so rebuilding on every open is
+    # churn, not correctness.
+    global _light_structure, _light_data
     scene = bpy.context.scene
-    _light_set_signature = _light_set(scene) if scene is not None else None
+    _light_structure = _structure_of(scene) if scene is not None else None
+    _light_data = _data_of(scene) if scene is not None else None
 
 
 def register_light_watch():

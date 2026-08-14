@@ -26,6 +26,7 @@
 #  · 不可发射函数落零值桩,清单见同目录 _BLENDER_UNSUPPORTED.md。
 # =============================================================================
 
+import math
 import os
 
 import bpy
@@ -735,59 +736,113 @@ def _cap_additional_light_count(g, query, ctx):
     return {'': float(len(_additional_lights(ctx.get('material'))))}
 
 
-def _light_record(g, light):
-    """一盏灯的四个叶子,全部原生取自灯物体本身(驱动器绑活值,转灯换色实时跟)。
+LIGHT_TABLE_ROWS = 4
 
-    SUN 是平行光:方向恒为灯的 +Z 轴,无距离衰减。
-    POINT/SPOT/AREA 的方向随着色点变,按 归一化(灯位 − 着色点) 算;距离衰减取
-    **平方反比** —— 那正是 Blender 自己的灯遵循的落衰,不是自造公式(URP 那条额外的
-    range 窗口在 Blender 没有对应物:灯没有「范围」这个属性,故不编一个出来)。"""
-    tint = g._nd('ShaderNodeCombineXYZ')
-    tint.label = 'RuriLightColor_' + light.name
-    for i in range(3):
-        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
-    if light.data.type == 'SUN':
-        to_light = _light_axis(g, light, 'RuriLightAxis_' + light.name)
-        attenuation = 1.0
-    else:
-        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriLightPos_' + light.name),
-                           g.geo().outputs['Position'])
-        distance2 = g.vmath('DOT_PRODUCT', to_light, to_light)
-        attenuation = g.math('DIVIDE', 1.0, g.math('MAXIMUM', distance2, 1e-4))
-        if light.data.type == 'SPOT':
-            # 聚光锥 = Blender 自己的语义:spot_size 全角、spot_blend 内缘软化,
-            # cos 经驱动器算在灯数据上(动灯即时跟),锥内外过渡用 smoothstep(与 Cycles 同式)。
-            axis = g.vmath('NORMALIZE', _light_axis(g, light, 'RuriSpotAxis_' + light.name))
-            cone = g._nd('ShaderNodeCombineXYZ')
-            cone.label = 'RuriSpotCone_' + light.name
-            _drive(cone.inputs[0], light, 'data.spot_size', expr='cos(v / 2)')
-            _drive(cone.inputs[1], light, 'data.spot_size', expr='cos(v * (1 - e) / 2)',
-                   extra=('e', 'data.spot_blend'))
-            cos_outer, cos_inner, _cz = g.sep(cone.outputs[0])
-            cone_cos = g.vmath('DOT_PRODUCT', g.vmath('NORMALIZE', to_light), axis)
-            t = g.clampn(g.math('DIVIDE', g.math('SUBTRACT', cone_cos, cos_outer),
-                                g.math('MAXIMUM', g.math('SUBTRACT', cos_inner, cos_outer), 1e-4)))
-            smooth = g.math('MULTIPLY', g.math('MULTIPLY', t, t),
-                            g.math('SUBTRACT', 3.0, g.math('MULTIPLY', 2.0, t)))
-            attenuation = g.math('MULTIPLY', attenuation, smooth)
+
+def _light_table(material, lights):
+    """灯表 = 一张 **N×4 浮点图**,一列一盏灯:
+       行0 (x,y,z | 类型)   类型 0=SUN 1=POINT/AREA 2=SPOT
+       行1 (r,g,b | -)      颜色 × 能量
+       行2 (x,y,z | -)      灯的世界 +Z 轴(指向光源;SUN 的方向、SPOT 的锥轴)
+       行3 (cosOuter, cosInner, 0 | -)  聚光锥
+
+    **灯数没有上限**:图有多宽就装多少盏。图里按下标采样是固定几个节点,
+    与灯数无关 —— 这正是不设槽位数的理由(槽位制的上限是实现漏进协议的产物)。
+    灯动/换色只重写像素(实测:改像素不重建任何节点,渲染即时跟)。
+    """
+    name = 'RuriLightTable_' + (material.name if material is not None else 'Scene')
+    width = max(len(lights), 1)
+    image = bpy.data.images.get(name)
+    if image is None or tuple(image.size) != (width, LIGHT_TABLE_ROWS) or not image.is_float:
+        if image is not None:
+            bpy.data.images.remove(image)
+        image = bpy.data.images.new(name, width, LIGHT_TABLE_ROWS, float_buffer=True, alpha=True)
+    image.colorspace_settings.name = 'Non-Color'
+    rows = [[0.0] * (width * 4) for _ in range(LIGHT_TABLE_ROWS)]
+    for k, light in enumerate(lights):
+        matrix = light.matrix_world
+        kind = light.data.type
+        flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
+        axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
+        length = math.sqrt(sum(c * c for c in axis)) or 1.0
+        axis = [c / length for c in axis]
+        energy = float(light.data.energy)
+        color = [float(c) * energy for c in light.data.color]
+        if kind == 'SPOT':
+            size = float(light.data.spot_size)
+            blend = float(light.data.spot_blend)
+            cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
+        else:
+            cone = [-1.0, 1.0]
+        for row, value in (
+                (0, [matrix[0][3], matrix[1][3], matrix[2][3], flag]),
+                (1, color + [1.0]),
+                (2, axis + [1.0]),
+                (3, cone + [0.0, 1.0])):
+            rows[row][k * 4:k * 4 + 4] = value
+    flat = []
+    for row in rows:
+        flat.extend(row)
+    image.pixels = flat
+    image.update()
+    return image, width
+
+
+def _table_row(g, image, index, row, width):
+    """按下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
+    否则相邻两盏灯会被硬件混成一盏不存在的灯。"""
+    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(width))
+    node = g._nd('ShaderNodeTexImage')
+    node.image = image
+    node.interpolation = 'Closest'
+    node.extension = 'EXTEND'
+    node.label = 'RuriLightTable'
+    g._set(node.inputs['Vector'], g.comb(u, (row + 0.5) / LIGHT_TABLE_ROWS, 0.0))
+    return node.outputs['Color'], node.outputs['Alpha']
+
+
+def _cap_additional_light(g, query, ctx):
+    """第 index 盏附加光。**逐迭代**按下标查灯表,所以下标是什么值都取得对 ——
+    循环体内的割点每圈自己采一次,不存在「把下标导出去只剩最后一圈」的问题。
+
+    类型差异不靠逐灯建节点,靠表里的类型位在图里选:
+      SUN  方向 = 灯的 +Z 轴,无距离衰减;
+      其余 方向 = 归一化(灯位 − 着色点),距离衰减 = 平方反比(Blender 自己的灯就这么落衰);
+      SPOT 再乘一层原生锥(cos 半角 + spot_blend 软边,smoothstep,与 Cycles 同式)。
+    """
+    index = query.get('index')
+    lights = _additional_lights(ctx.get('material'))
+    if index is None or not lights:
+        return None
+    image, width = _light_table(ctx.get('material'), lights)
+    position, type_flag = _table_row(g, image, index, 0, width)
+    color, _ca = _table_row(g, image, index, 1, width)
+    axis, _aa = _table_row(g, image, index, 2, width)
+    cone, _oa = _table_row(g, image, index, 3, width)
+    cos_outer, cos_inner, _unused = g.sep(cone)
+
+    to_light = g.vmath('SUBTRACT', position, g.geo().outputs['Position'])
+    is_sun = g.math('SUBTRACT', 1.0, g.math('MINIMUM', type_flag, 1.0))
+    direction = g.mixv(is_sun, to_light, axis)
+
+    distance2 = g.vmath('DOT_PRODUCT', to_light, to_light)
+    attenuation = g.mixf(is_sun, g.math('DIVIDE', 1.0, g.math('MAXIMUM', distance2, 1e-4)), 1.0)
+
+    is_spot = g.math('COMPARE', type_flag, 2.0, 0.5)
+    cone_cos = g.vmath('DOT_PRODUCT', g.vmath('NORMALIZE', to_light), g.vmath('NORMALIZE', axis))
+    edge = g.clampn(g.math('DIVIDE', g.math('SUBTRACT', cone_cos, cos_outer),
+                           g.math('MAXIMUM', g.math('SUBTRACT', cos_inner, cos_outer), 1e-4)))
+    smooth = g.math('MULTIPLY', g.math('MULTIPLY', edge, edge),
+                    g.math('SUBTRACT', 3.0, g.math('MULTIPLY', 2.0, edge)))
+    attenuation = g.math('MULTIPLY', attenuation, g.mixf(is_spot, 1.0, smooth))
+
     return {
-        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
-        'color': tint.outputs[0],
+        'direction': g.b2u(g.vmath('NORMALIZE', direction)),
+        'color': color,
         'distanceAttenuation': attenuation,
         'shadowAttenuation': 1.0,
         'layerMask': 1.0,
     }
-
-
-def _cap_additional_light(g, query, ctx):
-    """附加光的**元素列表**(集合能力,Arity 槽)。
-
-    按什么下标选哪盏是**数学面**的事:选择链生成在共享树里,repeat zone 内逐迭代取对 ——
-    这里只回答「第 k 盏是谁」,一句选择逻辑都没有。旧的兑现面 select 链已删:
-    它在循环里必然全错(下标是 zone 内迭代变量,导出到组接口只剩最后一圈的值,
-    每圈都会选到同一盏灯)。超出槽位的灯不发光,装配器如实打印。"""
-    _ = query
-    return [_light_record(g, light) for light in _additional_lights(ctx.get('material'))]
 
 
 # 能力身份 → {引擎: 建图器}。建图器契约:答得出 → (值, w值) 二元组;答不出 → None。
@@ -1811,6 +1866,342 @@ def build_RCE_Z_Ruri_Endfield_Uber_Standard_0():
     g.out_('o_pxi', v53, False)
 
 
+def build_RCE_Z_Ruri_Endfield_Uber_Standard_1():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Standard_1')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_Face_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Face_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_Eyes_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Eyes_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_Hair_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Hair_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_Fur_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Fur_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_Eyebrow_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_Eyebrow_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_VFX_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_VFX_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_OverlayShadow_0():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_OverlayShadow_0')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
+
+
 def build_RCE_Z_Ruri_Endfield_Uber_LiquidAg_0():
     t = _tree('RCE_Z_Ruri_Endfield_Uber_LiquidAg_0')
     g = G(t)
@@ -1880,6 +2271,48 @@ def build_RCE_Z_Ruri_Endfield_Uber_LiquidAg_0():
     g.out_('o_pxPrevLayerH', v51, False)
     g.out_('o_pxPrevOff', v52, True)
     g.out_('o_pxi', v53, False)
+
+
+def build_RCE_Z_Ruri_Endfield_Uber_LiquidAg_1():
+    t = _tree('RCE_Z_Ruri_Endfield_Uber_LiquidAg_1')
+    g = G(t)
+    v0 = g.inp('s_N', True)
+    v1 = g.inp('s_Lloop0', False)
+    v2 = g.inp('s_lightAccum', True)
+    v3 = g.inp('s_lightIndex', False)
+    v4 = g.inp('s_positionWS', True)
+    v5 = g.math('LESS_THAN', v3, g.inp('r_pixelLightCount', False))
+    v6 = g.math('MULTIPLY', v1, v5)
+    v7 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    g.out_('C0_AdditionalLight_index', v3, False)
+    g.out_('C0_AdditionalLight_position', v4, True)
+    v8 = g.inp('C0_AdditionalLight_direction', True, (0.0, 0.0, 0.0))
+    v9 = g.inp('C0_AdditionalLight_color', True, (0.0, 0.0, 0.0))
+    v10 = g.inp('C0_AdditionalLight_distanceAttenuation', False, 0.0)
+    v11 = g.inp('C0_AdditionalLight_shadowAttenuation', False, 0.0)
+    v12 = g.inp('C0_AdditionalLight_layerMask', False, 0.0)
+    v13 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v14 = g.vmath('DOT_PRODUCT', v0, v8)
+    v15 = g.math('MULTIPLY', v14, 0.5)
+    v16 = g.math('ADD', v15, 0.5)
+    v17 = g.clampn(v16)
+    v18 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v19 = g.math('MULTIPLY', v10, v11)
+    v20 = g.math('SUBTRACT', 1.0, g.inp('r___done', False))
+    v21 = g.vmath('MULTIPLY', g.inp('r_albedo', True), v9)
+    v22 = g.math('MULTIPLY', v17, v17)
+    v23 = g.math('MULTIPLY', v22, v19)
+    v24 = g.bc(v23)
+    v25 = g.vmath('MULTIPLY', v21, v24)
+    v26 = g.vmath('ADD', v2, v25)
+    v27 = g.mixv(v20, v2, v26)
+    v28 = g.mixv(v6, v2, v27)
+    v29 = g.math('ADD', v3, 1.0)
+    g.out_('o_N', v0, True)
+    g.out_('o_Lloop0', v6, False)
+    g.out_('o_lightAccum', v28, True)
+    g.out_('o_lightIndex', v29, False)
+    g.out_('o_positionWS', v4, True)
 
 
 def build_Ruri_Endfield_Uber_Standard():
@@ -2650,110 +3083,25 @@ def build_Ruri_Endfield_Uber_Standard():
     v728 = g.math('SUBTRACT', v727, 0)
     v729 = g.math('CEIL', v728, 0.0)
     v730 = g.math('MAXIMUM', v729, 0.0)
-    z731i, z731o = g.repeat_begin(v730, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v732 = g.math('LESS_THAN', z731i.outputs['lightIndex'], v727)
-    v733 = g.math('MULTIPLY', z731i.outputs['Lloop0'], v732)
-    v734 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v735 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v736 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v737 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v738 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v739 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v740 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v741 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v742 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v743 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v744 = g.math('COMPARE', z731i.outputs['lightIndex'], 1.0, 0.5)
-    v745 = g.mixv(v744, v734, v739)
-    v746 = g.mixv(v744, v735, v740)
-    v747 = g.mixf(v744, v736, v741)
-    v748 = g.mixf(v744, v737, v742)
-    v749 = g.mixf(v744, v738, v743)
-    v750 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v751 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v752 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v753 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v754 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v755 = g.math('COMPARE', z731i.outputs['lightIndex'], 2.0, 0.5)
-    v756 = g.mixv(v755, v745, v750)
-    v757 = g.mixv(v755, v746, v751)
-    v758 = g.mixf(v755, v747, v752)
-    v759 = g.mixf(v755, v748, v753)
-    v760 = g.mixf(v755, v749, v754)
-    v761 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v762 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v763 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v764 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v765 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v766 = g.math('COMPARE', z731i.outputs['lightIndex'], 3.0, 0.5)
-    v767 = g.mixv(v766, v756, v761)
-    v768 = g.mixv(v766, v757, v762)
-    v769 = g.mixf(v766, v758, v763)
-    v770 = g.mixf(v766, v759, v764)
-    v771 = g.mixf(v766, v760, v765)
-    v772 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v773 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v774 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v775 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v776 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v777 = g.math('COMPARE', z731i.outputs['lightIndex'], 4.0, 0.5)
-    v778 = g.mixv(v777, v767, v772)
-    v779 = g.mixv(v777, v768, v773)
-    v780 = g.mixf(v777, v769, v774)
-    v781 = g.mixf(v777, v770, v775)
-    v782 = g.mixf(v777, v771, v776)
-    v783 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v784 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v785 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v786 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v787 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v788 = g.math('COMPARE', z731i.outputs['lightIndex'], 5.0, 0.5)
-    v789 = g.mixv(v788, v778, v783)
-    v790 = g.mixv(v788, v779, v784)
-    v791 = g.mixf(v788, v780, v785)
-    v792 = g.mixf(v788, v781, v786)
-    v793 = g.mixf(v788, v782, v787)
-    v794 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v795 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v796 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v797 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v798 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v799 = g.math('COMPARE', z731i.outputs['lightIndex'], 6.0, 0.5)
-    v800 = g.mixv(v799, v789, v794)
-    v801 = g.mixv(v799, v790, v795)
-    v802 = g.mixf(v799, v791, v796)
-    v803 = g.mixf(v799, v792, v797)
-    v804 = g.mixf(v799, v793, v798)
-    v805 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v806 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v807 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v808 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v809 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v810 = g.math('COMPARE', z731i.outputs['lightIndex'], 7.0, 0.5)
-    v811 = g.mixv(v810, v800, v805)
-    v812 = g.mixv(v810, v801, v806)
-    v813 = g.mixf(v810, v802, v807)
-    v814 = g.mixf(v810, v803, v808)
-    v815 = g.mixf(v810, v804, v809)
-    v816 = g.vmath('DOT_PRODUCT', z731i.outputs['N'], v811)
-    v817 = g.math('MULTIPLY', v816, 0.5)
-    v818 = g.math('ADD', v817, 0.5)
-    v819 = g.clampn(v818)
-    v820 = g.math('MULTIPLY', v813, v814)
-    v821 = g.vmath('MULTIPLY', v341, v812)
-    v822 = g.math('MULTIPLY', v819, v819)
-    v823 = g.math('MULTIPLY', v822, v820)
-    v824 = g.bc(v823)
-    v825 = g.vmath('MULTIPLY', v821, v824)
-    v826 = g.vmath('ADD', z731i.outputs['lightAccum'], v825)
-    v827 = g.mixv(v733, z731i.outputs['lightAccum'], v826)
-    v828 = g.math('ADD', z731i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z731o, {'N': z731i.outputs['N'], 'Lloop0': v733, 'lightAccum': v827, 'lightIndex': v828, 'positionWS': z731i.outputs['positionWS']})
-    v829 = g.vmath('ADD', v723, z731o.outputs['lightAccum'])
-    v830 = g.sep(v723)
-    v831 = g.sep(v829)
-    v832 = g.comb(v831[0], v831[1], v831[2])
-    g.out_('ret_gBuffer0', v832, True)
+    g.out_('Z1_it', v730, False)
+    g.out_('Z1_s_N', v59, True)
+    g.out_('Z1_s_Lloop0', 1.0, False)
+    g.out_('Z1_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z1_s_lightIndex', 0, False)
+    g.out_('Z1_s_positionWS', v15, True)
+    g.out_('Z1_r_albedo', v341, True)
+    g.out_('Z1_r___done', 0.0, False)
+    g.out_('Z1_r_pixelLightCount', v727, False)
+    v731 = g.inp('Z1_o_N', True)
+    v732 = g.inp('Z1_o_Lloop0', False)
+    v733 = g.inp('Z1_o_lightAccum', True)
+    v734 = g.inp('Z1_o_lightIndex', False)
+    v735 = g.inp('Z1_o_positionWS', True)
+    v736 = g.vmath('ADD', v723, v733)
+    v737 = g.sep(v723)
+    v738 = g.sep(v736)
+    v739 = g.comb(v738[0], v738[1], v738[2])
+    g.out_('ret_gBuffer0', v739, True)
     g.out_('ret_gBuffer0_w', v726, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -3465,110 +3813,25 @@ def build_Ruri_Endfield_Uber_Face():
     v681 = g.math('SUBTRACT', v680, 0)
     v682 = g.math('CEIL', v681, 0.0)
     v683 = g.math('MAXIMUM', v682, 0.0)
-    z684i, z684o = g.repeat_begin(v683, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v685 = g.math('LESS_THAN', z684i.outputs['lightIndex'], v680)
-    v686 = g.math('MULTIPLY', z684i.outputs['Lloop0'], v685)
-    v687 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v688 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v689 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v690 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v691 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v692 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v693 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v694 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v695 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v696 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v697 = g.math('COMPARE', z684i.outputs['lightIndex'], 1.0, 0.5)
-    v698 = g.mixv(v697, v687, v692)
-    v699 = g.mixv(v697, v688, v693)
-    v700 = g.mixf(v697, v689, v694)
-    v701 = g.mixf(v697, v690, v695)
-    v702 = g.mixf(v697, v691, v696)
-    v703 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v704 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v705 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v706 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v707 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v708 = g.math('COMPARE', z684i.outputs['lightIndex'], 2.0, 0.5)
-    v709 = g.mixv(v708, v698, v703)
-    v710 = g.mixv(v708, v699, v704)
-    v711 = g.mixf(v708, v700, v705)
-    v712 = g.mixf(v708, v701, v706)
-    v713 = g.mixf(v708, v702, v707)
-    v714 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v715 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v716 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v717 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v718 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v719 = g.math('COMPARE', z684i.outputs['lightIndex'], 3.0, 0.5)
-    v720 = g.mixv(v719, v709, v714)
-    v721 = g.mixv(v719, v710, v715)
-    v722 = g.mixf(v719, v711, v716)
-    v723 = g.mixf(v719, v712, v717)
-    v724 = g.mixf(v719, v713, v718)
-    v725 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v726 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v727 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v728 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v729 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v730 = g.math('COMPARE', z684i.outputs['lightIndex'], 4.0, 0.5)
-    v731 = g.mixv(v730, v720, v725)
-    v732 = g.mixv(v730, v721, v726)
-    v733 = g.mixf(v730, v722, v727)
-    v734 = g.mixf(v730, v723, v728)
-    v735 = g.mixf(v730, v724, v729)
-    v736 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v737 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v738 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v739 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v740 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v741 = g.math('COMPARE', z684i.outputs['lightIndex'], 5.0, 0.5)
-    v742 = g.mixv(v741, v731, v736)
-    v743 = g.mixv(v741, v732, v737)
-    v744 = g.mixf(v741, v733, v738)
-    v745 = g.mixf(v741, v734, v739)
-    v746 = g.mixf(v741, v735, v740)
-    v747 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v748 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v749 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v750 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v751 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v752 = g.math('COMPARE', z684i.outputs['lightIndex'], 6.0, 0.5)
-    v753 = g.mixv(v752, v742, v747)
-    v754 = g.mixv(v752, v743, v748)
-    v755 = g.mixf(v752, v744, v749)
-    v756 = g.mixf(v752, v745, v750)
-    v757 = g.mixf(v752, v746, v751)
-    v758 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v759 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v760 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v761 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v762 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v763 = g.math('COMPARE', z684i.outputs['lightIndex'], 7.0, 0.5)
-    v764 = g.mixv(v763, v753, v758)
-    v765 = g.mixv(v763, v754, v759)
-    v766 = g.mixf(v763, v755, v760)
-    v767 = g.mixf(v763, v756, v761)
-    v768 = g.mixf(v763, v757, v762)
-    v769 = g.vmath('DOT_PRODUCT', z684i.outputs['N'], v764)
-    v770 = g.math('MULTIPLY', v769, 0.5)
-    v771 = g.math('ADD', v770, 0.5)
-    v772 = g.clampn(v771)
-    v773 = g.math('MULTIPLY', v766, v767)
-    v774 = g.vmath('MULTIPLY', v150, v765)
-    v775 = g.math('MULTIPLY', v772, v772)
-    v776 = g.math('MULTIPLY', v775, v773)
-    v777 = g.bc(v776)
-    v778 = g.vmath('MULTIPLY', v774, v777)
-    v779 = g.vmath('ADD', z684i.outputs['lightAccum'], v778)
-    v780 = g.mixv(v686, z684i.outputs['lightAccum'], v779)
-    v781 = g.math('ADD', z684i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z684o, {'N': z684i.outputs['N'], 'Lloop0': v686, 'lightAccum': v780, 'lightIndex': v781, 'positionWS': z684i.outputs['positionWS']})
-    v782 = g.vmath('ADD', v679, z684o.outputs['lightAccum'])
-    v783 = g.sep(v679)
-    v784 = g.sep(v782)
-    v785 = g.comb(v784[0], v784[1], v784[2])
-    g.out_('ret_gBuffer0', v785, True)
+    g.out_('Z0_it', v683, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v680, False)
+    v684 = g.inp('Z0_o_N', True)
+    v685 = g.inp('Z0_o_Lloop0', False)
+    v686 = g.inp('Z0_o_lightAccum', True)
+    v687 = g.inp('Z0_o_lightIndex', False)
+    v688 = g.inp('Z0_o_positionWS', True)
+    v689 = g.vmath('ADD', v679, v686)
+    v690 = g.sep(v679)
+    v691 = g.sep(v689)
+    v692 = g.comb(v691[0], v691[1], v691[2])
+    g.out_('ret_gBuffer0', v692, True)
     g.out_('ret_gBuffer0_w', v83, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -4227,110 +4490,25 @@ def build_Ruri_Endfield_Uber_Eyes():
     v628 = g.math('SUBTRACT', v627, 0)
     v629 = g.math('CEIL', v628, 0.0)
     v630 = g.math('MAXIMUM', v629, 0.0)
-    z631i, z631o = g.repeat_begin(v630, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v632 = g.math('LESS_THAN', z631i.outputs['lightIndex'], v627)
-    v633 = g.math('MULTIPLY', z631i.outputs['Lloop0'], v632)
-    v634 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v635 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v636 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v637 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v638 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v639 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v640 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v641 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v642 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v643 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v644 = g.math('COMPARE', z631i.outputs['lightIndex'], 1.0, 0.5)
-    v645 = g.mixv(v644, v634, v639)
-    v646 = g.mixv(v644, v635, v640)
-    v647 = g.mixf(v644, v636, v641)
-    v648 = g.mixf(v644, v637, v642)
-    v649 = g.mixf(v644, v638, v643)
-    v650 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v651 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v652 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v653 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v654 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v655 = g.math('COMPARE', z631i.outputs['lightIndex'], 2.0, 0.5)
-    v656 = g.mixv(v655, v645, v650)
-    v657 = g.mixv(v655, v646, v651)
-    v658 = g.mixf(v655, v647, v652)
-    v659 = g.mixf(v655, v648, v653)
-    v660 = g.mixf(v655, v649, v654)
-    v661 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v662 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v663 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v664 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v665 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v666 = g.math('COMPARE', z631i.outputs['lightIndex'], 3.0, 0.5)
-    v667 = g.mixv(v666, v656, v661)
-    v668 = g.mixv(v666, v657, v662)
-    v669 = g.mixf(v666, v658, v663)
-    v670 = g.mixf(v666, v659, v664)
-    v671 = g.mixf(v666, v660, v665)
-    v672 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v673 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v674 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v675 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v676 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v677 = g.math('COMPARE', z631i.outputs['lightIndex'], 4.0, 0.5)
-    v678 = g.mixv(v677, v667, v672)
-    v679 = g.mixv(v677, v668, v673)
-    v680 = g.mixf(v677, v669, v674)
-    v681 = g.mixf(v677, v670, v675)
-    v682 = g.mixf(v677, v671, v676)
-    v683 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v684 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v685 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v686 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v687 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v688 = g.math('COMPARE', z631i.outputs['lightIndex'], 5.0, 0.5)
-    v689 = g.mixv(v688, v678, v683)
-    v690 = g.mixv(v688, v679, v684)
-    v691 = g.mixf(v688, v680, v685)
-    v692 = g.mixf(v688, v681, v686)
-    v693 = g.mixf(v688, v682, v687)
-    v694 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v695 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v696 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v697 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v698 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v699 = g.math('COMPARE', z631i.outputs['lightIndex'], 6.0, 0.5)
-    v700 = g.mixv(v699, v689, v694)
-    v701 = g.mixv(v699, v690, v695)
-    v702 = g.mixf(v699, v691, v696)
-    v703 = g.mixf(v699, v692, v697)
-    v704 = g.mixf(v699, v693, v698)
-    v705 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v706 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v707 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v708 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v709 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v710 = g.math('COMPARE', z631i.outputs['lightIndex'], 7.0, 0.5)
-    v711 = g.mixv(v710, v700, v705)
-    v712 = g.mixv(v710, v701, v706)
-    v713 = g.mixf(v710, v702, v707)
-    v714 = g.mixf(v710, v703, v708)
-    v715 = g.mixf(v710, v704, v709)
-    v716 = g.vmath('DOT_PRODUCT', z631i.outputs['N'], v711)
-    v717 = g.math('MULTIPLY', v716, 0.5)
-    v718 = g.math('ADD', v717, 0.5)
-    v719 = g.clampn(v718)
-    v720 = g.math('MULTIPLY', v713, v714)
-    v721 = g.vmath('MULTIPLY', v150, v712)
-    v722 = g.math('MULTIPLY', v719, v719)
-    v723 = g.math('MULTIPLY', v722, v720)
-    v724 = g.bc(v723)
-    v725 = g.vmath('MULTIPLY', v721, v724)
-    v726 = g.vmath('ADD', z631i.outputs['lightAccum'], v725)
-    v727 = g.mixv(v633, z631i.outputs['lightAccum'], v726)
-    v728 = g.math('ADD', z631i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z631o, {'N': z631i.outputs['N'], 'Lloop0': v633, 'lightAccum': v727, 'lightIndex': v728, 'positionWS': z631i.outputs['positionWS']})
-    v729 = g.vmath('ADD', v626, z631o.outputs['lightAccum'])
-    v730 = g.sep(v626)
-    v731 = g.sep(v729)
-    v732 = g.comb(v731[0], v731[1], v731[2])
-    g.out_('ret_gBuffer0', v732, True)
+    g.out_('Z0_it', v630, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v627, False)
+    v631 = g.inp('Z0_o_N', True)
+    v632 = g.inp('Z0_o_Lloop0', False)
+    v633 = g.inp('Z0_o_lightAccum', True)
+    v634 = g.inp('Z0_o_lightIndex', False)
+    v635 = g.inp('Z0_o_positionWS', True)
+    v636 = g.vmath('ADD', v626, v633)
+    v637 = g.sep(v626)
+    v638 = g.sep(v636)
+    v639 = g.comb(v638[0], v638[1], v638[2])
+    g.out_('ret_gBuffer0', v639, True)
     g.out_('ret_gBuffer0_w', v83, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -5143,110 +5321,25 @@ def build_Ruri_Endfield_Uber_Hair():
     v781 = g.math('SUBTRACT', v780, 0)
     v782 = g.math('CEIL', v781, 0.0)
     v783 = g.math('MAXIMUM', v782, 0.0)
-    z784i, z784o = g.repeat_begin(v783, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v785 = g.math('LESS_THAN', z784i.outputs['lightIndex'], v780)
-    v786 = g.math('MULTIPLY', z784i.outputs['Lloop0'], v785)
-    v787 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v788 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v789 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v790 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v791 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v792 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v793 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v794 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v795 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v796 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v797 = g.math('COMPARE', z784i.outputs['lightIndex'], 1.0, 0.5)
-    v798 = g.mixv(v797, v787, v792)
-    v799 = g.mixv(v797, v788, v793)
-    v800 = g.mixf(v797, v789, v794)
-    v801 = g.mixf(v797, v790, v795)
-    v802 = g.mixf(v797, v791, v796)
-    v803 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v804 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v805 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v806 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v807 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v808 = g.math('COMPARE', z784i.outputs['lightIndex'], 2.0, 0.5)
-    v809 = g.mixv(v808, v798, v803)
-    v810 = g.mixv(v808, v799, v804)
-    v811 = g.mixf(v808, v800, v805)
-    v812 = g.mixf(v808, v801, v806)
-    v813 = g.mixf(v808, v802, v807)
-    v814 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v815 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v816 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v817 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v818 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v819 = g.math('COMPARE', z784i.outputs['lightIndex'], 3.0, 0.5)
-    v820 = g.mixv(v819, v809, v814)
-    v821 = g.mixv(v819, v810, v815)
-    v822 = g.mixf(v819, v811, v816)
-    v823 = g.mixf(v819, v812, v817)
-    v824 = g.mixf(v819, v813, v818)
-    v825 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v826 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v827 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v828 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v829 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v830 = g.math('COMPARE', z784i.outputs['lightIndex'], 4.0, 0.5)
-    v831 = g.mixv(v830, v820, v825)
-    v832 = g.mixv(v830, v821, v826)
-    v833 = g.mixf(v830, v822, v827)
-    v834 = g.mixf(v830, v823, v828)
-    v835 = g.mixf(v830, v824, v829)
-    v836 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v837 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v838 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v839 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v840 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v841 = g.math('COMPARE', z784i.outputs['lightIndex'], 5.0, 0.5)
-    v842 = g.mixv(v841, v831, v836)
-    v843 = g.mixv(v841, v832, v837)
-    v844 = g.mixf(v841, v833, v838)
-    v845 = g.mixf(v841, v834, v839)
-    v846 = g.mixf(v841, v835, v840)
-    v847 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v848 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v849 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v850 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v851 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v852 = g.math('COMPARE', z784i.outputs['lightIndex'], 6.0, 0.5)
-    v853 = g.mixv(v852, v842, v847)
-    v854 = g.mixv(v852, v843, v848)
-    v855 = g.mixf(v852, v844, v849)
-    v856 = g.mixf(v852, v845, v850)
-    v857 = g.mixf(v852, v846, v851)
-    v858 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v859 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v860 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v861 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v862 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v863 = g.math('COMPARE', z784i.outputs['lightIndex'], 7.0, 0.5)
-    v864 = g.mixv(v863, v853, v858)
-    v865 = g.mixv(v863, v854, v859)
-    v866 = g.mixf(v863, v855, v860)
-    v867 = g.mixf(v863, v856, v861)
-    v868 = g.mixf(v863, v857, v862)
-    v869 = g.vmath('DOT_PRODUCT', z784i.outputs['N'], v864)
-    v870 = g.math('MULTIPLY', v869, 0.5)
-    v871 = g.math('ADD', v870, 0.5)
-    v872 = g.clampn(v871)
-    v873 = g.math('MULTIPLY', v866, v867)
-    v874 = g.vmath('MULTIPLY', v150, v865)
-    v875 = g.math('MULTIPLY', v872, v872)
-    v876 = g.math('MULTIPLY', v875, v873)
-    v877 = g.bc(v876)
-    v878 = g.vmath('MULTIPLY', v874, v877)
-    v879 = g.vmath('ADD', z784i.outputs['lightAccum'], v878)
-    v880 = g.mixv(v786, z784i.outputs['lightAccum'], v879)
-    v881 = g.math('ADD', z784i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z784o, {'N': z784i.outputs['N'], 'Lloop0': v786, 'lightAccum': v880, 'lightIndex': v881, 'positionWS': z784i.outputs['positionWS']})
-    v882 = g.vmath('ADD', v776, z784o.outputs['lightAccum'])
-    v883 = g.sep(v776)
-    v884 = g.sep(v882)
-    v885 = g.comb(v884[0], v884[1], v884[2])
-    g.out_('ret_gBuffer0', v885, True)
+    g.out_('Z0_it', v783, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v780, False)
+    v784 = g.inp('Z0_o_N', True)
+    v785 = g.inp('Z0_o_Lloop0', False)
+    v786 = g.inp('Z0_o_lightAccum', True)
+    v787 = g.inp('Z0_o_lightIndex', False)
+    v788 = g.inp('Z0_o_positionWS', True)
+    v789 = g.vmath('ADD', v776, v786)
+    v790 = g.sep(v776)
+    v791 = g.sep(v789)
+    v792 = g.comb(v791[0], v791[1], v791[2])
+    g.out_('ret_gBuffer0', v792, True)
     g.out_('ret_gBuffer0_w', v779, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -5952,110 +6045,25 @@ def build_Ruri_Endfield_Uber_Fur():
     v669 = g.math('SUBTRACT', v668, 0)
     v670 = g.math('CEIL', v669, 0.0)
     v671 = g.math('MAXIMUM', v670, 0.0)
-    z672i, z672o = g.repeat_begin(v671, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v673 = g.math('LESS_THAN', z672i.outputs['lightIndex'], v668)
-    v674 = g.math('MULTIPLY', z672i.outputs['Lloop0'], v673)
-    v675 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v676 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v677 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v678 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v679 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v680 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v681 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v682 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v683 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v684 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v685 = g.math('COMPARE', z672i.outputs['lightIndex'], 1.0, 0.5)
-    v686 = g.mixv(v685, v675, v680)
-    v687 = g.mixv(v685, v676, v681)
-    v688 = g.mixf(v685, v677, v682)
-    v689 = g.mixf(v685, v678, v683)
-    v690 = g.mixf(v685, v679, v684)
-    v691 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v692 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v693 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v694 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v695 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v696 = g.math('COMPARE', z672i.outputs['lightIndex'], 2.0, 0.5)
-    v697 = g.mixv(v696, v686, v691)
-    v698 = g.mixv(v696, v687, v692)
-    v699 = g.mixf(v696, v688, v693)
-    v700 = g.mixf(v696, v689, v694)
-    v701 = g.mixf(v696, v690, v695)
-    v702 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v703 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v704 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v705 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v706 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v707 = g.math('COMPARE', z672i.outputs['lightIndex'], 3.0, 0.5)
-    v708 = g.mixv(v707, v697, v702)
-    v709 = g.mixv(v707, v698, v703)
-    v710 = g.mixf(v707, v699, v704)
-    v711 = g.mixf(v707, v700, v705)
-    v712 = g.mixf(v707, v701, v706)
-    v713 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v714 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v715 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v716 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v717 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v718 = g.math('COMPARE', z672i.outputs['lightIndex'], 4.0, 0.5)
-    v719 = g.mixv(v718, v708, v713)
-    v720 = g.mixv(v718, v709, v714)
-    v721 = g.mixf(v718, v710, v715)
-    v722 = g.mixf(v718, v711, v716)
-    v723 = g.mixf(v718, v712, v717)
-    v724 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v725 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v726 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v727 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v728 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v729 = g.math('COMPARE', z672i.outputs['lightIndex'], 5.0, 0.5)
-    v730 = g.mixv(v729, v719, v724)
-    v731 = g.mixv(v729, v720, v725)
-    v732 = g.mixf(v729, v721, v726)
-    v733 = g.mixf(v729, v722, v727)
-    v734 = g.mixf(v729, v723, v728)
-    v735 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v736 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v737 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v738 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v739 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v740 = g.math('COMPARE', z672i.outputs['lightIndex'], 6.0, 0.5)
-    v741 = g.mixv(v740, v730, v735)
-    v742 = g.mixv(v740, v731, v736)
-    v743 = g.mixf(v740, v732, v737)
-    v744 = g.mixf(v740, v733, v738)
-    v745 = g.mixf(v740, v734, v739)
-    v746 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v747 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v748 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v749 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v750 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v751 = g.math('COMPARE', z672i.outputs['lightIndex'], 7.0, 0.5)
-    v752 = g.mixv(v751, v741, v746)
-    v753 = g.mixv(v751, v742, v747)
-    v754 = g.mixf(v751, v743, v748)
-    v755 = g.mixf(v751, v744, v749)
-    v756 = g.mixf(v751, v745, v750)
-    v757 = g.vmath('DOT_PRODUCT', z672i.outputs['N'], v752)
-    v758 = g.math('MULTIPLY', v757, 0.5)
-    v759 = g.math('ADD', v758, 0.5)
-    v760 = g.clampn(v759)
-    v761 = g.math('MULTIPLY', v754, v755)
-    v762 = g.vmath('MULTIPLY', v150, v753)
-    v763 = g.math('MULTIPLY', v760, v760)
-    v764 = g.math('MULTIPLY', v763, v761)
-    v765 = g.bc(v764)
-    v766 = g.vmath('MULTIPLY', v762, v765)
-    v767 = g.vmath('ADD', z672i.outputs['lightAccum'], v766)
-    v768 = g.mixv(v674, z672i.outputs['lightAccum'], v767)
-    v769 = g.math('ADD', z672i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z672o, {'N': z672i.outputs['N'], 'Lloop0': v674, 'lightAccum': v768, 'lightIndex': v769, 'positionWS': z672i.outputs['positionWS']})
-    v770 = g.vmath('ADD', v665, z672o.outputs['lightAccum'])
-    v771 = g.sep(v665)
-    v772 = g.sep(v770)
-    v773 = g.comb(v772[0], v772[1], v772[2])
-    g.out_('ret_gBuffer0', v773, True)
+    g.out_('Z0_it', v671, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v668, False)
+    v672 = g.inp('Z0_o_N', True)
+    v673 = g.inp('Z0_o_Lloop0', False)
+    v674 = g.inp('Z0_o_lightAccum', True)
+    v675 = g.inp('Z0_o_lightIndex', False)
+    v676 = g.inp('Z0_o_positionWS', True)
+    v677 = g.vmath('ADD', v665, v674)
+    v678 = g.sep(v665)
+    v679 = g.sep(v677)
+    v680 = g.comb(v679[0], v679[1], v679[2])
+    g.out_('ret_gBuffer0', v680, True)
     g.out_('ret_gBuffer0_w', v667, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -6498,110 +6506,25 @@ def build_Ruri_Endfield_Uber_VFX():
     v413 = g.math('SUBTRACT', v412, 0)
     v414 = g.math('CEIL', v413, 0.0)
     v415 = g.math('MAXIMUM', v414, 0.0)
-    z416i, z416o = g.repeat_begin(v415, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v417 = g.math('LESS_THAN', z416i.outputs['lightIndex'], v412)
-    v418 = g.math('MULTIPLY', z416i.outputs['Lloop0'], v417)
-    v419 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v420 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v421 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v422 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v423 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v424 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v425 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v426 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v427 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v428 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v429 = g.math('COMPARE', z416i.outputs['lightIndex'], 1.0, 0.5)
-    v430 = g.mixv(v429, v419, v424)
-    v431 = g.mixv(v429, v420, v425)
-    v432 = g.mixf(v429, v421, v426)
-    v433 = g.mixf(v429, v422, v427)
-    v434 = g.mixf(v429, v423, v428)
-    v435 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v436 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v437 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v438 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v439 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v440 = g.math('COMPARE', z416i.outputs['lightIndex'], 2.0, 0.5)
-    v441 = g.mixv(v440, v430, v435)
-    v442 = g.mixv(v440, v431, v436)
-    v443 = g.mixf(v440, v432, v437)
-    v444 = g.mixf(v440, v433, v438)
-    v445 = g.mixf(v440, v434, v439)
-    v446 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v447 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v448 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v449 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v450 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v451 = g.math('COMPARE', z416i.outputs['lightIndex'], 3.0, 0.5)
-    v452 = g.mixv(v451, v441, v446)
-    v453 = g.mixv(v451, v442, v447)
-    v454 = g.mixf(v451, v443, v448)
-    v455 = g.mixf(v451, v444, v449)
-    v456 = g.mixf(v451, v445, v450)
-    v457 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v458 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v459 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v460 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v461 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v462 = g.math('COMPARE', z416i.outputs['lightIndex'], 4.0, 0.5)
-    v463 = g.mixv(v462, v452, v457)
-    v464 = g.mixv(v462, v453, v458)
-    v465 = g.mixf(v462, v454, v459)
-    v466 = g.mixf(v462, v455, v460)
-    v467 = g.mixf(v462, v456, v461)
-    v468 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v469 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v470 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v471 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v472 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v473 = g.math('COMPARE', z416i.outputs['lightIndex'], 5.0, 0.5)
-    v474 = g.mixv(v473, v463, v468)
-    v475 = g.mixv(v473, v464, v469)
-    v476 = g.mixf(v473, v465, v470)
-    v477 = g.mixf(v473, v466, v471)
-    v478 = g.mixf(v473, v467, v472)
-    v479 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v480 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v481 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v482 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v483 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v484 = g.math('COMPARE', z416i.outputs['lightIndex'], 6.0, 0.5)
-    v485 = g.mixv(v484, v474, v479)
-    v486 = g.mixv(v484, v475, v480)
-    v487 = g.mixf(v484, v476, v481)
-    v488 = g.mixf(v484, v477, v482)
-    v489 = g.mixf(v484, v478, v483)
-    v490 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v491 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v492 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v493 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v494 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v495 = g.math('COMPARE', z416i.outputs['lightIndex'], 7.0, 0.5)
-    v496 = g.mixv(v495, v485, v490)
-    v497 = g.mixv(v495, v486, v491)
-    v498 = g.mixf(v495, v487, v492)
-    v499 = g.mixf(v495, v488, v493)
-    v500 = g.mixf(v495, v489, v494)
-    v501 = g.vmath('DOT_PRODUCT', z416i.outputs['N'], v496)
-    v502 = g.math('MULTIPLY', v501, 0.5)
-    v503 = g.math('ADD', v502, 0.5)
-    v504 = g.clampn(v503)
-    v505 = g.math('MULTIPLY', v498, v499)
-    v506 = g.vmath('MULTIPLY', v150, v497)
-    v507 = g.math('MULTIPLY', v504, v504)
-    v508 = g.math('MULTIPLY', v507, v505)
-    v509 = g.bc(v508)
-    v510 = g.vmath('MULTIPLY', v506, v509)
-    v511 = g.vmath('ADD', z416i.outputs['lightAccum'], v510)
-    v512 = g.mixv(v418, z416i.outputs['lightAccum'], v511)
-    v513 = g.math('ADD', z416i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z416o, {'N': z416i.outputs['N'], 'Lloop0': v418, 'lightAccum': v512, 'lightIndex': v513, 'positionWS': z416i.outputs['positionWS']})
-    v514 = g.vmath('ADD', v411, z416o.outputs['lightAccum'])
-    v515 = g.sep(v411)
-    v516 = g.sep(v514)
-    v517 = g.comb(v516[0], v516[1], v516[2])
-    g.out_('ret_gBuffer0', v517, True)
+    g.out_('Z0_it', v415, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v412, False)
+    v416 = g.inp('Z0_o_N', True)
+    v417 = g.inp('Z0_o_Lloop0', False)
+    v418 = g.inp('Z0_o_lightAccum', True)
+    v419 = g.inp('Z0_o_lightIndex', False)
+    v420 = g.inp('Z0_o_positionWS', True)
+    v421 = g.vmath('ADD', v411, v418)
+    v422 = g.sep(v411)
+    v423 = g.sep(v421)
+    v424 = g.comb(v423[0], v423[1], v423[2])
+    g.out_('ret_gBuffer0', v424, True)
     g.out_('ret_gBuffer0_w', v407, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -6789,110 +6712,25 @@ def build_Ruri_Endfield_Uber_OverlayShadow():
     v164 = g.math('SUBTRACT', v163, 0)
     v165 = g.math('CEIL', v164, 0.0)
     v166 = g.math('MAXIMUM', v165, 0.0)
-    z167i, z167o = g.repeat_begin(v166, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v168 = g.math('LESS_THAN', z167i.outputs['lightIndex'], v163)
-    v169 = g.math('MULTIPLY', z167i.outputs['Lloop0'], v168)
-    v170 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v171 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v172 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v173 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v174 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v175 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v176 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v177 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v178 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v179 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v180 = g.math('COMPARE', z167i.outputs['lightIndex'], 1.0, 0.5)
-    v181 = g.mixv(v180, v170, v175)
-    v182 = g.mixv(v180, v171, v176)
-    v183 = g.mixf(v180, v172, v177)
-    v184 = g.mixf(v180, v173, v178)
-    v185 = g.mixf(v180, v174, v179)
-    v186 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v187 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v188 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v189 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v190 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v191 = g.math('COMPARE', z167i.outputs['lightIndex'], 2.0, 0.5)
-    v192 = g.mixv(v191, v181, v186)
-    v193 = g.mixv(v191, v182, v187)
-    v194 = g.mixf(v191, v183, v188)
-    v195 = g.mixf(v191, v184, v189)
-    v196 = g.mixf(v191, v185, v190)
-    v197 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v198 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v199 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v200 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v201 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v202 = g.math('COMPARE', z167i.outputs['lightIndex'], 3.0, 0.5)
-    v203 = g.mixv(v202, v192, v197)
-    v204 = g.mixv(v202, v193, v198)
-    v205 = g.mixf(v202, v194, v199)
-    v206 = g.mixf(v202, v195, v200)
-    v207 = g.mixf(v202, v196, v201)
-    v208 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v209 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v210 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v211 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v212 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v213 = g.math('COMPARE', z167i.outputs['lightIndex'], 4.0, 0.5)
-    v214 = g.mixv(v213, v203, v208)
-    v215 = g.mixv(v213, v204, v209)
-    v216 = g.mixf(v213, v205, v210)
-    v217 = g.mixf(v213, v206, v211)
-    v218 = g.mixf(v213, v207, v212)
-    v219 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v220 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v221 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v222 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v223 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v224 = g.math('COMPARE', z167i.outputs['lightIndex'], 5.0, 0.5)
-    v225 = g.mixv(v224, v214, v219)
-    v226 = g.mixv(v224, v215, v220)
-    v227 = g.mixf(v224, v216, v221)
-    v228 = g.mixf(v224, v217, v222)
-    v229 = g.mixf(v224, v218, v223)
-    v230 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v231 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v232 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v233 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v234 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v235 = g.math('COMPARE', z167i.outputs['lightIndex'], 6.0, 0.5)
-    v236 = g.mixv(v235, v225, v230)
-    v237 = g.mixv(v235, v226, v231)
-    v238 = g.mixf(v235, v227, v232)
-    v239 = g.mixf(v235, v228, v233)
-    v240 = g.mixf(v235, v229, v234)
-    v241 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v242 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v243 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v244 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v245 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v246 = g.math('COMPARE', z167i.outputs['lightIndex'], 7.0, 0.5)
-    v247 = g.mixv(v246, v236, v241)
-    v248 = g.mixv(v246, v237, v242)
-    v249 = g.mixf(v246, v238, v243)
-    v250 = g.mixf(v246, v239, v244)
-    v251 = g.mixf(v246, v240, v245)
-    v252 = g.vmath('DOT_PRODUCT', z167i.outputs['N'], v247)
-    v253 = g.math('MULTIPLY', v252, 0.5)
-    v254 = g.math('ADD', v253, 0.5)
-    v255 = g.clampn(v254)
-    v256 = g.math('MULTIPLY', v249, v250)
-    v257 = g.vmath('MULTIPLY', v150, v248)
-    v258 = g.math('MULTIPLY', v255, v255)
-    v259 = g.math('MULTIPLY', v258, v256)
-    v260 = g.bc(v259)
-    v261 = g.vmath('MULTIPLY', v257, v260)
-    v262 = g.vmath('ADD', z167i.outputs['lightAccum'], v261)
-    v263 = g.mixv(v169, z167i.outputs['lightAccum'], v262)
-    v264 = g.math('ADD', z167i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z167o, {'N': z167i.outputs['N'], 'Lloop0': v169, 'lightAccum': v263, 'lightIndex': v264, 'positionWS': z167i.outputs['positionWS']})
-    v265 = g.vmath('ADD', v161, z167o.outputs['lightAccum'])
-    v266 = g.sep(v161)
-    v267 = g.sep(v265)
-    v268 = g.comb(v267[0], v267[1], v267[2])
-    g.out_('ret_gBuffer0', v268, True)
+    g.out_('Z0_it', v166, False)
+    g.out_('Z0_s_N', v59, True)
+    g.out_('Z0_s_Lloop0', 1.0, False)
+    g.out_('Z0_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z0_s_lightIndex', 0, False)
+    g.out_('Z0_s_positionWS', v15, True)
+    g.out_('Z0_r_albedo', v150, True)
+    g.out_('Z0_r___done', 0.0, False)
+    g.out_('Z0_r_pixelLightCount', v163, False)
+    v167 = g.inp('Z0_o_N', True)
+    v168 = g.inp('Z0_o_Lloop0', False)
+    v169 = g.inp('Z0_o_lightAccum', True)
+    v170 = g.inp('Z0_o_lightIndex', False)
+    v171 = g.inp('Z0_o_positionWS', True)
+    v172 = g.vmath('ADD', v161, v169)
+    v173 = g.sep(v161)
+    v174 = g.sep(v172)
+    v175 = g.comb(v174[0], v174[1], v174[2])
+    g.out_('ret_gBuffer0', v175, True)
     g.out_('ret_gBuffer0_w', v155, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -7780,110 +7618,25 @@ def build_Ruri_Endfield_Uber_LiquidAg():
     v832 = g.math('SUBTRACT', v831, 0)
     v833 = g.math('CEIL', v832, 0.0)
     v834 = g.math('MAXIMUM', v833, 0.0)
-    z835i, z835o = g.repeat_begin(v834, [('N', True, v59), ('Lloop0', False, 1.0), ('lightAccum', True, (0, 0, 0)), ('lightIndex', False, 0), ('positionWS', True, v15)])
-    v836 = g.math('LESS_THAN', z835i.outputs['lightIndex'], v831)
-    v837 = g.math('MULTIPLY', z835i.outputs['Lloop0'], v836)
-    v838 = g.inp('C2_AdditionalLight_0_direction', True, (0.0, 0.0, 0.0))
-    v839 = g.inp('C2_AdditionalLight_0_color', True, (0.0, 0.0, 0.0))
-    v840 = g.inp('C2_AdditionalLight_0_distanceAttenuation', False, 0.0)
-    v841 = g.inp('C2_AdditionalLight_0_shadowAttenuation', False, 0.0)
-    v842 = g.inp('C2_AdditionalLight_0_layerMask', False, 0.0)
-    v843 = g.inp('C2_AdditionalLight_1_direction', True, (0.0, 0.0, 0.0))
-    v844 = g.inp('C2_AdditionalLight_1_color', True, (0.0, 0.0, 0.0))
-    v845 = g.inp('C2_AdditionalLight_1_distanceAttenuation', False, 0.0)
-    v846 = g.inp('C2_AdditionalLight_1_shadowAttenuation', False, 0.0)
-    v847 = g.inp('C2_AdditionalLight_1_layerMask', False, 0.0)
-    v848 = g.math('COMPARE', z835i.outputs['lightIndex'], 1.0, 0.5)
-    v849 = g.mixv(v848, v838, v843)
-    v850 = g.mixv(v848, v839, v844)
-    v851 = g.mixf(v848, v840, v845)
-    v852 = g.mixf(v848, v841, v846)
-    v853 = g.mixf(v848, v842, v847)
-    v854 = g.inp('C2_AdditionalLight_2_direction', True, (0.0, 0.0, 0.0))
-    v855 = g.inp('C2_AdditionalLight_2_color', True, (0.0, 0.0, 0.0))
-    v856 = g.inp('C2_AdditionalLight_2_distanceAttenuation', False, 0.0)
-    v857 = g.inp('C2_AdditionalLight_2_shadowAttenuation', False, 0.0)
-    v858 = g.inp('C2_AdditionalLight_2_layerMask', False, 0.0)
-    v859 = g.math('COMPARE', z835i.outputs['lightIndex'], 2.0, 0.5)
-    v860 = g.mixv(v859, v849, v854)
-    v861 = g.mixv(v859, v850, v855)
-    v862 = g.mixf(v859, v851, v856)
-    v863 = g.mixf(v859, v852, v857)
-    v864 = g.mixf(v859, v853, v858)
-    v865 = g.inp('C2_AdditionalLight_3_direction', True, (0.0, 0.0, 0.0))
-    v866 = g.inp('C2_AdditionalLight_3_color', True, (0.0, 0.0, 0.0))
-    v867 = g.inp('C2_AdditionalLight_3_distanceAttenuation', False, 0.0)
-    v868 = g.inp('C2_AdditionalLight_3_shadowAttenuation', False, 0.0)
-    v869 = g.inp('C2_AdditionalLight_3_layerMask', False, 0.0)
-    v870 = g.math('COMPARE', z835i.outputs['lightIndex'], 3.0, 0.5)
-    v871 = g.mixv(v870, v860, v865)
-    v872 = g.mixv(v870, v861, v866)
-    v873 = g.mixf(v870, v862, v867)
-    v874 = g.mixf(v870, v863, v868)
-    v875 = g.mixf(v870, v864, v869)
-    v876 = g.inp('C2_AdditionalLight_4_direction', True, (0.0, 0.0, 0.0))
-    v877 = g.inp('C2_AdditionalLight_4_color', True, (0.0, 0.0, 0.0))
-    v878 = g.inp('C2_AdditionalLight_4_distanceAttenuation', False, 0.0)
-    v879 = g.inp('C2_AdditionalLight_4_shadowAttenuation', False, 0.0)
-    v880 = g.inp('C2_AdditionalLight_4_layerMask', False, 0.0)
-    v881 = g.math('COMPARE', z835i.outputs['lightIndex'], 4.0, 0.5)
-    v882 = g.mixv(v881, v871, v876)
-    v883 = g.mixv(v881, v872, v877)
-    v884 = g.mixf(v881, v873, v878)
-    v885 = g.mixf(v881, v874, v879)
-    v886 = g.mixf(v881, v875, v880)
-    v887 = g.inp('C2_AdditionalLight_5_direction', True, (0.0, 0.0, 0.0))
-    v888 = g.inp('C2_AdditionalLight_5_color', True, (0.0, 0.0, 0.0))
-    v889 = g.inp('C2_AdditionalLight_5_distanceAttenuation', False, 0.0)
-    v890 = g.inp('C2_AdditionalLight_5_shadowAttenuation', False, 0.0)
-    v891 = g.inp('C2_AdditionalLight_5_layerMask', False, 0.0)
-    v892 = g.math('COMPARE', z835i.outputs['lightIndex'], 5.0, 0.5)
-    v893 = g.mixv(v892, v882, v887)
-    v894 = g.mixv(v892, v883, v888)
-    v895 = g.mixf(v892, v884, v889)
-    v896 = g.mixf(v892, v885, v890)
-    v897 = g.mixf(v892, v886, v891)
-    v898 = g.inp('C2_AdditionalLight_6_direction', True, (0.0, 0.0, 0.0))
-    v899 = g.inp('C2_AdditionalLight_6_color', True, (0.0, 0.0, 0.0))
-    v900 = g.inp('C2_AdditionalLight_6_distanceAttenuation', False, 0.0)
-    v901 = g.inp('C2_AdditionalLight_6_shadowAttenuation', False, 0.0)
-    v902 = g.inp('C2_AdditionalLight_6_layerMask', False, 0.0)
-    v903 = g.math('COMPARE', z835i.outputs['lightIndex'], 6.0, 0.5)
-    v904 = g.mixv(v903, v893, v898)
-    v905 = g.mixv(v903, v894, v899)
-    v906 = g.mixf(v903, v895, v900)
-    v907 = g.mixf(v903, v896, v901)
-    v908 = g.mixf(v903, v897, v902)
-    v909 = g.inp('C2_AdditionalLight_7_direction', True, (0.0, 0.0, 0.0))
-    v910 = g.inp('C2_AdditionalLight_7_color', True, (0.0, 0.0, 0.0))
-    v911 = g.inp('C2_AdditionalLight_7_distanceAttenuation', False, 0.0)
-    v912 = g.inp('C2_AdditionalLight_7_shadowAttenuation', False, 0.0)
-    v913 = g.inp('C2_AdditionalLight_7_layerMask', False, 0.0)
-    v914 = g.math('COMPARE', z835i.outputs['lightIndex'], 7.0, 0.5)
-    v915 = g.mixv(v914, v904, v909)
-    v916 = g.mixv(v914, v905, v910)
-    v917 = g.mixf(v914, v906, v911)
-    v918 = g.mixf(v914, v907, v912)
-    v919 = g.mixf(v914, v908, v913)
-    v920 = g.vmath('DOT_PRODUCT', z835i.outputs['N'], v915)
-    v921 = g.math('MULTIPLY', v920, 0.5)
-    v922 = g.math('ADD', v921, 0.5)
-    v923 = g.clampn(v922)
-    v924 = g.math('MULTIPLY', v917, v918)
-    v925 = g.vmath('MULTIPLY', v341, v916)
-    v926 = g.math('MULTIPLY', v923, v923)
-    v927 = g.math('MULTIPLY', v926, v924)
-    v928 = g.bc(v927)
-    v929 = g.vmath('MULTIPLY', v925, v928)
-    v930 = g.vmath('ADD', z835i.outputs['lightAccum'], v929)
-    v931 = g.mixv(v837, z835i.outputs['lightAccum'], v930)
-    v932 = g.math('ADD', z835i.outputs['lightIndex'], 1.0)
-    g.repeat_end(z835o, {'N': z835i.outputs['N'], 'Lloop0': v837, 'lightAccum': v931, 'lightIndex': v932, 'positionWS': z835i.outputs['positionWS']})
-    v933 = g.vmath('ADD', v827, z835o.outputs['lightAccum'])
-    v934 = g.sep(v827)
-    v935 = g.sep(v933)
-    v936 = g.comb(v935[0], v935[1], v935[2])
-    g.out_('ret_gBuffer0', v936, True)
+    g.out_('Z1_it', v834, False)
+    g.out_('Z1_s_N', v59, True)
+    g.out_('Z1_s_Lloop0', 1.0, False)
+    g.out_('Z1_s_lightAccum', (0, 0, 0), True)
+    g.out_('Z1_s_lightIndex', 0, False)
+    g.out_('Z1_s_positionWS', v15, True)
+    g.out_('Z1_r_albedo', v341, True)
+    g.out_('Z1_r___done', 0.0, False)
+    g.out_('Z1_r_pixelLightCount', v831, False)
+    v835 = g.inp('Z1_o_N', True)
+    v836 = g.inp('Z1_o_Lloop0', False)
+    v837 = g.inp('Z1_o_lightAccum', True)
+    v838 = g.inp('Z1_o_lightIndex', False)
+    v839 = g.inp('Z1_o_positionWS', True)
+    v840 = g.vmath('ADD', v827, v837)
+    v841 = g.sep(v827)
+    v842 = g.sep(v840)
+    v843 = g.comb(v842[0], v842[1], v842[2])
+    g.out_('ret_gBuffer0', v843, True)
     g.out_('ret_gBuffer0_w', v830, False)
     g.out_('ret_gBuffer1', (0.0, 0.0, 0.0), True)
     g.out_('ret_gBuffer1_w', 0.0, False)
@@ -7922,7 +7675,16 @@ SHARED_GROUPS = [
     ('RCE_BRDF_SubsurfaceSpec_Endfield', build_RCE_BRDF_SubsurfaceSpec_Endfield),
     ('RCE_VFXColorAdjust', build_RCE_VFXColorAdjust),
     ('RCE_Z_Ruri_Endfield_Uber_Standard_0', build_RCE_Z_Ruri_Endfield_Uber_Standard_0),
+    ('RCE_Z_Ruri_Endfield_Uber_Standard_1', build_RCE_Z_Ruri_Endfield_Uber_Standard_1),
+    ('RCE_Z_Ruri_Endfield_Uber_Face_0', build_RCE_Z_Ruri_Endfield_Uber_Face_0),
+    ('RCE_Z_Ruri_Endfield_Uber_Eyes_0', build_RCE_Z_Ruri_Endfield_Uber_Eyes_0),
+    ('RCE_Z_Ruri_Endfield_Uber_Hair_0', build_RCE_Z_Ruri_Endfield_Uber_Hair_0),
+    ('RCE_Z_Ruri_Endfield_Uber_Fur_0', build_RCE_Z_Ruri_Endfield_Uber_Fur_0),
+    ('RCE_Z_Ruri_Endfield_Uber_Eyebrow_0', build_RCE_Z_Ruri_Endfield_Uber_Eyebrow_0),
+    ('RCE_Z_Ruri_Endfield_Uber_VFX_0', build_RCE_Z_Ruri_Endfield_Uber_VFX_0),
+    ('RCE_Z_Ruri_Endfield_Uber_OverlayShadow_0', build_RCE_Z_Ruri_Endfield_Uber_OverlayShadow_0),
     ('RCE_Z_Ruri_Endfield_Uber_LiquidAg_0', build_RCE_Z_Ruri_Endfield_Uber_LiquidAg_0),
+    ('RCE_Z_Ruri_Endfield_Uber_LiquidAg_1', build_RCE_Z_Ruri_Endfield_Uber_LiquidAg_1),
 ]
 
 PARTS = {
@@ -7945,7 +7707,7 @@ CASCADE = {
     'Fur': 4,
     'Eyebrow': 3,
     'VFX': 3,
-    'OverlayShadow': 2,
+    'OverlayShadow': 3,
     'LiquidAg': 3,
 }
 
@@ -8086,20 +7848,92 @@ ZONES = {
          'fetches': [
              {'sock': 'F0_ParallaxTex', 'slot': '_ParallaxTex', 'depth': 0, 'non_color': True, 'extension': 'EXTEND', 'point': True, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
+        {'sock': 'Z1', 'body': 'RCE_Z_Ruri_Endfield_Uber_Standard_1', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'Face': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_Face_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'Eyes': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_Eyes_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'Hair': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_Hair_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'Fur': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_Fur_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'Eyebrow': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_Eyebrow_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'VFX': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_VFX_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'OverlayShadow': [
+        {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_OverlayShadow_0', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
     'LiquidAg': [
         {'sock': 'Z0', 'body': 'RCE_Z_Ruri_Endfield_Uber_LiquidAg_0', 'depth': 0, 'cascade': 2,
@@ -8111,59 +7945,59 @@ ZONES = {
          'fetches': [
              {'sock': 'F0_ParallaxTex', 'slot': '_ParallaxTex', 'depth': 0, 'non_color': True, 'extension': 'EXTEND', 'point': True, 'env': False, 'mip': False, 'derivative_mip': True, 'neutral': (1.0, 1.0, 1.0), 'neutral_alpha': 1.0},
          ]},
+        {'sock': 'Z1', 'body': 'RCE_Z_Ruri_Endfield_Uber_LiquidAg_1', 'depth': 1, 'cascade': 2,
+         'states': [('N', True), ('Lloop0', False), ('lightAccum', True), ('lightIndex', False), ('positionWS', True)],
+         'reads': [('albedo', True), ('__done', False), ('pixelLightCount', False)],
+         'uniforms': [],
+         'capabilities': [
+             {'sock': 'C0_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {'index': False, 'position': True}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'punctual light record (direction toward light, linear radiance)'},
+         ],
+         'fetches': [
+         ]},
     ],
 }
 
 CAPABILITIES = {
     'Standard': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'Face': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'Eyes': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'Hair': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'Fur': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'Eyebrow': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'VFX': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'OverlayShadow': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
     'LiquidAg': [
-        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 1, 'result': 'directional light record (direction toward light, linear radiance)'},
-        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'arity': 1, 'result': 'light count'},
-        {'sock': 'C2_AdditionalLight', 'cap': 'AdditionalLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'arity': 8, 'result': 'punctual light record (direction toward light, linear radiance)'},
+        {'sock': 'C0_MainLight', 'cap': 'MainLight', 'depth': 0, 'query': {}, 'results': {'direction': True, 'color': True, 'distanceAttenuation': False, 'shadowAttenuation': False, 'layerMask': False}, 'result': 'directional light record (direction toward light, linear radiance)'},
+        {'sock': 'C1_AdditionalLightCount', 'cap': 'AdditionalLightCount', 'depth': 0, 'query': {}, 'results': {'': False}, 'result': 'light count'},
     ],
 }
 
 DEFAULT_PART = 'Standard'
-STAMP = '5c8c699a79282249'
+STAMP = 'bd84456ca41a9d39'
 STAMP_KEY = 'ruri_uber_stamp'
 
 
@@ -8620,17 +8454,6 @@ def _wire_capability(g, insts, cap, ctx):
                 s = c.inputs.get(name)
                 if s is not None:
                     g._set(s, value)
-    arity = cap.get('arity', 1)
-    if arity > 1:
-        # 集合能力:数据面只按槽位灌元素(第 k 槽 = 第 k 个),选择在数学面早就生成好了。
-        if not isinstance(answer, (list, tuple)):
-            raise RuntimeError('[ruri-cap] {0}: 集合能力的建图器必须返回列表'.format(cap['cap']))
-        if len(answer) > arity:
-            print('[ruri-cap] {0}: {1} 个元素 > {2} 个槽位,超出的不参与'.format(
-                cap['cap'], len(answer), arity), flush=True)
-        for k, record in enumerate(answer[:arity]):
-            _feed_record(record, cap['sock'] + '_' + str(k))
-        return
     _feed_record(answer, cap['sock'])
 
 
@@ -8655,6 +8478,8 @@ def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
         b.node_tree = body_tpl
         binsts.append(b)
         inst_sink.append(b)
+        b['ruri_zone'] = zone['sock']   # 体实例的身份:重接体内割点要按 (zone, 序) 找回
+        b['ruri_binst'] = _i
         for item, is_vec in zone['states']:
             sock = b.inputs.get('s_' + item)
             if sock is not None:
@@ -9458,14 +9283,44 @@ def rewire_capabilities(mat):
         # 没有实例序标记 = 这张材质是旧产物,按 depth 取实例必错位。响亮说,不硬接。
         raise RuntimeError('[ruri-cap] 材质 {0} 无实例序标记(旧产物),请重新导入'.format(mat.name))
     g = G(nt, is_group=False)
+    ctx = {'material': mat}
     for row in rows:
-        _wire_capability(g, ordered, row, {'material': mat})
+        _wire_capability(g, ordered, row, ctx)
+    # 体内割点(灯就住在这儿):按 (zone, 序) 找回体实例链再接。
+    # 漏掉这段 = 上面刚把带 ruri_cap 标记的节点全删了、却只重建顶层那批,
+    # 循环里的兑现面被抹掉且永不回来(实测:第一次依赖图更新后灯全灭)。
+    for zone in ZONES.get(part, ()):
+        if not zone['capabilities']:
+            continue
+        binsts = sorted((n for n in nt.nodes if n.get('ruri_zone') == zone['sock']),
+                        key=lambda n: int(n['ruri_binst']))
+        if not binsts:
+            raise RuntimeError('[ruri-cap] 材质 {0} 的循环 {1} 无体实例标记(旧产物),请重新导入'.format(
+                mat.name, zone['sock']))
+        for row in zone['capabilities']:
+            _wire_capability(g, binsts, row, ctx)
     # 从 Python 改完节点树必须自己打脏标记:建材质那条路是 bpy 算子驱动的、
     # 依赖图顺手就重编了;这里是纯数据写,不打标记 EEVEE 会继续用旧的编译结果 ——
     # 症状是「图明明换了支、像素逐位不动」(实测换灯后三次渲染完全相同)。
     nt.update_tag()
     mat.update_tag()
     return True
+
+
+def refresh_light_tables():
+    """灯只是动了 / 换了色 / 调了能量 —— **重写灯表像素即可,一个节点都不用碰**。
+    灯集合本身没变时走这条:代价是几十个浮点写,与重建图不在一个量级。
+    (集合变了才需要重接:0 盏↔有盏会换整条兑现分支。)"""
+    touched = 0
+    for mat in bpy.data.materials:
+        if mat.get('ruri_uber_part') is None:
+            continue
+        lights = _additional_lights(mat)
+        if not lights:
+            continue
+        _light_table(mat, lights)
+        touched += 1
+    return touched
 
 
 def register():
@@ -9477,6 +9332,7 @@ def register():
     host.register_graph_provider(provider)
     host.register_vertex_stage(apply_vertex_stage)
     host.register_capability_rewire(rewire_capabilities)
+    host.register_light_table_refresh(refresh_light_tables)
 
 
 def unregister():
@@ -9485,6 +9341,7 @@ def unregister():
     host.unregister_graph_provider(provider)
     host.unregister_vertex_stage(apply_vertex_stage)
     host.unregister_capability_rewire(rewire_capabilities)
+    host.unregister_light_table_refresh(refresh_light_tables)
 
 
 # 导入即清理过时预设库(见 _prune_stale_libraries):要在 register() 之外,
