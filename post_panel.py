@@ -21,10 +21,11 @@ from __future__ import annotations
 import bpy
 
 try:
-    from . import derived_state, material_builder
+    from . import derived_state, material_builder, material_panel
 except ImportError:
     import derived_state
     import material_builder
+    import material_panel
 
 
 def _stage_nodes(scene):
@@ -250,7 +251,10 @@ def _draw_main_light(layout, context):
 
 
 def draw_post_tab(layout, context):
+    """这一格是「画面」:选中材质的参数、主光、后处理链 —— 一帧最终长什么样的全部旋钮。
+    材质参数排在最前:它是逐材质、改得最频繁的那一层。"""
     scene = context.scene
+    material_panel.draw_materials(layout, context)
     _draw_main_light(layout, context)
     if not material_builder.POST_STAGES:
         layout.label(text="No game shader package is loaded, so no post chain exists.", icon="INFO")

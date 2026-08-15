@@ -58,6 +58,21 @@ def _shader_identity(builder, props):
     return "guid {0} fileID {1}".format(guid, ref.get("fileID"))
 
 
+# ---- 材质参数面板,同样的注册表契约 ----
+# 生成的着色栈交出的是**接口 + 本栈的读写路径**(INTERFACE / panel_claims / panel_rows /
+# panel_read / panel_write*),不交面板本体:一个会话装着 N 个栈,每栈各注册一个面板就是 N 个
+# 面板并排堆在属性页里,而用户只想看选中网格所持有的那张材质。面板由宿主统一画一个
+# (material_panel),这里只是生成物看得见的那道门面。
+def register_material_panel(panel):
+    from . import material_panel
+    material_panel.register_stack(panel)
+
+
+def unregister_material_panel(panel):
+    from . import material_panel
+    material_panel.unregister_stack(panel)
+
+
 def _announce(*datablocks):
     """告诉派生态调度器这些数据块刚进场。函数内导入:derived_state 反过来读本模块的
     注册表,模块级互相导入会让先加载的那个拿到半初始化的对方。"""

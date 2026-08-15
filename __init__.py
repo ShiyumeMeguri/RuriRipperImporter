@@ -24,7 +24,7 @@ import importlib
 import sys
 
 from . import (Game, coordinate, hierarchy, armature_builder,
-               mesh_builder, material_builder, derived_state, animation_builder,
+               mesh_builder, material_builder, material_panel, derived_state, animation_builder,
                prefab_importer, cabmap_panel, cross_game_retarget, post_panel)
 from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
 
@@ -49,8 +49,8 @@ for _name, _mod in list(sys.modules.items()):
     if _name.startswith(_shared_prefix) and not _holds_process_state(_mod):
         importlib.reload(_mod)
 for _mod in (coordinate, hierarchy, armature_builder,
-             mesh_builder, material_builder, derived_state, animation_builder, prefab_importer,
-             cabmap_panel, cross_game_retarget):
+             mesh_builder, material_builder, material_panel, derived_state, animation_builder,
+             prefab_importer, cabmap_panel, cross_game_retarget):
     importlib.reload(_mod)
 # The game subtree goes registry-first then DEEPEST-first: a game package's
 # GAME_MODULE captures both the registry's GameTab/GameModule classes and its own
@@ -196,6 +196,9 @@ def register():
     # 派生态调度器:导入产物、灯、相机的变更从这里统一收敛成一次重建。装在游戏之前,
     # 这样一个游戏的着色栈注册进来的阶段第一次被用到时,调度器已经在监听了。
     derived_state.register()
+    # 材质参数面板:每个生成着色栈把自己的接口 + 读写路径注册进来(Game.register 里发生),
+    # 所以这一格要先立起来。面板本体全场只有一个,画的是选中网格持有的那张材质。
+    material_panel.register()
     # Every game folder under Game/ registers itself; the panel above names none
     # of them and simply draws whatever tabs the enabled hooks turn on.
     Game.register()
@@ -256,6 +259,7 @@ def unregister():
     animation_builder.unregister_slot_autofix()
     post_panel.unregister()
     Game.unregister()
+    material_panel.unregister()
     derived_state.unregister()
     cabmap_panel.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_asset)

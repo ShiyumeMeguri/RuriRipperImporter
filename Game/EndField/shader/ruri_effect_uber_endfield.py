@@ -2714,6 +2714,9 @@ def provider(builder, props):
     except Exception:
         pass
     mat['ruri_uber_part'] = part_name
+    # 栈身份:一个会话里同时装着 N 个生成栈,而 ruri_uber_part 每个栈都写 ——
+    # 材质面板要认领得准(只画选中材质那一个栈的参数),判据只能是这一枚烙印。
+    mat['ruri_uber_stack'] = PANEL_KEY
     # 顶点腿参数真源:只有顶点消费的属性(_FurLengthIntensity/_OutlineWidth…)在着色组上
     # 没有 socket,不落这里就永远丢 —— apply_vertex_stage 按名回收。
     mat['ruri_uber_images'] = {k: v.name for k, v in images.items()}
@@ -2726,7 +2729,6 @@ def provider(builder, props):
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
     print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} insts={5}'.format(
         name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(insts)), flush=True)
-    panel_sync(mat)
     return mat
 
 
@@ -2789,12 +2791,11 @@ def refresh_light_tables():
     return touched
 
 
-# ============================ 材质参数面板 ============================
+# ============================ 材质参数接口 ============================
 # 参数面 = 从 C# 声明([ShaderProperty]/[MaterialTexture]/[ShaderPropertyHeader])反射派生的
 # **接口**,不是对节点树的遍历——平坦、分组、带量程、带功能门。此表是它的逐字投影。
 PANEL_KEY = 'ruri_effect_uber_endfield'
 PANEL_TITLE = 'Ruri_EndfieldEffect_Uber 参数'
-_PANEL_PROP = 'ruri_panel_' + PANEL_KEY
 INTERFACE = [
     {'name': '基础', 'gate': None, 'rows': [
         {'name': '_MainTex', 'label': 'Main Tex', 'kind': 'TEXTURE'},
@@ -3703,14 +3704,6 @@ INTERFACE = [
 ]
 
 
-_PANEL_GUARD = [False]
-_PANEL_REGISTERED = []
-
-
-def _panel_attr(name):
-    return 'p' + name
-
-
 def _panel_rows():
     for group in INTERFACE:
         for row in group['rows']:
@@ -3755,7 +3748,14 @@ def _panel_touch(mat):
     mat.update_tag()
 
 
-def _panel_write(mat, row, value):
+def panel_claims(mat):
+    """这张材质是不是本栈建的。判据 = 建图时烙的**栈身份**,不是 ruri_uber_part:
+    那个键每个生成栈都写,拿它当判据就是一张材质被 N 个栈同时认领(N 个面板并排堆着,
+    实锤过)。没有烙印的是旧产物 —— 宿主会喊重新导入,这里不硬认。"""
+    return mat is not None and mat.get('ruri_uber_stack') == PANEL_KEY
+
+
+def panel_write(mat, row, value):
     """面板值 → 全部级联实例 socket + 快照字典 + 顶点腿克隆输入,一次到位。"""
     name = row['name']
     kind = row['kind']
@@ -3797,7 +3797,7 @@ def _panel_write(mat, row, value):
     _panel_touch(mat)
 
 
-def _panel_write_image(mat, row, image):
+def panel_write_image(mat, row, image):
     """贴图槽换图。清空 = 回落到该槽的中性占位图(槽语义中性,不是黑)。
     只写本材质自有数据:链接库模板(library 非空)只读且跨材质共享,跳过。"""
     name = row['name']
@@ -3869,12 +3869,9 @@ def _panel_write_image(mat, row, image):
     _panel_touch(mat)
 
 
-def _panel_write_st(mat, row):
+def panel_write_st(mat, row, tiling, offset):
     """平铺/偏移 → _ST socket 对 + 顶点期 uv 变换节点 + 描边 mask ST(同一真值三消费面)。"""
     name = row['name']
-    pg = getattr(mat, _PANEL_PROP)
-    tiling = getattr(pg, 't' + name)
-    offset = getattr(pg, 'o' + name)
     st_value = [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]
     st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
     st[name] = st_value
@@ -3901,27 +3898,6 @@ def _panel_write_st(mat, row):
     _panel_touch(mat)
 
 
-def _panel_updater(row):
-    def update(self, _context):
-        if not _PANEL_GUARD[0]:
-            _panel_write(self.id_data, row, getattr(self, _panel_attr(row['name'])))
-    return update
-
-
-def _panel_image_updater(row):
-    def update(self, _context):
-        if not _PANEL_GUARD[0]:
-            _panel_write_image(self.id_data, row, getattr(self, _panel_attr(row['name'])))
-    return update
-
-
-def _panel_st_updater(row):
-    def update(self, _context):
-        if not _PANEL_GUARD[0]:
-            _panel_write_st(self.id_data, row)
-    return update
-
-
 def _panel_bound_image(mat, slot):
     def walk(tree, depth=0):
         if tree is None or depth > 4:
@@ -3939,69 +3915,59 @@ def _panel_bound_image(mat, slot):
     return walk(mat.node_tree)
 
 
-def panel_sync(mat):
-    """图/快照 → 面板回读(守卫防触发写路径)。provider 每次建完自动调;
-    图被外部改动后由面板刷新按钮手动触发。"""
-    pg = getattr(mat, _PANEL_PROP, None)
-    if pg is None:
-        return False
+def panel_read(mat):
+    """图 + 快照 → 当前值。读路径全在本栈这一侧:值住在级联实例 socket 与 ruri_uber_*
+    快照里,那是本栈的形态。返回
+    {'values': {名: 标量/元组}, 'images': {名: Image|None}, 'st': {名: (t,t,o,o)}}。"""
+    values, images, st_out = {}, {}, {}
     insts = _panel_insts(mat)
     if not insts:
-        return False
+        return {'values': values, 'images': images, 'st': st_out}
     first = insts[0]
     floats = dict(mat.get('ruri_uber_floats') or {})
     st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
     colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
-    images = dict(mat.get('ruri_uber_images') or {})
-    _PANEL_GUARD[0] = True
-    try:
-        for row in _panel_rows():
-            name = row['name']
-            attr = _panel_attr(name)
-            kind = row['kind']
-            if kind == 'TEXTURE':
-                img = bpy.data.images.get(images.get(name, ''))
-                if img is None:
-                    img = _panel_bound_image(mat, name)
-                try:
-                    setattr(pg, attr, img)
-                except Exception:
-                    pass
-                value = st.get(name)
-                if value is None:
-                    sock = first.inputs.get(name + '_ST')
-                    if sock is not None and not sock.is_linked:
-                        tail = first.inputs.get(name + '_ST_w')
-                        raw = sock.default_value
-                        value = [raw[0], raw[1], raw[2],
-                                 tail.default_value if tail is not None else 0.0]
-                if value is not None:
-                    setattr(pg, 't' + name, (value[0], value[1]))
-                    setattr(pg, 'o' + name, (value[2], value[3]))
-                continue
-            sock = first.inputs.get(name)
-            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
-                value = floats.get(name)
-                if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
-                    value = sock.default_value
-                if value is None:
-                    continue
-                setattr(pg, attr, bool(value > 0.5) if kind == 'SWITCH'
-                        else int(value) if kind == 'INT' else float(value))
-            else:
-                value = colors.get(name)
-                if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
-                    tail = first.inputs.get(name + '_w')
+    bound = dict(mat.get('ruri_uber_images') or {})
+    for row in _panel_rows():
+        name = row['name']
+        kind = row['kind']
+        if kind == 'TEXTURE':
+            img = bpy.data.images.get(bound.get(name, ''))
+            if img is None:
+                img = _panel_bound_image(mat, name)
+            images[name] = img
+            value = st.get(name)
+            if value is None:
+                sock = first.inputs.get(name + '_ST')
+                if sock is not None and not sock.is_linked:
+                    tail = first.inputs.get(name + '_ST_w')
                     raw = sock.default_value
                     value = [raw[0], raw[1], raw[2],
-                             tail.default_value if tail is not None and not tail.is_linked else 1.0]
-                if value is None:
-                    continue
-                spread = (list(value) + [0.0] * 4)[:row['size']]
-                setattr(pg, attr, tuple(float(x) for x in spread))
-    finally:
-        _PANEL_GUARD[0] = False
-    return True
+                             tail.default_value if tail is not None else 0.0]
+            if value is not None:
+                st_out[name] = (value[0], value[1], value[2], value[3])
+            continue
+        sock = first.inputs.get(name)
+        if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+            value = floats.get(name)
+            if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
+                value = sock.default_value
+            if value is None:
+                continue
+            values[name] = (bool(value > 0.5) if kind == 'SWITCH'
+                            else int(value) if kind == 'INT' else float(value))
+        else:
+            value = colors.get(name)
+            if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
+                tail = first.inputs.get(name + '_w')
+                raw = sock.default_value
+                value = [raw[0], raw[1], raw[2],
+                         tail.default_value if tail is not None and not tail.is_linked else 1.0]
+            if value is None:
+                continue
+            spread = (list(value) + [0.0] * 4)[:row['size']]
+            values[name] = tuple(float(x) for x in spread)
+    return {'values': values, 'images': images, 'st': st_out}
 
 
 def _panel_slots(mat):
@@ -4024,178 +3990,29 @@ def _panel_slots(mat):
     return slots
 
 
-def _panel_visible(insts, slots, row):
-    """变体折叠掉的死支参数没有 socket → 不画。判据 = 图自己,不是另一张表。"""
-    if row['kind'] == 'TEXTURE':
-        return row['name'] in slots
-    name = row['name']
-    for grp in insts:
-        if grp.inputs.get(name) is not None:
-            return True
-    return False
-
-
-def _panel_classes():
-    toggle_idname = PANEL_KEY + '.toggle_group'
-    sync_idname = PANEL_KEY + '.sync_panel'
-
-    class Toggle(bpy.types.Operator):
-        bl_idname = toggle_idname
-        bl_label = '展开/折叠分组'
-        bl_options = {'INTERNAL'}
-        group: bpy.props.IntProperty()
-
-        def execute(self, context):
-            pg = getattr(context.material, _PANEL_PROP)
-            key = '_open_%d' % self.group
-            pg[key] = 0 if pg.get(key) else 1
-            return {'FINISHED'}
-
-    class Sync(bpy.types.Operator):
-        bl_idname = sync_idname
-        bl_label = '从图同步面板'
-        bl_description = '图被重建或外部改动后,把面板回读到当前值'
-        bl_options = {'INTERNAL'}
-
-        def execute(self, context):
-            panel_sync(context.material)
-            return {'FINISHED'}
-
-    class Panel(bpy.types.Panel):
-        bl_idname = 'RURI_PT_' + PANEL_KEY
-        bl_label = PANEL_TITLE
-        bl_space_type = 'PROPERTIES'
-        bl_region_type = 'WINDOW'
-        bl_context = 'material'
-
-        @classmethod
-        def poll(cls, context):
-            mat = getattr(context, 'material', None)
-            return (mat is not None and mat.get('ruri_uber_part') is not None
-                    and getattr(mat, _PANEL_PROP, None) is not None)
-
-        def draw(self, context):
-            mat = context.material
-            pg = getattr(mat, _PANEL_PROP)
-            layout = self.layout
-            layout.use_property_split = True
-            layout.use_property_decorate = False
-            head = layout.row(align=True)
-            head.label(text='{0} · {1}'.format(mat.get('ruri_uber_part', ''),
-                                               mat.get('ruri_uber_shader', '') or ''), icon='MATERIAL')
-            head.operator(sync_idname, text='', icon='FILE_REFRESH')
-            insts = _panel_insts(mat)
-            slots = _panel_slots(mat)
-            for index, group in enumerate(INTERFACE):
-                rows = [r for r in group['rows'] if _panel_visible(insts, slots, r)]
-                if not rows:
+def panel_rows(mat):
+    """这张材质**真正有**的行,按 INTERFACE 分组给出:变体折叠掉的死支参数在图上没有
+    socket,判据是图自己而不是另一张表。贴图行带 has_st(有没有平铺/偏移可调)。
+    顶点腿节点要扫全部对象,所以宿主会缓存本函数结果、在换图/回读时作废 ——
+    这里只负责答得准。"""
+    insts = _panel_insts(mat)
+    slots = _panel_slots(mat)
+    out = []
+    for group in INTERFACE:
+        rows = []
+        for row in group['rows']:
+            if row['kind'] == 'TEXTURE':
+                if row['name'] not in slots:
                     continue
-                gate = group['gate']
-                box = layout.box()
-                header = box.row(align=True)
-                opened = bool(pg.get('_open_%d' % index))
-                arrow = header.operator(toggle_idname, text='', emboss=False,
-                                        icon='TRIA_DOWN' if opened else 'TRIA_RIGHT')
-                arrow.group = index
-                header.label(text=group['name'])
-                gate_open = True
-                gate_attr = _panel_attr(gate) if gate else None
-                if gate_attr is not None and hasattr(pg, gate_attr):
-                    header.prop(pg, gate_attr, text='')
-                    gate_open = bool(getattr(pg, gate_attr))
-                if not opened:
-                    continue
-                column = box.column()
-                column.active = gate_open
-                for row in rows:
-                    if gate is not None and row['name'] == gate:
-                        continue
-                    self.draw_row(column, pg, insts, row)
-
-        def draw_row(self, column, pg, insts, row):
-            attr = _panel_attr(row['name'])
-            if row['kind'] != 'TEXTURE':
-                column.prop(pg, attr)
-                return
-            split = column.split(factor=0.4)
-            split.label(text=row['label'])
-            split.template_ID(pg, attr, open='image.open')
-            has_st = bool(row.get('st_node')) or any(
-                grp.inputs.get(row['name'] + '_ST') is not None for grp in insts)
-            if has_st:
-                sub = column.column(align=True)
-                sub.prop(pg, 't' + row['name'], text='平铺')
-                sub.prop(pg, 'o' + row['name'], text='偏移')
-
-    return Toggle, Sync, Panel
-
-
-def _panel_register():
-    """INTERFACE → PropertyGroup(动态注解)+ 面板 + 操作符。幂等:先卸旧再注册。"""
-    _panel_unregister()
-    annotations = {}
-    for row in _panel_rows():
-        attr = _panel_attr(row['name'])
-        kind = row['kind']
-        if kind == 'TEXTURE':
-            annotations[attr] = bpy.props.PointerProperty(
-                type=bpy.types.Image, name=row['label'], update=_panel_image_updater(row))
-            annotations['t' + row['name']] = bpy.props.FloatVectorProperty(
-                name='平铺', size=2, default=(1.0, 1.0), update=_panel_st_updater(row))
-            annotations['o' + row['name']] = bpy.props.FloatVectorProperty(
-                name='偏移', size=2, default=(0.0, 0.0), update=_panel_st_updater(row))
-            continue
-        default = list(row.get('default') or [])
-        if kind == 'SWITCH':
-            annotations[attr] = bpy.props.BoolProperty(
-                name=row['label'], default=bool(default and default[0] > 0.5),
-                update=_panel_updater(row))
-        elif kind == 'INT':
-            annotations[attr] = bpy.props.IntProperty(
-                name=row['label'], default=int(default[0]) if default else 0,
-                update=_panel_updater(row))
-        elif kind in ('VALUE', 'SLIDER'):
-            keywords = {'name': row['label'],
-                        'default': float(default[0]) if default else 0.0,
-                        'update': _panel_updater(row)}
-            if kind == 'SLIDER':
-                keywords['min'] = row['min']
-                keywords['max'] = row['max']
-            annotations[attr] = bpy.props.FloatProperty(**keywords)
-        else:
-            size = row['size']
-            fill = (default + [0.0] * 4)[:size]
-            keywords = {'name': row['label'], 'size': size,
-                        'update': _panel_updater(row)}
-            if kind == 'COLOR':
-                keywords.update(subtype='COLOR', min=0.0, max=1.0)
-                fill = [min(max(v, 0.0), 1.0) for v in fill]
-            elif kind == 'HDRCOLOR':
-                keywords.update(subtype='COLOR', min=0.0, soft_max=1.0)
-            keywords['default'] = tuple(fill)
-            annotations[attr] = bpy.props.FloatVectorProperty(**keywords)
-    group_cls = type('RURI_PG_' + PANEL_KEY, (bpy.types.PropertyGroup,),
-                     {'__annotations__': annotations})
-    bpy.utils.register_class(group_cls)
-    _PANEL_REGISTERED.append(group_cls)
-    setattr(bpy.types.Material, _PANEL_PROP, bpy.props.PointerProperty(type=group_cls))
-    for cls in _panel_classes():
-        bpy.utils.register_class(cls)
-        _PANEL_REGISTERED.append(cls)
-
-
-def _panel_unregister():
-    if hasattr(bpy.types.Material, _PANEL_PROP):
-        try:
-            delattr(bpy.types.Material, _PANEL_PROP)
-        except Exception:
-            pass
-    while _PANEL_REGISTERED:
-        cls = _PANEL_REGISTERED.pop()
-        try:
-            bpy.utils.unregister_class(cls)
-        except Exception:
-            pass
+                has_st = bool(row.get('st_node')) or any(
+                    grp.inputs.get(row['name'] + '_ST') is not None for grp in insts)
+                row = dict(row, has_st=has_st)
+            elif not any(grp.inputs.get(row['name']) is not None for grp in insts):
+                continue
+            rows.append(row)
+        if rows:
+            out.append({'name': group['name'], 'gate': group['gate'], 'rows': rows})
+    return out
 
 
 def register():
@@ -4203,18 +4020,22 @@ def register():
     # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
     # 材质图/顶点腿/兑现面重接都在这里自注册 —— 消费方只调宿主注册表,门面不写一行逻辑。
     import importlib
+    import sys
     host = importlib.import_module('RuriRipperImporter.material_builder')
     host.register_graph_provider(provider)
     host.register_vertex_stage(apply_vertex_stage)
     host.register_capability_rewire(rewire_capabilities)
     host.register_light_table_refresh(refresh_light_tables)
-    _panel_register()
+    # 材质参数面板:本模块只交出读写路径与接口表,面板本体由宿主统一画一个
+    # (每栈各画一个 = N 个面板并排堆在属性页里,而用户只关心选中网格的那张材质)。
+    host.register_material_panel(sys.modules[__name__])
 
 
 def unregister():
-    _panel_unregister()
     import importlib
+    import sys
     host = importlib.import_module('RuriRipperImporter.material_builder')
+    host.unregister_material_panel(sys.modules[__name__])
     host.unregister_graph_provider(provider)
     host.unregister_vertex_stage(apply_vertex_stage)
     host.unregister_capability_rewire(rewire_capabilities)

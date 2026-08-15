@@ -123,6 +123,15 @@ def _run_post(change):
     return len(material_builder.apply_post_stages(change.scene))
 
 
+def _run_material_panels(change):
+    """材质参数面板是图的镜子,图刚建好就得照一次 —— 否则面板显示的是接口缺省值,
+    用户一动某一格就把**没回读过的其它格**按缺省写进图里。"""
+    from . import material_panel
+
+    pool = list(bpy.data.materials) if change.whole_scene else change.materials
+    return material_panel.sync_all(pool)
+
+
 # 表就是调度策略的全部。顺序 = 注册顺序:兑现节点先接好,顶点腿再按材质真值建树,
 # 后处理最后落在合成器上(三者互不读对方产物,顺序只为报告好读)。
 STAGES = (
@@ -133,6 +142,7 @@ STAGES = (
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
     # 装过就跳过,所以在灯上反复触发也只是一次 installed() 判断。
     Stage("post", (OBJECTS, MATERIALS, LIGHT_SET), _run_post),
+    Stage("material-panels", (MATERIALS,), _run_material_panels),
 )
 
 
