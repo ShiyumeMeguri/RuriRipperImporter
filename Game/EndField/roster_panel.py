@@ -396,9 +396,9 @@ def _templet_skeleton(info):
     skeleton, read from the avatar template the manifest names.
 
     The skeleton is the Avatar asset the template's own bundle carries: its
-    ``m_AvatarSkeleton`` + ``m_AvatarSkeletonPose`` are the whole rig's STANDING
-    world rest and its ``m_TOS`` the name/parent table -- the authoritative pose a
-    part mesh is bind-baked against, exactly what a shipped rig gets from its
+    ``m_AvatarSkeleton`` posed by the pose array ``avatar.py`` selects is the whole
+    rig's world rest and its ``m_TOS`` the name/parent table -- the authoritative
+    pose a part mesh is bind-baked against, exactly what a shipped rig gets from its
     prefab transform hierarchy. The template MonoBehaviour beside it contributes
     ``bonePathsStr``, the leaf-name vocabulary for any part-specific bone the
     table does not name.

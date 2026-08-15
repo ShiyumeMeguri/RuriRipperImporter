@@ -408,8 +408,10 @@ class SkeletonBinder:
     a CRC32 name hash per bone but no armature and no standing pose. The template's
     Avatar carries both halves of what a shipped rig gets from its prefab: the
     ``crc32(path) -> path`` table (real leaf names + parent chain) AND the whole
-    skeleton's STANDING world rest (m_AvatarSkeleton posed by m_AvatarSkeletonPose,
-    Unity Y-up). Each bone -- skinned or purely structural (Root, Bip001) -- is
+    skeleton's world rest (m_AvatarSkeleton posed by the array avatar.py's
+    _SKELETON_POSE_FIELD names, Unity Y-up -- which array that is, and why the
+    other one shears a face apart, is stated there and only there). Each bone --
+    skinned or purely structural (Root, Bip001) -- is
     placed at that world rest; each part mesh is bind-BAKED against it
     (``skinning.bake_bind_pose``: v_world = sum w * restWorld * bindpose * v_local)
     exactly as the prefab path bakes against its transform hierarchy, which is why
