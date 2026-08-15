@@ -2448,7 +2448,12 @@ class RURI_PT_cabmap(bpy.types.Panel):
         # Above the Game Root/Cabmap fields (which belong to the current tab) and on
         # `top`, not `gated`, so tabs open/switch/close before any cabmap is loaded.
         # One tab per INSTALL, labelled with the product name its own build carries.
-        tab_bar = top.row(align=True)
+        # grid_flow rather than a row: a row divides the width it has between however
+        # many tabs there are, so every tab gets narrower as more open until each is a
+        # few clipped characters. This wraps to a second line instead, keeping each tab
+        # wide enough to read its name -- which is the whole point of naming them.
+        tab_bar = top.grid_flow(row_major=True, columns=0, even_columns=True,
+                                even_rows=False, align=True)
         for key in _open_tab_keys(state):
             one_tab = tab_bar.row(align=True)
             one_tab.operator(RURI_OT_select_install.bl_idname, text=key,
