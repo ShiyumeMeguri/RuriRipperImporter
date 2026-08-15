@@ -654,6 +654,18 @@ class SkeletonBinder:
         return None
 
 
+class _BoneRest:
+    """One source bone as plain VALUES -- its name, its ancestors' names nearest-first,
+    and its rest matrix. What survives an operator call; a bpy Bone does not."""
+
+    __slots__ = ("name", "ancestors", "rest")
+
+    def __init__(self, name, ancestors, rest):
+        self.name = name
+        self.ancestors = ancestors
+        self.rest = rest
+
+
 def graft_armature(context, target, source):
     """Fold ``source`` into ``target`` so an assembled character ends on ONE rig.
 
@@ -684,11 +696,20 @@ def graft_armature(context, target, source):
         return False
 
     target_names = {bone.name for bone in target.data.bones}
-    to_add = [bone for bone in source.data.bones
+    # READ EVERYTHING OFF THE SOURCE BONES NOW. _graft_bones enters and leaves edit
+    # mode, and a bpy Bone is a pointer into data that a mode switch rebuilds -- the
+    # wrappers survive the call as Python objects but no longer point at a bone, so
+    # reading .name afterwards hands back whatever occupies that memory and raises
+    # UnicodeDecodeError on a different garbage byte every run. Plain values cross;
+    # references do not.
+    grafts = [_BoneRest(bone.name,
+                        [ancestor.name for ancestor in bone.parent_recursive],
+                        bone.matrix_local.copy())
+              for bone in source.data.bones
               if bone.name not in target_names and subtree_has_weight(bone)]
-    if to_add:
-        _graft_bones(context, target, source, to_add)
-    _merge_identity(target, source, {bone.name for bone in to_add})
+    if grafts:
+        _graft_bones(context, target, source, grafts)
+    _merge_identity(target, source, {graft.name for graft in grafts})
 
     for obj in driven:
         world = obj.matrix_world.copy()
@@ -725,9 +746,12 @@ def _merge_identity(target, source, added_names):
         stamp_game(target, read_game(source))
 
 
-def _graft_bones(context, target, source, bones):
-    """Add ``bones`` (source Bones) to ``target`` at their current world rest,
-    parented to the nearest ancestor already present on target."""
+def _graft_bones(context, target, source, grafts):
+    """Add ``grafts`` (see _BoneRest) to ``target`` at their current world rest,
+    parented to the nearest ancestor already present on target.
+
+    Takes VALUES, not source Bones: this enters edit mode, which is exactly when a
+    Bone reference stops being one (see graft_armature)."""
     source_world = source.matrix_world
     target_inverse = target.matrix_world.inverted_safe()
     previous = context.view_layer.objects.active
@@ -735,18 +759,16 @@ def _graft_bones(context, target, source, bones):
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = target.data.edit_bones
 
-    for bone in sorted(bones, key=lambda b: len(b.parent_recursive)):
-        rest = target_inverse @ (source_world @ bone.matrix_local)
-        eb = edit_bones.new(bone.name)
+    for graft in sorted(grafts, key=lambda entry: len(entry.ancestors)):
+        eb = edit_bones.new(graft.name)
         eb.head = (0.0, 0.0, 0.0)
         eb.tail = (0.0, _DEFAULT_BONE_LENGTH, 0.0)
-        eb.matrix = rest
+        eb.matrix = target_inverse @ (source_world @ graft.rest)
         eb.length = _DEFAULT_BONE_LENGTH
-        ancestor = bone.parent
-        while ancestor is not None and ancestor.name not in edit_bones:
-            ancestor = ancestor.parent
-        if ancestor is not None:
-            eb.parent = edit_bones[ancestor.name]
+        for ancestor in graft.ancestors:
+            if ancestor in edit_bones:
+                eb.parent = edit_bones[ancestor]
+                break
 
     bpy.ops.object.mode_set(mode="OBJECT")
     context.view_layer.objects.active = previous
