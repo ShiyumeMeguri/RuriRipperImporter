@@ -37,11 +37,12 @@ import os
 import bpy
 
 try:
-    from . import armature_builder, prefab_importer
+    from . import Game, armature_builder, prefab_importer
     from .RuriRipperPyBridge.session import cabmap_state
     from .RuriRipperPyBridge.unity import (avatar as avatar_module, bridge_asset_db,
                                            class_registry, clip_paths)
 except ImportError:  # standalone (non-package) testing
+    import Game
     import armature_builder
     import prefab_importer
     from RuriRipperPyBridge.session import cabmap_state
@@ -323,7 +324,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
             raise CrossGameRetargetError(
                 "The chosen source avatar built a skeleton with no TOS-named bones.")
         before = set(bpy.data.actions)
-        _built, build_warnings = prefab_importer.build_selected_animations(
+        _built, build_warnings, _actions = prefab_importer.build_selected_animations(
             db, temp_arm, temp_maps, None, clip_guids, options, display_names)
         warnings.extend(build_warnings)
         baked_actions = [action for action in bpy.data.actions if action not in before]
@@ -389,12 +390,109 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
             "None of the clip's curve paths match armature '{0}', and it carries no game "
             "stamp naming another game to retarget from -- select the right skeleton, or "
             "re-import it so it knows which game it is from.".format(dest_arm.name))
-    built, warnings = prefab_importer.build_selected_animations(
+    built, warnings, actions = prefab_importer.build_selected_animations(
         db, dest_arm, maps, None, clip_guids, options, display_names, activate)
     if checked and ratio < 0.5:
         warnings.insert(0, "Only {0:.0%} of curve paths match armature '{1}' -- "
                            "imported anyway.".format(ratio, dest_arm.name))
+    warnings.extend(_retarget_faces(context, session_game, clip_cab, clip_guids, db,
+                                    dest_arm, options, actions))
     return built, warnings
+
+
+def _retarget_faces(context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+                    actions):
+    """Restate each clip's baked facial performance on this rig, when the user asked
+    for it and the clip's game states what a face IS.
+
+    Lives on the ONE clip-loading path for the same reason the cross-game branch does:
+    a body clip and its face are one import, and a second copy of this decision in a
+    game's own panel is how the two stop agreeing. The host stays game-blind -- it asks
+    the registry whether this game contributed a facial restatement and passes the clip
+    through; a game with no facial system contributes none and nothing happens.
+
+    ``actions`` is that clip's own {guid: (action, slot)} from the body build, and the
+    face goes INTO it. Two reasons, both measured, and both invisible without it:
+
+    * an object plays ONE action, so a face on its own action replaces the body it
+      arrived with -- whichever the user assigns, the other half stops playing;
+    * the body build already keyed the SOURCE character's facial bones onto this rig
+      (same standard bone names, so they bind), which is the untranslated geometry this
+      whole feature exists to avoid. Writing the face into the same action lets it
+      REPLACE those channels instead of losing a fight with them.
+    """
+    if not options.get("retarget_face"):
+        return []
+    provider = Game.face_retarget_of(session_game or armature_builder.read_game(dest_arm))
+    if provider is None:
+        return []
+    reports = []
+    for guid in clip_guids:
+        try:
+            clip = source_anchored_clip(session_game, clip_cab, guid, db)
+        except Exception as exc:
+            reports.append("Face retarget skipped for one clip: {0}".format(exc))
+            continue
+        if clip is None:
+            continue
+        try:
+            report = provider(context, dest_arm, clip, options, actions.get(guid))
+        except Exception as exc:
+            # Never silent: the body animation DID land, so a face that did not is a
+            # partial result the user has to be told about by name.
+            reports.append("Face retarget skipped for '{0}': {1}".format(clip.name, exc))
+            continue
+        if report:
+            reports.append(report)
+    return reports
+
+
+def source_anchored_clip(session_game, clip_cab, guid, db):
+    """The clip with its curves anchored to the rig it was AUTHORED on, not to the
+    one it is being played on.
+
+    A clip imported on its own carries no readable bindings at all -- measured: all
+    359 curve paths of a real UI clip arrive as ``path_0x<CRC32>_...`` placeholders,
+    because AssetRipper can only restore a binding to a string when that skeleton is
+    in the export scope. The normal import path then repairs them against the
+    DESTINATION rig, which is exactly right for playing body motion on it.
+
+    For a face it is not. Reading the performance means asking "where was this bone
+    relative to ITS OWN rest", and the destination's skeleton answers a different
+    question -- it happens not to explode only because these characters share a bone
+    vocabulary. So the source skeleton is resolved and loaded here as a dependency
+    (by CRC coverage of the clip's own bindings -- measurement, not the clip's name)
+    and a FRESH copy of the curves is anchored to it; the destination-repaired clip
+    the body import already produced is left alone.
+    """
+    blob = cabmap_state.BRIDGE.clip_curves_by_guid.get(guid) if cabmap_state.BRIDGE else None
+    if blob is None:
+        # No raw blob (a disk-mode session): the db's clip is all there is.
+        return db.clip_curves(guid)
+
+    from .RuriRipperPyBridge.unity import clip_curves as clip_curves_module
+    clip = clip_curves_module.ClipCurves.from_blob(blob[0], blob[1])
+    crcs = {clip_paths.entry_crc(channel.path)
+            for channels in clip.transform_channel_lists()
+            for channel in channels if channel.path}
+    if not crcs:
+        return clip
+
+    unity_file, score = _resolve_source_avatar(session_game, clip_cab or guid, crcs)
+    document = unity_file.first("Avatar") if unity_file is not None else None
+    if document is None:
+        raise CrossGameRetargetError(
+            "the skeleton these curves were authored on could not be read back")
+    paths = avatar_module.transform_paths(document.data)
+    source_paths = {path: path.rsplit("/", 1)[-1] for path in paths if path}
+    repaired, unmatched = clip_paths.repair_hashed_clip_paths(clip, source_paths)
+    if repaired == 0:
+        raise CrossGameRetargetError(
+            "'{0}' covers none of this clip's bindings once loaded".format(score.name))
+    print("[face] anchored '{0}' to source rig '{1}' ({2:.0%} binding coverage) · "
+          "{3} curve(s) repaired, {4} unmatched".format(
+              clip.name, score.name, score.coverage, repaired, unmatched), flush=True)
+    return clip
 
 
 def _binding_match(db, clip_guids, path_to_bone):

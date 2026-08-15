@@ -440,6 +440,60 @@ def _prepare_channels(action, slot_name, id_type):
     return action.fcurves, None
 
 
+def channels_of(action, slot):
+    """The fcurve collection of an ALREADY-BUILT action -- for a caller adding channels
+    to a clip's own action rather than starting a second one beside it.
+
+    A Blender object plays exactly ONE action, so anything that belongs to the same clip
+    has to land in the same action or it does not play at all. That is not a style
+    preference: a face restated onto its own action and assigned afterwards REPLACES the
+    body it was imported with, and whichever the user assigns back, the other half is
+    gone."""
+    if not hasattr(action, "layers"):
+        return action.fcurves
+    for layer in action.layers:
+        for strip in layer.strips:
+            return strip.channelbag(slot, ensure=True).fcurves
+    layer = action.layers.new("Layer")
+    strip = layer.strips.new(type="KEYFRAME")
+    return strip.channelbag(slot, ensure=True).fcurves
+
+
+def release_bones(arm_obj, fcurves, bone_names):
+    """Hand these pose bones back: drop their channels from ``fcurves`` AND put their
+    pose basis back at rest. Returns how many channels went.
+
+    The two halves are ONE operation and are written as one because doing either alone
+    is a silent, visible bug:
+
+    * channels alone -- a caller about to write its own version of a bone must REPLACE
+      what is there, since two bindings on one data path is a malformed action and a
+      consumer that indexes by path keeps whichever was written last;
+    * basis alone -- ``pose_bone.location`` and friends are STORED state, not a view of
+      the action. Whatever the previous action was last evaluated at stays on the bone
+      after its channels are gone, so a bone released this way keeps standing wherever
+      the animation left it, with no keyframes to explain why. Measured: the nose joint
+      held a constant 113 deg rotation and 4cm offset with an empty channel list, and
+      resetting its transform by hand was all it took to look right.
+    """
+    prefixes = tuple(f'pose.bones["{_escape(name)}"].' for name in bone_names)
+    if not prefixes:
+        return 0
+    doomed = [fcurve for fcurve in fcurves if fcurve.data_path.startswith(prefixes)]
+    for fcurve in doomed:
+        fcurves.remove(fcurve)
+    for name in bone_names:
+        pose_bone = arm_obj.pose.bones.get(name)
+        if pose_bone is None:
+            continue
+        pose_bone.location = (0.0, 0.0, 0.0)
+        pose_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pose_bone.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+        pose_bone.rotation_euler = (0.0, 0.0, 0.0)
+        pose_bone.scale = (1.0, 1.0, 1.0)
+    return len(doomed)
+
+
 # ── putting an action ON something ───────────────────────────────────────────
 #
 # The ONE way anything in this add-on makes an action play. Building an action

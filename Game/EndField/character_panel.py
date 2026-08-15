@@ -261,6 +261,22 @@ class BoneBinding:
         return len(self._bones)
 
     @property
+    def governed_bones(self):
+        """EVERY bone this character's face tables own on this rig -- not just the ones
+        some particular expression moves.
+
+        That distinction is the whole difference between a retargeted face and a broken
+        one. When a restated face replaces a source performance, the bones no expression
+        happens to drive must fall back to THIS rig's rest, not keep the source
+        character's absolute transform: the two rigs hold the same named bone differently
+        (measured: 7.4 deg apart at the median, 180 at the worst), so a leftover source
+        curve is a bone wrenched somewhere it was never meant to be. Measured on the nose
+        joint, which no ctrl of that character drives: a constant 113 deg rotation and 4cm
+        offset for the whole clip -- the face visibly deformed while every expression
+        curve was correct."""
+        return set(self._bones)
+
+    @property
     def base_bone_count(self):
         return len(self._base)
 
@@ -1023,12 +1039,16 @@ class RURI_OT_character_build_actions(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def build_morph_action(asset, bindings, fps):
+def build_morph_action(asset, bindings, fps, into=None):
     """Bake one animation onto whatever this rig binds it to: shape-key value
     curves where the ctrl is a baked blendshape, pose-bone transforms where it
-    moves bones. Returns True when at least one curve was written."""
+    moves bones. Returns True when at least one curve was written.
+
+    ``into`` is an existing (action, slot) to write the BONE half into -- a clip whose
+    body animation is already keyed there, whose facial channels this replaces. None
+    (the Character tab's own use) builds an action of its own and plays it."""
     wrote = _build_shape_key_action(asset, bindings.shape_binding(), fps)
-    wrote |= _build_bone_action(asset, bindings.bone_binding(), fps)
+    wrote |= _build_bone_action(asset, bindings.bone_binding(), fps, into)
     return wrote
 
 
@@ -1060,14 +1080,21 @@ def _build_shape_key_action(asset, shape_binding, fps):
     return True
 
 
-def _build_bone_action(asset, bone_binding, fps):
+def _build_bone_action(asset, bone_binding, fps, into=None):
     """Bone channels are SAMPLED per frame, not keyed at the source times: a
     bone's transform is the sum of every ctrl pushing it, and those ctrls have
     independent key times, so there is no shared key grid to preserve. Same
     approach the clip importer takes for transform curves.
 
     Only the bones this animation's own ctrls can move get channels -- a face
-    animation must not overwrite bones it never mentions."""
+    animation must not overwrite bones it never mentions.
+
+    ``into`` writes into a clip's existing action instead of a new one, REPLACING those
+    bones' channels there. Both halves of that matter: an object plays one action, so a
+    separate one would not play alongside the body; and the body build has already keyed
+    these same bones from the SOURCE character (all these rigs share one standard facial
+    bone vocabulary, so its curves bound here), which is exactly the untranslated geometry
+    this restatement exists to replace."""
     if bone_binding is None:
         return False
     animated = {driver.ctrl for driver in asset.drivers() if driver.curve is not None}
@@ -1087,10 +1114,25 @@ def _build_bone_action(asset, bone_binding, fps):
     samples = [skeletal_morph.sample_weights(asset, float(time)) for time in times]
 
     armature_obj = bone_binding.armature
-    action = bpy.data.actions.new(asset.name)
-    if hasattr(action, "use_fake_user"):
-        action.use_fake_user = True
-    fcurves, slot = animation_builder._prepare_channels(action, action.name, "OBJECT")
+    if into is not None:
+        action, slot = into
+        fcurves = animation_builder.channels_of(action, slot)
+        # EVERY bone these face tables own, not just the ones this expression moves:
+        # a face bone left holding the source character's curve is a bone wrenched out
+        # of place (see BoneBinding.governed_bones). The ones no expression drives are
+        # meant to sit at this rig's own rest, and dropping their channels is what puts
+        # them there.
+        governed = bone_binding.governed_bones
+        replaced = animation_builder.release_bones(armature_obj, fcurves, governed)
+        print("[face] {0}: released {1} source facial channel(s) over {2} governed bone(s) "
+              "(basis reset to rest), {3} of them re-driven by this expression, in "
+              "'{4}'".format(asset.name, replaced, len(governed), len(bones), action.name),
+              flush=True)
+    else:
+        action = bpy.data.actions.new(asset.name)
+        if hasattr(action, "use_fake_user"):
+            action.use_fake_user = True
+        fcurves, slot = animation_builder._prepare_channels(action, action.name, "OBJECT")
 
     for bone_name in sorted(bones):
         locations = np.empty((frame_count, 3), dtype=np.float32)
@@ -1105,9 +1147,12 @@ def _build_bone_action(asset, bone_binding, fps):
         animation_builder._write_bone_fcurves(fcurves, bone_name, frames,
                                               locations, quaternions, scales)
 
-    # Same reason as the shape-key half: one animation, one retime, done by the
-    # caller once both halves exist.
-    animation_builder.adopt_action(armature_obj, action, slot, frame_range=False)
+    # Writing into a clip's own action: it is already assigned and already spans the
+    # clip -- re-adopting it would only retime the scene to the face's own length.
+    if into is None:
+        # Same reason as the shape-key half: one animation, one retime, done by the
+        # caller once both halves exist.
+        animation_builder.adopt_action(armature_obj, action, slot, frame_range=False)
     return True
 
 

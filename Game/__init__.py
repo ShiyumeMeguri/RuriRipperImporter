@@ -68,11 +68,27 @@ class GameModule:
     """One game's whole contribution: its upstream identity, the tabs it adds,
     and the register/unregister pair for the bpy classes those tabs need."""
 
-    __slots__ = ("game_name", "label", "tabs", "project_names", "_register", "_unregister")
+    __slots__ = ("game_name", "label", "tabs", "project_names", "face_retarget",
+                 "_register", "_unregister")
 
-    def __init__(self, game_name, label, tabs, register, unregister, project_names=()):
+    def __init__(self, game_name, label, tabs, register, unregister, project_names=(),
+                 face_retarget=None):
         self.game_name = game_name          # the upstream GameType member, e.g. "EndField"
         self.label = label
+        # How this game states a face, if it states one at all. A clip whose facial
+        # animation is baked into its bone tracks means nothing on another character's
+        # rig, so the ONE clip-loading path asks the game that owns the clip to restate
+        # it (see cross_game_retarget.load_clips_onto). A game with no facial system
+        # simply declares none and that path stays untouched.
+        #
+        # The callable takes (context, armature, clip, options, into) and returns a
+        # one-line report, or None when it had nothing to do. ``clip`` is anchored to the
+        # rig it was AUTHORED on, not to the one it is being played on -- the host resolves
+        # and loads that skeleton first, because reading a performance means asking where a
+        # bone was relative to ITS OWN rest. ``into`` is that clip's own (action, slot) to
+        # write the face INTO, or None for a caller with no action of its own: an object
+        # plays one action, so a face given its own would replace the body it came with.
+        self.face_retarget = face_retarget
         self.tabs = tuple(tabs)
         # The Unity productName/companyName values this game's players build
         # under -- one project can ship several (a game, its VR build, its
@@ -149,6 +165,16 @@ def active_modules(hook_ids, project_names=()):
 
     identities = {str(name).lower() for name in project_names}
     return [game for game in _MODULES if game.project_names & identities]
+
+
+def face_retarget_of(game_name):
+    """The facial restatement ONE game contributes, or None. What the clip-loading
+    path asks before it decides whether a face can travel between characters -- the
+    host never learns which games have faces, only whether this one answered."""
+    for game in _MODULES:
+        if game.game_name == game_name:
+            return game.face_retarget
+    return None
 
 
 def tabs_of(game_name):

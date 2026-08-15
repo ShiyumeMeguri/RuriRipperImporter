@@ -208,8 +208,16 @@ def register():
     # claim below, since _dll_dir() (called from claim_runtime_early -> _runtime_config_path)
     # needs it to find Ruri.RipperHook.dll at all. The hint goes with it: the shared bridge
     # has no idea where THIS host keeps that setting, and says so in its error.
-    prefs = bpy.context.preferences.addons[__package__].preferences
-    pythonnet_bridge.set_bin_dir(prefs.ripperhook_repo)
+    # .get, not [__package__]: an add-on enabled with no saved preferences entry (a
+    # --factory-startup session, a first run) has none, and raising here aborts the
+    # REST of register() while everything above it stays registered -- a half-live
+    # add-on whose operators exist but whose game registry is empty, which reads as
+    # "the feature silently does nothing" rather than as a startup failure. The bin
+    # dir is a user setting with a real absence; a caller that needs it and has none
+    # already says so by name (pythonnet_bridge._configured_bin_dir).
+    entry = bpy.context.preferences.addons.get(__package__)
+    if entry is not None:
+        pythonnet_bridge.set_bin_dir(entry.preferences.ripperhook_repo)
     pythonnet_bridge.set_bin_dir_hint(_BIN_DIR_HINT)
     # What container every texture crosses in. Blender reads tga natively, so
     # declaring nothing (keep each texture's authored container) looks like the

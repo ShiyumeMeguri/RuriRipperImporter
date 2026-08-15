@@ -35,7 +35,7 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, roster_panel, scene_panel, shader, story_panel
+from . import character_panel, face_retarget, roster_panel, scene_panel, shader, story_panel
 
 
 def _register():
@@ -75,6 +75,11 @@ GAME_MODULE = GameModule(
                 "emotion/pose/lipsync library and its morph animations",
                 character_panel.draw_character_tab),
     ),
+    # A UI or cutscene clip carries its face in the BONE tracks, so importing one onto
+    # another character needs the performance read off the geometry and restated in that
+    # character's own expression vocabulary. The host's one clip-loading path asks for
+    # this; the maths is the hook's (RipperBlenderBridge.SolveFaceRetarget).
+    face_retarget=face_retarget.provide,
     register=_register,
     unregister=_unregister,
 )

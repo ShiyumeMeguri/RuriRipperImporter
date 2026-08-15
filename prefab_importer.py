@@ -304,10 +304,16 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
 
     ``display_names`` ({guid: name}) renames the products and every warning about them.
     A clip's m_Name is whatever the game's own controller state was called, which for
-    some games is unreadable; a caller holding the catalog label passes it here."""
+    some games is unreadable; a caller holding the catalog label passes it here.
+
+    Returns (built, warnings, actions) where ``actions`` is {guid: (action, slot)} -- a
+    caller that has more of THIS clip to write (a face restated into the destination's own
+    expressions, say) adds it to that clip's own action. An object plays one action, so a
+    second action beside it would simply replace this one."""
     built = 0
     first = None
     warnings = []
+    actions = {}
     guids = list(guids)
     assign_always = activate or len(guids) == 1
     has_action = arm_obj.animation_data is not None and arm_obj.animation_data.action is not None
@@ -337,11 +343,12 @@ def build_selected_animations(db, arm_obj, maps, path_to_meshobjects, guids, opt
             clip, arm_obj, maps, path_to_meshobjects, options, display_name=clip_name)
 
         built += 1
+        actions[guid] = (action, slot)
         if first is None:
             first = (action, slot)
     if first is not None and (assign_always or not has_action):
         animation_builder.adopt_action(arm_obj, first[0], first[1])
-    return built, warnings
+    return built, warnings, actions
 
 
 def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_level):

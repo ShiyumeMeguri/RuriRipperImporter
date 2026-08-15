@@ -1049,6 +1049,15 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         name="Import Empties", default=False,
         description="Keep every GameObject as an Empty. Off keeps only the "
                     "empties that hold imported content in the hierarchy")
+    retarget_face: BoolProperty(
+        name="Retarget Face", default=False,
+        description="For a clip whose facial animation is baked into its bone tracks "
+                    "(UI and cutscene clips are), work out WHICH library expressions "
+                    "that performance is -- measured on the character the clip was "
+                    "authored on -- and have the character in the scene play those same "
+                    "named expressions through its own face table. No geometry crosses "
+                    "between the two faces. The expression library loads itself the "
+                    "first time this is needed")
     import_animations: BoolProperty(
         name="Discover Animations", default=True,
         description="List this character's animation clips in the Animations "
@@ -1070,6 +1079,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
             "import_empties": self.import_empties,
+            "retarget_face": self.retarget_face,
             # THE game this session is looking at, resolved exactly once here and
             # stamped onto every armature the import builds -- what a later
             # cross-game retarget selects its table by.
@@ -2534,6 +2544,12 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")
+            # Only where the current game states what a face IS -- the host never
+            # learns which games those are, it asks the registry (see Game.GameModule).
+            if Game.face_retarget_of(_active_game_name(state)) is not None:
+                face = opts.row(align=True)
+                face.active = any(obj.type == "ARMATURE" for obj in context.scene.objects)
+                face.prop(state, "retarget_face", icon="USER")
 
             batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)
