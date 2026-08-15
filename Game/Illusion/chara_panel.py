@@ -172,15 +172,18 @@ def _expression_items(self, context):
 
 # ── the animation catalog ───────────────────────────────────────────────────
 
-def _side_of(bundle):
-    """Which partner an H animation belongs to -- the game files them under
-    h/anim/male/ and h/anim/female/, which is the only statement of it."""
-    lowered = str(bundle).lower()
-    if "/male/" in lowered:
-        return "male"
-    if "/female/" in lowered:
-        return "female"
-    return None
+_SIDES = {0: "male", 1: "female"}
+
+
+def _side_of(row_sex):
+    """Which partner a row is for -- the catalog's own ``sex`` column (0 male,
+    1 female, -1 unstated), which the hook derives from whatever the game states it
+    with. Not re-derived here from a path: a title that files both partners on one
+    sheet row has no per-partner path to read."""
+    try:
+        return _SIDES.get(int(float(row_sex)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _rebuild_anime(state):
@@ -204,20 +207,22 @@ def _rebuild_anime(state):
                "group": "{0} / {1}".format(table.cell(index, "groupName"), category),
                "row": str(index),
                "clip": table.cell(index, "clip")}
-        if family != "h":
+        side = _side_of(table.cell(index, "sex"))
+        pair = str(table.cell(index, "pair"))
+        if family != "h" or side is None or not pair:
             normal.append(row)
             continue
-        side = _side_of(table.cell(index, "bundle"))
-        if side is None:
-            normal.append(row)
-            continue
-        # A position (category) is the pair: the same act has one animation for
-        # each partner, so the two lists are built from ONE key set and stay
-        # index-aligned -- row N on the left is row N's partner on the right.
-        key = (str(category), str(name), str(table.cell(index, "clip")))
+        # WHICH act a row is one partner's half of is the catalog's own ``pair``
+        # column, so the two lists are built from ONE key set and stay index-aligned
+        # -- row N on the left is row N's partner on the right. Never re-derived from
+        # name+clip: a title that spells the clip per sex (hou_m_00 / hou_f_00) then
+        # matches nothing, every act becomes two half-empty rows, and the two columns
+        # drift a row apart.
+        bucket = pair.rpartition("/")[0] or pair
+        key = (bucket, pair)
         if key not in sides[side]:
             sides[side][key] = row
-            group_of[side].setdefault(str(category), row["group"])
+            group_of[side].setdefault(bucket, row["group"])
             if key not in seen:
                 seen.add(key)
                 order.append(key)
@@ -240,7 +245,13 @@ def _grouped_pairs(state, order, sides, group_of):
     way and a bare position number names nothing."""
     state.male_entries.clear()
     state.female_entries.clear()
-    order.sort(key=lambda key: (key[0], key[1], key[2]))
+    # Within a band, by the act's own id as a NUMBER: it is the order the game lists
+    # them in, and sorting the pair string instead puts 10 before 2.
+    def _rank(key):
+        tail = key[1].rpartition("/")[2]
+        return (key[0], 0, int(tail), "") if tail.lstrip("-").isdigit() else (key[0], 1, 0, key[1])
+
+    order.sort(key=_rank)
     counts = {}
     for key in order:
         counts[key[0]] = counts.get(key[0], 0) + 1
