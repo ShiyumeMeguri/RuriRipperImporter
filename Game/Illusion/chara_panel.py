@@ -3,7 +3,7 @@
 Three sections, which are the three things this game keeps separate itself:
 
 ``Model``  the cast -- every character card the install ships, under the name
-           written inside the card -- plus which of her seven outfits to wear.
+           written inside the card -- plus which of her outfits to wear.
 ``Face``   the head's own blend-shape patterns, and the expressions the game
            names out of them per personality.
 ``Anime``  the studio's animation catalog, imported onto whichever rig is in the
@@ -38,12 +38,12 @@ ANIME_NORMAL = "normal"
 ANIME_SEX = "sex"
 
 CAST_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatu:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
+    key="Illusion:cast", fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
     state_for=lambda context: context.scene.ruri_kk_chara,
     apply=lambda context: _rebuild_cast(context.scene.ruri_kk_chara)))
 
 ANIME_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatu:anime",
+    key="Illusion:anime",
     fields=(("name", "Name"), ("groupName", "Group"), ("categoryName", "Position"),
             ("clip", "Clip"), ("bundle", "Bundle")),
     state_for=lambda context: context.scene.ruri_kk_anime,
@@ -321,7 +321,7 @@ class RURI_PG_kk_entry(bpy.types.PropertyGroup):
 
 
 class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "Koikatu:cast"
+    FILTER_SPEC_KEY = "Illusion:cast"
 
     section: EnumProperty(
         name="Section",
@@ -352,7 +352,7 @@ class RURI_PG_kk_chara(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 
 
 class RURI_PG_kk_anime(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "Koikatu:anime"
+    FILTER_SPEC_KEY = "Illusion:anime"
 
     section: EnumProperty(
         name="Kind",
@@ -702,7 +702,7 @@ def _resolve_state_family(bridge, cabs, controller_name, family):
 def _catalog_label(row, state_name):
     """What the panel row says, as the action's name.
 
-    Koikatu's clips are named after internal controller states (`L_SLoop1`,
+    These clips are named after internal controller states (`L_SLoop1`,
     `M_IN_Loop`) which say nothing about what the animation is; the catalog is
     where the readable Japanese identity lives, and it is what the user picked
     from. ``state_name`` only contributes the part that separates one member of

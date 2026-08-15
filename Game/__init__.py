@@ -119,8 +119,12 @@ def game_of(hook_id):
 
 
 def discover():
-    """Import every subpackage here and collect the GAME_MODULE it declares.
-    A subpackage declaring none simply is not a game module."""
+    """Import every subpackage here and collect the GAME_MODULE(s) it declares.
+
+    A subpackage declaring none simply is not a game module. It may declare SEVERAL:
+    a family of titles that are the same game rebuilt shares one panel, and stating
+    them as four modules out of one folder is what keeps that folder free of
+    per-title code while each title still gets its own identity, tabs and session."""
     global _MODULES
     found = []
     for entry in pkgutil.iter_modules(__path__):
@@ -128,8 +132,9 @@ def discover():
             continue
         package = importlib.import_module("{0}.{1}".format(__name__, entry.name))
         declared = getattr(package, _DECLARATION, None)
-        if isinstance(declared, GameModule):
-            found.append(declared)
+        for module in (declared if isinstance(declared, (list, tuple)) else [declared]):
+            if isinstance(module, GameModule):
+                found.append(module)
     found.sort(key=lambda game: game.game_name.lower())
     _MODULES = found
     return _MODULES

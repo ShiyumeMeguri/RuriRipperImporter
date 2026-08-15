@@ -1,7 +1,8 @@
-"""What this game publishes, and the small amount of shape that is genuinely the UI's.
+"""What a title of this family publishes, and the small amount of shape that is
+genuinely the UI's.
 
-Every list this add-on draws for Koikatu is a dataset the game's own hook reads
-(``Ruri.RipperHook.Koikatu``): the customization catalog, the cast, a build plan,
+Every list this add-on draws is a dataset the title's own hook reads
+(``Ruri.RipperHook.Illusion``): the customization catalog, the cast, a build plan,
 the places, the animation catalog, the named expressions, a head's pattern table.
 None of it is parsed on this side -- the ids below name the tables, and
 ``bridge.game_data(id, *args)`` returns one already columnar, already searchable
@@ -17,15 +18,27 @@ from __future__ import annotations
 
 from ...RuriRipperPyBridge.session import cabmap_state
 
-# The datasets the hook publishes. Names, not paths: the hook owns where they come from.
-CATALOG = "koikatu.chara.catalog"
-CAST = "koikatu.chara.cast"
-PLAN = "koikatu.chara.plan"
-PLACES = "koikatu.scene.places"
-ANIMATIONS = "koikatu.anime.catalog"
-EXPRESSIONS = "koikatu.face.expressions"
-FACE_PATTERNS = "koikatu.face.patterns"
-BUNDLE_CABS = "koikatu.bundle.cabs"
+# What the hook publishes, named WITHOUT the game -- every title of this family
+# publishes the same set, each under its own prefix (Ruri.RipperHook.Illusion's
+# IllusionProfile.IdPrefix), so the id is completed here from whichever game the
+# browser is on. Nothing in this package names a title.
+CATALOG = "chara.catalog"
+CAST = "chara.cast"
+PLAN = "chara.plan"
+PLACES = "scene.places"
+ANIMATIONS = "anime.catalog"
+EXPRESSIONS = "face.expressions"
+FACE_PATTERNS = "face.patterns"
+BUNDLE_CABS = "bundle.cabs"
+
+
+def dataset_id(suffix):
+    """One suffix under the current game's prefix. The prefix is the game's own name
+    lowercased -- the same rule the hook builds its ids with -- so a title added
+    upstream needs no entry here."""
+    game = cabmap_state.active_game() or ""
+    return "{0}.{1}".format(game.lower(), suffix) if game else suffix
+
 
 # The slot families a build can be narrowed to, as the plan's own ``slot`` column
 # spells them. The skeleton, body and tongue have no toggle: they are what the
@@ -45,36 +58,42 @@ def reset():
     _TABLES.clear()
 
 
-def table(dataset_id, refresh=False, **args):
+def table(suffix, refresh=False, **args):
     """One published dataset, by NAME-ed arguments. Returns None when there is no
-    bridge yet, which is what a draw callback sees before a cabmap is loaded."""
+    bridge yet (what a draw callback sees before a cabmap is loaded) or when the
+    game on this tab publishes no such dataset -- an absence the hook states by not
+    publishing it, which a panel reads as "this title has none"."""
     if cabmap_state.BRIDGE is None:
         return None
-    key = (dataset_id,) + tuple(sorted((name, str(value)) for name, value in args.items()))
+    resolved = dataset_id(suffix)
+    key = (resolved,) + tuple(sorted((name, str(value)) for name, value in args.items()))
     if refresh:
         _TABLES.pop(key, None)
     if key not in _TABLES:
-        _TABLES[key] = cabmap_state.BRIDGE.game_data(dataset_id, **args)
+        try:
+            _TABLES[key] = cabmap_state.BRIDGE.game_data(resolved, **args)
+        except Exception:
+            _TABLES[key] = None
     return _TABLES[key]
 
 
-def rows(dataset_id, refresh=False, **args):
+def rows(suffix, refresh=False, **args):
     """The dataset's rows as dicts -- for the handful of places that genuinely
     need every row (a build plan is 15 rows). A LIST does not use this: it draws
     through search_data_table over the table's own handle."""
-    found = table(dataset_id, refresh=refresh, **args)
+    found = table(suffix, refresh=refresh, **args)
     if found is None:
         return []
     return [{name: found.cell(index, name) for name in found.names}
             for index in range(len(found))]
 
 
-def search(dataset_id, args, query, filter_rules):
+def search(suffix, args, query, filter_rules):
     """Row ids of one dataset matching a query and every enabled rule, on the C#
     engine, over the buffers the read already produced. ``table.handle`` is the
     search handle, so reading and searching are not two registrations that can
     disagree."""
-    found = table(dataset_id, **args)
+    found = table(suffix, **args)
     if found is None:
         return [], None
     if cabmap_state.BRIDGE is None or not len(found):

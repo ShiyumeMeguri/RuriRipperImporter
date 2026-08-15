@@ -4,7 +4,7 @@ One list, because the game has one set of places under two names: every one is a
 Unity level, and picking one and importing it is the whole interaction -- nothing
 here is streamed, so there is no window to choose.
 
-The list itself comes from the game's hook (``koikatu.scene.places``) and the
+The list itself comes from the game's hook (the ``scene.places`` dataset) and the
 filtering runs on the same C# engine the bundle browser uses, over that dataset's
 own handle. Nothing on this side reads a byte of the game.
 """
@@ -23,7 +23,7 @@ from . import datasets
 _FILTER_FIELDS = (("name", "Name"), ("bundle", "Bundle"), ("group", "Group"))
 
 SCENE_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="Koikatu:scene", fields=_FILTER_FIELDS,
+    key="Illusion:scene", fields=_FILTER_FIELDS,
     state_for=lambda context: context.scene.ruri_kk_scene,
     apply=lambda context: _rebuild(context.scene.ruri_kk_scene)))
 
@@ -122,7 +122,7 @@ class RURI_PG_kk_scene_entry(bpy.types.PropertyGroup):
 
 
 class RURI_PG_kk_scene(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "Koikatu:scene"
+    FILTER_SPEC_KEY = "Illusion:scene"
 
     search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"}, update=_on_search_edit,
                            description="Filter by displayed name or bundle")

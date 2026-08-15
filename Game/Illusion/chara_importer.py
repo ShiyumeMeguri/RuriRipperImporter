@@ -1,9 +1,9 @@
 """Assemble one character into the scene from the plan the game's hook produced.
 
-The generic importer knows how to build ONE prefab. A Koikatu character is a
-dozen of them sharing a skeleton, and WHICH dozen -- in what order, on which
-bone, rebound how -- is the hook's answer (``koikatu.chara.plan``). What is left
-here is the part that can only happen in Blender:
+The generic importer knows how to build ONE prefab. A character of this family is
+a dozen of them sharing a skeleton, and WHICH dozen -- in what order, on which
+bone, rebound how -- is the hook's answer (the ``chara.plan`` dataset). What is
+left here is the part that can only happen in Blender:
 
 * the first row IS the skeleton, and every later part is placed at the BONE the
   plan names, so a hair prefab authored relative to the head's hair anchor lands
@@ -39,9 +39,12 @@ _GEOMETRY = ("GameObject", "Transform", "Mesh", "SkinnedMeshRenderer", "MeshRend
 _MATERIALS = ("Material", "Shader")
 _TEXTURES = ("Texture2D",)
 
-# The plan's own vocabulary for how a part binds, and the rig's root.
+# The plan's own vocabulary for how a part binds. WHERE it binds is not vocabulary
+# at all: every plan row already names a real bone (the hook resolves the rig root
+# for a part the game parents to the character itself), and the row that IS the face
+# says so in its own column -- so nothing here has to know what a head is or what
+# this family calls its root.
 REBIND_BODY = "body"
-ROOT_BONE = "cf_j_root"
 
 
 class BuildReport:
@@ -75,7 +78,7 @@ def _class_ids(options):
 
 
 def build(context, plan, options=None, name="Character"):
-    """Build a plan (the rows of ``koikatu.chara.plan``). Returns a BuildReport;
+    """Build a plan (the rows of ``chara.plan``). Returns a BuildReport;
     the armature it names is the one every later flow binds to."""
     options = dict(prefab_importer.resolve_options(options))
     # A part list only means anything against a skeleton -- the pieces are bound to
@@ -130,9 +133,11 @@ def build(context, plan, options=None, name="Character"):
             context, db, prefab, options, name=part["label"], top_level=False)
         _attach(context, report, built, part)
         report.parts += 1
-        if part["slot"] == "head":
-            # The head IS the expression system; remember WHICH head so the face can
-            # still be driven in a later session (its pattern table is the hook's).
+        if str(part.get("face") or "0") not in ("0", "0.0", ""):
+            # The row the plan marked as the face IS the expression system; remember
+            # WHICH prefab it was so the face can still be driven in a later session
+            # (its pattern table is the hook's). Which row that is, is the hook's
+            # answer -- this side never decides what a head is.
             face_importer.stamp(report.armature, part["bundle"], part["asset"])
 
     return report
@@ -164,14 +169,13 @@ def _attach(context, report, built, part):
 
 
 def _anchor_bone(armature, part):
-    """The bone this part hangs on: the one the plan names, or the rig's root for a
-    part the game parents to the character itself."""
+    """The bone this part hangs on -- the one the plan names, which is always a real
+    bone. Only a rig that does not have it at all falls back to its first bone, and
+    that is a broken import, not a naming rule."""
     bones = armature.data.bones
     name = str(part.get("parent") or "")
     if name and name in bones:
         return name
-    if ROOT_BONE in bones:
-        return ROOT_BONE
     return bones[0].name if len(bones) else ""
 
 

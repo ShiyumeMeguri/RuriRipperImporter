@@ -5,7 +5,7 @@ weight: the pattern's Close key gets ``(1 - openness)`` and its Open key gets
 ``openness``. Unity states those weights on 0..100 and Blender's shape keys run
 0..1, which is the only conversion on this path.
 
-The pattern table itself is the hook's (``koikatu.face.patterns``), normalized to
+The pattern table itself is the hook's (the ``face.patterns`` dataset), normalized to
 one row per (channel, target, pattern) -- so what is left here is setting shape
 key values on the meshes that rig actually has.
 """
@@ -20,7 +20,7 @@ from . import datasets
 
 # Where the rig remembers which head it was built from, so the face can still be
 # driven in a later session without re-resolving that.
-RIG_PROPERTY = "ruri_koikatu_head"
+RIG_PROPERTY = "ruri_illusion_head"
 
 CHANNELS = ("eyebrow", "eyes", "mouth")
 
@@ -180,7 +180,7 @@ def resting_openness(ceilings):
 
 
 def expression_patterns(row):
-    """One ``koikatu.face.expressions`` row split into what ``apply`` takes. The
+    """One ``face.expressions`` row split into what ``apply`` takes. The
     row's three open values are the ceilings the command sets, so they become a
     pose through ``resting_openness``. A pattern of -1 is one the expression does
     not touch."""
@@ -205,7 +205,7 @@ SCALAR_CHANNELS = ("blush", "tears", "highlight")
 
 
 def expression_ir(row):
-    """One ``koikatu.face.expressions`` row as the cross-game IR (see face_ir).
+    """One ``face.expressions`` row as the cross-game IR (see face_ir).
 
     Each driven channel contributes its pattern at the openness rate, plus the
     same pattern's shut end at the complement -- that pair IS what the game
