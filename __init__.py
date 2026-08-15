@@ -82,7 +82,7 @@ for _name, _mod in sorted(_game_modules, key=lambda entry: -entry[0].count("."))
     importlib.reload(_mod)
 
 import bpy
-from bpy.props import BoolProperty, CollectionProperty, StringProperty
+from bpy.props import BoolProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 
@@ -95,18 +95,6 @@ def _on_ripperhook_repo_change(self, context):
     pythonnet_bridge.set_bin_dir(self.ripperhook_repo)
 
 
-class RURI_PG_remembered_install(bpy.types.PropertyGroup):
-    """One install's remembered browser inputs, kept in the addon preferences so the
-    folder a tab was last pointed at survives across .blend files and Blender
-    restarts -- what the scene's own per-install config (RURI_PG_install_config,
-    gone the moment a file closes) cannot do. Only the paths the user chose per
-    install live here; loaded/session state stays on the scene."""
-    key: StringProperty()
-    game_root: StringProperty()
-    cabmap_path: StringProperty()
-    browsed_dir: StringProperty()
-
-
 class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     """Edit > Preferences > Add-ons > RuriRipperImporter. Holds the one path that differs per
     machine (this workspace is synced across machines that check the Ruri-RipperHook repo out
@@ -114,10 +102,6 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     Blender persists this in the user's saved preferences, so it only needs setting once per
     machine."""
     bl_idname = __package__
-
-    # One entry per install the user has ever pointed the panel at -- the persistent
-    # memory the browser tabs read on open and write on every path change.
-    remembered_installs: CollectionProperty(type=RURI_PG_remembered_install)
 
     ripperhook_repo: StringProperty(
         name="Ruri-RipperHook Bin Dir",
@@ -185,7 +169,7 @@ def _menu_asset(self, context):
                          text="Unity Asset (.prefab / .asset / .anim / .controller)")
 
 
-_CLASSES = (RURI_PG_remembered_install, RuriRipperImporterPreferences, IMPORT_OT_unity_asset)
+_CLASSES = (RuriRipperImporterPreferences, IMPORT_OT_unity_asset)
 
 
 def register():

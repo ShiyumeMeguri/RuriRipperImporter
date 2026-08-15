@@ -306,78 +306,6 @@ def _active_game_name(state):
     return cabmap_state.active_game() or ""
 
 
-# --- persistent per-install memory --------------------------------------------
-# The scene's ``games`` entries vanish with the .blend; the folder a user picked
-# must not. That memory lives in the addon preferences (persistent, cross-file,
-# cross-restart) as one entry per INSTALL KEY, holding only the paths the user
-# chose. Reopening a remembered install comes back with its folder; closing a tab
-# never touches it.
-_ADDON_PACKAGE = __package__ or "RuriRipperImporter"
-
-
-def _prefs():
-    """The addon's AddonPreferences, or None when this module runs outside a
-    registered addon (a bare-import test harness) -- persistence then no-ops, the
-    way _register_keymaps already skips a headless run."""
-    addon = bpy.context.preferences.addons.get(_ADDON_PACKAGE)
-    return addon.preferences if addon is not None else None
-
-
-def _recall_install(prefs, key):
-    if prefs is None or not key:
-        return None
-    for entry in prefs.remembered_installs:
-        if entry.key == key:
-            return entry
-    return None
-
-
-def _remembered_keys():
-    """Every install key persistent memory holds a folder for, in insertion order --
-    what the new-tab menu offers to reopen."""
-    prefs = _prefs()
-    return [entry.key for entry in prefs.remembered_installs] if prefs is not None else []
-
-
-def _remember_install(prefs, key, game_root, cabmap_path, browsed_dir):
-    """Upsert this install's remembered paths -- the one write into persistent
-    memory. A tab that has not been pointed at a folder yet has nothing to remember,
-    so only a key with a root is filed."""
-    if prefs is None or not key or not game_root:
-        return
-    entry = _recall_install(prefs, key)
-    if entry is None:
-        entry = prefs.remembered_installs.add()
-        entry.key = key
-    entry.game_root = game_root
-    entry.cabmap_path = cabmap_path
-    entry.browsed_dir = browsed_dir
-
-
-def _recall_into(config):
-    """Fill a freshly-opened tab's inputs from that install's remembered paths, so
-    the folder is already there instead of blank. Writes the raw config fields, not
-    the get/set view, so it never re-enters the setters or writes memory back. A
-    loaded tab is live, not freshly opened."""
-    if config.loaded:
-        return
-    remembered = _recall_install(_prefs(), config.key)
-    if remembered is None:
-        return
-    config.game_root = remembered.game_root
-    config.cabmap_path = remembered.cabmap_path
-    config.browsed_dir = remembered.browsed_dir
-
-
-def _persist_current(state):
-    """Write the current tab's chosen paths into persistent memory, so the folder is
-    remembered across files and restarts."""
-    config = _active_config(state)
-    if config is not None:
-        _remember_install(_prefs(), config.key, config.game_root,
-                          config.cabmap_path, config.browsed_dir)
-
-
 # --- per-install config + current tab -----------------------------------------
 # A BROWSER TAB IS AN INSTALL, not a game. Each open tab keeps its own
 # game_root/cabmap_path/browse-dir/loaded in a ``games`` CollectionProperty entry
@@ -423,17 +351,37 @@ def _open_tab_keys(state):
     return keys if state.current_tab in keys else keys + [state.current_tab]
 
 
-def _unique_tab_key(state, wanted, held_by=None):
+def _unique_tab_key(state, wanted, held_by_key=None):
     """``wanted``, or ``wanted_2`` / ``wanted_3`` / ... when another tab already holds
     it. Two installs of the same title are a real case (a repack beside a vanilla
-    copy), and two tabs sharing a key would share a session and a cabmap slot."""
-    taken = {config.key for config in state.games if config is not held_by}
+    copy), and two tabs sharing a key would share a session and a cabmap slot.
+
+    A numbered key therefore means TWO DIFFERENT FOLDERS -- pointing a second tab at
+    a folder some tab already has is not a second install and never gets one (see
+    _tab_on_root)."""
+    # By KEY, never by object identity: bpy hands back a fresh PropertyGroup wrapper
+    # on every access, so `config is held_by` is False even for the very same entry --
+    # which is how re-typing a tab's own folder used to mint it a "<name>_2".
+    taken = {config.key for config in state.games if config.key != held_by_key}
     if wanted not in taken:
         return wanted
     ordinal = 2
     while "{0}_{1}".format(wanted, ordinal) in taken:
         ordinal += 1
     return "{0}_{1}".format(wanted, ordinal)
+
+
+def _tab_on_root(state, root, excluding_key=None):
+    """The open tab already pointed at ``root``, or None. An install is a FOLDER, so
+    two tabs on one folder are one install listed twice -- and the second would mint
+    a "<name>_2" key that reads as a different copy of the game when it is the very
+    same one."""
+    for config in state.games:
+        if config.key == excluding_key or not config.game_root:
+            continue
+        if os.path.normcase(os.path.normpath(bpy.path.abspath(config.game_root))) == root:
+            return config
+    return None
 
 
 def _next_unnamed_key(state):
@@ -449,14 +397,12 @@ def _next_unnamed_key(state):
 
 
 def _ensure_tab(state, key):
-    """The one place a browser tab is created. A brand-new tab is backfilled from
-    persistent memory, so reopening an install brings its remembered folder back
-    instead of a blank field."""
+    """The one place a browser tab is created. It is created EMPTY -- a tab has no
+    identity beyond the folder its user points it at."""
     config = _find_config(state, key)
     if config is None:
         config = state.games.add()
         config.key = key
-        _recall_into(config)
     return config
 
 
@@ -494,9 +440,8 @@ def _rename_tab(state, config, new_key):
 
 
 def _open_tab(state, key, context):
-    """Open (or focus) a tab and switch to it. ``key`` names a remembered install to
-    reopen; empty opens a fresh unnamed tab, which the next folder typed into it
-    renames."""
+    """Open a fresh unnamed tab and switch to it. The next folder typed into it is
+    what names it."""
     _ensure_tab(state, key or _next_unnamed_key(state))
     _switch_current_tab(state, key or _tab_keys(state)[-1], context)
 
@@ -504,8 +449,7 @@ def _open_tab(state, key, context):
 def _close_tab(state, key, context):
     """Close one tab -- remove its scene config entry, release its browser session,
     and hand focus to a remaining tab (a fresh unnamed one when none is left, so the
-    panel is never tabless). Persistent memory is untouched, so reopening the install
-    restores its folder."""
+    panel is never tabless)."""
     for index, config in enumerate(state.games):
         if config.key == key:
             state.games.remove(index)
@@ -877,7 +821,6 @@ def _get_cabmap_path(self):
 
 def _set_cabmap_path(self, value):
     _ensure_active_config(self).cabmap_path = value
-    _persist_current(self)
 
 
 def _get_browsed_dir(self):
@@ -887,7 +830,6 @@ def _get_browsed_dir(self):
 
 def _set_browsed_dir(self, value):
     _ensure_active_config(self).browsed_dir = value
-    _persist_current(self)
 
 
 def _get_loaded(self):
@@ -930,22 +872,30 @@ def _on_game_root_set(state):
     * the Cabmap field is seeded afterwards, so its default filename is built from
       the game just recognised.
 
-    Nothing moves between tabs any more: a tab is the install in front of it."""
+    Nothing moves between tabs any more: a tab is the install in front of it -- and
+    when that install is already open on another tab, this one gives the folder back
+    and the browser goes there, rather than minting a second identity for one folder."""
     config = _active_config(state)
     if config is None:
         return
     root = bpy.path.abspath(config.game_root) if config.game_root else ""
     _PROJECT_NAMES.pop(config.game_root or "", None)
+    if root:
+        already = _tab_on_root(state, os.path.normcase(os.path.normpath(root)),
+                              excluding_key=config.key)
+        if already is not None:
+            config.game_root = ""
+            _set_current_tab(state, already.key)
+            return
     module = _recognised_game(state)
     config.game_name = module.game_name if module is not None else ""
     _ensure_hooks_listed(state)
     _apply_recognised_game(state)
     product = build_identity.product(root) if root else ""
     if product:
-        _rename_tab(state, config, _unique_tab_key(state, product, held_by=config))
+        _rename_tab(state, config, _unique_tab_key(state, product, held_by_key=config.key))
     _set_current_tab(state, config.key)
     _seed_cabmap_default(state)
-    _persist_current(state)
 
 
 class RURI_PG_install_config(bpy.types.PropertyGroup):
@@ -1276,9 +1226,10 @@ class RURI_OT_select_install(bpy.types.Operator):
 
 
 class RURI_OT_open_tab(bpy.types.Operator):
-    """Open a browser tab and switch to it. ``key`` reopens a remembered install
-    (backfilling the folder it was last pointed at); empty opens a fresh unnamed tab,
-    which the next folder typed into it renames after that build's own product."""
+    """Open a fresh, EMPTY browser tab and switch to it. That is the whole of it: the
+    tab is unnamed until a folder is typed into it, which then names it after that
+    build's own product. Nothing is preset and nothing is remembered -- which install
+    a user wants is the folder they pick, not a list this add-on keeps."""
     bl_idname = "ruri.open_tab"
     bl_label = "Open Tab"
     bl_options = {"INTERNAL"}
@@ -1291,9 +1242,8 @@ class RURI_OT_open_tab(bpy.types.Operator):
 
 
 class RURI_OT_close_tab(bpy.types.Operator):
-    """The tab's x button: close one install's tab -- drop its config entry and
-    browser session, hand focus to a remaining tab. The remembered folder is kept, so
-    reopening the install restores it."""
+    """The tab's x button: close one install's tab -- drop its config entry and its
+    browser session, and hand focus to a remaining tab."""
     bl_idname = "ruri.close_tab"
     bl_label = "Close Tab"
     bl_options = {"INTERNAL"}
@@ -1303,24 +1253,6 @@ class RURI_OT_close_tab(bpy.types.Operator):
         _close_tab(context.scene.ruri_cabmap, self.key, context)
         _redraw_all(context)
         return {"FINISHED"}
-
-
-class RURI_MT_new_tab(bpy.types.Menu):
-    """The + button's menu: every install this add-on remembers a folder for that has
-    no open tab, plus New Tab (an unnamed tab whose folder, once typed, names it)."""
-    bl_idname = "RURI_MT_new_tab"
-    bl_label = "New Tab"
-
-    def draw(self, context):
-        layout = self.layout
-        state = context.scene.ruri_cabmap
-        open_keys = set(_tab_keys(state))
-        reopenable = [key for key in _remembered_keys() if key not in open_keys]
-        for key in reopenable:
-            layout.operator(RURI_OT_open_tab.bl_idname, text=key).key = key
-        if reopenable:
-            layout.separator()
-        layout.operator(RURI_OT_open_tab.bl_idname, text="New Tab", icon="FILE_BLANK").key = ""
 
 
 class RURI_OT_cabmap_sort(bpy.types.Operator):
@@ -2459,7 +2391,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             one_tab.operator(RURI_OT_select_install.bl_idname, text=key,
                              depress=(key == state.current_tab)).key = key
             one_tab.operator(RURI_OT_close_tab.bl_idname, text="", icon="X").key = key
-        tab_bar.menu(RURI_MT_new_tab.bl_idname, text="", icon="ADD")
+        tab_bar.operator(RURI_OT_open_tab.bl_idname, text="", icon="ADD").key = ""
 
         top.prop(state, "game_root")
         top.prop(state, "cabmap_path")
@@ -2876,7 +2808,6 @@ _CLASSES = (
     RURI_OT_select_install,
     RURI_OT_open_tab,
     RURI_OT_close_tab,
-    RURI_MT_new_tab,
     RURI_OT_cabmap_sort,
     RURI_OT_cabmap_import_with_dependents,
     RURI_OT_import_selected,
