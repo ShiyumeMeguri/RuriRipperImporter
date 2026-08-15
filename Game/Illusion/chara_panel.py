@@ -108,7 +108,7 @@ def _rebuild_cast(state):
                                      state.search.strip(), state.filter_rules)
     if table is None:
         state.entries.clear()
-        STATUS = "Load a cabmap, then refresh."
+        STATUS = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
         return
     rows = [{name: table.cell(index, name) for name in table.names} for index in matched]
     _grouped(state, rows, "name", "folder", "path", "file")

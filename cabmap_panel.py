@@ -543,30 +543,28 @@ def _current_game_hooks(state, game):
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
 
-def _default_cabmap_filename(hook_ids):
-    """A sensible default cabmap filename from the game hook id(s) --
-    "<Game>_<Version>.cabmap", or "<Game>_<Version>+<Other>_<Version>.cabmap" for
-    more than one. Used to auto-complete the Cabmap field when it's a bare folder
-    with no filename (see RURI_OT_build_cabmap)."""
-    stem = "+".join(hook_ids) if hook_ids else "output"
-    return _FILENAME_UNSAFE.sub("_", stem) + ".cabmap"
+def _default_cabmap_filename(key):
+    """A cabmap is named after the INSTALL it maps -- the product name the build
+    itself carries, which is this tab's key ("HoneyCome.cabmap"). Not after the
+    hook(s): which decoder happens to be ticked while the map is built is a passing
+    state of the session, while the map is a fact about that folder, and naming it
+    after the hooks meant a map built before the game was recognised landed as a
+    nondescript "output.cabmap" next to the install it belongs to."""
+    return _FILENAME_UNSAFE.sub("_", key).strip() + ".cabmap"
 
 
 def _auto_default_cabmap_filename(state):
-    """If state.cabmap_path is a non-empty path that (still) resolves to a bare folder, fill in a
-    default filename built from the checked hook(s) -- writes straight onto state.cabmap_path so
+    """If state.cabmap_path is a non-empty path that (still) resolves to a bare folder, fill in the
+    default filename -- writes straight onto state.cabmap_path so
     it's what's shown in the field AND what Blender's file-browser popup pre-fills/lets you edit
     the next time the user clicks its folder icon (that browser seeds its filename box from the
     property's CURRENT string value, so the default has to already be in the property before the
     popup opens, not just patched in at Build time). A completely empty cabmap_path is left
     alone here -- there's no folder yet to build a default INTO (see _on_game_root_set, which
-    seeds one first). Called from both that callback and RURI_OT_refresh_hooks (refreshes the
-    filename once the real hook selection is known)."""
+    seeds one first)."""
     raw = bpy.path.abspath(state.cabmap_path) if state.cabmap_path else ""
-    if raw and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
-        config = _active_config(state)
-        state.cabmap_path = os.path.join(raw, _default_cabmap_filename(
-            _current_game_hooks(state, config.game_name if config is not None else "")))
+    if raw and state.current_tab and (raw.endswith(("\\", "/")) or os.path.isdir(raw)):
+        state.cabmap_path = os.path.join(raw, _default_cabmap_filename(state.current_tab))
 
 
 def _resolve_build_output_path(state):
@@ -657,6 +655,86 @@ def _newest_game_hook(state, game_name):
     return max(mine, key=_hook_version) if mine else ""
 
 
+# Every hook id compiled into the loaded DLL. Read ONCE per process, exactly like
+# _GAME_HOOK_IDS below and for the same reason: the set is compiled in and cannot
+# change under a running session (pythonnet loads that DLL once, for good). So this
+# is not a cache of something that might move -- it is the one reading there is.
+_DLL_HOOK_IDS = None
+
+# Set while the hook list is being re-listed, so the per-item update callback does
+# not read a bulk rewrite as the user ticking things.
+_RELISTING = False
+
+
+def _dll_hook_ids():
+    """The DLL's hook ids, or [] while it is not up yet (no bin dir, install still
+    running) -- a miss is deliberately NOT cached, so one early call cannot disable
+    the list for the session."""
+    global _DLL_HOOK_IDS
+    if _DLL_HOOK_IDS is not None:
+        return _DLL_HOOK_IDS
+    try:
+        _DLL_HOOK_IDS = [str(hook_id) for hook_id in pythonnet_bridge.list_available_hooks()]
+    except Exception:
+        return []
+    return _DLL_HOOK_IDS
+
+
+def _ensure_hooks_listed(state):
+    """Bring the hook checklist in step with the DLL, keeping every tick that still
+    exists. Returns whether the list is now real.
+
+    WHY this exists at all: the checklist is DERIVED data that happens to be stored
+    in the .blend (a UIList needs a collection to draw). The hook set is compiled
+    into the DLL, so a list saved in a file made before a hook existed is stale by
+    construction -- and nothing re-derived it, so the game that hook decodes could
+    never be enabled, and every list it feeds came back empty while the panel said
+    "load a cabmap". Deriving it is not the user's job.
+
+    NOT polling: the DLL is read once per process (_dll_hook_ids), this is a list
+    compare over ~30 strings, and it runs only where the list is about to be USED --
+    never from a draw callback, which must neither cross the CLR boundary nor write
+    scene data."""
+    global _RELISTING
+    hook_ids = _dll_hook_ids()
+    if not hook_ids or [item.id for item in state.available_hooks] == hook_ids:
+        return len(state.available_hooks) > 0
+    ticked = {item.id for item in state.available_hooks if item.selected}
+    _RELISTING = True
+    try:
+        state.available_hooks.clear()
+        for hook_id in hook_ids:
+            item = state.available_hooks.add()
+            item.id = hook_id
+            item.selected = hook_id in ticked
+    finally:
+        _RELISTING = False
+    return True
+
+
+def _ensure_decoder_hook(state):
+    """The current tab's own game must be the one DECODING, or the hook that publishes
+    its datasets never runs and every list it feeds comes back empty.
+
+    The folder already said which game this is (config.game_name), so the tick follows
+    from that rather than from the user remembering to set it -- the same rule
+    _apply_recognised_game applies when a root is typed, re-applied here because the
+    hook list may not have existed yet at that moment (a .blend opened before the
+    DLL was listed). Returns the hook id now decoding this tab, or ""."""
+    config = _active_config(state)
+    if config is None or not config.game_name:
+        return ""
+    _ensure_hooks_listed(state)
+    ticked = _ticked_game_hooks(state, config.game_name)
+    if ticked:
+        return ticked[0].id
+    newest = _newest_game_hook(state, config.game_name)
+    for item in state.available_hooks:
+        if item.id == newest:
+            item.selected = True
+    return newest
+
+
 def _apply_recognised_game(state):
     """Tick the recognised game's newest hook, so the current tab decodes through it.
 
@@ -685,6 +763,8 @@ def _on_hook_tick(self, context):
     unticking the last of that game's hooks takes the statement back. Tabs are
     installs and are opened/closed by the user alone -- a hook tick never creates or
     destroys one. AR_* feature hooks are about no game and combine freely."""
+    if _RELISTING:
+        return
     state = context.scene.ruri_cabmap
     config = _active_config(state)
     if config is None or self.id.lower() not in _game_hook_ids():
@@ -858,6 +938,7 @@ def _on_game_root_set(state):
     _PROJECT_NAMES.pop(config.game_root or "", None)
     module = _recognised_game(state)
     config.game_name = module.game_name if module is not None else ""
+    _ensure_hooks_listed(state)
     _apply_recognised_game(state)
     product = build_identity.product(root) if root else ""
     if product:
@@ -908,7 +989,10 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                                 get=_get_cabmap_path, set=_set_cabmap_path)
     available_hooks: CollectionProperty(type=RURI_PG_hook_entry)
     available_hooks_active_index: IntProperty()
-    hooks_status: StringProperty(default="Click Refresh to list hooks compiled into Ruri.RipperHook.dll.")
+    # The list derives itself where it is used (see _ensure_hooks_listed); Refresh
+    # is the explicit re-read, not a step the user has to know about.
+    hooks_status: StringProperty(
+        default="Hooks list themselves from Ruri.RipperHook.dll when a game folder is picked.")
     loaded: BoolProperty(get=_get_loaded, set=_set_loaded)
     # A plain string, not an EnumProperty: the tab set is whatever the enabled
     # games contribute, and Blender's dynamic-enum items callback stores an index
@@ -1034,12 +1118,9 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
             _report_exception(self, "Refresh hooks failed", exc)
             return {"CANCELLED"}
 
-        previously_selected = {item.id for item in state.available_hooks if item.selected}
-        state.available_hooks.clear()
-        for hook_id in hook_ids:
-            item = state.available_hooks.add()
-            item.id = hook_id
-            item.selected = hook_id in previously_selected
+        global _DLL_HOOK_IDS
+        _DLL_HOOK_IDS = [str(hook_id) for hook_id in hook_ids]
+        _ensure_hooks_listed(state)
         # Which GAME is decided by the current tab's folder, not by a default (see
         # _apply_recognised_game) -- so a fresh session starts with nothing
         # ticked and picks up a game the moment Game Root names one.
@@ -1089,6 +1170,7 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, f"Can't create output folder '{out_dir}': {exc}")
             return {"CANCELLED"}
         config = _ensure_active_config(state)
+        _ensure_decoder_hook(state)
         try:
             hooks = _current_game_hooks(state, config.game_name)
             bridge = cabmap_state.ensure_bridge(hooks, root)
@@ -1138,6 +1220,7 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, "Pick a valid cabmap file first.")
             return {"CANCELLED"}
         config = _ensure_active_config(state)
+        _ensure_decoder_hook(state)
         try:
             bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, config.game_name),
                                                 bpy.path.abspath(state.game_root) if state.game_root else "")

@@ -53,9 +53,21 @@ ACCESSORY = "accessory"
 # redraw never crosses the bridge; a Refresh drops it.
 _TABLES = {}
 
+# Why the last read produced nothing, in the reader's own words. A dataset this
+# title does not publish is a REASON ("its hook is not decoding", "this title ships
+# no such list"), and a panel that swallows it can only say "load a cabmap" -- which
+# sends the user looking at the one thing that was never wrong.
+_FAILURES = {}
+
 
 def reset():
     _TABLES.clear()
+    _FAILURES.clear()
+
+
+def why_empty(suffix):
+    """What stopped the last read of this dataset, or "" when nothing did."""
+    return _FAILURES.get(dataset_id(suffix), "")
 
 
 def table(suffix, refresh=False, **args):
@@ -72,9 +84,27 @@ def table(suffix, refresh=False, **args):
     if key not in _TABLES:
         try:
             _TABLES[key] = cabmap_state.BRIDGE.game_data(resolved, **args)
-        except Exception:
+            _FAILURES.pop(resolved, None)
+        except Exception as exc:
             _TABLES[key] = None
+            _FAILURES[resolved] = _explain(resolved, exc)
+            print("[RuriRipper] {0}: {1}".format(resolved, exc))
     return _TABLES[key]
+
+
+def _explain(resolved, exc):
+    """One line a user can act on. "Not published" is the common case and has exactly
+    two causes -- this title ships no such list, or its hook is not the one decoding
+    right now -- and which it is, is answerable: the id's own prefix says which game
+    the dataset belongs to, and the session says which game is decoding."""
+    if "no dataset" not in str(exc):
+        return "{0}: {1}".format(type(exc).__name__, exc)
+    wanted = resolved.split(".", 1)[0]
+    decoding = cabmap_state.active_game() or ""
+    if decoding.lower() != wanted:
+        return ("This tab is {0} but {1} is decoding -- reload this tab's cabmap."
+                .format(wanted, decoding or "no game hook"))
+    return "{0} publishes no '{1}'.".format(decoding, resolved.split(".", 1)[1])
 
 
 def rows(suffix, refresh=False, **args):

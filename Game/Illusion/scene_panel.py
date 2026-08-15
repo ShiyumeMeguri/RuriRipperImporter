@@ -87,7 +87,7 @@ def _rebuild(state):
     state.entries.clear()
     matched, table = datasets.search(datasets.PLACES, {}, state.search.strip(), state.filter_rules)
     if table is None:
-        STATUS = "Load a cabmap, then refresh."
+        STATUS = datasets.why_empty(datasets.PLACES) or "Load a cabmap, then refresh."
         return
 
     rows = [{name: table.cell(index, name) for name in table.names} for index in matched]
