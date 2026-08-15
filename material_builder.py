@@ -45,6 +45,42 @@ def _material_content_digest(doc):
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+_ORPHAN_FRAME_LABEL = "Unclaimed shader: {0}"
+
+
+def _orphan_textures(builder, nt, props, claimed, origin=(-1100, 400)):
+    """Put EVERY texture the material carries that nothing above claimed into the
+    graph as an unconnected image node, inside a frame labelled with the shader.
+
+    A shader's property names are whatever its author typed. The curated lists and
+    hints above catch the conventional ones, and cannot catch the rest: there is no
+    rule that finds ``_Create_jm_main_skin_head``. Dropping those silently leaves a
+    material that looks fully built while most of its content is missing and the
+    only clue -- the shader's name -- is a console line long since scrolled away.
+
+    So they land as islands: the frame says which shader this was, each node is
+    labelled with the property name the game gave it, and one look tells you what
+    the material actually has and what to wire it into. Nothing is connected,
+    because guessing a connection is how a normal map ends up in Base Color."""
+    # The frame goes in even when nothing is left over: an unclaimed material's
+    # shader name is the one thing worth knowing about it, and a console line is
+    # not somewhere you can look a week later.
+    frame = nt.nodes.new("NodeFrame")
+    frame.label = _ORPHAN_FRAME_LABEL.format(_shader_identity(builder, props))
+    frame.shrink = True
+    left = [(name, guid) for name, guid in sorted(props.textures.items())
+            if guid and name not in claimed]
+    for index, (name, guid) in enumerate(left):
+        image = builder._load_image(guid)
+        if image is None:
+            continue
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        node.label = name
+        node.parent = frame
+        node.location = (origin[0], origin[1] - index * 300)
+
+
 def _shader_identity(builder, props):
     """What a report calls this material's shader: its resolved name, else the
     raw reference -- never a guess."""
@@ -619,8 +655,12 @@ class MaterialBuilder:
         # neutral white tint adds no node.
         tint = props.find_color(unity_material.BASE_COLOR_FACTORS)
         base_node = None
+        # Every slot this build understood, so the ones it did not can still be put
+        # on the sheet at the end (see _orphan_textures).
+        claimed_slots = set()
         base_name, base_guid = props.find_texture(
             unity_material.BASE_COLOR_NAMES, unity_material.GENERIC_BASE_COLOR_HINTS)
+        claimed_slots.add(base_name)
         if base_guid:
             img = self._load_image(base_guid)
             if img:
@@ -667,6 +707,7 @@ class MaterialBuilder:
         # DXT5nm path below would decode it completely wrong (different channel
         # layout, different hemisphere-reconstruction order).
         _sname, split_guid = props.find_texture(unity_material.SPLIT_NORMAL_NAMES)
+        claimed_slots.add(_sname)
         if split_guid:
             img = self._load_image(split_guid, non_color=True)
             if img:
@@ -675,6 +716,7 @@ class MaterialBuilder:
         else:
             _nname, normal_guid = props.find_texture(
                 unity_material.NORMAL_NAMES, unity_material.GENERIC_NORMAL_HINTS)
+            claimed_slots.add(_nname)
             if normal_guid:
                 img = self._load_image(normal_guid, non_color=True)
                 if img:
@@ -692,6 +734,7 @@ class MaterialBuilder:
         # MetallicGlossMap; the ground-truthed channel layout of each is
         # documented on material.MRO_NAMES. No generic fallback for this slot.
         _mroname, mro_guid = props.find_texture(unity_material.MRO_NAMES)
+        claimed_slots.add(_mroname)
         _mgname, mg_guid = (None, None)
         if mro_guid:
             img = self._load_image(mro_guid, non_color=True)
@@ -699,6 +742,7 @@ class MaterialBuilder:
                 _wire_packed_mro(nt, bsdf, img, (-400, -420))
         else:
             _mgname, mg_guid = props.find_texture(unity_material.METALLIC_GLOSS_NAMES)
+            claimed_slots.add(_mgname)
             if mg_guid:
                 img = self._load_image(mg_guid, non_color=True)
                 if img:
@@ -719,6 +763,7 @@ class MaterialBuilder:
         # the multiply made every such material glow at full map brightness).
         _ename, emis_guid = props.find_texture(
             unity_material.EMISSION_NAMES, unity_material.GENERIC_EMISSION_HINTS)
+        claimed_slots.add(_ename)
         if emis_guid:
             img = self._load_image(emis_guid)
             if img and "Emission Color" in bsdf.inputs:
@@ -742,4 +787,5 @@ class MaterialBuilder:
                 nt.links.new(emission_socket, bsdf.inputs["Emission Color"])
                 bsdf.inputs["Emission Strength"].default_value = 1.0
 
+        _orphan_textures(self, nt, props, claimed_slots)
         return mat
