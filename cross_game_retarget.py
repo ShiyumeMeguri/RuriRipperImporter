@@ -118,10 +118,10 @@ _AvatarScore = collections.namedtuple(
 _SOURCE_AVATAR_CACHE = {}
 
 
-def _candidate_avatar_cabs(session_game):
-    """Every CAB in the source game's loaded cabmap that carries an Avatar, cheapest
+def _candidate_avatar_cabs(session_key):
+    """Every CAB in the source install's loaded cabmap that carries an Avatar, cheapest
     (fewest cabmap dependencies) first -- the search order for the source rig."""
-    session = cabmap_state.session_for(session_game)
+    session = cabmap_state.session_for(session_key)
     rows = session.ROWS
     avatar_id = class_registry.id_for_name("Avatar")
     if avatar_id is None:
@@ -142,7 +142,7 @@ def _avatar_documents(unity_file):
             yield document
 
 
-def score_source_avatars(session_game, clip_crcs, stop_at_full=True):
+def score_source_avatars(session_key, clip_crcs, stop_at_full=True):
     """Rank the source game's Avatar CABs by how many of the clips' binding CRCs each
     avatar's ``m_TOS`` covers -- the measured answer to "which rig were these clips
     authored on", with no name guessing. Cheapest candidates are imported first and a
@@ -151,8 +151,8 @@ def score_source_avatars(session_game, clip_crcs, stop_at_full=True):
     bridge = cabmap_state.BRIDGE
     if bridge is None:
         raise CrossGameRetargetError("No cabmap bridge session for the source game.")
-    candidates, avatar_id = _candidate_avatar_cabs(session_game)
-    bridge.use_game(session_game)
+    candidates, avatar_id = _candidate_avatar_cabs(session_key)
+    bridge.use_session(session_key)
     want = len(clip_crcs)
     ranked = []
     for dependency_count, cab in candidates:
@@ -182,11 +182,11 @@ def _rank_key(item):
     return (-item.score, item.dependency_count, -item.tos_size, item.name)
 
 
-def _load_source_avatar_file(bridge, session_game, cab, avatar_name):
+def _load_source_avatar_file(bridge, session_key, cab, avatar_name):
     """The exported Avatar UnityFile named ``avatar_name`` in ``cab`` -- matched by m_Name,
     never by guid: AssetRipper mints a fresh guid on every export, so the guid a scoring pass
     saw is meaningless in a later one, while the avatar's own name is stable."""
-    bridge.use_game(session_game)
+    bridge.use_session(session_key)
     avatar_id = class_registry.id_for_name("Avatar")
     assets = bridge.import_cabs([cab], export_class_ids=[avatar_id])[0]
     cab_db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid)
@@ -200,26 +200,26 @@ def _load_source_avatar_file(bridge, session_game, cab, avatar_name):
     return None
 
 
-def _resolve_source_avatar(session_game, clip_cab, clip_crcs):
+def _resolve_source_avatar(session_key, clip_cab, clip_crcs):
     """The Avatar UnityFile the clips were authored on, plus its _AvatarScore. Cached per
-    (game, clip CAB) so a second clip from the same pack skips the whole scan."""
+    (install, clip CAB) so a second clip from the same pack skips the whole scan."""
     bridge = cabmap_state.BRIDGE
     if bridge is None:
         raise CrossGameRetargetError("No cabmap bridge session for the source game.")
-    key = (session_game, clip_cab)
+    key = (session_key, clip_cab)
     cached = _SOURCE_AVATAR_CACHE.get(key)
     if cached is not None:
-        unity_file = _load_source_avatar_file(bridge, session_game, cached.cab, cached.name)
+        unity_file = _load_source_avatar_file(bridge, session_key, cached.cab, cached.name)
         if unity_file is not None:
             return unity_file, cached
-    ranked = score_source_avatars(session_game, clip_crcs)
+    ranked = score_source_avatars(session_key, clip_crcs)
     if not ranked or ranked[0].score == 0:
         raise CrossGameRetargetError(
             "No {0} avatar's skeleton covers the selected clip's bindings -- there is nothing "
-            "to retarget from.".format(session_game))
+            "to retarget from.".format(session_key))
     best = ranked[0]
     _SOURCE_AVATAR_CACHE[key] = best
-    unity_file = _load_source_avatar_file(bridge, session_game, best.cab, best.name)
+    unity_file = _load_source_avatar_file(bridge, session_key, best.cab, best.name)
     if unity_file is None:
         raise CrossGameRetargetError("The chosen source avatar CAB could not be re-read.")
     return unity_file, best
@@ -281,7 +281,7 @@ def _missing_table_prompt(api, source_game, dest_game, source_arm, dest_arm):
              src_cfg=source_config, dst_cfg=dest_config)
 
 
-def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, options,
                         display_names=None, activate=False):
     """Import ``clip_guids`` (already resolved into ``db``, a source-game closure) straight
     onto ``dest_arm`` -- a rig stamped with a DIFFERENT game -- without importing the source
@@ -297,6 +297,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
             "retarget maths.")
     core, _presets, api = addon
     dest_game = armature_builder.read_game(dest_arm)
+    source_game = cabmap_state.game_of(session_key)
 
     clip_crcs = set()
     for guid in clip_guids:
@@ -310,14 +311,14 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
     if not clip_crcs:
         raise CrossGameRetargetError("The selected clip(s) carry no transform bindings to retarget.")
 
-    avatar_file, source = _resolve_source_avatar(session_game, clip_cab, clip_crcs)
+    avatar_file, source = _resolve_source_avatar(session_key, clip_cab, clip_crcs)
 
     warnings = []
     products = []
     baked_actions = []
     temp_arm = armature_builder.build_armature_from_avatar(
         context, avatar_file, name="{0}_xg_source".format(source.name))
-    armature_builder.stamp_game(temp_arm, session_game)
+    armature_builder.stamp_game(temp_arm, source_game)
     try:
         temp_maps = prefab_importer.maps_from_stamped_armature(temp_arm)
         if temp_maps is None:
@@ -331,10 +332,10 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
         if not baked_actions:
             raise CrossGameRetargetError("No source action baked from the selected clip(s).")
 
-        pairs, _table_label, _flipped = find_table(session_game, dest_game)
+        pairs, _table_label, _flipped = find_table(source_game, dest_game)
         if pairs is None:
             raise CrossGameRetargetError(
-                _missing_table_prompt(api, session_game, dest_game, temp_arm, dest_arm))
+                _missing_table_prompt(api, source_game, dest_game, temp_arm, dest_arm))
 
         results, errors = api.retarget_actions(
             temp_arm, dest_arm, pairs, {"suffix": "_" + dest_game.lower()}, baked_actions)
@@ -344,7 +345,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
         if not products:
             raise CrossGameRetargetError(
                 "Nothing retargeted from {0} to {1} -- the bone table matched no shared bone.".format(
-                    session_game, dest_game))
+                    source_game, dest_game))
         if activate or len(clip_guids) == 1 or not _has_action(dest_arm):
             core.assign_action(dest_arm, products[0])
     finally:
@@ -352,7 +353,7 @@ def retarget_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_ar
     return products, warnings
 
 
-def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, maps, options,
+def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, maps, options,
                     display_names=None, activate=False):
     """THE animation-loading entry point. Every panel calls this and nothing else.
 
@@ -373,9 +374,10 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
     Rides both branches too, so which one it is never changes what the user sees.
     """
     dest_game = armature_builder.read_game(dest_arm)
-    if session_game and dest_game and dest_game != session_game:
+    source_game = cabmap_state.game_of(session_key)
+    if source_game and dest_game and dest_game != source_game:
         products, warnings = retarget_clips_onto(
-            context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+            context, session_key, clip_cab, clip_guids, db, dest_arm, options,
             display_names, activate)
         return len(products), warnings
     if maps is None:
@@ -395,12 +397,12 @@ def load_clips_onto(context, session_game, clip_cab, clip_guids, db, dest_arm, m
     if checked and ratio < 0.5:
         warnings.insert(0, "Only {0:.0%} of curve paths match armature '{1}' -- "
                            "imported anyway.".format(ratio, dest_arm.name))
-    warnings.extend(_retarget_faces(context, session_game, clip_cab, clip_guids, db,
+    warnings.extend(_retarget_faces(context, session_key, clip_cab, clip_guids, db,
                                     dest_arm, options, actions))
     return built, warnings
 
 
-def _retarget_faces(context, session_game, clip_cab, clip_guids, db, dest_arm, options,
+def _retarget_faces(context, session_key, clip_cab, clip_guids, db, dest_arm, options,
                     actions):
     """Restate each clip's baked facial performance on this rig, when the user asked
     for it and the clip's game states what a face IS.
@@ -423,13 +425,14 @@ def _retarget_faces(context, session_game, clip_cab, clip_guids, db, dest_arm, o
     """
     if not options.get("retarget_face"):
         return []
-    provider = Game.face_retarget_of(session_game or armature_builder.read_game(dest_arm))
+    provider = Game.face_retarget_of(cabmap_state.game_of(session_key)
+                                     or armature_builder.read_game(dest_arm))
     if provider is None:
         return []
     reports = []
     for guid in clip_guids:
         try:
-            clip = source_anchored_clip(session_game, clip_cab, guid, db)
+            clip = source_anchored_clip(session_key, clip_cab, guid, db)
         except Exception as exc:
             reports.append("Face retarget skipped for one clip: {0}".format(exc))
             continue
@@ -447,7 +450,7 @@ def _retarget_faces(context, session_game, clip_cab, clip_guids, db, dest_arm, o
     return reports
 
 
-def source_anchored_clip(session_game, clip_cab, guid, db):
+def source_anchored_clip(session_key, clip_cab, guid, db):
     """The clip with its curves anchored to the rig it was AUTHORED on, not to the
     one it is being played on.
 
@@ -478,7 +481,7 @@ def source_anchored_clip(session_game, clip_cab, guid, db):
     if not crcs:
         return clip
 
-    unity_file, score = _resolve_source_avatar(session_game, clip_cab or guid, crcs)
+    unity_file, score = _resolve_source_avatar(session_key, clip_cab or guid, crcs)
     document = unity_file.first("Avatar") if unity_file is not None else None
     if document is None:
         raise CrossGameRetargetError(

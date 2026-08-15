@@ -13,21 +13,22 @@ underscore, and a module's ``game_name`` is that same ``GameType`` member. A
 module's tabs are therefore visible exactly while one of its game's hooks is
 enabled -- every version of it, with no per-version list to maintain.
 
-A hook is not the only way to name a game. A module may also declare
+A hook is not the only way to name a game. A module also declares
 ``project_names``: the identities the BUILD itself carries -- its Unity
 ``productName``/``companyName``, read off the install by
 ``RuriRipperPyBridge.unity.build_identity``. Pointing the panel at an install IS
-saying which game it is, so that join needs no hook ticked to work.
+saying which game it is, so that join is what actually selects a game, and it
+needs no hook ticked to work.
 
-SEVERAL games can be enabled at once. Each ticked game hook enables that game;
-the panel keeps a game root, a cabmap and a browser session PER game (see
-``cabmap_state``) and lets the user pick which one the browser is currently on.
-The upstream still decodes ONE game at a time -- game hooks are mutually exclusive
-there (they patch the same methods with different layouts, see
-``RuriHook.ApplyHooks``) -- so switching the current game re-selects the decoder
-(``pythonnet_bridge.use_game``); enabling a game is not the same as decoding it. A
-ticked hook is the stronger statement of what a game is; the build's own identity
-only speaks when no game hook is ticked.
+A BROWSER TAB IS AN INSTALL, NOT A GAME. The panel keeps a game root, a cabmap
+and a browser session per install key (the product name the build carries -- see
+``cabmap_state.GameSession``) and lets the user pick which one the browser is
+currently on; several can be open at once, including two copies of one title. A
+tab's ``game_name`` is what THIS registry answers about its folder, and that is
+what selects its tabs, its face system and its retarget tables. The upstream
+still decodes ONE game at a time -- game hooks are mutually exclusive there (they
+patch the same methods with different layouts, see ``RuriHook.ApplyHooks``) -- so
+switching tabs re-selects the decoder (``pythonnet_bridge.use_session``).
 """
 
 from __future__ import annotations
@@ -148,25 +149,6 @@ def tab_by_key(key):
     return next((tab for tab in all_tabs() if tab.key == key), None)
 
 
-def active_modules(hook_ids, project_names=()):
-    """Every game this session has enabled -- ALL of them, not one.
-
-    A ticked game hook enables that game, and several can be ticked at once: the
-    panel keeps a session and a cabmap PER game and lets the user switch which
-    one's cabmap the browser is on. When no game hook is ticked, the build's own
-    identity (project_names) speaks instead -- the fallback for an install with no
-    upstream hook. The upstream still decodes one game at a time (game hooks are
-    mutually exclusive there); enabling a game is not the same as decoding it, and
-    switching the current game re-selects the decoder (pythonnet_bridge.use_game)."""
-    enabled = {game_of(hook_id).lower() for hook_id in hook_ids}
-    hooked = [game for game in _MODULES if game.game_name.lower() in enabled]
-    if hooked:
-        return hooked
-
-    identities = {str(name).lower() for name in project_names}
-    return [game for game in _MODULES if game.project_names & identities]
-
-
 def face_retarget_of(game_name):
     """The facial restatement ONE game contributes, or None. What the clip-loading
     path asks before it decides whether a face can travel between characters -- the
@@ -178,9 +160,9 @@ def face_retarget_of(game_name):
 
 
 def tabs_of(game_name):
-    """The tabs ONE game contributes. Several games are enabled at once now, each
-    with its own browser tab, so a panel draws the tabs of the game it is currently
-    on -- never the union, which would show two games' content tabs side by side."""
+    """The tabs ONE game contributes. Several installs are open at once, each its own
+    browser tab, so a panel draws the tabs of the game the CURRENT tab's install is
+    -- never the union, which would show two games' content tabs side by side."""
     for game in _MODULES:
         if game.game_name == game_name:
             return list(game.tabs)

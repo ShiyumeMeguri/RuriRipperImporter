@@ -639,7 +639,7 @@ def _import_rows(operator, context, rows, armature):
                          for key, state_name in clip_keys.items() if key in guid_by_key}
         try:
             built, warnings = cross_game_retarget.load_clips_onto(
-                context, cabmap_state.active_game(), cabs[0], wanted, db, armature,
+                context, cabmap_state.active_key(), cabs[0], wanted, db, armature,
                 None, options, display_names, activate=True)
         except cross_game_retarget.CrossGameRetargetError as exc:
             operator.report({"ERROR"}, str(exc))
