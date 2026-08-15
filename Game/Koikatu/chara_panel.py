@@ -268,15 +268,12 @@ def _grouped_pairs(state, order, sides, group_of):
                 entry.label = str(row["name"])
                 entry.key = str(row["row"])
                 entry.detail = str(row["clip"])
-    for index_prop in ("male_index", "female_index"):
-        if getattr(state, index_prop) >= len(state.male_entries):
-            setattr(state, index_prop, 0)
+    if state.pair_index >= len(state.male_entries):
+        state.pair_index = 0
 
 
 def _on_anime_edit(self, context):
     _rebuild_anime(self)
-
-
 
 
 def _row_of_entry(entry):
@@ -298,9 +295,13 @@ def _selected_animation(state):
 
 def _selected_side(state, side):
     """The catalog row selected in one of the paired lists, or None -- a header
-    or a placeholder (the partner this position lacks) selects nothing."""
+    or a placeholder (the partner this position lacks) selects nothing.
+
+    Both lists share ONE index: an H act is one animation per partner and the
+    two collections are index-aligned, so the row chosen on either side IS the
+    partner of the row shown on the other."""
     entries = state.male_entries if side == "male" else state.female_entries
-    index = state.male_index if side == "male" else state.female_index
+    index = state.pair_index
     if not 0 <= index < len(entries):
         return None
     entry = entries[index]
@@ -363,9 +364,8 @@ class RURI_PG_kk_anime(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     entries: CollectionProperty(type=RURI_PG_kk_entry)
     active_index: IntProperty()
     male_entries: CollectionProperty(type=RURI_PG_kk_entry)
-    male_index: IntProperty()
     female_entries: CollectionProperty(type=RURI_PG_kk_entry)
-    female_index: IntProperty()
+    pair_index: IntProperty()
 
 
 class RURI_UL_kk_list(bpy.types.UIList):
@@ -833,14 +833,14 @@ def _draw_anime_normal(layout, anime):
 
 def _draw_anime_sex(layout, anime):
     split = layout.split(factor=0.5)
-    for side, title, entries_prop, index_prop in (
-            ("male", "Male", "male_entries", "male_index"),
-            ("female", "Female", "female_entries", "female_index")):
+    for side, title, entries_prop in (
+            ("male", "Male", "male_entries"),
+            ("female", "Female", "female_entries")):
         row = _selected_side(anime, side)
         column = split.column(align=True)
         column.label(text=title, icon="OUTLINER_OB_ARMATURE")
         column.template_list(RURI_UL_kk_list.bl_idname, "kk_h_" + side,
-                             anime, entries_prop, anime, index_prop, rows=12)
+                             anime, entries_prop, anime, "pair_index", rows=12)
         caption = column.box()
         caption.enabled = row is not None
         caption.label(text=(str(row["name"]) if row is not None else "(nothing selected)"))
