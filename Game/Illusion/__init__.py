@@ -76,9 +76,10 @@ def _title(game_name, label, project_names, tabs):
     )
 
 
-# The titles this family covers, and the tabs each one HAS. The two newer titles
-# ship no studio, so they state a Character tab and no Scene tab rather than a Scene
-# tab that would draw a list their hook publishes nothing for.
+# The titles this family covers. All four ship both a place list and a cast, each
+# through whichever reader its own generation needs (the hook registers that per
+# title), so all four state both tabs. A list a title does not ship comes back empty
+# from its own section rather than costing the whole tab.
 GAME_MODULE = [
     _title("Koikatu", "Koikatu",
            ("Koikatu", "KoikatuVR", "illusion__Koikatu", "illusion_Koikatu"),
@@ -87,7 +88,7 @@ GAME_MODULE = [
            ("KoikatsuSunshine", "KoikatsuSunshine_VR",
             "illusion__KoikatsuSunshine", "illusion_KoikatsuSunshine"),
            (_SCENE_TAB, _CHARACTER_TAB)),
-    _title("HoneyCome", "HoneyCome", ("HoneyCome",), (_CHARACTER_TAB,)),
+    _title("HoneyCome", "HoneyCome", ("HoneyCome",), (_SCENE_TAB, _CHARACTER_TAB)),
     _title("SamabakeScramble", "Summer Vacation! Scramble",
-           ("SamabakeScramble",), (_CHARACTER_TAB,)),
+           ("SamabakeScramble",), (_SCENE_TAB, _CHARACTER_TAB)),
 ]
