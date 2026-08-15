@@ -21,8 +21,9 @@ from __future__ import annotations
 import bpy
 
 try:
-    from . import material_builder
+    from . import derived_state, material_builder
 except ImportError:
+    import derived_state
     import material_builder
 
 
@@ -49,7 +50,8 @@ class RURI_OT_post_install(bpy.types.Operator):
         return bool(material_builder.POST_STAGES)
 
     def execute(self, context):
-        material_builder.apply_post_stages(context.scene)
+        # 明说要装就整条重建(参数回出厂值);自动收尾那条路是「装过就不动」。
+        material_builder.apply_post_stages(context.scene, force=True)
         self.report({"INFO"}, "Post chain installed on the compositor.")
         return {"FINISHED"}
 
@@ -175,21 +177,22 @@ class RURI_OT_main_light_clear(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class RURI_OT_main_light_refresh(bpy.types.Operator):
-    bl_idname = "ruri.main_light_refresh"
-    bl_label = "Re-answer Lighting"
-    bl_description = ("Force-rebuild how every Ruri material reads the scene's lights and world. "
-                      "Adding/removing lights re-answers automatically; this button is only for "
-                      "edits the watcher cannot see, e.g. rewiring the world's own node tree")
+class RURI_OT_derived_rebuild(bpy.types.Operator):
+    bl_idname = "ruri.derived_rebuild"
+    bl_label = "Rebuild Derived State"
+    bl_description = ("Force-rebuild everything this add-on derives from the scene: the vertex "
+                      "stack (fur shells, outlines, face basis), how every Ruri material reads "
+                      "the lights and world, the light tables and the post chain. Imports, light "
+                      "and camera edits already do this by themselves; this button is for edits "
+                      "nothing can watch, e.g. rewiring the world's own node tree")
     bl_options = {"REGISTER", "UNDO"}
 
-    @classmethod
-    def poll(cls, context):
-        return bool(material_builder.CAPABILITY_REWIRES)
-
     def execute(self, context):
-        count = material_builder.rewire_capabilities()
-        self.report({"INFO"}, "{0} material(s) re-answered.".format(count))
+        derived_state.rebuild_all()
+        if derived_state.LAST_ERROR:
+            self.report({"ERROR"}, "派生态重建失败: " + derived_state.LAST_ERROR)
+            return {"FINISHED"}
+        self.report({"INFO"}, "Derived state rebuilt.")
         return {"FINISHED"}
 
 
@@ -208,7 +211,13 @@ def _draw_main_light(layout, context):
     row = box.row()
     row.label(text="Scene default")
     row.label(text=sun or fallback, icon="LIGHT_SUN" if sun else "CAMERA_DATA")
-    box.operator(RURI_OT_main_light_refresh.bl_idname, icon="FILE_REFRESH")
+    box.operator(RURI_OT_derived_rebuild.bl_idname, icon="FILE_REFRESH")
+    # 派生态失败在画面上与「这个着色器本来就长这样」无法区分,所以它得一直挂在这里
+    # 喊,而不是只在控制台滚一行过去。
+    if derived_state.LAST_ERROR:
+        alert = box.row()
+        alert.alert = True
+        alert.label(text=derived_state.LAST_ERROR, icon="ERROR")
 
     mats = _ruri_materials(context.selected_objects)
     if not mats:
@@ -295,18 +304,15 @@ _CLASSES = (
     RURI_OT_post_reset,
     RURI_OT_main_light_set,
     RURI_OT_main_light_clear,
-    RURI_OT_main_light_refresh,
+    RURI_OT_derived_rebuild,
 )
 
 
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
-    # 灯集合自动重接:加/删/改类型/换世界即生效,与原生灯同手感(见 material_builder 注)。
-    material_builder.register_light_watch()
 
 
 def unregister():
-    material_builder.unregister_light_watch()
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

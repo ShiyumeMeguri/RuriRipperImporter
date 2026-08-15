@@ -6,9 +6,10 @@ from __future__ import annotations
 import numpy as np
 
 try:
-    from . import coordinate
+    from . import coordinate, derived_state
 except ImportError:
     import coordinate
+    import derived_state
 
 import bpy
 
@@ -113,6 +114,9 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
     if decoded.blendshapes and options.get("import_blendshapes", True):
         _apply_blendshapes(obj, decoded)
 
+    # 造完报一声。这里是**每一条**导入路径造网格的必经之处,所以派生态(顶点腿、
+    # 后处理、兑现节点)不需要任何入口记得手动收尾 —— 见 derived_state 的开篇。
+    derived_state.announce(obj)
     return obj
 
 

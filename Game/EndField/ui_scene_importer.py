@@ -26,7 +26,7 @@ import bpy
 import numpy
 from mathutils import Vector
 
-from ... import coordinate, material_builder, prefab_importer
+from ... import coordinate, prefab_importer
 from . import datasets, ui_scene_state
 
 STAGE_COLLECTION = "Endfield UI Stage"
@@ -187,16 +187,6 @@ def _world(context, ambient, scale):
     if background is not None:
         background.inputs[0].default_value = (channels[0], channels[1], channels[2], 1.0)
     return world
-
-
-def apply_post(context):
-    """Put the game's own post-processing onto the scene's compositor.
-
-    It belongs there and not in the materials: the game runs its post chain once
-    on the composited frame, so a material-side copy would run again for every
-    overlapping transparent surface. The stage itself is a generated module that
-    registered its own installer -- nothing here knows what the chain does."""
-    return material_builder.apply_post_stages(context.scene)
 
 
 def apply_character_params(char_volume_data, materials=None):

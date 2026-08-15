@@ -58,6 +58,16 @@ def _shader_identity(builder, props):
     return "guid {0} fileID {1}".format(guid, ref.get("fileID"))
 
 
+def _announce(*datablocks):
+    """告诉派生态调度器这些数据块刚进场。函数内导入:derived_state 反过来读本模块的
+    注册表,模块级互相导入会让先加载的那个拿到半初始化的对方。"""
+    try:
+        from . import derived_state
+    except ImportError:  # standalone (non-package) testing
+        import derived_state
+    derived_state.announce(*datablocks)
+
+
 def register_graph_provider(provider):
     if provider not in GRAPH_PROVIDERS:
         GRAPH_PROVIDERS.append(provider)
@@ -71,8 +81,11 @@ def unregister_graph_provider(provider):
 # Vertex stages, same contract as GRAPH_PROVIDERS: each generated shader module
 # registers its own ``apply_vertex_stage(objects=None, camera=None) -> int`` on
 # register() and removes it on unregister(). Every stage only touches materials
-# and modifiers it owns, so running all of them is order-independent. Consumers
-# call apply_vertex_stages() -- never a module by name.
+# and modifiers it owns, so running all of them is order-independent.
+#
+# 唯一的调用方是 derived_state 的调度器 —— 导入路径与面板一律不碰这个函数,谁造了
+# 网格/材质谁 announce 一声就够了(见 derived_state 开篇:漏调一次就是画面上毫无
+# 痕迹的静默缺失,那不该是每个入口自己记得的事)。
 VERTEX_STAGES = []
 
 
@@ -149,112 +162,9 @@ def refresh_light_tables():
     return sum(refresh() for refresh in LIGHT_TABLE_REFRESHERS)
 
 
-# ---- Following the scene the way a native light does ----
-# A Blender light takes effect the moment it exists, and keeps up as you drag
-# it. A Ruri material reads lights as assembled data, so it has to be told --
-# by the same depsgraph channel drivers and constraints already ride on. No
-# timer, no polling, no button.
-#
-#   structure changed (added / removed / retyped / hidden / world swapped)
-#       -> rewire: the fulfilment branch itself may differ
-#   data changed (moved / recoloured / energy / cone)
-#       -> rewrite the table pixels, touching no node at all
-#
-# Cost discipline: the depsgraph ticks on every interaction, so gate first on
-# "did this batch touch a light / world at all" (a few isinstance checks), and
-# only then build the signatures. Re-entrancy (our own edit triggers the next
-# tick) dies because the signature is stored BEFORE acting: the echo compares
-# equal and returns.
-
-_light_structure = None
-_light_data = None
-
-
-def _structure_of(scene):
-    sig = []
-    for obj in scene.objects:
-        if obj.type != 'LIGHT':
-            continue
-        try:
-            visible = obj.visible_get()
-        except Exception:
-            visible = not obj.hide_viewport
-        sig.append((obj.name, obj.data.type, visible))
-    sig.sort()
-    return (tuple(sig), scene.world.name_full if scene.world is not None else None)
-
-
-def _data_of(scene):
-    sig = []
-    for obj in scene.objects:
-        if obj.type != 'LIGHT':
-            continue
-        light = obj.data
-        sig.append((
-            obj.name,
-            tuple(round(c, 5) for row in obj.matrix_world for c in row),
-            tuple(round(c, 5) for c in light.color),
-            round(light.energy, 5),
-            round(getattr(light, 'spot_size', 0.0), 5),
-            round(getattr(light, 'spot_blend', 0.0), 5),
-        ))
-    sig.sort()
-    return tuple(sig)
-
-
-def _lights_maybe_touched(depsgraph):
-    for update in depsgraph.updates:
-        block = update.id
-        if isinstance(block, (bpy.types.Light, bpy.types.World, bpy.types.Scene, bpy.types.Collection)):
-            return True
-        if isinstance(block, bpy.types.Object) and getattr(block, 'type', '') == 'LIGHT':
-            return True
-    return False
-
-
-@bpy.app.handlers.persistent
-def _on_depsgraph_update(scene, depsgraph):
-    global _light_structure, _light_data
-    if not CAPABILITY_REWIRES or not _lights_maybe_touched(depsgraph):
-        return
-    structure = _structure_of(scene)
-    data = _data_of(scene)
-    if structure != _light_structure:
-        _light_structure, _light_data = structure, data
-        count = rewire_capabilities()
-        if count:
-            print("[ruri-cap] light set changed -> re-answered {0} material(s)".format(count), flush=True)
-        return
-    if data != _light_data:
-        _light_data = data
-        refresh_light_tables()
-
-
-@bpy.app.handlers.persistent
-def _on_load_post(_path):
-    # Prime both signatures on load WITHOUT acting: a saved file was wired
-    # against the lights it was saved with, so rebuilding on every open is
-    # churn, not correctness.
-    global _light_structure, _light_data
-    scene = bpy.context.scene
-    _light_structure = _structure_of(scene) if scene is not None else None
-    _light_data = _data_of(scene) if scene is not None else None
-
-
-def register_light_watch():
-    from bpy.app import handlers
-    if _on_depsgraph_update not in handlers.depsgraph_update_post:
-        handlers.depsgraph_update_post.append(_on_depsgraph_update)
-    if _on_load_post not in handlers.load_post:
-        handlers.load_post.append(_on_load_post)
-
-
-def unregister_light_watch():
-    from bpy.app import handlers
-    if _on_depsgraph_update in handlers.depsgraph_update_post:
-        handlers.depsgraph_update_post.remove(_on_depsgraph_update)
-    if _on_load_post in handlers.load_post:
-        handlers.load_post.remove(_on_load_post)
+# 灯变了谁去重接 —— 不在这里。本模块只拥有「有哪些派生态能力」(上面四张注册表);
+# 「什么时候跑、跑在哪个范围上」是 derived_state 的唯一职责,灯/相机的依赖图监视器
+# 也在那里,与导入产物的收尾走同一条去抖落地路径。
 
 
 # Post stages, same contract again, except that a stage is the generated MODULE
@@ -277,14 +187,19 @@ def unregister_post_stage(stage):
         POST_STAGES.remove(stage)
 
 
-def apply_post_stages(scene):
+def apply_post_stages(scene, force=False):
     """Install every registered post stage onto a scene. More than one stage
     would mean two owners of one compositor tree, so that is reported rather
-    than silently letting the last one win."""
+    than silently letting the last one win.
+
+    装过的默认跳过。install() 是整棵合成器树重建,连带把 view transform 和 3D 视图的
+    合成器开关按出厂值写回去 —— 每次导入都重装一遍,等于用户在面板上调过的每一个旋钮
+    在下一次导入时无声归零。``force`` 是面板上「Install Post Chain」那种明说要重来的意思。"""
     if len(POST_STAGES) > 1:
         print("[material] !! {0} post stages registered; a scene has ONE compositor tree, "
               "the last installed wins".format(len(POST_STAGES)))
-    return [stage.install(scene) for stage in POST_STAGES]
+    return [stage.install(scene) for stage in POST_STAGES
+            if force or not stage.installed(scene)]
 
 
 def remove_post_stages(scene):
@@ -603,12 +518,15 @@ class MaterialBuilder:
         if doc is None:
             mat = bpy.data.materials.new("UnityMaterial")
             self._cache[guid] = mat
+            _announce(mat)
             return mat
         digest = _material_content_digest(doc)
         mat = self._content_cache.get(digest)
         if mat is None:
             mat = self._build(doc)
             self._content_cache[digest] = mat
+            # 新建的才报:两层缓存命中意味着这张材质早已在场,派生态也早已按它接过。
+            _announce(mat)
         self._cache[guid] = mat
         return mat
 

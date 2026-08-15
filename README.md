@@ -159,6 +159,9 @@ RuriRipperImporter/            ← 插件本体(装这个)
   coordinate.py hierarchy.py   ← 共用实现的 mathutils 边界(见下)
   armature_builder.py mesh_builder.py material_builder.py
   animation_builder.py prefab_importer.py
+  derived_state.py             ← 派生态调度器:顶点腿/兑现节点/灯表/后处理什么时候重建,
+                                 只在这里回答一次。导入路径只管造东西并 announce,
+                                 面板一行收尾都不写(漏一个入口 = 画面静默缺失)
   cabmap_panel.py              ← 微内核面板:hook / cabmap / 浏览 / 导入,零游戏知识
   Game/                        ← 按游戏解耦的 GUI(见上)
     __init__.py                ← 注册表:GameModule / GameTab + hook id → 游戏
