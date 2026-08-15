@@ -282,6 +282,41 @@ class G:
         x, y, z = self.sep(v)
         return self.vtrans(self.comb(x, z, y), 'OBJECT', 'WORLD', 'VECTOR')
 
+    def _rig_basis_cols(self):
+        """驱动骨骼相对绑定姿势的**增量旋转**三列(内核语义,已换轴),由顶点腿每帧写成点属性。
+        属性缺席(网格没骨架 / 没跑顶点腿)读到零向量 ⇒ 长度 0 ⇒ 就地补回单位阵三列,
+        于是 rig_basis 退化成恒等 = 与本桥不存在时逐位一致(禁静默黑脸)。"""
+        hit = self._cse.get(('rigbcols',))
+        if hit is not None:
+            return hit
+        raw = [self.attr(RIG_BASIS_ATTR + str(i)).outputs['Vector'] for i in range(3)]
+        absent = self.math('MAXIMUM', self.math('SUBTRACT', 1.0, self.vmath('LENGTH', raw[0])), 0.0)
+        unit = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        cols = [self.vmath('ADD', c, self.vmath('SCALE', e, s=absent)) for c, e in zip(raw, unit)]
+        self._cse[('rigbcols',)] = cols
+        return cols
+
+    def rig_basis(self, v):
+        """引擎每帧从角色骨骼注入的**世界基**(_FaceForward/_FaceRight 这类)的当下值。
+
+        为什么必须:材质里存的是**绑定姿势**的那一份(引擎运行时才按骨骼覆写,导出的 .mat
+        只剩静止值),而内核跑在对象空间 —— 骨骼一转,几何在对象空间里跟着转,这个常量却不转。
+        脸转到背面时 SDF 仍按静止朝向判明暗,整张脸压黑而皮肤照亮(SDF 与几何 NdotL 的分歧)。
+        真源语义 = 驱动骨骼当下的基 = **该骨骼相对绑定姿势的增量旋转** × 材质里的静止基,
+        故此处逐列线性组合(增量恒为纯旋转,静止时是单位阵)。"""
+        k = ('rigb', self._ck(v))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        cols = self._rig_basis_cols()
+        x, y, z = self.sep(v)
+        out = self.vmath('ADD',
+                         self.vmath('ADD', self.vmath('SCALE', cols[0], s=x),
+                                    self.vmath('SCALE', cols[1], s=y)),
+                         self.vmath('SCALE', cols[2], s=z))
+        self._cse[k] = out
+        return out
+
     ENV_PREFILTER_TAPS = (
         (0.0, 0.0, 1.0),
         (1.0, 0.0, 0.5), (-1.0, 0.0, 0.5), (0.0, 1.0, 0.5), (0.0, -1.0, 0.5),
@@ -915,6 +950,11 @@ class GV(G):
     def attr(self, name):
         raise RuntimeError('几何树无 ShaderNodeAttribute(命名属性由 wrapper 读)')
 
+    def rig_basis(self, v):
+        # 增量三列是顶点腿自己写出去的点属性,顶点腿再回头读就是自指。真要在顶点腿用骨骼基座,
+        # 得给克隆注入一个 per-角色的 ObjectInfo(材质克隆时才知道是哪个骨架)——现无消费者。
+        raise RuntimeError('顶点腿无骨骼基座桥(要用先给克隆注入 per-角色 ObjectInfo)')
+
     def env(self, name, direction, default, mip=None):
         raise RuntimeError('几何树无环境采样(顶点腿不该走到 IBL)')
 
@@ -1543,6 +1583,9 @@ VTX_TREE_PREFIX = 'Ruri Endfield Effect Vertex '
 OUTLINE_TEMPLATE = 'Ruri Endfield Effect Outline'
 CLONE_V_PREFIX = 'Ruri Endfield Effect V '
 CLONE_O_PREFIX = 'Ruri Endfield Effect O '
+RIG_BASIS_BONE = ''
+RIG_BASIS_ATTR = ''
+RIG_BASIS_PARTS = set()
 
 _BUILT = {}      # part -> 本会话在用的模板组(link 来的或现建的)
 _SHARED_READY = False
@@ -2203,8 +2246,21 @@ def _fill_uniform_sockets(node, floats, st, colors):
                 pass
 
 
+def _rig_basis_armature(obj):
+    """网格挂在哪个骨架上 —— Bone Info 节点要的就是骨架**对象**加骨名,
+    骨骼在不在是它自己的 Exists 口,这里不替它判。"""
+    if not RIG_BASIS_BONE:
+        return None
+    arm = next((m.object for m in obj.modifiers
+                if m.type == 'ARMATURE' and m.object is not None), None)
+    if arm is None and obj.parent is not None and obj.parent.type == 'ARMATURE':
+        arm = obj.parent
+    return arm
+
+
 def apply_vertex_stage(objects=None, camera=None):
-    """给 uber 材质网格装顶点腿 modifier:壳层位移(VERTEX_PARTS 的 part)+ 反壳描边。
+    """给 uber 材质网格装顶点腿 modifier:壳层位移(VERTEX_PARTS 的 part)+ 反壳描边
+    + 骨骼基座增量(RIG_BASIS_PARTS 的 part,逐帧由 depsgraph 自己算)。
     幂等:同名 modifier/树/克隆整体换血。相机基轴按当下快照 —— 相机动了重跑本函数。"""
     import mathutils
     scene = bpy.context.scene
@@ -2240,6 +2296,7 @@ def apply_vertex_stage(objects=None, camera=None):
                  if m is not None and m.get('ruri_uber_part') in KNOWN_PARTS
                  and not m.get('ruri_outline_clone')]   # 描边克隆继承 id props,不算 uber 槽
         vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in VERTEX_PARTS]
+        basis_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in RIG_BASIS_PARTS]
         def _outline_on(mat):
             # 真判据三连:①材质自禁的 pass 列表(disabledShaderPasses,唯一的
             # per-材质关描边真值 —— _OutlineWidth 只是历史键,证明不了在用);
@@ -2254,7 +2311,7 @@ def apply_vertex_stage(objects=None, camera=None):
         # 「相机动了重跑本函数」)。曾把 `cam is not None` 并进这个判据 —— 场景没设
         # 活动相机就一个描边对象都不建,而壳位移照装,静默得毫无痕迹。
         outline_slots = [(i, m) for i, m in slots if _outline_on(m)]
-        if not vert_slots and not outline_slots:
+        if not vert_slots and not outline_slots and not basis_slots:
             continue
         tree_name = VTX_TREE_PREFIX + obj.name
         old = bpy.data.node_groups.get(tree_name)
@@ -2397,6 +2454,49 @@ def apply_vertex_stage(objects=None, camera=None):
             mt.links.new(geo, jn.inputs[0])
             mt.links.new(sa.outputs['Geometry'], jn.inputs[0])
             geo = jn.outputs['Geometry']
+        # ③ 骨骼基座增量(RIG_BASIS_BONE 的增量旋转三列 → 点属性,材质树 g.rig_basis 读):
+        #    材质里的 _FaceForward/_FaceRight 是**绑定姿势**的静止值(引擎运行时才按头骨
+        #    每帧覆写,导出的 .mat 带不走),而内核跑在对象空间 —— 骨骼一转,几何在对象空间里
+        #    跟着转、这个常量不转,SDF 脸影就按静止朝向判明暗(转身 180° 整脸压黑、皮肤照亮)。
+        #    增量 = Pose × RestPose⁻¹,两个矩阵都由 Bone Info 现出(**节点直接读骨骼**,
+        #    不经空物体也不经 driver/handler);transform_space=RELATIVE 出的已是**本对象的
+        #    对象空间**,连对象自己的世界矩阵都是活的(快照下来就会在用户挪动网格后过期)。
+        #    再补一次 Y/Z 互换即内核的 Unity 语义;静止时 Pose == RestPose ⇒ 三列恒为单位阵,
+        #    画面与本桥不存在时一致。骨骼名/属性名全来自配方。
+        #    存放点在 Join 之后:描边虚拟面与本体同材质,漏掉它们那壳的脸影会各判各的。
+        if basis_slots:
+            arm = _rig_basis_armature(obj)
+            if arm is None:
+                print('[ruri-vertex] {0}: 没挂骨架,脸部基座留在绑定姿势值'.format(
+                    obj.name), flush=True)
+            else:
+                bone = nd('GeometryNodeBoneInfo')
+                bone.transform_space = 'RELATIVE'
+                bone.inputs['Armature'].default_value = arm
+                bone.inputs['Bone Name'].default_value = RIG_BASIS_BONE
+                rest_inv = nd('FunctionNodeInvertMatrix')
+                mt.links.new(bone.outputs['Rest Pose'], rest_inv.inputs['Matrix'])
+                delta = nd('FunctionNodeMatrixMultiply')
+                mt.links.new(bone.outputs['Pose'], delta.inputs[0])
+                mt.links.new(rest_inv.outputs['Matrix'], delta.inputs[1])
+                # 内核三根基轴按导入换轴取对象空间的 (x, z, y) —— 与 swap_yz 对称。
+                for idx, axis in enumerate(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))):
+                    td = nd('FunctionNodeTransformDirection')
+                    td.inputs['Direction'].default_value = axis
+                    mt.links.new(delta.outputs['Matrix'], td.inputs['Transform'])
+                    # 基是**方向**不是长度:骨架/骨骼带缩放时矩阵会把它拉长,归一化掐死。
+                    unit = nd('ShaderNodeVectorMath')
+                    unit.operation = 'NORMALIZE'
+                    mt.links.new(td.outputs['Direction'], unit.inputs[0])
+                    sa = nd('GeometryNodeStoreNamedAttribute')
+                    sa.data_type = 'FLOAT_VECTOR'
+                    sa.domain = 'POINT'
+                    sa.inputs['Name'].default_value = RIG_BASIS_ATTR + str(idx)
+                    # 骨架里没这根骨头 = 一个点都不写 ⇒ 属性恒零 ⇒ 材质端回退单位阵。
+                    mt.links.new(bone.outputs['Exists'], sa.inputs['Selection'])
+                    mt.links.new(geo, sa.inputs['Geometry'])
+                    mt.links.new(swap_yz(unit.outputs[0]), sa.inputs['Value'])
+                    geo = sa.outputs['Geometry']
         mt.links.new(geo, gout.inputs[0])
         mod = obj.modifiers.get(VTX_MODIFIER)
         if mod is None:
@@ -2411,8 +2511,8 @@ def apply_vertex_stage(objects=None, camera=None):
             except AttributeError:
                 pass
         done += 1
-        print('[ruri-vertex] {0}: shell x{1} outline x{2}'.format(
-            obj.name, len(vert_slots), len(outline_slots)), flush=True)
+        print('[ruri-vertex] {0}: shell x{1} outline x{2} basis x{3}'.format(
+            obj.name, len(vert_slots), len(outline_slots), len(basis_slots)), flush=True)
     return done
 
 

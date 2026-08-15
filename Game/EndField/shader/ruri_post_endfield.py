@@ -264,6 +264,41 @@ class G:
         x, y, z = self.sep(v)
         return self.vtrans(self.comb(x, z, y), 'OBJECT', 'WORLD', 'VECTOR')
 
+    def _rig_basis_cols(self):
+        """驱动骨骼相对绑定姿势的**增量旋转**三列(内核语义,已换轴),由顶点腿每帧写成点属性。
+        属性缺席(网格没骨架 / 没跑顶点腿)读到零向量 ⇒ 长度 0 ⇒ 就地补回单位阵三列,
+        于是 rig_basis 退化成恒等 = 与本桥不存在时逐位一致(禁静默黑脸)。"""
+        hit = self._cse.get(('rigbcols',))
+        if hit is not None:
+            return hit
+        raw = [self.attr(RIG_BASIS_ATTR + str(i)).outputs['Vector'] for i in range(3)]
+        absent = self.math('MAXIMUM', self.math('SUBTRACT', 1.0, self.vmath('LENGTH', raw[0])), 0.0)
+        unit = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        cols = [self.vmath('ADD', c, self.vmath('SCALE', e, s=absent)) for c, e in zip(raw, unit)]
+        self._cse[('rigbcols',)] = cols
+        return cols
+
+    def rig_basis(self, v):
+        """引擎每帧从角色骨骼注入的**世界基**(_FaceForward/_FaceRight 这类)的当下值。
+
+        为什么必须:材质里存的是**绑定姿势**的那一份(引擎运行时才按骨骼覆写,导出的 .mat
+        只剩静止值),而内核跑在对象空间 —— 骨骼一转,几何在对象空间里跟着转,这个常量却不转。
+        脸转到背面时 SDF 仍按静止朝向判明暗,整张脸压黑而皮肤照亮(SDF 与几何 NdotL 的分歧)。
+        真源语义 = 驱动骨骼当下的基 = **该骨骼相对绑定姿势的增量旋转** × 材质里的静止基,
+        故此处逐列线性组合(增量恒为纯旋转,静止时是单位阵)。"""
+        k = ('rigb', self._ck(v))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        cols = self._rig_basis_cols()
+        x, y, z = self.sep(v)
+        out = self.vmath('ADD',
+                         self.vmath('ADD', self.vmath('SCALE', cols[0], s=x),
+                                    self.vmath('SCALE', cols[1], s=y)),
+                         self.vmath('SCALE', cols[2], s=z))
+        self._cse[k] = out
+        return out
+
     ENV_PREFILTER_TAPS = (
         (0.0, 0.0, 1.0),
         (1.0, 0.0, 0.5), (-1.0, 0.0, 0.5), (0.0, 1.0, 0.5), (0.0, -1.0, 0.5),
@@ -896,6 +931,11 @@ class GV(G):
 
     def attr(self, name):
         raise RuntimeError('几何树无 ShaderNodeAttribute(命名属性由 wrapper 读)')
+
+    def rig_basis(self, v):
+        # 增量三列是顶点腿自己写出去的点属性,顶点腿再回头读就是自指。真要在顶点腿用骨骼基座,
+        # 得给克隆注入一个 per-角色的 ObjectInfo(材质克隆时才知道是哪个骨架)——现无消费者。
+        raise RuntimeError('顶点腿无骨骼基座桥(要用先给克隆注入 per-角色 ObjectInfo)')
 
     def env(self, name, direction, default, mip=None):
         raise RuntimeError('几何树无环境采样(顶点腿不该走到 IBL)')
