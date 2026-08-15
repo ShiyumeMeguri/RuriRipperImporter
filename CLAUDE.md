@@ -24,8 +24,19 @@ C# 侧是秒级且能并行。把逻辑放在 py 里等于给整条链装一个�
 
 `Game/*/shader/ruri_*.py` 全部由 `Ruri.RenderPipelines.Generator`
 (`E:\SpeedProject\AzureNihil\RuriTools\Ruri.RenderPipelines.Generator`,后端
-`Source/Ruri.CodeGen.Blender`)生成,`--codegen-only` 就地覆盖部署。**直接编辑下次生成就被冲掉。**
-改行为 → 改生成器 → 重生成。
+`Source/Ruri.CodeGen.Blender`)生成,配方的 `destination` 指向本目录 ⇒ 生成即就地部署。
+**直接编辑下次生成就被冲掉**;改行为 → 改生成器 → 重生成。
+
+```bash
+dotnet build Source/Ruri.App/Ruri.App.csproj
+dotnet run --project Source/Ruri.App/Ruri.App.csproj --no-build -- --codegen-only Recipes/Blender.json
+```
+`--codegen-only` **必须带配方**(单个 .json 或 `Recipes/` 全量);Blender 系共 5 个配方:
+`Blender / BlenderEffect / BlenderScene / BlenderShadowReceiver / BlenderPost`。
+
+材质参数面板**不在生成物里**:生成物只交出 `INTERFACE` 表与本栈的读写路径,注册进
+`material_builder.register_material_panel`;面板本体全场一个,在 `material_panel.py`,
+画的是选中网格所持有的那张材质。认领判据 = 建图时烙的 `mat['ruri_uber_stack']`。
 
 ## 🔴 3. 派生态收尾不许在导入路径里写
 
