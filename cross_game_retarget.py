@@ -1,65 +1,13 @@
-"""Cross-game animation retarget: play one game's animation on another game's rig.
-
-A humanoid clip already retargets by itself -- muscle values are avatar-relative, and the
-solve runs against whichever skeleton the clip is bound to (see prefab_importer.
-_solve_humanoid_curves). A GENERIC clip cannot: its curves carry per-bone local rotations
-in the SOURCE rig's own bone axes, so there is nothing avatar-shaped to re-decode. It needs
-a real retarget -- world-rotation transfer through both rigs' rest poses -- and one table
-saying which bone is which.
-
-That is exactly what the AnimationRetarget add-on already is, so this module adds no maths
-of its own -- and deliberately no second judgement of its own either. It contributes only
-what AnimationRetarget cannot know: WHICH RIG the clips were authored on. That answer is
-measured in two hops, neither of which reads a name, a folder or a game:
+"""Cross-game animation retarget: play any game's animation on any rig.
 
   clip 绑定 CRC ─(m_TOS 覆盖率)─> 源 Avatar ─(cabmap 反向依赖 + 根 Animator 身份)─> 宿主角色 prefab
 
-and the host is then built by the ordinary prefab import path -- the same builder a user's
-own character import runs. The tables are ordinary AnimationRetarget presets, so they stay
-editable in its own panel and nothing here is a second config format.
-
-🔴 骨架只允许有一个建造者
-------------------------
-重定向数学是过两副骨架的**静止姿势**做世界旋转传递的, 所以源骨架错一点, 结果就整个是
-错的, 而且是"忠实地错" —— 数学没毛病, 传的是错的东西。这条路上死过两次, 两次都是源:
-
-* 用 ``armature_builder.build_armature_from_avatar`` 从 Avatar 现搭源骨架 —— 实测同一个
-  角色 415 骨 vs 真导入的 454 骨, 共有的 414 根里 380 根静止矩阵不同, 上臂差 0.7466。
-  现场表现是跑步动画变成举手。Avatar 里那副骨架是给蒙皮用的绑定姿势, 不是泛型 clip 的
-  曲线所参照的那副;
-* 拿"用到这个角色的任意一个 prefab"当宿主 —— 过场/levelseq 里那份是**摆好位的实例**,
-  带着场景的姿态, 实测 595/595 根骨全变, 最大差 612。
-
-所以宿主必须是角色**自己的模型 prefab**, 且必须走 prefab 导入路径建。用户手动重定向之所以
-完美, 就是因为他手动导的正是这一份 —— 同一个数学、同一张表, 只是源是对的。
-
-🔴 这里不许再长出第二套判断
---------------------------
-这个模块反复被写坏, 都是同一种错: 在"交给 AnimationRetarget"之外, 自己又加一层
-"要不要交、交哪张"的推断。已经试错并否掉的:
-
-* 按骨架上烙的游戏配对查 ``<GameA>To<GameB>.json`` —— 游戏不是骨架身份:
-  一个游戏有多套互不兼容的骨架, 两个游戏可能共用一套, OC 骨架根本没有游戏;
-* 按骨名覆盖率自动选表 —— 太松, 骨名碰巧撞上一半的无关表会被判成可用;
-* 按骨架 path 集合的指纹精确选表 —— 太紧, 把一张表钉死在一副骨架上, 换外观、
-  少几根骨、用别人的骨架全都失配, 而这些恰恰最该复用;
-* 按路径匹配率决定"够像就直接绑定, 省掉重定向" —— **最隐蔽的一个**: 路径对得上
-  只说明骨骼是同一批, 不说明骨轴一样。目标骨架为了 Blender 的 .L/.R 镜像重排过
-  朝向/roll 时, 直接灌局部旋转就是一堆乱的, 而匹配率还接近 100%, 判据完全看不出来。
-
-现在只剩一句话: **目标骨架指名了表就走重定向, 没指名就照旧直接绑定。**
-
-* 用哪张表 —— 目标骨架上写着表名(``ruri_retarget_table``), 直接读那张。表是一份
-  **通用的骨名对应关系**, 不绑定任何一副具体骨架: 两侧缺哪根骨就跳过哪一行, 所以同一张
-  表能服务同一套骨架的各种外观变体, 也能手动指给别人的骨架用。一张表天然双向,
-  方向按哪一侧更贴合来源骨架自动定, 永远不要再写镜像的那一份。
-
-唯一还按游戏走的是**表情**: ``_retarget_faces`` 里的 ``Game.face_retarget_of``。
-那是对的 —— 一套表情系统(blendshape 词汇)确实是每个游戏自己的, 和骨架身份是两回事。
-
-There is no panel and no button here on purpose. A cross-game import is an ordinary clip
-import onto a rig that names a table (see ``cabmap_panel._import_clips_standalone``); a
-second, manual path would be a second way to express the same intent.
+One decision: a rig that names a table (``ruri_retarget_table``) retargets, a rig that
+names none binds directly. One builder: the host is imported through the ordinary prefab
+path, the same one a user's own character import runs. One maths: the named preset goes
+verbatim (mappings AND settings) to AnimationRetarget, which skips missing bones itself.
+Nothing here reads a name, a folder or a game; faces alone stay game-specific
+(``Game.face_retarget_of``).
 """
 
 from __future__ import annotations
@@ -108,16 +56,7 @@ RETARGET_TABLE_PROP = "ruri_retarget_table"
 
 
 def table_name_of(arm_obj):
-    """这副骨架指定用哪张对照表(AnimationRetarget 预设名), "" = 没指定。
-
-    为什么是"骨架上写个表名"而不是任何自动推断:
-      * 指纹把一张表钉死在**一副**骨架上 —— 换套外观、少几根骨、拿别人的骨架来用,
-        指纹立刻不匹配, 而这些恰恰是最该能复用的情况;
-      * 覆盖率打分又太松, 骨名碰巧撞上一半的无关表会被判成可用。
-    表本来就是一份**通用的骨名对应关系**, 不属于任何一副具体骨架。所以"用哪张"是
-    用户的一句声明, 写在骨架上, 之后每次导入动画自动读它 —— 透明、可复用、可手动
-    改成别人的表。
-    """
+    """The AnimationRetarget preset this rig declares for itself, "" when none."""
     if arm_obj is None:
         return ""
     return str(arm_obj.get(RETARGET_TABLE_PROP) or "")
@@ -129,24 +68,8 @@ def set_table_name(arm_obj, name):
 
 
 def table_spec_of(arm_obj):
-    """(这副骨架指名的那张表, 表名) —— **整份原样返回, 不过滤不定向不改设置**。
-
-    🔴 这里刻意什么都不做, 因为 AnimationRetarget 自己已经做了:
-    ``retarget_math.build_mappings`` 会把每一行编译成 SolvedMapping, 两侧任一根骨不存在
-    就跳过该行并记一条警告("跳过映射 X -> Y: 骨骼不存在")。所以缺骨骼**本来就被容忍**,
-    在这一层再滤一遍纯属第二套系统 —— 而且滤法还不一样(这边看 ``obj.data.bones``,
-    那边看它自己建的 ``skel.index``), 两套一旦不一致就会出现"这边留下的行那边不认"。
-
-    ``settings`` 同理整份直通(frame_step/interpolation/suffix/overwrite/bake_mode/
-    fake_user 都在表里)。这里曾经自编过一份 ``{"suffix": "_"+目标名}`` 塞进去, 那就是
-    第二套配置: 用户在 AnimationRetarget 面板里存的烘焙参数被无声顶掉, 同一张表手动跑
-    和自动跑出来的产物不一样。表怎么写就怎么用。
-
-    同理不在这里猜方向: 这条路的来源永远是动画的宿主角色, 目标永远是用户的骨架,
-    方向是固定的; 表的双向性由 AnimationRetarget 面板那侧使用, 不该在这里再实现一遍。
-
-    表名为空 / 插件缺失 / 表读不出来, 一律返回 ({}, 表名)。
-    """
+    """(the declared preset verbatim, its name) -- never filtered, oriented or
+    re-configured here: missing bones and settings are AnimationRetarget's own job."""
     addon = _addon()
     name = table_name_of(arm_obj)
     if addon is None or not name:
@@ -203,14 +126,6 @@ def _avatar_documents(unity_file):
 _ScannedAvatar = collections.namedtuple(
     "_ScannedAvatar", "cab name dependency_count tos_size crcs")
 
-# install key -> {"order": [(dep count, cab)], "position": int, "seen": [_ScannedAvatar]}.
-# 每个 avatar 的 m_TOS 只解析一次, 结果按 install 留在会话里。
-#
-# 为什么这件事值得: clip 和它的 avatar 在 cabmap 图上**没有连边**(实测 302 个 clip CAB,
-# 97% 从 clip 反向依赖出发一个 Avatar 都够不到), 所以这一步只能拿覆盖率去量, 而量就得
-# 逐个把 avatar 导进来解析。pelica 的 avatar 排在扫描序第 740 / 1386, 27.4s。过去这 740
-# 个的解析结果转头就扔了, 下一个角色再从第 1 个重扫一遍 —— 现在扫过的就留着, 第二个角色
-# 只从上次停下的地方往后走, 排在前面的直接命中。
 _AVATAR_INDEX = {}
 
 
@@ -403,20 +318,12 @@ def _has_action(arm_obj):
 
 HOST_COLLECTION = "RuriRetargetSources"
 
-# (install key, avatar name) -> 宿主骨架对象名。同一副宿主服务这个角色的全部 clip:
-# 宿主是一次**完整的角色导入**(秒级), 不是从前那种毫秒级脚手架, 每批 clip 重导一次
-# 是纯浪费。缓存在会话里, 失效判据只有一条 —— 对象还在不在。
 _HOST_RIG_CACHE = {}
 
 
 def _discard_baked(baked_actions):
-    """Remove the intermediate actions baked onto the host, leaving only the retarget
-    products on the destination rig.
-
-    🔴 宿主角色本身**不删**。它不是脚手架, 它就是这条路唯一正确的静止姿势来源
-    (见 _resolve_host_cab), 重建一次等于重导一次角色。所以它被停在
-    HOST_COLLECTION 这个隐藏 collection 里复用 —— 藏起来因为用户要的不是它,
-    留着因为它是源, 放在一个具名 collection 里因为用户得看得见、删得掉。"""
+    """Remove the intermediate actions baked onto the host; the host itself stays parked
+    in HOST_COLLECTION for reuse -- it is the source, not scaffolding."""
     for action in baked_actions:
         try:
             bpy.data.actions.remove(action)
@@ -476,13 +383,19 @@ def _host_candidate_cabs(session_key, avatar_cab):
         closure = bridge.resolve_closure_cab_names([cab])
         ranked.append((len(closure), int(rows.deps[index]), cab))
     ranked.sort()
-    return [cab for _closure_size, _dependency_count, cab in ranked]
+    ordered = [cab for _closure_size, _dependency_count, cab in ranked]
+    self_index = index_of.get(avatar_cab)
+    if self_index is not None and avatar_cab not in ordered:
+        classes = _class_ids_at(rows, self_index)
+        if gameobject_id in classes and animator_id in classes:
+            ordered.append(avatar_cab)
+    return ordered
 
 
-def _prefab_head(bridge, cab):
-    """(this CAB's own root prefab, its db) with only the hierarchy/animator classes
-    exported -- no mesh, no material, no texture. There can be a hundred-odd candidates
-    and deciding whether one is the host reads nothing but its root Animator."""
+def _prefab_roots(bridge, cab):
+    """(db, [(guid, root prefab file), ...]) for one candidate CAB, hierarchy classes
+    only, its own seed asset first -- one CAB can hold many prefabs (a whole chara
+    bundle), and any of them may be the host."""
     class_ids = [class_registry.id_for_name(name)
                  for name in ("GameObject", "Transform", "Animator", "Avatar")]
     if any(class_id is None for class_id in class_ids):
@@ -490,8 +403,9 @@ def _prefab_head(bridge, cab):
     assets, roots, seed_roots, _clips, _scenes = bridge.import_cabs(
         [cab], export_class_ids=class_ids)
     db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid)
-    guid = seed_roots.get(cab) or (roots[0] if roots else None)
-    return (db.load_guid(guid) if guid else None), db
+    head = seed_roots.get(cab)
+    ordered = ([head] if head else []) + [guid for guid in roots if guid != head]
+    return db, [(guid, db.load_guid(guid)) for guid in ordered]
 
 
 def _resolve_host_cab(session_key, source):
@@ -515,48 +429,41 @@ def _resolve_host_cab(session_key, source):
         raise CrossGameRetargetError("No cabmap bridge session for the source game.")
     bridge.use_session(session_key)
     for cab in _host_candidate_cabs(session_key, source.cab):
-        prefab_file, db = _prefab_head(bridge, cab)
-        if prefab_file is None:
-            continue
-        _nodes, roots = unity_hierarchy.build_hierarchy(prefab_file)
-        animator = prefab_importer.root_animator(prefab_file, {"roots": roots})
-        document = prefab_importer.animator_avatar(db, animator)
-        if document is not None and str(document.data.get("m_Name") or "") == source.name:
-            return cab
+        db, prefab_files = _prefab_roots(bridge, cab)
+        for guid, prefab_file in prefab_files:
+            if prefab_file is None:
+                continue
+            _nodes, roots = unity_hierarchy.build_hierarchy(prefab_file)
+            animator = prefab_importer.root_animator(prefab_file, {"roots": roots})
+            document = prefab_importer.animator_avatar(db, animator)
+            if document is not None and str(document.data.get("m_Name") or "") == source.name:
+                return cab, str(bridge.asset_paths_by_guid.get(guid) or "")
     raise CrossGameRetargetError(
         "No prefab in {0} is rooted on avatar '{1}' -- the character these clips were "
         "authored on is not in this install's cabmap, so there is no rig to retarget "
         "from.".format(session_key, source.name))
 
 
-def _build_host_rig(context, session_key, host_cab, options):
-    """Import the host character through the PREFAB IMPORT PATH -- the very builder a
-    user's own character import runs, byte for byte the same call.
-
-    🔴 骨架只允许有一个建造者。这里曾经用 armature_builder.build_armature_from_avatar
-    从 Avatar 现搭一副源骨架, 那是第二个建造者, 而两个建造者建出来的东西不一样:
-    实测同一个角色 415 骨 vs 454 骨, 共有的 414 根里 380 根静止矩阵不同, 上臂差 0.7466。
-    重定向数学是过两副骨架的**静止姿势**做世界旋转传递的, 源的静止姿势错了, 数学再对也
-    只是忠实地传错 —— 这就是"跑步动画变成举手"。所以源必须是真角色, 而真角色只有一种
-    建法, 就是这一个。"""
+def _build_host_rig(context, session_key, host, options):
+    """Import the host character through the prefab import path -- the ONE skeleton
+    builder. Materials/textures/clip discovery are visual-only and stay off (measured:
+    454 rest matrices max|delta| = 0, 7.2s -> 2.7s); everything skeletal rides the
+    caller's own options untouched."""
+    host_cab, host_path = host
     bridge = cabmap_state.BRIDGE
     bridge.use_session(session_key)
     assets, roots, seed_roots, _clips, _scenes = bridge.import_cabs([host_cab])
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, clip_curve_blobs=bridge.clip_curves_by_guid,
         mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid)
-    guid = seed_roots.get(host_cab) or (roots[0] if roots else None)
+    guid = next((candidate for candidate in roots
+                 if str(bridge.asset_paths_by_guid.get(candidate) or "") == host_path),
+                None) if host_path else None
+    if guid is None:
+        guid = seed_roots.get(host_cab)
     prefab_file = db.load_guid(guid) if guid else None
     if prefab_file is None:
         raise CrossGameRetargetError("The host character's own asset could not be resolved.")
-    # 关掉的三样都只关掉"看得见的部分", 一根骨头都不动:
-    #   * clip 发现 —— 这条路要的 clip 是用户点的那些, 由 build_selected_animations 烘,
-    #     宿主自己那一整柜子动画一条都不需要;
-    #   * 材质与贴图 —— 骨架在 _import_prefab_core 里是**第一件事**, 只读 prefab 的
-    #     transform 层级, 建完了才轮到网格/材质/贴图。实测同一个宿主开与关两种导法,
-    #     454 根骨静止矩阵 max|delta| = 0.0000000000, 而耗时 7.2s -> 2.7s。宿主是停在
-    #     隐藏 collection 里的源骨架, 没人看它的材质。
-    # 其余选项原样透传: 凡是可能影响骨架的, 宿主必须和用户手动导入的那一份是同一份。
     host_options = dict(options or {})
     host_options["import_animations"] = False
     host_options["import_materials"] = False
@@ -635,10 +542,6 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
     if not clip_crcs:
         raise CrossGameRetargetError("The selected clip(s) carry no transform bindings to retarget.")
 
-    # 🔴 先验表, 再导宿主。
-    # 顺序反了会出现最难看的失败: 先把一整个来源角色导进场景, 再发现表根本用不上, 然后
-    # 抛错 —— 用户看到的是"导入动画结果多了个角色而且没有动画"。表能不能用只跟两侧骨名
-    # 有关, 什么都不建就能先答一半: 表读不出来或是空的, 直接停手。
     spec, table_label = table_spec_of(dest_arm)
     mappings = list(spec.get("mappings") or [])
     if not mappings:
@@ -660,9 +563,6 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
         if not baked_actions:
             raise CrossGameRetargetError("No source action baked from the selected clip(s).")
 
-        # 表整份原样交给 AnimationRetarget: mappings 与 settings 都是它的, 缺骨骼它自己
-        # 跳过并警告, 数学也全是它的。这里一个字节都不改, 所以同一张表手动跑和自动跑
-        # 出来的产物是同一个。
         results, errors = api.retarget_actions(
             host_arm, dest_arm, mappings, spec.get("settings") or {}, baked_actions)
         for action_name, message in errors:
@@ -702,19 +602,6 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
     if maps is None:
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
 
-    # 走哪条路是**量出来的**, 不是标签判的: clip 的绑定路径有多少落在目标骨架的
-    # 身份上。够高 = 就是这套骨架(哪怕骨骼全被改过名), 直接精确改绑写入, 零重定向
-    # 误差; 不够 = 另一套骨架, 才需要表 + 重定向数学。
-    # 这里刻意不问"哪个游戏": 游戏不是骨架的身份 —— 一个游戏有多套互不兼容的骨架,
-    # 两个游戏可能共用一套, OC 骨架根本没有游戏, 拿游戏当判据对三者全部失效。
-    # 🔴 指名了对照表 = 走重定向, 到此为止。这里**不再判断"要不要"**。
-    #
-    # 曾经在这里加过"路径匹配率够高就直接绑定, 省掉重定向"。那是错的, 而且错得很隐蔽:
-    # 路径对得上只说明骨骼**是同一批**, 不说明骨轴一样。泛型 clip 的曲线是源骨架
-    # 自己骨轴下的逐骨局部旋转, 目标骨架若为了 Blender 的 .L/.R 镜像重排过朝向/roll,
-    # 直接把局部旋转灌进去就是一堆乱的 —— 而匹配率还是接近 100%, 判据完全看不出来。
-    # 吸收轴向差异正是重定向(过两副骨架静止姿势的世界旋转传递)在做的事, 所以有表就用表,
-    # 数学全交 AnimationRetarget, 不在这里另立一套判断。
     if table_name_of(dest_arm):
         products, warnings = retarget_clips_onto(
             context, session_key, clip_cab, clip_guids, db, dest_arm, options,
