@@ -14,7 +14,6 @@ Nothing here reads a name, a folder or a game; faces alone stay game-specific
 from __future__ import annotations
 
 import collections
-import json
 
 import bpy
 
@@ -395,14 +394,8 @@ def _has_action(arm_obj):
             and arm_obj.animation_data.action is not None)
 
 
-HOST_COLLECTION = "RuriRetargetSources"
-
-_HOST_RIG_CACHE = {}
-
-
 def _discard_baked(baked_actions):
-    """Remove the intermediate actions baked onto the host; the host itself stays parked
-    in HOST_COLLECTION for reuse -- it is the source, not scaffolding."""
+    """Remove the intermediate actions baked onto the host."""
     for action in baked_actions:
         try:
             bpy.data.actions.remove(action)
@@ -410,25 +403,26 @@ def _discard_baked(baked_actions):
             pass
 
 
-def _host_collection(context):
-    """The hidden collection every retarget source character is parked in."""
-    collection = bpy.data.collections.get(HOST_COLLECTION)
-    if collection is None:
-        collection = bpy.data.collections.new(HOST_COLLECTION)
-    if not any(child is collection for child in context.scene.collection.children_recursive):
-        context.scene.collection.children.link(collection)
-    collection.hide_viewport = True
-    collection.hide_render = True
-    return collection
-
-
-def _park_in_host_collection(context, objects):
-    for obj in objects:
-        for existing in list(obj.users_collection):
-            existing.objects.unlink(obj)
-    collection = _host_collection(context)
-    for obj in objects:
-        collection.objects.link(obj)
+def _discard_host(host_objects):
+    """The host lives only for the duration of one retarget call -- it is rebuilt from
+    the game data whenever needed, so nothing of it ever stays in the scene."""
+    blocks = []
+    for obj in host_objects:
+        if obj.data is not None:
+            blocks.append(obj.data)
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            pass
+    for data in blocks:
+        if data.users:
+            continue
+        for pool in (bpy.data.armatures, bpy.data.meshes, bpy.data.curves):
+            try:
+                pool.remove(data)
+                break
+            except Exception:
+                continue
 
 
 def _host_candidate_cabs(session_key, avatar_cab):
@@ -549,48 +543,29 @@ def _build_host_rig(context, session_key, host, options):
     host_options["import_textures"] = False
     known = set(bpy.data.objects)
     report = prefab_importer.import_prefab_from_db(context, db, prefab_file, host_options)
-    _park_in_host_collection(context, [obj for obj in bpy.data.objects if obj not in known])
+    host_objects = [obj for obj in bpy.data.objects if obj not in known]
+    for obj in host_objects:
+        obj.hide_viewport = True
+        obj.hide_render = True
     if report.armature is None:
+        _discard_host(host_objects)
         raise CrossGameRetargetError(
             "The host character built no skeleton to bake the clips onto.")
-    return report.armature
-
-
-def _stamped_avatar_name(arm_obj):
-    """The name of the Avatar stamped on this armature at import time, "" for a rig
-    carrying none -- the host's identity, read back off the host itself rather than
-    trusted from a cache entry."""
-    raw = armature_builder.read_avatar_json(arm_obj)
-    if not raw:
-        return ""
-    try:
-        return str(json.loads(raw).get("m_Name") or "")
-    except ValueError:
-        return ""
+    return report.armature, host_objects
 
 
 def _host_rig_for(context, session_key, clip_cab, clip_crcs, options):
-    """(host armature, its rig maps) for the clips' own source character, built once
-    per install+avatar and reused for every later batch.
-
-    The cache holds a NAME, so reusing an entry re-reads the identity off the object it
-    resolves to (its stamped Avatar) instead of believing the entry: a name can come to
-    mean a different rig -- another .blend opened, the host renamed or replaced -- and a
-    silently wrong source is precisely the failure this whole path exists to end."""
+    """(host armature, its rig maps, every object imported with it) -- built fresh for
+    this one call and discarded by the caller when the retarget is done."""
     _avatar_file, source = _resolve_source_avatar(session_key, clip_cab, clip_crcs)
-    key = (session_key, source.name)
-    cached = bpy.data.objects.get(_HOST_RIG_CACHE.get(key) or "")
-    if (cached is None or cached.type != "ARMATURE"
-            or _stamped_avatar_name(cached) != source.name):
-        _HOST_RIG_CACHE.pop(key, None)
-        cached = _build_host_rig(context, session_key,
-                                 _resolve_host_cab(session_key, source), options)
-        _HOST_RIG_CACHE[key] = cached.name
-    maps = prefab_importer.maps_from_stamped_armature(cached)
+    host_arm, host_objects = _build_host_rig(
+        context, session_key, _resolve_host_cab(session_key, source), options)
+    maps = prefab_importer.maps_from_stamped_armature(host_arm)
     if maps is None:
+        _discard_host(host_objects)
         raise CrossGameRetargetError(
-            "The host character '{0}' carries no Unity rig identity.".format(cached.name))
-    return cached, maps
+            "The host character '{0}' carries no Unity rig identity.".format(host_arm.name))
+    return host_arm, maps, host_objects
 
 
 def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, options,
@@ -627,7 +602,8 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
             "Bone table {0!r} for armature '{1}' could not be read or is empty."
             .format(table_label, dest_arm.name))
 
-    host_arm, host_maps = _host_rig_for(context, session_key, clip_cab, clip_crcs, options)
+    host_arm, host_maps, host_objects = _host_rig_for(
+        context, session_key, clip_cab, clip_crcs, options)
 
     warnings = []
     products = []
@@ -654,6 +630,7 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
             core.assign_action(dest_arm, products[0])
     finally:
         _discard_baked(baked_actions)
+        _discard_host(host_objects)
     return products, warnings
 
 
