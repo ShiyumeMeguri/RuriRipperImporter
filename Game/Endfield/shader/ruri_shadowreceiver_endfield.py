@@ -611,10 +611,20 @@ def _cap_specular_radiance(g, query, ctx):
 MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
 
 
+def _light_visible(obj):
+    """灯算不算数。`visible_get()` 要走 view layer 求值 —— 刚 link 进场景、依赖图这一拍
+    还没评估时它会答 False(实测:头一张材质因此按"无太阳"建,之后才跟上,同一场景先后
+    两次渲染不一致)。求值不出就退回对象自己的隐藏旗标,那是不依赖任何求值的真值。"""
+    try:
+        return obj.visible_get()
+    except (RuntimeError, ReferenceError):
+        return not obj.hide_viewport
+
+
 def _scene_sun():
     """场景里的主方向光 = 第一盏 SUN(按名字排序取定,免得场景枚举序变了图就跟着变)。"""
     suns = [o for o in bpy.context.scene.objects
-            if o.type == 'LIGHT' and o.data.type == 'SUN' and o.visible_get()]
+            if o.type == 'LIGHT' and o.data.type == 'SUN' and _light_visible(o)]
     return sorted(suns, key=lambda o: o.name)[0] if suns else None
 
 
@@ -705,129 +715,91 @@ def _light_axis(g, light, label):
     return v
 
 
-def _cap_main_light(g, query, ctx):
-    """主方向光的兑现。**不自造光照系统** —— 方向与颜色全部原生取自 Blender 自己的灯物体,
-    经**驱动器**绑到灯的 `matrix_world` / `data.color` / `data.energy`:转灯、换色、调能量
-    实时跟随,材质不用重建(不是建图时刻的快照)。
-
-    取谁,三级,单一真源逐级下落:
-      ① **逐角色覆盖** —— 对象自定义属性 `ruri_main_light` 指向一盏灯(选中对象设一下即可);
-      ② **场景太阳** —— 没有覆盖就取场景里的 SUN;
-      ③ **前向光** —— 一盏灯都没有时,方向 = ShaderNodeNewGeometry 的 Incoming
-         (表面指向观察者),也是 Blender 原生量,等价一盏永远跟着视角的头灯。
-         这不是替身值:没有场景灯时,「光从看的方向来」是唯一不依赖任何未知量的定义。
-
-    灯的类型也照 Blender 原生语义分:SUN 是平行光,方向恒为灯的 +Z 轴;POINT/SPOT/AREA 的方向
-    随着色点变,故按 `归一化(灯位 − 着色点)` 算,着色点取 Geometry 的 Position(同样原生)。
-    归一化交给节点(灯物体可能带缩放),不在 Python 里算死。
-
-    方向最后经 g.b2u 换回内核的 Unity 语义(内核 +Y 是上)。距离衰减恒 1(方向光无距离项);
-    阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,而它在 Blender 上是 Subsumed ——
-    EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。
-    """
-    _ = query
-    light = _override_light(ctx.get('material')) or _scene_sun()
-    if light is None:
-        return {
-            'direction': g.b2u(g.geo().outputs['Incoming']),
-            'color': (1.0, 1.0, 1.0),
-            'distanceAttenuation': 1.0,
-            'shadowAttenuation': 1.0,
-            'layerMask': 1.0,
-        }
-    if light.data.type == 'SUN':
-        to_light = _light_axis(g, light, 'RuriMainLightAxis')
-    else:
-        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
-                           g.geo().outputs['Position'])
-    tint = g._nd('ShaderNodeCombineXYZ')
-    tint.label = 'RuriMainLightColor'
-    for i in range(3):
-        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
-    return {
-        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
-        'color': tint.outputs[0],
-        'distanceAttenuation': 1.0,
-        'shadowAttenuation': 1.0,
-        'layerMask': 1.0,
-    }
-
-
-def _additional_lights(material):
-    """附加光 = 场景里除主光以外的所有可见灯,按名字定序。
-
-    「除主光以外」按对象取,不按类型:主光可能是场景 SUN,也可能是本材质自己覆盖的那盏。
-    定序按名字而不是枚举序 —— 场景里加删别的对象不该让灯的下标跳位。"""
-    main = _override_light(material) or _scene_sun()
-    lights = [o for o in bpy.context.scene.objects
-              if o.type == 'LIGHT' and o.visible_get() and o is not main]
-    return sorted(lights, key=lambda o: o.name)
-
-
-def _cap_additional_light_count(g, query, ctx):
-    """有几盏附加光 —— 装配期数得出来,直接给常量。这个值喂的是灯循环的迭代数socket。"""
-    _ = (g, query)
-    return {'': float(len(_additional_lights(ctx.get('material'))))}
-
-
+LIGHT_TABLE = 'RuriLightTable'
 LIGHT_TABLE_ROWS = 4
+LIGHT_TABLE_COLS = 64
 
 
-def _light_table(material, lights):
-    """灯表 = 一张 **N×4 浮点图**,一列一盏灯:
+def _light_table_image():
+    """场景全局灯表(全部生成栈共读同一张):64 列 × 4 行 fp32。
+       列0 = 场景主光;列1.. = 附加光。行布局:
        行0 (x,y,z | 类型)   类型 0=SUN 1=POINT/AREA 2=SPOT
        行1 (r,g,b | -)      颜色 × 能量
        行2 (x,y,z | -)      灯的世界 +Z 轴(指向光源;SUN 的方向、SPOT 的锥轴)
-       行3 (cosOuter, cosInner, 0 | -)  聚光锥
+       行3 (cosOuter, cosInner, hasMain* | count*)   *仅列0:主光在场旗标 + 附加光数
+    列宽定死:图节点指针烙在几百张模板拷贝里,尺寸一变就得全场换指针 —— 表列数是
+    协议不是容量优化;63 盏附加光之外的照明缺席会响亮报数,不静默截断。"""
+    image = bpy.data.images.get(LIGHT_TABLE)
+    if image is None or tuple(image.size) != (LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS) or not image.is_float:
+        stale = image
+        image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
+                                    float_buffer=True, alpha=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.use_fake_user = True
+        if stale is not None:
+            stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
+            bpy.data.images.remove(stale)
+            image.name = LIGHT_TABLE
+    return image
 
-    **灯数没有上限**:图有多宽就装多少盏。图里按下标采样是固定几个节点,
-    与灯数无关 —— 这正是不设槽位数的理由(槽位制的上限是实现漏进协议的产物)。
-    灯动/换色只重写像素(实测:改像素不重建任何节点,渲染即时跟)。
-    """
-    name = 'RuriLightTable_' + (material.name if material is not None else 'Scene')
-    width = max(len(lights), 1)
-    image = bpy.data.images.get(name)
-    if image is None or tuple(image.size) != (width, LIGHT_TABLE_ROWS) or not image.is_float:
-        if image is not None:
-            bpy.data.images.remove(image)
-        image = bpy.data.images.new(name, width, LIGHT_TABLE_ROWS, float_buffer=True, alpha=True)
-    image.colorspace_settings.name = 'Non-Color'
-    rows = [[0.0] * (width * 4) for _ in range(LIGHT_TABLE_ROWS)]
-    for k, light in enumerate(lights):
-        matrix = light.matrix_world
-        kind = light.data.type
-        flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
-        axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
-        length = math.sqrt(sum(c * c for c in axis)) or 1.0
-        axis = [c / length for c in axis]
-        energy = float(light.data.energy)
-        color = [float(c) * energy for c in light.data.color]
-        if kind == 'SPOT':
-            size = float(light.data.spot_size)
-            blend = float(light.data.spot_blend)
-            cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
-        else:
-            cone = [-1.0, 1.0]
-        for row, value in (
-                (0, [matrix[0][3], matrix[1][3], matrix[2][3], flag]),
-                (1, color + [1.0]),
-                (2, axis + [1.0]),
-                (3, cone + [0.0, 1.0])):
-            rows[row][k * 4:k * 4 + 4] = value
+
+def _pack_light(light):
+    """一盏灯的 4 texel 记录(列向,行序同上)。"""
+    matrix = light.matrix_world
+    kind = light.data.type
+    flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
+    axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
+    length = math.sqrt(sum(c * c for c in axis)) or 1.0
+    axis = [c / length for c in axis]
+    energy = float(light.data.energy)
+    color = [float(c) * energy for c in light.data.color]
+    if kind == 'SPOT':
+        size = float(light.data.spot_size)
+        blend = float(light.data.spot_blend)
+        cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
+    else:
+        cone = [-1.0, 1.0]
+    return ([matrix[0][3], matrix[1][3], matrix[2][3], flag],
+            color + [1.0], axis + [1.0], cone + [0.0, 0.0])
+
+
+def refresh_light_tables():
+    """场景灯 → 灯表像素。加灯/删灯/动灯/换色/调锥全走这一条:**零节点、零重接**
+    (实测机制:改像素不重建任何节点,渲染即时跟)。这正是模板复制架构的前提 ——
+    拷出去的几百张材质不可能逐张重接,灯的一切变化都必须是数据。"""
+    main = _scene_sun()
+    others = [o for o in bpy.context.scene.objects
+              if o.type == 'LIGHT' and _light_visible(o) and o is not main]
+    others.sort(key=lambda o: o.name)
+    if len(others) > LIGHT_TABLE_COLS - 1:
+        print('[ruri-cap] !! 场景 {0} 盏附加光超过灯表 {1} 列,按名序靠后的不参与照明'.format(
+            len(others), LIGHT_TABLE_COLS - 1), flush=True)
+        others = others[:LIGHT_TABLE_COLS - 1]
+    image = _light_table_image()
+    rows = [[0.0] * (LIGHT_TABLE_COLS * 4) for _ in range(LIGHT_TABLE_ROWS)]
+    for col, light in enumerate([main] + others if main is not None else others, start=0 if main is not None else 1):
+        r0, r1, r2, r3 = _pack_light(light)
+        for row, value in ((0, r0), (1, r1), (2, r2), (3, r3)):
+            rows[row][col * 4:col * 4 + 4] = value
+    rows[3][2] = 1.0 if main is not None else 0.0   # 列0 行3 .b = hasMain
+    rows[3][3] = float(len(others))                 # 列0 行3 .a = 附加光数(灯循环迭代数)
     flat = []
     for row in rows:
         flat.extend(row)
     image.pixels = flat
     image.update()
-    return image, width
+    # 🔴 同 _param_flush:纯像素写不触发 GPU 纹理重传,EEVEE 会继续用旧的那份
+    # (症状=加了灯画面纹丝不动,下一次渲染才跟上)。update_tag 是 O(1) 的脏标记。
+    image.update_tag()
+    return 1
 
 
-def _table_row(g, image, index, row, width):
-    """按下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
+def _table_row(g, index, row):
+    """按列下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
     否则相邻两盏灯会被硬件混成一盏不存在的灯。"""
-    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(width))
+    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(LIGHT_TABLE_COLS))
     node = g._nd('ShaderNodeTexImage')
-    node.image = image
+    node.image = _light_table_image()
     node.interpolation = 'Closest'
     node.extension = 'EXTEND'
     node.label = 'RuriLightTable'
@@ -835,24 +807,80 @@ def _table_row(g, image, index, row, width):
     return node.outputs['Color'], node.outputs['Alpha']
 
 
+def _cap_main_light(g, query, ctx):
+    """主方向光的兑现,**数据驱动**:方向/颜色从灯表列0读。加灯/删灯/动灯只改像素,
+    图一个节点都不动。没有主光时的头灯兜底(方向 = Geometry 的 Incoming,表面指向观察者)
+    以 hasMain 选择支**常驻图里** —— 0 盏灯 ↔ 有灯 的切换同样只是像素。
+
+    逐角色覆盖灯(MAIN_LIGHT_OVERRIDE)是唯一的非表路径:那盏灯是这张材质自己的,
+    走驱动器直连(转灯/换色实时跟),由设置它的算子对该材质单独 rewire —— 单材质一次,
+    永不进批量路径。
+
+    距离衰减恒 1(方向光无距离项);阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,
+    而它在 Blender 上是 Subsumed —— EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。"""
+    _ = query
+    light = _override_light(ctx.get('material'))
+    if light is not None:
+        if light.data.type == 'SUN':
+            to_light = _light_axis(g, light, 'RuriMainLightAxis')
+        else:
+            to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
+                               g.geo().outputs['Position'])
+        tint = g._nd('ShaderNodeCombineXYZ')
+        tint.label = 'RuriMainLightColor'
+        for i in range(3):
+            _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
+        return {
+            'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
+            'color': tint.outputs[0],
+            'distanceAttenuation': 1.0,
+            'shadowAttenuation': 1.0,
+            'layerMask': 1.0,
+        }
+    refresh_light_tables()
+    _pos, _flag = _table_row(g, 0.0, 0)
+    color, _ca = _table_row(g, 0.0, 1)
+    axis, _aa = _table_row(g, 0.0, 2)
+    flags, _count = _table_row(g, 0.0, 3)
+    _co, _ci, has_main = g.sep(flags)
+    direction = g.mixv(has_main, g.geo().outputs['Incoming'], axis)
+    tint = g.mixv(has_main, (1.0, 1.0, 1.0), color)
+    return {
+        'direction': g.b2u(g.vmath('NORMALIZE', direction)),
+        'color': tint,
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _cap_additional_light_count(g, query, ctx):
+    """附加光数从灯表列0行3的 .a 读 —— 给的是 socket 不是常量:加灯删灯改像素即生效,
+    模板的几百张拷贝零重接。喂灯循环的迭代数 socket(float→int 隐式转换,值恒为精确整数)。"""
+    _ = (query, ctx)
+    refresh_light_tables()
+    _flags, count = _table_row(g, 0.0, 3)
+    return {'': count}
+
+
 def _cap_additional_light(g, query, ctx):
-    """第 index 盏附加光。**逐迭代**按下标查灯表,所以下标是什么值都取得对 ——
-    循环体内的割点每圈自己采一次,不存在「把下标导出去只剩最后一圈」的问题。
+    """第 index 盏附加光(表列 index+1;列0 是主光)。**逐迭代**按下标查灯表,
+    所以下标是什么值都取得对 —— 循环体内的割点每圈自己采一次。
 
     类型差异不靠逐灯建节点,靠表里的类型位在图里选:
       SUN  方向 = 灯的 +Z 轴,无距离衰减;
       其余 方向 = 归一化(灯位 − 着色点),距离衰减 = 平方反比(Blender 自己的灯就这么落衰);
       SPOT 再乘一层原生锥(cos 半角 + spot_blend 软边,smoothstep,与 Cycles 同式)。
-    """
+    灯不在场时对应列全零 ⇒ 颜色 0 ⇒ 贡献 0,且 count 门根本不让循环跑到那里。"""
     index = query.get('index')
-    lights = _additional_lights(ctx.get('material'))
-    if index is None or not lights:
+    if index is None:
         return None
-    image, width = _light_table(ctx.get('material'), lights)
-    position, type_flag = _table_row(g, image, index, 0, width)
-    color, _ca = _table_row(g, image, index, 1, width)
-    axis, _aa = _table_row(g, image, index, 2, width)
-    cone, _oa = _table_row(g, image, index, 3, width)
+    refresh_light_tables()
+    column = g.math('ADD', index, 1.0)
+    position, type_flag = _table_row(g, column, 0)
+    color, _ca = _table_row(g, column, 1)
+    axis, _aa = _table_row(g, column, 2)
+    cone, _oa = _table_row(g, column, 3)
     cos_outer, cos_inner, _unused = g.sep(cone)
 
     to_light = g.vmath('SUBTRACT', position, g.geo().outputs['Position'])
@@ -1102,6 +1130,20 @@ CAPABILITIES = {
     ],
 }
 
+PARAMS = {
+    'ShadowReceiver': [
+        ('_DisableSceneShadow', 'F', 0, 0, 0.0, 0.0),
+        ('_ShadowColor', 'V4', 1, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_CircleFade', 'F', 0, 1, 0.0, 0.0),
+        ('_CircleFadeDistance', 'F', 0, 2, 1.0, 0.0),
+        ('_CircleFadeSmoothness', 'F', 0, 3, 0.2, 0.0),
+        ('_UseAlphaTest', 'F', 2, 0, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 2, 1, 0.5, 0.0),
+    ],
+}
+MAT_TABLE_H = 3
+MAT_TABLE_W = 1024
+
 DEFAULT_PART = 'ShadowReceiver'
 STAMP = 'c97f00cad7e468a3'
 STAMP_KEY = 'ruri_uber_stamp'
@@ -1111,6 +1153,8 @@ VERTEX_PARTS = {
 }
 
 KNOWN_PARTS = {'ShadowReceiver'}
+MAT_TABLE = 'Ruri Endfield Params'
+TEMPLATE_MAT = 'Ruri Endfield Tpl '
 VTX_MODIFIER = 'Ruri Endfield Vertex'
 VTX_TREE_PREFIX = 'Ruri Endfield Vertex '
 OUTLINE_TEMPLATE = 'Ruri Endfield Outline'
@@ -1468,6 +1512,200 @@ def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
                 g._set(sock, zout.outputs[item])
 
 
+# ==================== 材质参数表(材质 = 数据行) ====================
+# 一张材质的全部自有参数 = 共享 fp32 表图的一列像素;真源恒为材质上的 ruri_uber_*
+# 快照,列是它的投影(开旧文件/重载会话时逐材质重组,图本身不需要持久化)。
+_MAT_MIRROR = None      # numpy (H, W, 4) float32 —— 表像素的权威镜像
+_MAT_NEXT_COL = [1]     # 列0 = 缺省列(模板材质自己渲的就是它),材质从列1起
+_MAT_FLUSH_QUEUED = [False]
+
+
+def _mat_table_image():
+    image = bpy.data.images.get(MAT_TABLE)
+    if image is None or tuple(image.size) != (MAT_TABLE_W, MAT_TABLE_H) or not image.is_float:
+        stale = image
+        image = bpy.data.images.new(MAT_TABLE, MAT_TABLE_W, MAT_TABLE_H,
+                                    float_buffer=True, alpha=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.use_fake_user = True
+        if stale is not None:
+            stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
+            bpy.data.images.remove(stale)
+            image.name = MAT_TABLE
+    return image
+
+
+def _mat_defaults(part):
+    """一列声明缺省(生成期从真源 Properties 反射而来;列0 常驻这份)。"""
+    import numpy as np
+    column = np.zeros((MAT_TABLE_H, 4), dtype=np.float32)
+    for name, kind, texel, comp, dvec, dw in PARAMS.get(part, ()):
+        if kind == 'F':
+            column[texel, comp] = dvec
+        else:
+            column[texel, 0:3] = dvec
+            column[texel, 3] = dw
+    return column
+
+
+def _mat_compose(part, floats, st, colors):
+    """材质快照 → 一列像素:缺省打底,声明值覆写。raw 直灌语义原样保留 ——
+    行名 = 游戏属性名,_ST 后缀 = 平铺偏移,零映射表。"""
+    column = _mat_defaults(part)
+    merged = dict(floats or {})
+    for prop, value in (st or {}).items():
+        merged[prop + '_ST'] = value
+    merged.update(colors or {})
+    for name, kind, texel, comp, _dv, _dw in PARAMS.get(part, ()):
+        value = merged.get(name)
+        if value is None:
+            continue
+        if kind == 'F':
+            try:
+                column[texel, comp] = float(value)
+            except (TypeError, ValueError):
+                pass
+        else:
+            vec = [float(x) for x in value] + [0.0] * 4 if hasattr(value, '__len__') \
+                else [float(value)] * 3 + [0.0]
+            column[texel, 0:3] = vec[0:3]
+            column[texel, 3] = vec[3]
+    return column
+
+
+def _mat_mirror():
+    """镜像惰性建立:会话冷启/开旧文件时按材质快照逐列重组 —— 真源在材质,
+    列号在 mat['ruri_param_col'],谁在场谁的列就有效。"""
+    global _MAT_MIRROR
+    if _MAT_MIRROR is not None:
+        return _MAT_MIRROR
+    import numpy as np
+    _MAT_MIRROR = np.zeros((MAT_TABLE_H, MAT_TABLE_W, 4), dtype=np.float32)
+    top = 0
+    for mat in bpy.data.materials:
+        if mat.get('ruri_uber_stack') != PANEL_KEY or mat.get('ruri_param_col') is None:
+            continue
+        col = int(mat['ruri_param_col'])
+        if not (0 < col < MAT_TABLE_W):
+            continue
+        top = max(top, col)
+        part = mat.get('ruri_uber_part', '')
+        _MAT_MIRROR[:, col, :] = _mat_compose(
+            part, dict(mat.get('ruri_uber_floats') or {}),
+            {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()},
+            {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()})
+    _MAT_NEXT_COL[0] = max(_MAT_NEXT_COL[0], top + 1)
+    for part in PARAMS:
+        _MAT_MIRROR[:, 0, :] = _mat_defaults(part)   # 列0:任一 part 的缺省(模板渲染用)
+        break
+    return _MAT_MIRROR
+
+
+def _param_flush():
+    _MAT_FLUSH_QUEUED[0] = False
+    image = _mat_table_image()
+    image.pixels.foreach_set(_mat_mirror().ravel())
+    image.update()
+    # 🔴 纯像素写**不会**让 EEVEE 重传 GPU 纹理:它会继续用已上传的那份,
+    # 症状是「表里明明写对了、渲出来还是上一版」(实测:同一张材质连渲两次
+    # 结果差 0.8,第二次才对)。update_tag 让依赖图把这个 ID 判脏 —— O(1),
+    # 不需要碰任何材质,正是表化架构成立的前提。
+    image.update_tag()
+    return None      # timer 协议:None = 注销
+
+
+def _param_flush_soon():
+    """批量导入几百材质 = 几百次列写;整图 foreach_set 按帧去抖成一次。
+    headless 没有事件循环(timers 永不触发)⇒ 直接刷。"""
+    if bpy.app.background:
+        _param_flush()
+        return
+    if not _MAT_FLUSH_QUEUED[0]:
+        _MAT_FLUSH_QUEUED[0] = True
+        bpy.app.timers.register(_param_flush, first_interval=0.1)
+
+
+def _param_write(mat):
+    """材质的 ruri_uber_* 快照 → 它的表列。分配列号(首次)并返回。"""
+    part = mat.get('ruri_uber_part', '')
+    mirror = _mat_mirror()
+    col = mat.get('ruri_param_col')
+    if col is None:
+        col = _MAT_NEXT_COL[0]
+        if col >= MAT_TABLE_W:
+            raise RuntimeError('[ruri-uber] 材质表 {0} 列耗尽——同栈材质超容量'.format(MAT_TABLE_W))
+        _MAT_NEXT_COL[0] = col + 1
+        mat['ruri_param_col'] = col
+    col = int(col)
+    mirror[:, col, :] = _mat_compose(
+        part, dict(mat.get('ruri_uber_floats') or {}),
+        {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()},
+        {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()})
+    _param_flush_soon()
+    return col
+
+
+def _param_read(mat, name):
+    """面板回读兜底:镜像列里的当前值(缺省已在列里)。F 返回标量,V 返回 [x,y,z,w]。"""
+    col = mat.get('ruri_param_col')
+    if col is None:
+        return None
+    mirror = _mat_mirror()
+    for row_name, kind, texel, comp, _dv, _dw in PARAMS.get(mat.get('ruri_uber_part', ''), ()):
+        if row_name != name:
+            continue
+        cell = mirror[texel, int(col)]
+        if kind == 'F':
+            return float(cell[comp])
+        return [float(cell[0]), float(cell[1]), float(cell[2]), float(cell[3])]
+    return None
+
+
+def _wire_params(g, insts, part):
+    """把本 part 的全部材质 uniform 从表列接进级联/循环体实例 —— 模板建图时跑一次。
+    从此「一张材质的参数」= 表里的一列像素:实例化零 socket 写,面板改参零树更新。
+    列号住在 RuriMatCol 值节点上,是拷贝里唯一逐材质的图内状态。
+    已链接的 socket(varying/fetch/能力答案)天然跳过 —— 顺序上本函数最后跑。"""
+    rows = PARAMS.get(part, ())
+    if not rows:
+        return
+    image = _mat_table_image()
+    _param_flush_soon()          # 列0 缺省得先在像素里,模板渲染才不是全零
+    colv = g._nd('ShaderNodeValue')
+    colv.label = 'RuriMatCol'
+    colv.outputs[0].default_value = 0.0
+    u = g.math('DIVIDE', g.math('ADD', colv.outputs[0], 0.5), float(MAT_TABLE_W))
+    texels = {}
+    seps = {}
+    for name, kind, texel, comp, _dv, _dw in rows:
+        nd = texels.get(texel)
+        if nd is None:
+            nd = g._nd('ShaderNodeTexImage')
+            nd.image = image
+            nd.interpolation = 'Closest'
+            nd.extension = 'EXTEND'
+            nd.label = 'RuriMatParam'
+            g._set(nd.inputs['Vector'], g.comb(u, (texel + 0.5) / MAT_TABLE_H, 0.0))
+            texels[texel] = nd
+        if kind == 'F' and comp < 3:
+            parts3 = seps.get(texel)
+            if parts3 is None:
+                parts3 = seps[texel] = g.sep(nd.outputs['Color'])
+            value = parts3[comp]
+        elif kind == 'F':
+            value = nd.outputs['Alpha']
+        else:
+            value = nd.outputs['Color']
+        for inst in insts:
+            sock = inst.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                g._set(sock, value)
+            if kind == 'V4':
+                tail = inst.inputs.get(name + '_w')
+                if tail is not None and not tail.is_linked:
+                    g._set(tail, nd.outputs['Alpha'])
+
+
 _ANCHOR_SLOTS = ('_BaseMap', '_BaseColorMap', '_MainTex')
 
 
@@ -1539,6 +1777,9 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
         _wire_capability(g, insts, c, {'material': mat})
     for z in ZONES.get(part, ()):
         _wire_zone(g, insts, z, images, all_insts, part, {'material': mat})
+    # 材质 uniform 最后接:此刻 varying/fetch/能力答案已全部占线,剩下的
+    # 未链接 socket 恰是 PARAMS 的行 —— 全部改从表列读(材质 = 数据行)。
+    _wire_params(g, all_insts, part)
     if anchor is not None:
         nt.nodes.active = anchor
         anchor.select = True
@@ -1593,6 +1834,82 @@ def _apply_cull(g, shader_sock, cull, outline_fac):
     g._set(cmix.inputs[1], shader_sock)
     g._set(cmix.inputs[2], ctr.outputs[0])
     return cmix.outputs[0]
+
+
+# ==================== 模板材质 + 实例化(唯一的逐材质路径) ====================
+_TEMPLATE_KEY = 'ruri_uber_template'
+
+
+def _template_images(part):
+    """模板必须用**中性占位图**建满全部采样槽 —— 占位图名 == 槽名,这正是
+    实例化时按名认槽换真图的依据。漏了这步模板里根本没有 TexImage 节点,
+    instantiate 的换图循环无处可换、每张材质都变成无贴图(实测:与直建路
+    渲染 peak|Δ|≈1.0,而断链等价测试却是 0 —— 差异全在这)。
+    没绑真图的槽保持占位,语义就是该槽的声明中性值,与直建路一致。"""
+    _images()
+    slots = {}
+    for fetch in FETCHES.get(part, ()):
+        if not fetch['env']:
+            slots[fetch['slot']] = None
+    for zone in ZONES.get(part, ()):
+        for fetch in zone['fetches']:
+            if not fetch['env']:
+                slots[fetch['slot']] = None
+    out = {}
+    for slot in slots:
+        img = bpy.data.images.get(slot)
+        if img is not None:
+            out[slot] = img
+    return out
+
+
+def _template(part, opaque, multiply_blend, cull):
+    """每 (part, 透明形态, 剔除) 一张模板材质,整棵图只建这一次:级联、循环、割点、
+    兑现面、参数表接线、**全部采样槽的占位图节点**全在这里付清 ——
+    之后每张材质 = copy + 换图指针 + 一列像素。
+    模板列号恒 0(缺省列),自己渲染出来就是声明缺省的样子。"""
+    name = '{0}{1} {2}{3} c{4:g}'.format(TEMPLATE_MAT, part,
+                                         int(bool(opaque)), int(bool(multiply_blend)), float(cull))
+    tpl = bpy.data.materials.get(name)
+    if tpl is not None and tpl.get(STAMP_KEY) == STAMP and tpl.node_tree is not None:
+        return tpl
+    stale = tpl
+    if stale is not None:
+        stale.name = name + '.old'
+    tpl = bpy.data.materials.new(name)
+    if tpl.node_tree is None:
+        tpl.use_nodes = True
+    build_material(tpl, part=part, opaque=opaque, multiply_blend=multiply_blend,
+                   cull=cull, images=_template_images(part))
+    tpl[STAMP_KEY] = STAMP
+    tpl[_TEMPLATE_KEY] = 1
+    tpl.use_fake_user = True
+    if stale is not None:
+        stale.user_remap(tpl)   # 旧模板的拷贝不受影响(各自独立树);只挪引用者
+        bpy.data.materials.remove(stale)
+        tpl.name = name
+    return tpl
+
+
+def instantiate(name, part, images=None, opaque=True, multiply_blend=False, cull=2.0):
+    """一张材质 = 模板拷贝 + 贴图指针 + (调用方随后写的)一列像素。零建图、
+    零逐 socket 灌参 —— build_material 从此只服务模板与探针。返回 (材质, 换图数)。"""
+    tpl = _template(part, opaque, multiply_blend, cull)
+    mat = tpl.copy()
+    mat.name = name
+    mat.use_fake_user = False
+    if mat.get(_TEMPLATE_KEY) is not None:
+        del mat[_TEMPLATE_KEY]
+    swapped = 0
+    if images and mat.node_tree is not None:
+        for nd in mat.node_tree.nodes:
+            if nd.type != 'TEX_IMAGE':
+                continue
+            real = images.get(_slot_of(nd.label or ''))
+            if real is not None:
+                _swap_image(nd, real)
+                swapped += 1
+    return mat, swapped
 
 
 def build_root(part=None):
@@ -2202,43 +2519,22 @@ def provider(builder, props):
     #   那条 gBuffer0.w 在真管线是 materialFlags 不是不透明度 —— 接成不透明度会让
     #   皮肤/眼睛整个隐形。透明 part 由 [StylePart(Transparent)] 定,是风格自己的事实。
     opaque = props.floats.get('_SurfaceType', 0.0) < 0.5 and not meta['transparent']
-    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-    if mat.node_tree is None:
-        mat.use_nodes = True
-    insts = build_material(mat, part=part_name, opaque=opaque,
-                           multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
-                           cull=_cull_mode(props), images=images)
-    filled = [0]
+    # 材质 = 数据行:模板拷贝 + 贴图指针 + 一列像素。逐 socket 灌参(整棵图从零建 +
+    # 798 次 put)已整删 —— 那条路把 300 材质的场景窗口拖成 8 分钟,而一张材质的
+    # 真实信息量只有十个图指针加几百字节参数。
+    mat, swapped = instantiate(name, part_name, images=images, opaque=opaque,
+                               multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
+                               cull=_cull_mode(props))
+    stale = bpy.data.materials.get(name)
+    if stale is not None and stale is not mat:
+        stale.user_remap(mat)   # 重导同名:旧材质的使用者全体改指新的,再删旧
+        bpy.data.materials.remove(stale)
+        mat.name = name
     bst = props.texture_st.get('_BaseMap') or [1.0, 1.0, 0.0, 0.0]
     for node in mat.node_tree.nodes:
         if node.label == 'RuriBaseMapST':
             node.inputs['Scale'].default_value = (float(bst[0]), float(bst[1]), 1.0)
             node.inputs['Location'].default_value = (float(bst[2]), float(bst[3]), 0.0)
-
-    def put(sock_name, value):
-        for grp in insts:
-            sock = grp.inputs.get(sock_name)
-            if sock is None or sock.is_linked:
-                continue
-            if sock.type == 'VECTOR':
-                sock.default_value = value if isinstance(value, tuple) else (value, value, value)
-            else:
-                sock.default_value = value[0] if isinstance(value, tuple) else value
-            filled[0] += 1
-
-    # raw 直灌:socket 名 = 游戏属性名(生成期就是这么命名的),零映射表。
-    for prop, value in props.floats.items():
-        put(prop, float(value))
-    for prop, value in props.colors.items():
-        put(prop, (float(value[0]), float(value[1]), float(value[2])))
-        put(prop + '_w', float(value[3]))
-    for prop, st in props.texture_st.items():
-        put(prop + '_ST', (float(st[0]), float(st[1]), float(st[2])))
-        put(prop + '_ST_w', float(st[3]))
-    put('_ShadowReceiverPartID', float(part_id))
-    # 透明特效 part 的游戏 shader 靠 pass 状态透明、不声明 _SurfaceType,补上内核开关。
-    if meta['transparent']:
-        put('_SurfaceType', 1.0)
     try:
         mat.surface_render_method = 'BLENDED' if meta['transparent'] else 'DITHERED'
     except Exception:
@@ -2247,18 +2543,27 @@ def provider(builder, props):
     # 栈身份:一个会话里同时装着 N 个生成栈,而 ruri_uber_part 每个栈都写 ——
     # 材质面板要认领得准(只画选中材质那一个栈的参数),判据只能是这一枚烙印。
     mat['ruri_uber_stack'] = PANEL_KEY
-    # 顶点腿参数真源:只有顶点消费的属性(_FurLengthIntensity/_OutlineWidth…)在着色组上
-    # 没有 socket,不落这里就永远丢 —— apply_vertex_stage 按名回收。
+    # 快照 = 参数唯一真源(表列/顶点腿/面板全部从这里投影)。透明特效 part 的游戏
+    # shader 靠 pass 状态透明、不声明 _SurfaceType —— 内核开关折进快照本身,
+    # 冷启重组列时才不会丢(曾是 put() 的旁路补写,快照里没有)。
+    snapshot_floats = {k: float(v) for k, v in props.floats.items()}
+    if meta['transparent']:
+        snapshot_floats['_SurfaceType'] = 1.0
     mat['ruri_uber_images'] = {k: v.name for k, v in images.items()}
-    mat['ruri_uber_floats'] = {k: float(v) for k, v in props.floats.items()}
+    mat['ruri_uber_floats'] = snapshot_floats
     mat['ruri_uber_st'] = {k: [float(x) for x in v] for k, v in props.texture_st.items()}
     mat['ruri_uber_colors'] = {k: [float(x) for x in v] for k, v in props.colors.items()}
     mat['ruri_uber_disabled_passes'] = list(getattr(props, 'disabled_passes', ()))
     ref = props.shader_ref
     mat['ruri_uber_shader_guid'] = str(ref.get('guid', '')) if isinstance(ref, dict) else ''
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
-    print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} insts={5}'.format(
-        name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(insts)), flush=True)
+    col = _param_write(mat)
+    for node in mat.node_tree.nodes:
+        if node.label == 'RuriMatCol':
+            node.outputs[0].default_value = float(col)
+            break
+    print('[ruri-uber] {0}: shader={1} part={2} images={3} col={4}'.format(
+        name, mat['ruri_uber_shader'], part_name, swapped, col), flush=True)
     return mat
 
 
@@ -2303,22 +2608,6 @@ def rewire_capabilities(mat):
     nt.update_tag()
     mat.update_tag()
     return True
-
-
-def refresh_light_tables():
-    """灯只是动了 / 换了色 / 调了能量 —— **重写灯表像素即可,一个节点都不用碰**。
-    灯集合本身没变时走这条:代价是几十个浮点写,与重建图不在一个量级。
-    (集合变了才需要重接:0 盏↔有盏会换整条兑现分支。)"""
-    touched = 0
-    for mat in bpy.data.materials:
-        if mat.get('ruri_uber_part') is None:
-            continue
-        lights = _additional_lights(mat)
-        if not lights:
-            continue
-        _light_table(mat, lights)
-        touched += 1
-    return touched
 
 
 # ============================ 材质参数接口 ============================
@@ -3286,7 +3575,9 @@ def panel_claims(mat):
 
 
 def panel_write(mat, row, value):
-    """面板值 → 全部级联实例 socket + 快照字典 + 顶点腿克隆输入,一次到位。"""
+    """面板值 → 快照字典(真源)→ 表列像素 + 顶点腿克隆输入,一次到位。
+    着色面的 socket 已被表列占线(is_linked 天然跳过)—— 改参 = 改像素,
+    零树更新:这是拖杆不再卡顿的全部原因。"""
     name = row['name']
     kind = row['kind']
     insts = _panel_insts(mat)
@@ -3303,6 +3594,7 @@ def panel_write(mat, row, value):
         floats = dict(mat.get('ruri_uber_floats') or {})
         floats[name] = scalar
         mat['ruri_uber_floats'] = floats
+        _param_write(mat)
     else:
         vec4 = [float(v) for v in value] + [0.0] * 4
         vec4 = vec4[:4]
@@ -3324,6 +3616,7 @@ def panel_write(mat, row, value):
         colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
         colors[name] = vec4
         mat['ruri_uber_colors'] = colors
+        _param_write(mat)
     _panel_touch(mat)
 
 
@@ -3406,6 +3699,7 @@ def panel_write_st(mat, row, tiling, offset):
     st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
     st[name] = st_value
     mat['ruri_uber_st'] = st
+    _param_write(mat)
     for grp in _panel_insts(mat):
         sock = grp.inputs.get(name + '_ST')
         if sock is not None and not sock.is_linked:
@@ -3468,6 +3762,8 @@ def panel_read(mat):
             images[name] = img
             value = st.get(name)
             if value is None:
+                value = _param_read(mat, name + '_ST')   # 表列(缺省已在列里)
+            if value is None:
                 sock = first.inputs.get(name + '_ST')
                 if sock is not None and not sock.is_linked:
                     tail = first.inputs.get(name + '_ST_w')
@@ -3480,6 +3776,10 @@ def panel_read(mat):
         sock = first.inputs.get(name)
         if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
             value = floats.get(name)
+            if value is None:
+                value = _param_read(mat, name)   # 表列(缺省已在列里)
+                if isinstance(value, list):
+                    value = value[0]
             if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
                 value = sock.default_value
             if value is None:
@@ -3488,6 +3788,10 @@ def panel_read(mat):
                             else int(value) if kind == 'INT' else float(value))
         else:
             value = colors.get(name)
+            if value is None:
+                value = _param_read(mat, name)   # 表列(缺省已在列里)
+                if isinstance(value, float):
+                    value = None
             if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
                 tail = first.inputs.get(name + '_w')
                 raw = sock.default_value

@@ -593,10 +593,20 @@ def _cap_specular_radiance(g, query, ctx):
 MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
 
 
+def _light_visible(obj):
+    """灯算不算数。`visible_get()` 要走 view layer 求值 —— 刚 link 进场景、依赖图这一拍
+    还没评估时它会答 False(实测:头一张材质因此按"无太阳"建,之后才跟上,同一场景先后
+    两次渲染不一致)。求值不出就退回对象自己的隐藏旗标,那是不依赖任何求值的真值。"""
+    try:
+        return obj.visible_get()
+    except (RuntimeError, ReferenceError):
+        return not obj.hide_viewport
+
+
 def _scene_sun():
     """场景里的主方向光 = 第一盏 SUN(按名字排序取定,免得场景枚举序变了图就跟着变)。"""
     suns = [o for o in bpy.context.scene.objects
-            if o.type == 'LIGHT' and o.data.type == 'SUN' and o.visible_get()]
+            if o.type == 'LIGHT' and o.data.type == 'SUN' and _light_visible(o)]
     return sorted(suns, key=lambda o: o.name)[0] if suns else None
 
 
@@ -687,129 +697,91 @@ def _light_axis(g, light, label):
     return v
 
 
-def _cap_main_light(g, query, ctx):
-    """主方向光的兑现。**不自造光照系统** —— 方向与颜色全部原生取自 Blender 自己的灯物体,
-    经**驱动器**绑到灯的 `matrix_world` / `data.color` / `data.energy`:转灯、换色、调能量
-    实时跟随,材质不用重建(不是建图时刻的快照)。
-
-    取谁,三级,单一真源逐级下落:
-      ① **逐角色覆盖** —— 对象自定义属性 `ruri_main_light` 指向一盏灯(选中对象设一下即可);
-      ② **场景太阳** —— 没有覆盖就取场景里的 SUN;
-      ③ **前向光** —— 一盏灯都没有时,方向 = ShaderNodeNewGeometry 的 Incoming
-         (表面指向观察者),也是 Blender 原生量,等价一盏永远跟着视角的头灯。
-         这不是替身值:没有场景灯时,「光从看的方向来」是唯一不依赖任何未知量的定义。
-
-    灯的类型也照 Blender 原生语义分:SUN 是平行光,方向恒为灯的 +Z 轴;POINT/SPOT/AREA 的方向
-    随着色点变,故按 `归一化(灯位 − 着色点)` 算,着色点取 Geometry 的 Position(同样原生)。
-    归一化交给节点(灯物体可能带缩放),不在 Python 里算死。
-
-    方向最后经 g.b2u 换回内核的 Unity 语义(内核 +Y 是上)。距离衰减恒 1(方向光无距离项);
-    阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,而它在 Blender 上是 Subsumed ——
-    EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。
-    """
-    _ = query
-    light = _override_light(ctx.get('material')) or _scene_sun()
-    if light is None:
-        return {
-            'direction': g.b2u(g.geo().outputs['Incoming']),
-            'color': (1.0, 1.0, 1.0),
-            'distanceAttenuation': 1.0,
-            'shadowAttenuation': 1.0,
-            'layerMask': 1.0,
-        }
-    if light.data.type == 'SUN':
-        to_light = _light_axis(g, light, 'RuriMainLightAxis')
-    else:
-        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
-                           g.geo().outputs['Position'])
-    tint = g._nd('ShaderNodeCombineXYZ')
-    tint.label = 'RuriMainLightColor'
-    for i in range(3):
-        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
-    return {
-        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
-        'color': tint.outputs[0],
-        'distanceAttenuation': 1.0,
-        'shadowAttenuation': 1.0,
-        'layerMask': 1.0,
-    }
-
-
-def _additional_lights(material):
-    """附加光 = 场景里除主光以外的所有可见灯,按名字定序。
-
-    「除主光以外」按对象取,不按类型:主光可能是场景 SUN,也可能是本材质自己覆盖的那盏。
-    定序按名字而不是枚举序 —— 场景里加删别的对象不该让灯的下标跳位。"""
-    main = _override_light(material) or _scene_sun()
-    lights = [o for o in bpy.context.scene.objects
-              if o.type == 'LIGHT' and o.visible_get() and o is not main]
-    return sorted(lights, key=lambda o: o.name)
-
-
-def _cap_additional_light_count(g, query, ctx):
-    """有几盏附加光 —— 装配期数得出来,直接给常量。这个值喂的是灯循环的迭代数socket。"""
-    _ = (g, query)
-    return {'': float(len(_additional_lights(ctx.get('material'))))}
-
-
+LIGHT_TABLE = 'RuriLightTable'
 LIGHT_TABLE_ROWS = 4
+LIGHT_TABLE_COLS = 64
 
 
-def _light_table(material, lights):
-    """灯表 = 一张 **N×4 浮点图**,一列一盏灯:
+def _light_table_image():
+    """场景全局灯表(全部生成栈共读同一张):64 列 × 4 行 fp32。
+       列0 = 场景主光;列1.. = 附加光。行布局:
        行0 (x,y,z | 类型)   类型 0=SUN 1=POINT/AREA 2=SPOT
        行1 (r,g,b | -)      颜色 × 能量
        行2 (x,y,z | -)      灯的世界 +Z 轴(指向光源;SUN 的方向、SPOT 的锥轴)
-       行3 (cosOuter, cosInner, 0 | -)  聚光锥
+       行3 (cosOuter, cosInner, hasMain* | count*)   *仅列0:主光在场旗标 + 附加光数
+    列宽定死:图节点指针烙在几百张模板拷贝里,尺寸一变就得全场换指针 —— 表列数是
+    协议不是容量优化;63 盏附加光之外的照明缺席会响亮报数,不静默截断。"""
+    image = bpy.data.images.get(LIGHT_TABLE)
+    if image is None or tuple(image.size) != (LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS) or not image.is_float:
+        stale = image
+        image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
+                                    float_buffer=True, alpha=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.use_fake_user = True
+        if stale is not None:
+            stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
+            bpy.data.images.remove(stale)
+            image.name = LIGHT_TABLE
+    return image
 
-    **灯数没有上限**:图有多宽就装多少盏。图里按下标采样是固定几个节点,
-    与灯数无关 —— 这正是不设槽位数的理由(槽位制的上限是实现漏进协议的产物)。
-    灯动/换色只重写像素(实测:改像素不重建任何节点,渲染即时跟)。
-    """
-    name = 'RuriLightTable_' + (material.name if material is not None else 'Scene')
-    width = max(len(lights), 1)
-    image = bpy.data.images.get(name)
-    if image is None or tuple(image.size) != (width, LIGHT_TABLE_ROWS) or not image.is_float:
-        if image is not None:
-            bpy.data.images.remove(image)
-        image = bpy.data.images.new(name, width, LIGHT_TABLE_ROWS, float_buffer=True, alpha=True)
-    image.colorspace_settings.name = 'Non-Color'
-    rows = [[0.0] * (width * 4) for _ in range(LIGHT_TABLE_ROWS)]
-    for k, light in enumerate(lights):
-        matrix = light.matrix_world
-        kind = light.data.type
-        flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
-        axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
-        length = math.sqrt(sum(c * c for c in axis)) or 1.0
-        axis = [c / length for c in axis]
-        energy = float(light.data.energy)
-        color = [float(c) * energy for c in light.data.color]
-        if kind == 'SPOT':
-            size = float(light.data.spot_size)
-            blend = float(light.data.spot_blend)
-            cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
-        else:
-            cone = [-1.0, 1.0]
-        for row, value in (
-                (0, [matrix[0][3], matrix[1][3], matrix[2][3], flag]),
-                (1, color + [1.0]),
-                (2, axis + [1.0]),
-                (3, cone + [0.0, 1.0])):
-            rows[row][k * 4:k * 4 + 4] = value
+
+def _pack_light(light):
+    """一盏灯的 4 texel 记录(列向,行序同上)。"""
+    matrix = light.matrix_world
+    kind = light.data.type
+    flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
+    axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
+    length = math.sqrt(sum(c * c for c in axis)) or 1.0
+    axis = [c / length for c in axis]
+    energy = float(light.data.energy)
+    color = [float(c) * energy for c in light.data.color]
+    if kind == 'SPOT':
+        size = float(light.data.spot_size)
+        blend = float(light.data.spot_blend)
+        cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
+    else:
+        cone = [-1.0, 1.0]
+    return ([matrix[0][3], matrix[1][3], matrix[2][3], flag],
+            color + [1.0], axis + [1.0], cone + [0.0, 0.0])
+
+
+def refresh_light_tables():
+    """场景灯 → 灯表像素。加灯/删灯/动灯/换色/调锥全走这一条:**零节点、零重接**
+    (实测机制:改像素不重建任何节点,渲染即时跟)。这正是模板复制架构的前提 ——
+    拷出去的几百张材质不可能逐张重接,灯的一切变化都必须是数据。"""
+    main = _scene_sun()
+    others = [o for o in bpy.context.scene.objects
+              if o.type == 'LIGHT' and _light_visible(o) and o is not main]
+    others.sort(key=lambda o: o.name)
+    if len(others) > LIGHT_TABLE_COLS - 1:
+        print('[ruri-cap] !! 场景 {0} 盏附加光超过灯表 {1} 列,按名序靠后的不参与照明'.format(
+            len(others), LIGHT_TABLE_COLS - 1), flush=True)
+        others = others[:LIGHT_TABLE_COLS - 1]
+    image = _light_table_image()
+    rows = [[0.0] * (LIGHT_TABLE_COLS * 4) for _ in range(LIGHT_TABLE_ROWS)]
+    for col, light in enumerate([main] + others if main is not None else others, start=0 if main is not None else 1):
+        r0, r1, r2, r3 = _pack_light(light)
+        for row, value in ((0, r0), (1, r1), (2, r2), (3, r3)):
+            rows[row][col * 4:col * 4 + 4] = value
+    rows[3][2] = 1.0 if main is not None else 0.0   # 列0 行3 .b = hasMain
+    rows[3][3] = float(len(others))                 # 列0 行3 .a = 附加光数(灯循环迭代数)
     flat = []
     for row in rows:
         flat.extend(row)
     image.pixels = flat
     image.update()
-    return image, width
+    # 🔴 同 _param_flush:纯像素写不触发 GPU 纹理重传,EEVEE 会继续用旧的那份
+    # (症状=加了灯画面纹丝不动,下一次渲染才跟上)。update_tag 是 O(1) 的脏标记。
+    image.update_tag()
+    return 1
 
 
-def _table_row(g, image, index, row, width):
-    """按下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
+def _table_row(g, index, row):
+    """按列下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
     否则相邻两盏灯会被硬件混成一盏不存在的灯。"""
-    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(width))
+    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(LIGHT_TABLE_COLS))
     node = g._nd('ShaderNodeTexImage')
-    node.image = image
+    node.image = _light_table_image()
     node.interpolation = 'Closest'
     node.extension = 'EXTEND'
     node.label = 'RuriLightTable'
@@ -817,24 +789,80 @@ def _table_row(g, image, index, row, width):
     return node.outputs['Color'], node.outputs['Alpha']
 
 
+def _cap_main_light(g, query, ctx):
+    """主方向光的兑现,**数据驱动**:方向/颜色从灯表列0读。加灯/删灯/动灯只改像素,
+    图一个节点都不动。没有主光时的头灯兜底(方向 = Geometry 的 Incoming,表面指向观察者)
+    以 hasMain 选择支**常驻图里** —— 0 盏灯 ↔ 有灯 的切换同样只是像素。
+
+    逐角色覆盖灯(MAIN_LIGHT_OVERRIDE)是唯一的非表路径:那盏灯是这张材质自己的,
+    走驱动器直连(转灯/换色实时跟),由设置它的算子对该材质单独 rewire —— 单材质一次,
+    永不进批量路径。
+
+    距离衰减恒 1(方向光无距离项);阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,
+    而它在 Blender 上是 Subsumed —— EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。"""
+    _ = query
+    light = _override_light(ctx.get('material'))
+    if light is not None:
+        if light.data.type == 'SUN':
+            to_light = _light_axis(g, light, 'RuriMainLightAxis')
+        else:
+            to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
+                               g.geo().outputs['Position'])
+        tint = g._nd('ShaderNodeCombineXYZ')
+        tint.label = 'RuriMainLightColor'
+        for i in range(3):
+            _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
+        return {
+            'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
+            'color': tint.outputs[0],
+            'distanceAttenuation': 1.0,
+            'shadowAttenuation': 1.0,
+            'layerMask': 1.0,
+        }
+    refresh_light_tables()
+    _pos, _flag = _table_row(g, 0.0, 0)
+    color, _ca = _table_row(g, 0.0, 1)
+    axis, _aa = _table_row(g, 0.0, 2)
+    flags, _count = _table_row(g, 0.0, 3)
+    _co, _ci, has_main = g.sep(flags)
+    direction = g.mixv(has_main, g.geo().outputs['Incoming'], axis)
+    tint = g.mixv(has_main, (1.0, 1.0, 1.0), color)
+    return {
+        'direction': g.b2u(g.vmath('NORMALIZE', direction)),
+        'color': tint,
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _cap_additional_light_count(g, query, ctx):
+    """附加光数从灯表列0行3的 .a 读 —— 给的是 socket 不是常量:加灯删灯改像素即生效,
+    模板的几百张拷贝零重接。喂灯循环的迭代数 socket(float→int 隐式转换,值恒为精确整数)。"""
+    _ = (query, ctx)
+    refresh_light_tables()
+    _flags, count = _table_row(g, 0.0, 3)
+    return {'': count}
+
+
 def _cap_additional_light(g, query, ctx):
-    """第 index 盏附加光。**逐迭代**按下标查灯表,所以下标是什么值都取得对 ——
-    循环体内的割点每圈自己采一次,不存在「把下标导出去只剩最后一圈」的问题。
+    """第 index 盏附加光(表列 index+1;列0 是主光)。**逐迭代**按下标查灯表,
+    所以下标是什么值都取得对 —— 循环体内的割点每圈自己采一次。
 
     类型差异不靠逐灯建节点,靠表里的类型位在图里选:
       SUN  方向 = 灯的 +Z 轴,无距离衰减;
       其余 方向 = 归一化(灯位 − 着色点),距离衰减 = 平方反比(Blender 自己的灯就这么落衰);
       SPOT 再乘一层原生锥(cos 半角 + spot_blend 软边,smoothstep,与 Cycles 同式)。
-    """
+    灯不在场时对应列全零 ⇒ 颜色 0 ⇒ 贡献 0,且 count 门根本不让循环跑到那里。"""
     index = query.get('index')
-    lights = _additional_lights(ctx.get('material'))
-    if index is None or not lights:
+    if index is None:
         return None
-    image, width = _light_table(ctx.get('material'), lights)
-    position, type_flag = _table_row(g, image, index, 0, width)
-    color, _ca = _table_row(g, image, index, 1, width)
-    axis, _aa = _table_row(g, image, index, 2, width)
-    cone, _oa = _table_row(g, image, index, 3, width)
+    refresh_light_tables()
+    column = g.math('ADD', index, 1.0)
+    position, type_flag = _table_row(g, column, 0)
+    color, _ca = _table_row(g, column, 1)
+    axis, _aa = _table_row(g, column, 2)
+    cone, _oa = _table_row(g, column, 3)
     cos_outer, cos_inner, _unused = g.sep(cone)
 
     to_light = g.vmath('SUBTRACT', position, g.geo().outputs['Position'])

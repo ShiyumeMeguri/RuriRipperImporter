@@ -53,10 +53,11 @@ except ImportError:  # standalone (non-package) testing
 OBJECTS = "objects"            # 有新对象进场
 MATERIALS = "materials"        # 有新材质进场
 CAMERA = "camera"              # 活动相机的身份/位姿/投影/输出分辨率
-LIGHT_SET = "light_set"        # 灯的增删/类型/可见性/世界(兑现分支本身可能变)
-LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(只有表像素要重写)
+LIGHT_SET = "light_set"        # 灯的增删/类型/可见性(生成栈的灯表:改像素即生效,零重接)
+LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(同上,表像素)
+WORLD = "world"                # 世界被换(环境采样是建组时快照,只有这件事还要重接兑现面)
 
-ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES))
+ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD))
 
 # 去抖窗口:批量导入的几百次 announce、相机拖动的每帧变更,都收敛成末尾的一次落地。
 DEBOUNCE_SECONDS = 0.1
@@ -103,7 +104,9 @@ class Stage:
 
 
 def _run_capabilities(change):
-    """材质的环境查询兑现:新材质要接上,灯集合变了则全场重接。"""
+    """材质的环境查询兑现面重接。只剩一个触发者:**世界被换**(环境采样是建组时快照)。
+    灯的增删挪动全部走灯表像素(生成栈的表化能力),再不进这条逐材质路径 ——
+    场景窗口导入几百材质后加一盏灯就全场重接,曾把加载完的会话拖进分钟级卡顿。"""
     scope = None if change.whole_scene else change.materials
     return material_builder.rewire_capabilities(scope)
 
@@ -135,8 +138,8 @@ def _run_material_panels(change):
 # 表就是调度策略的全部。顺序 = 注册顺序:兑现节点先接好,顶点腿再按材质真值建树,
 # 后处理最后落在合成器上(三者互不读对方产物,顺序只为报告好读)。
 STAGES = (
-    Stage("capabilities", (MATERIALS, LIGHT_SET), _run_capabilities),
-    Stage("light-tables", (LIGHT_VALUES,), _run_light_tables),
+    Stage("capabilities", (WORLD,), _run_capabilities),
+    Stage("light-tables", (LIGHT_SET, LIGHT_VALUES), _run_light_tables),
     Stage("vertex", (OBJECTS, MATERIALS, CAMERA), _run_vertex),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
@@ -287,6 +290,7 @@ def rebuild_all():
 _light_set = None
 _light_values = None
 _camera = None
+_world = None
 
 
 def _light_set_signature(scene):
@@ -300,7 +304,13 @@ def _light_set_signature(scene):
             visible = not obj.hide_viewport
         signature.append((obj.name, obj.data.type, visible))
     signature.sort()
-    return (tuple(signature), scene.world.name_full if scene.world is not None else None)
+    return tuple(signature)
+
+
+def _world_signature(scene):
+    """世界的身份。环境采样是各材质建组时的快照,换世界是唯一还需要重接兑现面的事件
+    —— 所以它是独立事实,不再混在灯集合签名里(混着的时候,加一盏灯也会触发全场重接)。"""
+    return scene.world.name_full if scene.world is not None else None
 
 
 def _light_values_signature(scene):
@@ -363,22 +373,26 @@ def _camera_touched(depsgraph):
 
 
 def _resnapshot(scene):
-    global _light_set, _light_values, _camera
+    global _light_set, _light_values, _camera, _world
     _light_set = _light_set_signature(scene)
     _light_values = _light_values_signature(scene)
     _camera = _camera_signature(scene)
+    _world = _world_signature(scene)
 
 
 @bpy.app.handlers.persistent
 def _on_depsgraph_update(scene, depsgraph):
-    global _light_set, _light_values, _camera
+    global _light_set, _light_values, _camera, _world
     if _flushing:
         return
     if _lights_touched(depsgraph):
+        world = _world_signature(scene)
+        if world != _world:
+            _world = world
+            _mark((WORLD,), whole_scene=True)
         light_set = _light_set_signature(scene)
         light_values = _light_values_signature(scene)
         if light_set != _light_set:
-            # 集合变了就只报集合:兑现节点整体重建,顺带把表也重写了,再单独刷一遍是白干。
             _light_set, _light_values = light_set, light_values
             _mark((LIGHT_SET,), whole_scene=True)
         elif light_values != _light_values:

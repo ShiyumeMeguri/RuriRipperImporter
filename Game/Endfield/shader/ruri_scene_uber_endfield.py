@@ -611,10 +611,20 @@ def _cap_specular_radiance(g, query, ctx):
 MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
 
 
+def _light_visible(obj):
+    """灯算不算数。`visible_get()` 要走 view layer 求值 —— 刚 link 进场景、依赖图这一拍
+    还没评估时它会答 False(实测:头一张材质因此按"无太阳"建,之后才跟上,同一场景先后
+    两次渲染不一致)。求值不出就退回对象自己的隐藏旗标,那是不依赖任何求值的真值。"""
+    try:
+        return obj.visible_get()
+    except (RuntimeError, ReferenceError):
+        return not obj.hide_viewport
+
+
 def _scene_sun():
     """场景里的主方向光 = 第一盏 SUN(按名字排序取定,免得场景枚举序变了图就跟着变)。"""
     suns = [o for o in bpy.context.scene.objects
-            if o.type == 'LIGHT' and o.data.type == 'SUN' and o.visible_get()]
+            if o.type == 'LIGHT' and o.data.type == 'SUN' and _light_visible(o)]
     return sorted(suns, key=lambda o: o.name)[0] if suns else None
 
 
@@ -705,129 +715,104 @@ def _light_axis(g, light, label):
     return v
 
 
-def _cap_main_light(g, query, ctx):
-    """主方向光的兑现。**不自造光照系统** —— 方向与颜色全部原生取自 Blender 自己的灯物体,
-    经**驱动器**绑到灯的 `matrix_world` / `data.color` / `data.energy`:转灯、换色、调能量
-    实时跟随,材质不用重建(不是建图时刻的快照)。
-
-    取谁,三级,单一真源逐级下落:
-      ① **逐角色覆盖** —— 对象自定义属性 `ruri_main_light` 指向一盏灯(选中对象设一下即可);
-      ② **场景太阳** —— 没有覆盖就取场景里的 SUN;
-      ③ **前向光** —— 一盏灯都没有时,方向 = ShaderNodeNewGeometry 的 Incoming
-         (表面指向观察者),也是 Blender 原生量,等价一盏永远跟着视角的头灯。
-         这不是替身值:没有场景灯时,「光从看的方向来」是唯一不依赖任何未知量的定义。
-
-    灯的类型也照 Blender 原生语义分:SUN 是平行光,方向恒为灯的 +Z 轴;POINT/SPOT/AREA 的方向
-    随着色点变,故按 `归一化(灯位 − 着色点)` 算,着色点取 Geometry 的 Position(同样原生)。
-    归一化交给节点(灯物体可能带缩放),不在 Python 里算死。
-
-    方向最后经 g.b2u 换回内核的 Unity 语义(内核 +Y 是上)。距离衰减恒 1(方向光无距离项);
-    阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,而它在 Blender 上是 Subsumed ——
-    EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。
-    """
-    _ = query
-    light = _override_light(ctx.get('material')) or _scene_sun()
-    if light is None:
-        return {
-            'direction': g.b2u(g.geo().outputs['Incoming']),
-            'color': (1.0, 1.0, 1.0),
-            'distanceAttenuation': 1.0,
-            'shadowAttenuation': 1.0,
-            'layerMask': 1.0,
-        }
-    if light.data.type == 'SUN':
-        to_light = _light_axis(g, light, 'RuriMainLightAxis')
-    else:
-        to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
-                           g.geo().outputs['Position'])
-    tint = g._nd('ShaderNodeCombineXYZ')
-    tint.label = 'RuriMainLightColor'
-    for i in range(3):
-        _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
-    return {
-        'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
-        'color': tint.outputs[0],
-        'distanceAttenuation': 1.0,
-        'shadowAttenuation': 1.0,
-        'layerMask': 1.0,
-    }
-
-
-def _additional_lights(material):
-    """附加光 = 场景里除主光以外的所有可见灯,按名字定序。
-
-    「除主光以外」按对象取,不按类型:主光可能是场景 SUN,也可能是本材质自己覆盖的那盏。
-    定序按名字而不是枚举序 —— 场景里加删别的对象不该让灯的下标跳位。"""
-    main = _override_light(material) or _scene_sun()
-    lights = [o for o in bpy.context.scene.objects
-              if o.type == 'LIGHT' and o.visible_get() and o is not main]
-    return sorted(lights, key=lambda o: o.name)
-
-
-def _cap_additional_light_count(g, query, ctx):
-    """有几盏附加光 —— 装配期数得出来,直接给常量。这个值喂的是灯循环的迭代数socket。"""
-    _ = (g, query)
-    return {'': float(len(_additional_lights(ctx.get('material'))))}
-
-
+LIGHT_TABLE = 'RuriLightTable'
 LIGHT_TABLE_ROWS = 4
+LIGHT_TABLE_COLS = 64
 
 
-def _light_table(material, lights):
-    """灯表 = 一张 **N×4 浮点图**,一列一盏灯:
+def _image_uploaded(image):
+    """像素写完之后让它真的到达 GPU。
+
+    🔴 `update()` + `update_tag()` **都不够**:EEVEE 会继续用已上传的那份纹理,
+    症状是「表里写对了、画面纹丝不动,下一次渲染才跟上」(实测:加一盏灯后
+    peak|Δ|=0,再渲一次才变)。`gl_free()` 丢掉 GPU 端句柄,下次求值重新上传。
+    表都是极小的图(灯表 64×4、参数表 1024×68),重传成本可以忽略;而这正是
+    「数据一改、几百张材质立刻跟随且零重接」得以成立的最后一环。"""
+    image.update()
+    image.update_tag()
+    try:
+        image.gl_free()
+    except Exception:
+        pass
+
+
+def _light_table_image():
+    """场景全局灯表(全部生成栈共读同一张):64 列 × 4 行 fp32。
+       列0 = 场景主光;列1.. = 附加光。行布局:
        行0 (x,y,z | 类型)   类型 0=SUN 1=POINT/AREA 2=SPOT
        行1 (r,g,b | -)      颜色 × 能量
        行2 (x,y,z | -)      灯的世界 +Z 轴(指向光源;SUN 的方向、SPOT 的锥轴)
-       行3 (cosOuter, cosInner, 0 | -)  聚光锥
+       行3 (cosOuter, cosInner, hasMain* | count*)   *仅列0:主光在场旗标 + 附加光数
+    列宽定死:图节点指针烙在几百张模板拷贝里,尺寸一变就得全场换指针 —— 表列数是
+    协议不是容量优化;63 盏附加光之外的照明缺席会响亮报数,不静默截断。"""
+    image = bpy.data.images.get(LIGHT_TABLE)
+    if image is None or tuple(image.size) != (LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS) or not image.is_float:
+        stale = image
+        image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
+                                    float_buffer=True, alpha=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.use_fake_user = True
+        if stale is not None:
+            stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
+            bpy.data.images.remove(stale)
+            image.name = LIGHT_TABLE
+    return image
 
-    **灯数没有上限**:图有多宽就装多少盏。图里按下标采样是固定几个节点,
-    与灯数无关 —— 这正是不设槽位数的理由(槽位制的上限是实现漏进协议的产物)。
-    灯动/换色只重写像素(实测:改像素不重建任何节点,渲染即时跟)。
-    """
-    name = 'RuriLightTable_' + (material.name if material is not None else 'Scene')
-    width = max(len(lights), 1)
-    image = bpy.data.images.get(name)
-    if image is None or tuple(image.size) != (width, LIGHT_TABLE_ROWS) or not image.is_float:
-        if image is not None:
-            bpy.data.images.remove(image)
-        image = bpy.data.images.new(name, width, LIGHT_TABLE_ROWS, float_buffer=True, alpha=True)
-    image.colorspace_settings.name = 'Non-Color'
-    rows = [[0.0] * (width * 4) for _ in range(LIGHT_TABLE_ROWS)]
-    for k, light in enumerate(lights):
-        matrix = light.matrix_world
-        kind = light.data.type
-        flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
-        axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
-        length = math.sqrt(sum(c * c for c in axis)) or 1.0
-        axis = [c / length for c in axis]
-        energy = float(light.data.energy)
-        color = [float(c) * energy for c in light.data.color]
-        if kind == 'SPOT':
-            size = float(light.data.spot_size)
-            blend = float(light.data.spot_blend)
-            cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
-        else:
-            cone = [-1.0, 1.0]
-        for row, value in (
-                (0, [matrix[0][3], matrix[1][3], matrix[2][3], flag]),
-                (1, color + [1.0]),
-                (2, axis + [1.0]),
-                (3, cone + [0.0, 1.0])):
-            rows[row][k * 4:k * 4 + 4] = value
+
+def _pack_light(light):
+    """一盏灯的 4 texel 记录(列向,行序同上)。"""
+    matrix = light.matrix_world
+    kind = light.data.type
+    flag = 0.0 if kind == 'SUN' else (2.0 if kind == 'SPOT' else 1.0)
+    axis = [matrix[0][2], matrix[1][2], matrix[2][2]]
+    length = math.sqrt(sum(c * c for c in axis)) or 1.0
+    axis = [c / length for c in axis]
+    energy = float(light.data.energy)
+    color = [float(c) * energy for c in light.data.color]
+    if kind == 'SPOT':
+        size = float(light.data.spot_size)
+        blend = float(light.data.spot_blend)
+        cone = [math.cos(size * 0.5), math.cos(size * (1.0 - blend) * 0.5)]
+    else:
+        cone = [-1.0, 1.0]
+    return ([matrix[0][3], matrix[1][3], matrix[2][3], flag],
+            color + [1.0], axis + [1.0], cone + [0.0, 0.0])
+
+
+def refresh_light_tables():
+    """场景灯 → 灯表像素。加灯/删灯/动灯/换色/调锥全走这一条:**零节点、零重接**
+    (实测机制:改像素不重建任何节点,渲染即时跟)。这正是模板复制架构的前提 ——
+    拷出去的几百张材质不可能逐张重接,灯的一切变化都必须是数据。"""
+    main = _scene_sun()
+    others = [o for o in bpy.context.scene.objects
+              if o.type == 'LIGHT' and _light_visible(o) and o is not main]
+    others.sort(key=lambda o: o.name)
+    if len(others) > LIGHT_TABLE_COLS - 1:
+        print('[ruri-cap] !! 场景 {0} 盏附加光超过灯表 {1} 列,按名序靠后的不参与照明'.format(
+            len(others), LIGHT_TABLE_COLS - 1), flush=True)
+        others = others[:LIGHT_TABLE_COLS - 1]
+    image = _light_table_image()
+    rows = [[0.0] * (LIGHT_TABLE_COLS * 4) for _ in range(LIGHT_TABLE_ROWS)]
+    for col, light in enumerate([main] + others if main is not None else others, start=0 if main is not None else 1):
+        r0, r1, r2, r3 = _pack_light(light)
+        for row, value in ((0, r0), (1, r1), (2, r2), (3, r3)):
+            rows[row][col * 4:col * 4 + 4] = value
+    rows[3][2] = 1.0 if main is not None else 0.0   # 列0 行3 .b = hasMain
+    rows[3][3] = float(len(others))                 # 列0 行3 .a = 附加光数(灯循环迭代数)
     flat = []
     for row in rows:
         flat.extend(row)
     image.pixels = flat
-    image.update()
-    return image, width
+    _image_uploaded(image)
+    return 1
 
 
-def _table_row(g, image, index, row, width):
-    """按下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
+def _table_row(g, index, row):
+    """按列下标取灯表的一行。Closest + EXTEND:纹素寻址不许再插一次值,
     否则相邻两盏灯会被硬件混成一盏不存在的灯。"""
-    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(width))
+    u = g.math('DIVIDE', g.math('ADD', index, 0.5), float(LIGHT_TABLE_COLS))
     node = g._nd('ShaderNodeTexImage')
-    node.image = image
+    node.image = _light_table_image()
     node.interpolation = 'Closest'
     node.extension = 'EXTEND'
     node.label = 'RuriLightTable'
@@ -835,24 +820,80 @@ def _table_row(g, image, index, row, width):
     return node.outputs['Color'], node.outputs['Alpha']
 
 
+def _cap_main_light(g, query, ctx):
+    """主方向光的兑现,**数据驱动**:方向/颜色从灯表列0读。加灯/删灯/动灯只改像素,
+    图一个节点都不动。没有主光时的头灯兜底(方向 = Geometry 的 Incoming,表面指向观察者)
+    以 hasMain 选择支**常驻图里** —— 0 盏灯 ↔ 有灯 的切换同样只是像素。
+
+    逐角色覆盖灯(MAIN_LIGHT_OVERRIDE)是唯一的非表路径:那盏灯是这张材质自己的,
+    走驱动器直连(转灯/换色实时跟),由设置它的算子对该材质单独 rewire —— 单材质一次,
+    永不进批量路径。
+
+    距离衰减恒 1(方向光无距离项);阴影衰减恒 1 是因为遮挡归 ShadowAttenuation 那条能力,
+    而它在 Blender 上是 Subsumed —— EEVEE/Cycles 在图外自己算,图里再乘一次就是双计。"""
+    _ = query
+    light = _override_light(ctx.get('material'))
+    if light is not None:
+        if light.data.type == 'SUN':
+            to_light = _light_axis(g, light, 'RuriMainLightAxis')
+        else:
+            to_light = g.vmath('SUBTRACT', _light_pos(g, light, 'RuriMainLightPos'),
+                               g.geo().outputs['Position'])
+        tint = g._nd('ShaderNodeCombineXYZ')
+        tint.label = 'RuriMainLightColor'
+        for i in range(3):
+            _drive(tint.inputs[i], light, 'data.color[%d]' % i, expr='v * e', extra=('e', 'data.energy'))
+        return {
+            'direction': g.b2u(g.vmath('NORMALIZE', to_light)),
+            'color': tint.outputs[0],
+            'distanceAttenuation': 1.0,
+            'shadowAttenuation': 1.0,
+            'layerMask': 1.0,
+        }
+    refresh_light_tables()
+    _pos, _flag = _table_row(g, 0.0, 0)
+    color, _ca = _table_row(g, 0.0, 1)
+    axis, _aa = _table_row(g, 0.0, 2)
+    flags, _count = _table_row(g, 0.0, 3)
+    _co, _ci, has_main = g.sep(flags)
+    direction = g.mixv(has_main, g.geo().outputs['Incoming'], axis)
+    tint = g.mixv(has_main, (1.0, 1.0, 1.0), color)
+    return {
+        'direction': g.b2u(g.vmath('NORMALIZE', direction)),
+        'color': tint,
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _cap_additional_light_count(g, query, ctx):
+    """附加光数从灯表列0行3的 .a 读 —— 给的是 socket 不是常量:加灯删灯改像素即生效,
+    模板的几百张拷贝零重接。喂灯循环的迭代数 socket(float→int 隐式转换,值恒为精确整数)。"""
+    _ = (query, ctx)
+    refresh_light_tables()
+    _flags, count = _table_row(g, 0.0, 3)
+    return {'': count}
+
+
 def _cap_additional_light(g, query, ctx):
-    """第 index 盏附加光。**逐迭代**按下标查灯表,所以下标是什么值都取得对 ——
-    循环体内的割点每圈自己采一次,不存在「把下标导出去只剩最后一圈」的问题。
+    """第 index 盏附加光(表列 index+1;列0 是主光)。**逐迭代**按下标查灯表,
+    所以下标是什么值都取得对 —— 循环体内的割点每圈自己采一次。
 
     类型差异不靠逐灯建节点,靠表里的类型位在图里选:
       SUN  方向 = 灯的 +Z 轴,无距离衰减;
       其余 方向 = 归一化(灯位 − 着色点),距离衰减 = 平方反比(Blender 自己的灯就这么落衰);
       SPOT 再乘一层原生锥(cos 半角 + spot_blend 软边,smoothstep,与 Cycles 同式)。
-    """
+    灯不在场时对应列全零 ⇒ 颜色 0 ⇒ 贡献 0,且 count 门根本不让循环跑到那里。"""
     index = query.get('index')
-    lights = _additional_lights(ctx.get('material'))
-    if index is None or not lights:
+    if index is None:
         return None
-    image, width = _light_table(ctx.get('material'), lights)
-    position, type_flag = _table_row(g, image, index, 0, width)
-    color, _ca = _table_row(g, image, index, 1, width)
-    axis, _aa = _table_row(g, image, index, 2, width)
-    cone, _oa = _table_row(g, image, index, 3, width)
+    refresh_light_tables()
+    column = g.math('ADD', index, 1.0)
+    position, type_flag = _table_row(g, column, 0)
+    color, _ca = _table_row(g, column, 1)
+    axis, _aa = _table_row(g, column, 2)
+    cone, _oa = _table_row(g, column, 3)
     cos_outer, cos_inner, _unused = g.sep(cone)
 
     to_light = g.vmath('SUBTRACT', position, g.geo().outputs['Position'])
@@ -13290,6 +13331,1605 @@ CAPABILITIES = {
     ],
 }
 
+PARAMS = {
+    'Lit': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 10, 2, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 10, 3, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 0, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 1, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 11, 2, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 11, 3, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 0, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 1, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 12, 2, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 13, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 12, 3, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 14, 0, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 14, 1, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 14, 2, 0.0, 0.0),
+        ('_MaskBScale', 'F', 14, 3, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 16, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 17, 0, 0.0, 0.0),
+        ('_MaskGScale', 'F', 17, 1, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 17, 2, 0.0, 0.0),
+        ('_MaskRScale', 'F', 17, 3, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 19, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 20, 0, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 20, 1, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 20, 2, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 20, 3, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 0, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 1, 0.0, 0.0),
+        ('_LayerBlend', 'F', 21, 2, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 21, 3, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 0, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 1, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 22, 2, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 22, 3, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 0, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 1, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 23, 2, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 23, 3, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 0, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 1, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 24, 2, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 24, 3, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 0, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 1, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 26, 2, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 26, 3, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 27, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 28, 0, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 28, 1, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 28, 2, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 28, 3, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 29, 2, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 29, 3, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 0, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 1, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 30, 3, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 0, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 1, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 31, 2, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 31, 3, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 32, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 33, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 37, 0, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 37, 1, 0.0, 0.0),
+        ('_EmissiveType', 'F', 37, 2, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 37, 3, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 0, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 1, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 39, 2, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 39, 3, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 0, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 40, 2, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 41, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 40, 3, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 42, 0, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 42, 1, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 42, 2, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 42, 3, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 46, 0, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 46, 1, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 46, 2, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 46, 3, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 48, 0, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 48, 1, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 48, 2, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 49, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 48, 3, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 50, 0, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 50, 1, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 50, 2, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 52, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 50, 3, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 55, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 56, 0, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 56, 1, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 56, 2, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 56, 3, 0.5, 0.0),
+        ('M_PI', 'F', 57, 0, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 1, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 57, 2, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 57, 3, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 58, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 59, 0, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 59, 1, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 59, 2, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 59, 3, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 0, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 1, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 60, 2, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 60, 3, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 62, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 63, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 64, 0, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 64, 1, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 64, 2, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 64, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 65, 3, 0.0, 0.0),
+    ],
+    'LitForward': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 10, 2, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 10, 3, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 0, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 1, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 11, 2, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 11, 3, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 0, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 1, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 12, 2, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 13, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 12, 3, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 14, 0, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 14, 1, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 14, 2, 0.0, 0.0),
+        ('_MaskBScale', 'F', 14, 3, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 16, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 17, 0, 0.0, 0.0),
+        ('_MaskGScale', 'F', 17, 1, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 17, 2, 0.0, 0.0),
+        ('_MaskRScale', 'F', 17, 3, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 19, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 20, 0, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 20, 1, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 20, 2, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 20, 3, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 0, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 1, 0.0, 0.0),
+        ('_LayerBlend', 'F', 21, 2, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 21, 3, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 0, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 1, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 22, 2, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 22, 3, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 0, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 1, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 23, 2, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 23, 3, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 0, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 1, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 24, 2, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 24, 3, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 0, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 1, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 26, 2, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 26, 3, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 27, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 28, 0, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 28, 1, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 28, 2, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 28, 3, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 29, 2, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 29, 3, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 0, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 1, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 30, 3, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 0, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 1, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 31, 2, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 31, 3, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 32, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 33, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 37, 0, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 37, 1, 0.0, 0.0),
+        ('_EmissiveType', 'F', 37, 2, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 37, 3, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 0, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 1, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 39, 2, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 39, 3, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 0, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 40, 2, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 41, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 40, 3, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 42, 0, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 42, 1, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 42, 2, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 42, 3, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 46, 0, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 46, 1, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 46, 2, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 46, 3, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 48, 0, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 48, 1, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 48, 2, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 49, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 48, 3, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 50, 0, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 50, 1, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 50, 2, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 52, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 50, 3, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 55, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 56, 0, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 56, 1, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 56, 2, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 56, 3, 0.5, 0.0),
+        ('M_PI', 'F', 57, 0, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 1, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 57, 2, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 57, 3, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 58, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 59, 0, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 59, 1, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 59, 2, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 59, 3, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 0, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 1, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 60, 2, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 60, 3, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 62, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 63, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 64, 0, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 64, 1, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 64, 2, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 64, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 65, 3, 0.0, 0.0),
+    ],
+    'LitTransparent': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_EffectIntensity', 'F', 10, 2, 1.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 10, 3, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 11, 0, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 1, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 2, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 11, 3, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 12, 0, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 1, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 2, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 12, 3, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 13, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 14, 0, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 14, 1, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 14, 2, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 14, 3, 0.0, 0.0),
+        ('_MaskBScale', 'F', 16, 0, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 17, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 16, 1, 0.0, 0.0),
+        ('_MaskGScale', 'F', 16, 2, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 16, 3, 0.0, 0.0),
+        ('_MaskRScale', 'F', 19, 0, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 20, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 19, 1, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 19, 2, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 19, 3, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 21, 0, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 1, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 2, 0.0, 0.0),
+        ('_LayerBlend', 'F', 21, 3, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 22, 0, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 1, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 2, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 22, 3, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 23, 0, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 1, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 2, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 23, 3, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 24, 0, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 1, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 2, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 24, 3, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 26, 0, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 1, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 2, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 26, 3, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 27, 0, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 28, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 27, 1, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 27, 2, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 27, 3, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 2, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 29, 3, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 30, 0, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 1, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 30, 3, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 31, 0, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 1, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 2, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 31, 3, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 32, 0, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 33, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 37, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 32, 1, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 32, 2, 0.0, 0.0),
+        ('_EmissiveType', 'F', 32, 3, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 39, 0, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 1, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 2, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 39, 3, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 40, 0, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 2, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 40, 3, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 41, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 42, 0, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 42, 1, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 42, 2, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 42, 3, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 46, 0, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 46, 1, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 46, 2, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 46, 3, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 48, 0, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 48, 1, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 48, 2, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 48, 3, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 49, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 50, 0, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 50, 1, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 50, 2, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 50, 3, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 52, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 55, 0, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 56, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 55, 1, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 55, 2, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 55, 3, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 57, 0, 0.5, 0.0),
+        ('M_PI', 'F', 57, 1, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 2, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 57, 3, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 58, 0, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 59, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 58, 1, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 58, 2, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 58, 3, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 60, 0, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 1, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 2, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 60, 3, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 62, 0, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 63, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 64, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 62, 1, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 62, 2, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 62, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+    ],
+    'LitEffect': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_EffectIntensity', 'F', 10, 2, 1.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 10, 3, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 11, 0, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 1, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 2, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 11, 3, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 12, 0, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 1, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 2, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 12, 3, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 13, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 14, 0, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 14, 1, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 14, 2, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 14, 3, 0.0, 0.0),
+        ('_MaskBScale', 'F', 16, 0, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 17, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 16, 1, 0.0, 0.0),
+        ('_MaskGScale', 'F', 16, 2, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 16, 3, 0.0, 0.0),
+        ('_MaskRScale', 'F', 19, 0, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 20, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 19, 1, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 19, 2, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 19, 3, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 21, 0, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 1, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 2, 0.0, 0.0),
+        ('_LayerBlend', 'F', 21, 3, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 22, 0, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 1, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 2, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 22, 3, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 23, 0, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 1, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 2, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 23, 3, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 24, 0, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 1, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 2, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 24, 3, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 26, 0, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 1, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 2, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 26, 3, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 27, 0, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 28, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 27, 1, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 27, 2, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 27, 3, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 2, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 29, 3, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 30, 0, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 1, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 30, 3, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 31, 0, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 1, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 2, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 31, 3, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 32, 0, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 33, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 37, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 32, 1, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 32, 2, 0.0, 0.0),
+        ('_EmissiveType', 'F', 32, 3, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 39, 0, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 1, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 2, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 39, 3, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 40, 0, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 2, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 40, 3, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 41, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 42, 0, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 42, 1, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 42, 2, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 42, 3, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 46, 0, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 46, 1, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 46, 2, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 46, 3, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 48, 0, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 48, 1, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 48, 2, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 48, 3, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 49, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 50, 0, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 50, 1, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 50, 2, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 50, 3, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 52, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 55, 0, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 56, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 55, 1, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 55, 2, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 55, 3, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 57, 0, 0.5, 0.0),
+        ('M_PI', 'F', 57, 1, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 2, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 57, 3, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 58, 0, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 59, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 58, 1, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 58, 2, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 58, 3, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 60, 0, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 1, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 2, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 60, 3, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 62, 0, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 63, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 64, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 62, 1, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 62, 2, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 62, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+    ],
+    'LitEffectBlend': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_EffectIntensity', 'F', 10, 2, 1.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 10, 3, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 11, 0, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 1, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 2, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 11, 3, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 12, 0, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 1, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 2, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 12, 3, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 13, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 14, 0, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 14, 1, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 14, 2, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 14, 3, 0.0, 0.0),
+        ('_MaskBScale', 'F', 16, 0, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 17, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 16, 1, 0.0, 0.0),
+        ('_MaskGScale', 'F', 16, 2, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 16, 3, 0.0, 0.0),
+        ('_MaskRScale', 'F', 19, 0, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 20, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 19, 1, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 19, 2, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 19, 3, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 21, 0, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 1, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 2, 0.0, 0.0),
+        ('_LayerBlend', 'F', 21, 3, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 22, 0, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 1, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 2, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 22, 3, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 23, 0, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 1, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 2, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 23, 3, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 24, 0, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 1, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 2, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 24, 3, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 26, 0, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 1, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 2, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 26, 3, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 27, 0, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 28, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 27, 1, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 27, 2, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 27, 3, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 2, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 29, 3, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 30, 0, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 1, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 30, 3, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 31, 0, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 1, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 2, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 31, 3, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 32, 0, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 33, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 37, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 32, 1, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 32, 2, 0.0, 0.0),
+        ('_EmissiveType', 'F', 32, 3, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 39, 0, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 1, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 2, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 39, 3, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 40, 0, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 2, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 40, 3, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 41, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 42, 0, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 42, 1, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 42, 2, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 42, 3, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 46, 0, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 46, 1, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 46, 2, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 46, 3, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 48, 0, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 48, 1, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 48, 2, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 48, 3, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 49, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 50, 0, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 50, 1, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 50, 2, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 50, 3, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 52, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 55, 0, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 56, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 55, 1, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 55, 2, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 55, 3, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 57, 0, 0.5, 0.0),
+        ('M_PI', 'F', 57, 1, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 2, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 57, 3, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 58, 0, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 59, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 58, 1, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 58, 2, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 58, 3, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 60, 0, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 1, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 2, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 60, 3, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 62, 0, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 63, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 64, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 62, 1, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 62, 2, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 62, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+    ],
+    'LitHLod': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 3, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 8, 0, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 1, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 8, 2, 1.0, 0.0),
+        ('_Metallic', 'F', 8, 3, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 0, 0.0, 0.0),
+        ('_OcclusionStrength', 'F', 9, 1, 1.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 2, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 9, 3, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 0, 0.4, 0.0),
+        ('_DisableVerticalFlow', 'F', 10, 1, 0.0, 0.0),
+        ('_EffectIntensity', 'F', 10, 2, 1.0, 0.0),
+        ('_HLodFade', 'F', 10, 3, 1.0, 0.0),
+        ('_UseMacroNormalMap', 'F', 11, 0, 0.0, 0.0),
+        ('_MacroNormalMapScale', 'F', 11, 1, 1.0, 0.0),
+        ('_EnableDetailMap', 'F', 11, 2, 0.0, 0.0),
+        ('_DetailFalloffStart', 'F', 11, 3, 750.0, 0.0),
+        ('_DetailFalloffEnd', 'F', 12, 0, 800.0, 0.0),
+        ('_DetailMaskMode', 'F', 12, 1, 0.0, 0.0),
+        ('_DetailNormalIntensity', 'F', 12, 2, 1.0, 0.0),
+        ('_DetailMode', 'F', 12, 3, 0.0, 0.0),
+        ('_DetailBaseColorBrighterScale', 'F', 13, 0, 1.0, 0.0),
+        ('_DetailOverlayColor', 'V4', 14, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_DetailPBRIntensity', 'F', 13, 1, 1.0, 0.0),
+        ('_EnableTriChannelMask', 'F', 13, 2, 0.0, 0.0),
+        ('_MaskUVSet', 'F', 13, 3, 0.0, 0.0),
+        ('_MaskMap_ST', 'V4', 15, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_MaskBOffset', 'F', 16, 0, 0.0, 0.0),
+        ('_MaskBScale', 'F', 16, 1, 0.0, 0.0),
+        ('_MaskAlbedoB', 'V4', 17, 0, (0.0, 0.0, 1.0), 1.0),
+        ('_MaskGOffset', 'F', 16, 2, 0.0, 0.0),
+        ('_MaskGScale', 'F', 16, 3, 0.0, 0.0),
+        ('_MaskAlbedoG', 'V4', 18, 0, (0.0, 1.0, 0.0), 1.0),
+        ('_MaskROffset', 'F', 19, 0, 0.0, 0.0),
+        ('_MaskRScale', 'F', 19, 1, 0.0, 0.0),
+        ('_MaskAlbedoR', 'V4', 20, 0, (1.0, 0.0, 0.0), 1.0),
+        ('_MaskRoghnessB', 'F', 19, 2, 0.25, 0.0),
+        ('_MaskRoghnessG', 'F', 19, 3, 0.25, 0.0),
+        ('_MaskRoghnessR', 'F', 21, 0, 0.25, 0.0),
+        ('_MaskMetallicB', 'F', 21, 1, 0.0, 0.0),
+        ('_MaskMetallicG', 'F', 21, 2, 0.0, 0.0),
+        ('_MaskMetallicR', 'F', 21, 3, 0.0, 0.0),
+        ('_LayerBlend', 'F', 22, 0, 0.0, 0.0),
+        ('_LayerBlendUVType', 'F', 22, 1, 0.0, 0.0),
+        ('_Layer1Tilling', 'F', 22, 2, 1.0, 0.0),
+        ('_LayerBlendType', 'F', 22, 3, 1.0, 0.0),
+        ('_LayerBlendMaskUVType', 'F', 23, 0, 0.0, 0.0),
+        ('_LayerBlendMaskType', 'F', 23, 1, 0.0, 0.0),
+        ('_TopBlendWithBumpMap', 'F', 23, 2, 0.0, 0.0),
+        ('_TopBlendThreshold', 'F', 23, 3, 0.5, 0.0),
+        ('_TopBlendSmoothness', 'F', 24, 0, 0.5, 0.0),
+        ('_LayerBlendHeightTransition', 'F', 24, 1, 1.0, 0.0),
+        ('_LayerBlendHeight', 'F', 24, 2, 1.0, 0.0),
+        ('_Layer1Saturation', 'F', 24, 3, 0.0, 0.0),
+        ('_Layer1TintColor', 'V4', 25, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Layer1ColorBrighterScale', 'F', 26, 0, 1.0, 0.0),
+        ('_LayerMetallicType', 'F', 26, 1, 0.0, 0.0),
+        ('_Layer1Metallic', 'F', 26, 2, 0.0, 0.0),
+        ('_Layer1AOStrength', 'F', 26, 3, 1.0, 0.0),
+        ('_Layer1BumpScale', 'F', 27, 0, 1.0, 0.0),
+        ('_Layer1BaseNormalIntensity', 'F', 27, 1, 0.0, 0.0),
+        ('_EmissionTint', 'V4', 28, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveIntensity', 'F', 27, 2, 0.0, 0.0),
+        ('_UseEmissiveMap', 'F', 27, 3, 0.0, 0.0),
+        ('_AlbedoAffectEmissive', 'F', 29, 0, 1.0, 0.0),
+        ('_EnableEmissiveAnim', 'F', 29, 1, 0.0, 0.0),
+        ('_EmissiveAnimSpeed', 'F', 29, 2, 0.0, 0.0),
+        ('_EmissiveAnimRandom', 'F', 29, 3, 0.0, 0.0),
+        ('_EmissiveAnimInterval', 'F', 30, 0, 1.0, 0.0),
+        ('_EmissiveMinBrightness', 'F', 30, 1, 0.0, 0.0),
+        ('_EnableEmissiveAnimSweep', 'F', 30, 2, 0.0, 0.0),
+        ('_EmissiveMaskChannel', 'F', 30, 3, 0.0, 0.0),
+        ('_EmissiveSweepRandom', 'F', 31, 0, 0.0, 0.0),
+        ('_EmissiveSweepInterval', 'F', 31, 1, 3.0, 0.0),
+        ('_EmissiveSweepSpeed', 'F', 31, 2, 3.0, 0.0),
+        ('_EmissiveSweepWidth', 'F', 31, 3, 0.8, 0.0),
+        ('_EmissiveSweepFalloff', 'F', 32, 0, 1.0, 0.0),
+        ('_EmissiveSweepAlbedoScale', 'F', 32, 1, 0.0, 0.0),
+        ('_EmissiveColor', 'V4', 33, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EmissiveColorG', 'V4', 34, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 35, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveSpeed', 'V4', 37, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveUVSet', 'F', 32, 2, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 38, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMapTilling', 'F', 32, 3, 0.0, 0.0),
+        ('_EmissiveType', 'F', 39, 0, 0.0, 0.0),
+        ('_EnableMatcap', 'F', 39, 1, 0.0, 0.0),
+        ('_MatcapMapStrength', 'F', 39, 2, 0.2, 0.0),
+        ('_EnableParallaxMap', 'F', 39, 3, 0.0, 0.0),
+        ('_ParallaxMappingType', 'F', 40, 0, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 40, 1, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 40, 2, 0.0, 0.0),
+        ('_ParallaxMaskByLayerBlend', 'F', 40, 3, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 41, 0, 0.0, 0.0),
+        ('_GlobalMipBias', 'V3', 42, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMarchNum', 'F', 41, 1, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 41, 2, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 41, 3, 1.0, 0.0),
+        ('_ParallaxColor', 'V4', 43, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColorDark', 'V4', 44, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxFresnelStrength', 'F', 45, 0, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 46, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 45, 1, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 45, 2, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 45, 3, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 47, 0, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 48, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMinBrightness', 'F', 47, 1, 0.0, 0.0),
+        ('_ParallaxAnimSpeed', 'F', 47, 2, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 47, 3, 0.0, 0.0),
+        ('_UseWorldSpaceParallaxMask', 'F', 49, 0, 0.0, 0.0),
+        ('_MaskWorldPosParams', 'V4', 50, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxMaskMapColorStrength', 'F', 49, 1, 0.0, 0.0),
+        ('_ParallaxSignControl', 'F', 49, 2, 0.0, 0.0),
+        ('_ParallaxSignLerpFactor0', 'V4', 51, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor2', 'F', 49, 3, 0.0, 0.0),
+        ('_ParallaxLerpSchedule', 'F', 52, 0, 0.0, 0.0),
+        ('_ParallaxPatternColorDark', 'V4', 53, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxPatternColor', 'V4', 54, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxSignLerpFactor1', 'V4', 55, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WorldParallaxAdditionalLightMaskChannel', 'F', 52, 1, 0.0, 0.0),
+        ('_WorldParallaxAdditionalColor', 'V4', 56, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxIntensity', 'F', 52, 2, 0.0, 0.0),
+        ('_UseThinFilm', 'F', 52, 3, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 57, 0, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 57, 1, 0.5, 0.0),
+        ('M_PI', 'F', 57, 2, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 57, 3, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 58, 0, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 58, 1, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 59, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 58, 2, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 58, 3, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 60, 0, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 60, 1, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 60, 2, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 60, 3, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 61, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 62, 0, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 62, 1, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 63, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 64, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 62, 2, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 62, 3, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 65, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 65, 1, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 65, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 65, 3, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 66, 0, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 67, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 66, 1, 0.0, 0.0),
+    ],
+    'Unlit': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 7, 2, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 7, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 8, 0, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 8, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 8, 2, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 9, 0, (0.0, 0.0, 0.0), 0.0),
+    ],
+    'ContainerWater': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('unity_OrthoParams', 'V4', 8, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_NormalScale', 'F', 7, 2, 0.0, 0.0),
+        ('_Use_VerexTexColorAsOpacity', 'F', 7, 3, 0.0, 0.0),
+        ('_RefractionIOR', 'F', 9, 0, 1.0, 0.0),
+        ('_RefractionFresnelColor', 'V4', 10, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Roughness', 'F', 9, 1, 0.0, 0.0),
+        ('_GraphicsFeaturesGlobalParam1', 'V4', 11, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EnableParallaxMap', 'F', 9, 2, 0.0, 0.0),
+        ('_UseParallaxMask', 'F', 9, 3, 0.0, 0.0),
+        ('_ParallaxMaskChannel', 'F', 12, 0, 0.0, 0.0),
+        ('_ParallaxMapUVType', 'F', 12, 1, 0.0, 0.0),
+        ('_ParallaxNoiseMapTilling', 'F', 12, 2, 0.0, 0.0),
+        ('_ParallaxMarchNum', 'F', 12, 3, 3.0, 0.0),
+        ('_ParallaxStrength', 'F', 13, 0, 0.0, 0.0),
+        ('_ParallaxTilling', 'F', 13, 1, 1.0, 0.0),
+        ('_ParallaxMinBrightness', 'F', 13, 2, 0.0, 0.0),
+        ('_ParallaxFresnelStrength', 'F', 13, 3, 0.0, 0.0),
+        ('_VFXParams0', 'V4', 14, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxAnimSpeed', 'F', 15, 0, 0.0, 0.0),
+        ('_ParallaxAnimRandom', 'F', 15, 1, 0.0, 0.0),
+        ('_ParallaxCharPos', 'F', 15, 2, 0.0, 0.0),
+        ('_ParallaxBrightOuterRadius', 'F', 15, 3, 0.0, 0.0),
+        ('_ParallaxBrightInnerRadius', 'F', 16, 0, 0.0, 0.0),
+        ('_ParallaxBrightStrength', 'F', 16, 1, 0.0, 0.0),
+        ('_VFXParams2', 'V4', 17, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_ParallaxColorDark', 'V4', 18, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxColor', 'V4', 19, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_ParallaxIgnorePostExposure', 'F', 16, 2, 1.0, 0.0),
+        ('_ExposureWithMiscParams', 'V4', 20, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_FresnelUseMeshNormal', 'F', 16, 3, 0.0, 0.0),
+        ('_FresnelBias', 'F', 21, 0, 0.0, 0.0),
+        ('_FresnelPower', 'F', 21, 1, 1.0, 0.0),
+        ('_FresnelFlip', 'F', 21, 2, 0.001, 0.0),
+        ('_UseFresnel', 'F', 21, 3, 0.0, 0.0),
+        ('_FresnelAffectOpacity', 'F', 22, 0, 1.0, 0.0),
+        ('_EnableGlassRim', 'F', 22, 1, 0.0, 0.0),
+        ('_GlassRimPower', 'F', 22, 2, 1.0, 0.0),
+        ('_GlassRimStrength', 'F', 22, 3, 1.0, 0.0),
+        ('_GlassRimUseMask', 'F', 23, 0, 0.0, 0.0),
+        ('_GlassRimMaskChannel', 'F', 23, 1, 0.0, 0.0),
+        ('_GlassRimColor', 'V4', 24, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_GlassRimRoughnessScale', 'F', 23, 2, 1.0, 0.0),
+        ('_UseVertexColorAsRimMask', 'F', 23, 3, 0.0, 0.0),
+        ('_GlassMaskOpacity', 'F', 25, 0, 0.995, 0.0),
+        ('_EnableGlassRefraction', 'F', 25, 1, 0.0, 0.0),
+        ('_RefractThickness', 'F', 25, 2, 0.01, 0.0),
+        ('_IsShell', 'F', 25, 3, 1.0, 0.0),
+        ('_IoR', 'F', 26, 0, 0.8, 0.0),
+        ('_RefractTex_ST', 'V4', 27, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_RefractTexIntensity', 'F', 26, 1, 0.01, 0.0),
+        ('_UseCustomRefractTex', 'F', 26, 2, 0.0, 0.0),
+        ('_RefractTint', 'V4', 28, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_RefractBrightness', 'F', 26, 3, 1.0, 0.0),
+        ('_RefractionContribution', 'F', 29, 0, 0.8, 0.0),
+        ('_GlassRimRefractionPower', 'F', 29, 1, 1.0, 0.0),
+        ('_GlassRimRefractionStrength', 'F', 29, 2, 1.0, 0.0),
+        ('_EnableIce', 'F', 29, 3, 0.0, 0.0),
+        ('_IceRefractionStrength', 'F', 30, 0, 1.0, 0.0),
+        ('_IceRefractionColor', 'V4', 31, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_IceRefractionBrightness', 'F', 30, 1, 1.0, 0.0),
+        ('_IceOpacityMapTilling', 'F', 30, 2, 1.0, 0.0),
+        ('_IceOpacityThreshold', 'F', 30, 3, 0.0, 0.0),
+        ('_EnableContainerWater', 'F', 32, 0, 0.0, 0.0),
+        ('_WaterNormalMap_ST', 'V4', 33, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_WaterNormalSpeed', 'F', 32, 1, 0.01, 0.0),
+        ('_WaterSurfaceNormalScale', 'F', 32, 2, 1.0, 0.0),
+        ('_DisplacementTex_ST', 'V4', 34, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_NormalMapBlendWeight', 'F', 32, 3, 0.5, 0.0),
+        ('_DisplacementNormalStrength', 'F', 35, 0, 0.5, 0.0),
+        ('_IcePosition', 'V4', 36, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WaterCupRadius', 'F', 35, 1, 1.0, 0.0),
+        ('_IceballRadius', 'F', 35, 2, 1.0, 0.0),
+        ('_IceballWaterlineWidth', 'F', 35, 3, 1.0, 0.0),
+        ('_WaterCausticSpeed', 'F', 37, 0, 1.0, 0.0),
+        ('_MainLightPosition', 'V4', 38, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_WaterScatteringColor', 'V4', 39, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_WaterRefractionColor', 'V4', 40, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_WaterRefractionBrightness', 'F', 37, 1, 1.0, 0.0),
+        ('_WaterCausticMap_ST', 'V4', 41, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_WaterShallowColor', 'V4', 42, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_WaterCausticStrength', 'F', 37, 2, 1.0, 0.0),
+        ('_WaterDeepColor', 'V4', 43, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_WaterAbsorptionColor', 'V4', 44, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_GraphicsFeaturesGlobalParam0', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 46, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_WaterFresnelPower', 'F', 37, 3, 1.0, 0.0),
+        ('_WaterReflectionStrength', 'F', 47, 0, 1.0, 0.0),
+        ('_WaterStrokeDistance', 'F', 47, 1, 0.0395, 0.0),
+        ('_WaterStrokeWidth', 'F', 47, 2, 0.0352, 0.0),
+        ('_WaterStrokeSoftness', 'F', 47, 3, 0.0025, 0.0),
+        ('_WaterStrokeOpacity', 'F', 48, 0, 1.0, 0.0),
+        ('_WaterMeniscusWidth', 'F', 48, 1, 1.0, 0.0),
+        ('_WaterStrokeColor', 'V4', 49, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_WaterBaseOpacity', 'F', 48, 2, 1.0, 0.0),
+        ('_WaterOpacityDepthFactor', 'F', 48, 3, 1.0, 0.0),
+        ('_WaterOpacityFresnelFactor', 'F', 50, 0, 1.0, 0.0),
+        ('_WaterEdgeOpacity', 'F', 50, 1, 1.0, 0.0),
+        ('_WaterTurbidity', 'F', 50, 2, 1.0, 0.0),
+        ('_WaterOpacityMinimum', 'F', 50, 3, 1.0, 0.0),
+        ('_WaterOpacityMaximum', 'F', 51, 0, 1.0, 0.0),
+        ('_Specular', 'F', 51, 1, 1.0, 0.0),
+        ('_MatcapMapStrength', 'F', 51, 2, 0.2, 0.0),
+        ('_MatCapIgnorePostExposure', 'F', 51, 3, 1.0, 0.0),
+        ('_EnableMatcap', 'F', 52, 0, 0.0, 0.0),
+        ('_RefractionColor', 'V4', 53, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_RefractionStrength', 'F', 52, 1, 1.0, 0.0),
+        ('_FresnelColor', 'V4', 54, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_Use_VerexGAsFresnelOpacity', 'F', 52, 2, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 52, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 55, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 55, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 55, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 55, 3, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 56, 0, (0.0, 0.0, 0.0), 0.0),
+    ],
+    'Leaf': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 2, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 7, 3, 0.0, 0.0),
+        ('_EnableNormalMap', 'F', 8, 0, 0.0, 0.0),
+        ('_NormalScale', 'F', 8, 1, 0.0, 0.0),
+        ('_BendNormalUpward', 'F', 8, 2, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 3, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 9, 0, 1.0, 0.0),
+        ('_Metallic', 'F', 9, 1, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 2, 0.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 3, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 10, 0, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 1, 0.4, 0.0),
+        ('_OcclusionStrength', 'F', 10, 2, 1.0, 0.0),
+        ('_TrunkVertexAoStrength', 'F', 10, 3, 1.0, 0.0),
+        ('_EnableVerticalNormalBoostAO', 'F', 11, 0, 0.0, 0.0),
+        ('_VerticalNormalThreshold', 'F', 11, 1, 0.0, 0.0),
+        ('_VerticalNormalBoostAO', 'F', 11, 2, 0.0, 0.0),
+        ('_TransmissionDistanceFade', 'F', 11, 3, 0.0, 0.0),
+        ('_Transmission', 'F', 12, 0, 0.2, 0.0),
+        ('_AoAffectTransmissionStart', 'F', 12, 1, 0.0, 0.0),
+        ('_AoAffectTransmissionRange', 'F', 12, 2, 0.01, 0.0),
+        ('_SubsurfaceIntensity', 'F', 12, 3, 0.0, 0.0),
+        ('_AoAffectSubsurfaceStart', 'F', 13, 0, 0.0, 0.0),
+        ('_AoAffectSubsurfaceRange', 'F', 13, 1, 0.01, 0.0),
+        ('_FakeDirectionalShadowStrength', 'F', 13, 2, 0.0, 0.0),
+        ('_DiffuseUseVertexNormal', 'F', 13, 3, 1.0, 0.0),
+        ('_MainLightPosition', 'V4', 14, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_FakeDirectionalShadowPow', 'F', 15, 0, 1.0, 0.0),
+        ('_OcclusionShadow', 'F', 15, 1, 0.0, 0.0),
+        ('_EnableCanopyColorRamp', 'F', 15, 2, 0.0, 0.0),
+        ('_CanopyRampStartAtTop', 'F', 15, 3, 0.0, 0.0),
+        ('_CanopyRampRange', 'F', 16, 0, 0.0, 0.0),
+        ('_CanopyRampTransitionRange', 'F', 16, 1, 0.01, 0.0),
+        ('_CanopyRampIntensity', 'F', 16, 2, 1.0, 0.0),
+        ('_CanopyRampColor', 'V4', 17, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_CanopyRampColorBrighterScale', 'F', 16, 3, 1.0, 0.0),
+        ('_CanopyRampColorCover', 'F', 18, 0, 0.0, 0.0),
+        ('_EnableAoTuneColor', 'F', 18, 1, 0.0, 0.0),
+        ('_FlipAoMask', 'F', 18, 2, 0.0, 0.0),
+        ('_AoMaskTuneColorRampStart', 'F', 18, 3, 0.0, 0.0),
+        ('_AoMaskTuneColorRampRange', 'F', 19, 0, 0.2, 0.0),
+        ('_AoMaskTuneColorIntensity', 'F', 19, 1, 1.0, 0.0),
+        ('_AoMaskTuneColor', 'V4', 20, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_AoMaskTuneColorBrighterScale', 'F', 19, 2, 1.0, 0.0),
+        ('_AoMaskTuneColorCover', 'F', 19, 3, 0.0, 0.0),
+        ('_EnableBlendColor', 'F', 21, 0, 0.0, 0.0),
+        ('_BlendWithVertexNormal', 'F', 21, 1, 0.0, 0.0),
+        ('_BlendNormalAdd', 'F', 21, 2, 0.0, 0.0),
+        ('_BlendColor', 'V4', 22, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_BlendNormalPower', 'F', 21, 3, 1.0, 0.0),
+        ('_EnableTrunkRamp', 'F', 23, 0, 0.0, 0.0),
+        ('_TrunkRampRange', 'F', 23, 1, 0.0, 0.0),
+        ('_TrunkRampTransitionRange', 'F', 23, 2, 0.01, 0.0),
+        ('_TrunkRampIntensity', 'F', 23, 3, 1.0, 0.0),
+        ('_TrunkRampColor', 'V4', 24, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableEmissiveMap', 'F', 25, 0, 0.0, 0.0),
+        ('_EmissiveUVSet', 'F', 25, 1, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 26, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMaskChannel', 'F', 25, 2, 0.0, 0.0),
+        ('_EmissiveColorR', 'V4', 27, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_EmissiveColorG', 'V4', 28, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 29, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 30, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_AlbedoAffectEmissive', 'F', 25, 3, 1.0, 0.0),
+        ('_EnableVertColorEmissive', 'F', 31, 0, 0.0, 0.0),
+        ('_VertColorEmissiveChannelVector', 'V4', 32, 0, (1.0, 0.0, 0.0), 0.0),
+        ('_VertColorEmissiveFlip', 'F', 31, 1, 0.0, 0.0),
+        ('_VertColorEmissiveBias', 'F', 31, 2, 0.0, 0.0),
+        ('_VertColorEmissiveColor', 'V4', 33, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_VertColorEmissiveAlbedoAffect', 'F', 31, 3, 1.0, 0.0),
+        ('_CrossCardViewCulling', 'F', 34, 0, 0.0, 0.0),
+        ('_CrossCardViewCullingThreshold', 'F', 34, 1, 0.4, 0.0),
+        ('_CrossCardViewCullingFadeValue', 'F', 34, 2, 0.5, 0.0),
+        ('_UseThinFilm', 'F', 34, 3, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 35, 0, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 35, 1, 0.5, 0.0),
+        ('M_PI', 'F', 35, 2, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 35, 3, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 36, 0, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 36, 1, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 37, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 36, 2, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 36, 3, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 38, 0, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 38, 1, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 38, 2, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 38, 3, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 39, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 40, 0, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 40, 1, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 41, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 42, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 40, 2, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 40, 3, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 43, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 43, 1, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 43, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 43, 3, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 44, 0, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+    ],
+    'Grass': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 2, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 7, 3, 0.0, 0.0),
+        ('_EnableNormalMap', 'F', 8, 0, 0.0, 0.0),
+        ('_NormalScale', 'F', 8, 1, 0.0, 0.0),
+        ('_BendNormalUpward', 'F', 8, 2, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 3, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 9, 0, 1.0, 0.0),
+        ('_Metallic', 'F', 9, 1, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 2, 0.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 3, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 10, 0, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 1, 0.4, 0.0),
+        ('_OcclusionStrength', 'F', 10, 2, 1.0, 0.0),
+        ('_TrunkVertexAoStrength', 'F', 10, 3, 1.0, 0.0),
+        ('_EnableVerticalNormalBoostAO', 'F', 11, 0, 0.0, 0.0),
+        ('_VerticalNormalThreshold', 'F', 11, 1, 0.0, 0.0),
+        ('_VerticalNormalBoostAO', 'F', 11, 2, 0.0, 0.0),
+        ('_AoPosition', 'F', 11, 3, 0.0, 0.0),
+        ('_AoRadius', 'F', 12, 0, 0.1, 0.0),
+        ('_AoContrast', 'F', 12, 1, 0.2, 0.0),
+        ('_AoIntensity', 'F', 12, 2, 0.2, 0.0),
+        ('_TransmissionDistanceFade', 'F', 12, 3, 0.0, 0.0),
+        ('_Transmission', 'F', 13, 0, 0.2, 0.0),
+        ('_AoAffectTransmissionStart', 'F', 13, 1, 0.0, 0.0),
+        ('_AoAffectTransmissionRange', 'F', 13, 2, 0.01, 0.0),
+        ('_SubsurfaceIntensity', 'F', 13, 3, 0.0, 0.0),
+        ('_AoAffectSubsurfaceStart', 'F', 14, 0, 0.0, 0.0),
+        ('_AoAffectSubsurfaceRange', 'F', 14, 1, 0.01, 0.0),
+        ('_DirPosition', 'F', 14, 2, 0.0, 0.0),
+        ('_DirRadius', 'F', 14, 3, 0.1, 0.0),
+        ('_DirContrast', 'F', 15, 0, 0.2, 0.0),
+        ('_MaskOnTransmission', 'F', 15, 1, 1.0, 0.0),
+        ('_FakeDirectionalShadowStrength', 'F', 15, 2, 0.0, 0.0),
+        ('_DiffuseUseVertexNormal', 'F', 15, 3, 1.0, 0.0),
+        ('_MainLightPosition', 'V4', 16, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_FakeDirectionalShadowPow', 'F', 17, 0, 1.0, 0.0),
+        ('_OcclusionShadow', 'F', 17, 1, 0.0, 0.0),
+        ('_EnableCanopyColorRamp', 'F', 17, 2, 0.0, 0.0),
+        ('_CanopyRampStartAtTop', 'F', 17, 3, 0.0, 0.0),
+        ('_CanopyRampRange', 'F', 18, 0, 0.0, 0.0),
+        ('_CanopyRampTransitionRange', 'F', 18, 1, 0.01, 0.0),
+        ('_CanopyRampIntensity', 'F', 18, 2, 1.0, 0.0),
+        ('_CanopyRampColor', 'V4', 19, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_CanopyRampColorBrighterScale', 'F', 18, 3, 1.0, 0.0),
+        ('_CanopyRampColorCover', 'F', 20, 0, 0.0, 0.0),
+        ('_EnableAoTuneColor', 'F', 20, 1, 0.0, 0.0),
+        ('_FlipAoMask', 'F', 20, 2, 0.0, 0.0),
+        ('_AoMaskTuneColorRampStart', 'F', 20, 3, 0.0, 0.0),
+        ('_AoMaskTuneColorRampRange', 'F', 21, 0, 0.2, 0.0),
+        ('_AoMaskTuneColorIntensity', 'F', 21, 1, 1.0, 0.0),
+        ('_AoMaskTuneColor', 'V4', 22, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_AoMaskTuneColorBrighterScale', 'F', 21, 2, 1.0, 0.0),
+        ('_AoMaskTuneColorCover', 'F', 21, 3, 0.0, 0.0),
+        ('_EnableBlendColor', 'F', 23, 0, 0.0, 0.0),
+        ('_BlendWithVertexNormal', 'F', 23, 1, 0.0, 0.0),
+        ('_BlendNormalAdd', 'F', 23, 2, 0.0, 0.0),
+        ('_BlendColor', 'V4', 24, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_BlendNormalPower', 'F', 23, 3, 1.0, 0.0),
+        ('_EnableTrunkRamp', 'F', 25, 0, 0.0, 0.0),
+        ('_TrunkRampRange', 'F', 25, 1, 0.0, 0.0),
+        ('_TrunkRampTransitionRange', 'F', 25, 2, 0.01, 0.0),
+        ('_TrunkRampIntensity', 'F', 25, 3, 1.0, 0.0),
+        ('_TrunkRampColor', 'V4', 26, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_DirIntensity', 'F', 27, 0, 0.2, 0.0),
+        ('_MaskOnDiffuse', 'F', 27, 1, 1.0, 0.0),
+        ('_EnableEmissiveMap', 'F', 27, 2, 0.0, 0.0),
+        ('_EmissiveUVSet', 'F', 27, 3, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 28, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMaskChannel', 'F', 29, 0, 0.0, 0.0),
+        ('_EmissiveColorR', 'V4', 30, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_EmissiveColorG', 'V4', 31, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 32, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 33, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_AlbedoAffectEmissive', 'F', 29, 1, 1.0, 0.0),
+        ('_EnableVertColorEmissive', 'F', 29, 2, 0.0, 0.0),
+        ('_VertColorEmissiveChannelVector', 'V4', 34, 0, (1.0, 0.0, 0.0), 0.0),
+        ('_VertColorEmissiveFlip', 'F', 29, 3, 0.0, 0.0),
+        ('_VertColorEmissiveBias', 'F', 35, 0, 0.0, 0.0),
+        ('_VertColorEmissiveColor', 'V4', 36, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_VertColorEmissiveAlbedoAffect', 'F', 35, 1, 1.0, 0.0),
+        ('_CrossCardViewCulling', 'F', 35, 2, 0.0, 0.0),
+        ('_CrossCardViewCullingThreshold', 'F', 35, 3, 0.4, 0.0),
+        ('_CrossCardViewCullingFadeValue', 'F', 37, 0, 0.5, 0.0),
+        ('_UseThinFilm', 'F', 37, 1, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 37, 2, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 37, 3, 0.5, 0.0),
+        ('M_PI', 'F', 38, 0, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 38, 1, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 38, 2, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 38, 3, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 39, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 40, 0, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 40, 1, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 40, 2, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 40, 3, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 41, 0, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 41, 1, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 42, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 41, 2, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 41, 3, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 43, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 44, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 45, 0, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 45, 1, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 45, 2, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 45, 3, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 46, 0, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 46, 1, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 46, 2, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 47, 0, (0.0, 0.0, 0.0), 0.0),
+    ],
+    'Trunk': [
+        ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
+        ('_BaseColor', 'V4', 1, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_UseVoxelAtlas', 'F', 0, 1, 0.0, 0.0),
+        ('_UseCutoff', 'F', 0, 2, 0.0, 0.0),
+        ('_UseVertexColor', 'F', 0, 3, 0.0, 0.0),
+        ('_RuriVoxelLightVolumeOn', 'F', 2, 0, 0.0, 0.0),
+        ('_UseDitherClip', 'F', 2, 1, 0.0, 0.0),
+        ('_Cutoff', 'F', 2, 2, 0.5, 0.0),
+        ('_EnableAlphaTest', 'F', 2, 3, 0.0, 0.0),
+        ('_BaseUVSet', 'F', 3, 0, 0.0, 0.0),
+        ('_BaseColorMap_ST', 'V4', 4, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_BasePbrMapUVSet', 'F', 3, 1, 0.0, 0.0),
+        ('_NormalMap_ST', 'V4', 5, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_AlphaMaskChannel', 'F', 3, 2, 0.0, 0.0),
+        ('_AlphaClipThreshold', 'F', 3, 3, 0.5, 0.0),
+        ('_RoughnessIntensity', 'F', 6, 0, 0.5, 0.0),
+        ('_MetallicIntensity', 'F', 6, 1, 0.0, 0.0),
+        ('_OcclusionIntensity', 'F', 6, 2, 1.0, 0.0),
+        ('_SpecularIntensity', 'F', 6, 3, 1.0, 0.0),
+        ('_RuriRadianceMode', 'F', 7, 0, 0.0, 0.0),
+        ('_VoxelEmissionScale', 'F', 7, 1, 4.0, 0.0),
+        ('_BaseColorBrighterScale', 'F', 7, 2, 1.0, 0.0),
+        ('_BaseColorTintCover', 'F', 7, 3, 0.0, 0.0),
+        ('_EnableNormalMap', 'F', 8, 0, 0.0, 0.0),
+        ('_NormalScale', 'F', 8, 1, 0.0, 0.0),
+        ('_BendNormalUpward', 'F', 8, 2, 0.0, 0.0),
+        ('_RoughnessMin', 'F', 8, 3, 0.0, 0.0),
+        ('_RoughnessMax', 'F', 9, 0, 1.0, 0.0),
+        ('_Metallic', 'F', 9, 1, 0.0, 0.0),
+        ('_BaseTextureMapCount', 'F', 9, 2, 0.0, 0.0),
+        ('_PorosityFactorX', 'F', 9, 3, 0.2, 0.0),
+        ('_PorosityFactorZ', 'F', 10, 0, 0.0, 0.0),
+        ('_PorosityFactorY', 'F', 10, 1, 0.4, 0.0),
+        ('_OcclusionStrength', 'F', 10, 2, 1.0, 0.0),
+        ('_TrunkVertexAoStrength', 'F', 10, 3, 1.0, 0.0),
+        ('_EnableVerticalNormalBoostAO', 'F', 11, 0, 0.0, 0.0),
+        ('_VerticalNormalThreshold', 'F', 11, 1, 0.0, 0.0),
+        ('_VerticalNormalBoostAO', 'F', 11, 2, 0.0, 0.0),
+        ('_TransmissionDistanceFade', 'F', 11, 3, 0.0, 0.0),
+        ('_Transmission', 'F', 12, 0, 0.2, 0.0),
+        ('_AoAffectTransmissionStart', 'F', 12, 1, 0.0, 0.0),
+        ('_AoAffectTransmissionRange', 'F', 12, 2, 0.01, 0.0),
+        ('_SubsurfaceIntensity', 'F', 12, 3, 0.0, 0.0),
+        ('_AoAffectSubsurfaceStart', 'F', 13, 0, 0.0, 0.0),
+        ('_AoAffectSubsurfaceRange', 'F', 13, 1, 0.01, 0.0),
+        ('_FakeDirectionalShadowStrength', 'F', 13, 2, 0.0, 0.0),
+        ('_DiffuseUseVertexNormal', 'F', 13, 3, 1.0, 0.0),
+        ('_MainLightPosition', 'V4', 14, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_FakeDirectionalShadowPow', 'F', 15, 0, 1.0, 0.0),
+        ('_OcclusionShadow', 'F', 15, 1, 0.0, 0.0),
+        ('_EnableCanopyColorRamp', 'F', 15, 2, 0.0, 0.0),
+        ('_CanopyRampStartAtTop', 'F', 15, 3, 0.0, 0.0),
+        ('_CanopyRampRange', 'F', 16, 0, 0.0, 0.0),
+        ('_CanopyRampTransitionRange', 'F', 16, 1, 0.01, 0.0),
+        ('_CanopyRampIntensity', 'F', 16, 2, 1.0, 0.0),
+        ('_CanopyRampColor', 'V4', 17, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_CanopyRampColorBrighterScale', 'F', 16, 3, 1.0, 0.0),
+        ('_CanopyRampColorCover', 'F', 18, 0, 0.0, 0.0),
+        ('_EnableAoTuneColor', 'F', 18, 1, 0.0, 0.0),
+        ('_FlipAoMask', 'F', 18, 2, 0.0, 0.0),
+        ('_AoMaskTuneColorRampStart', 'F', 18, 3, 0.0, 0.0),
+        ('_AoMaskTuneColorRampRange', 'F', 19, 0, 0.2, 0.0),
+        ('_AoMaskTuneColorIntensity', 'F', 19, 1, 1.0, 0.0),
+        ('_AoMaskTuneColor', 'V4', 20, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_AoMaskTuneColorBrighterScale', 'F', 19, 2, 1.0, 0.0),
+        ('_AoMaskTuneColorCover', 'F', 19, 3, 0.0, 0.0),
+        ('_EnableBlendColor', 'F', 21, 0, 0.0, 0.0),
+        ('_BlendWithVertexNormal', 'F', 21, 1, 0.0, 0.0),
+        ('_BlendNormalAdd', 'F', 21, 2, 0.0, 0.0),
+        ('_BlendColor', 'V4', 22, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_BlendNormalPower', 'F', 21, 3, 1.0, 0.0),
+        ('_EnableTrunkRamp', 'F', 23, 0, 0.0, 0.0),
+        ('_TrunkRampRange', 'F', 23, 1, 0.0, 0.0),
+        ('_TrunkRampTransitionRange', 'F', 23, 2, 0.01, 0.0),
+        ('_TrunkRampIntensity', 'F', 23, 3, 1.0, 0.0),
+        ('_TrunkRampColor', 'V4', 24, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableEmissiveMap', 'F', 25, 0, 0.0, 0.0),
+        ('_EmissiveUVSet', 'F', 25, 1, 0.0, 0.0),
+        ('_EmissiveMap_ST', 'V4', 26, 0, (1.0, 1.0, 0.0), 0.0),
+        ('_EmissiveMaskChannel', 'F', 25, 2, 0.0, 0.0),
+        ('_EmissiveColorR', 'V4', 27, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_EmissiveColorG', 'V4', 28, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorB', 'V4', 29, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_EmissiveColorA', 'V4', 30, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_AlbedoAffectEmissive', 'F', 25, 3, 1.0, 0.0),
+        ('_EnableVertColorEmissive', 'F', 31, 0, 0.0, 0.0),
+        ('_VertColorEmissiveChannelVector', 'V4', 32, 0, (1.0, 0.0, 0.0), 0.0),
+        ('_VertColorEmissiveFlip', 'F', 31, 1, 0.0, 0.0),
+        ('_VertColorEmissiveBias', 'F', 31, 2, 0.0, 0.0),
+        ('_VertColorEmissiveColor', 'V4', 33, 0, (0.0, 0.0, 0.0), 1.0),
+        ('_VertColorEmissiveAlbedoAffect', 'F', 31, 3, 1.0, 0.0),
+        ('_CrossCardViewCulling', 'F', 34, 0, 0.0, 0.0),
+        ('_CrossCardViewCullingThreshold', 'F', 34, 1, 0.4, 0.0),
+        ('_CrossCardViewCullingFadeValue', 'F', 34, 2, 0.5, 0.0),
+        ('_UseThinFilm', 'F', 34, 3, 0.0, 0.0),
+        ('_ThinFilmIOR', 'F', 35, 0, 1.4, 0.0),
+        ('_ThinFilmThickness', 'F', 35, 1, 0.5, 0.0),
+        ('M_PI', 'F', 35, 2, 0.0, 0.0),
+        ('_ThinFilmWeight', 'F', 35, 3, 0.0, 0.0),
+        ('_ThinFilmIntensity', 'F', 36, 0, 1.0, 0.0),
+        ('_SubsurfaceShadingMode', 'F', 36, 1, 0.0, 0.0),
+        ('_SubsurfaceColor', 'V4', 37, 0, (0.8, 0.8, 0.8), 1.0),
+        ('_MaxSubsurfaceThickness', 'F', 36, 2, 1.0, 0.0),
+        ('_UseSubsurfaceThicknessMap', 'F', 36, 3, 0.0, 0.0),
+        ('_MinSubsurfaceThickness', 'F', 38, 0, 0.0, 0.0),
+        ('_UseCustomIBL', 'F', 38, 1, 0.0, 0.0),
+        ('_CustomIBLIntensity', 'F', 38, 2, 1.0, 0.0),
+        ('_PlanarReflection', 'F', 38, 3, 0.0, 0.0),
+        ('_PlanarReflectionTint', 'V4', 39, 0, (1.0, 1.0, 1.0), 1.0),
+        ('_EnableSubsurface', 'F', 40, 0, 0.0, 0.0),
+        ('_SubsurfaceIndirect', 'F', 40, 1, 1.0, 0.0),
+        ('_EnvironmentGlobalParams0', 'V4', 41, 0, (1.67, 1.5, 1.0), 0.0),
+        ('_MainLightOcclusionProbes', 'V4', 42, 0, (0.0, 0.0, 0.0), 0.0),
+        ('_SubsurfaceSelfShadowBias', 'F', 40, 2, 0.0, 0.0),
+        ('_SubsurfaceEnableSelfShadowBias', 'F', 40, 3, 0.0, 0.0),
+        ('_RuriVoxelSizeMeters', 'F', 43, 0, 0.0, 0.0),
+        ('_RuriFogEnvironmentalStart', 'F', 43, 1, 0.0, 0.0),
+        ('_RuriFogEnvironmentalEnd', 'F', 43, 2, 0.0, 0.0),
+        ('_RuriFogRenderDistanceStart', 'F', 43, 3, 0.0, 0.0),
+        ('_RuriFogRenderDistanceEnd', 'F', 44, 0, 0.0, 0.0),
+        ('_RuriFogColor', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
+    ],
+}
+MAT_TABLE_H = 68
+MAT_TABLE_W = 1024
+
 DEFAULT_PART = 'Lit'
 STAMP = 'e2892d86d68c6881'
 STAMP_KEY = 'ruri_uber_stamp'
@@ -13299,6 +14939,8 @@ VERTEX_PARTS = {
 }
 
 KNOWN_PARTS = {'Lit', 'LitForward', 'LitTransparent', 'LitEffect', 'LitEffectBlend', 'LitHLod', 'Unlit', 'ContainerWater', 'Leaf', 'Grass', 'Trunk'}
+MAT_TABLE = 'Ruri Endfield Scene Params'
+TEMPLATE_MAT = 'Ruri Endfield Scene Tpl '
 VTX_MODIFIER = 'Ruri Endfield Scene Vertex'
 VTX_TREE_PREFIX = 'Ruri Endfield Scene Vertex '
 OUTLINE_TEMPLATE = 'Ruri Endfield Scene Outline'
@@ -13656,6 +15298,195 @@ def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
                 g._set(sock, zout.outputs[item])
 
 
+# ==================== 材质参数表(材质 = 数据行) ====================
+# 一张材质的全部自有参数 = 共享 fp32 表图的一列像素;真源恒为材质上的 ruri_uber_*
+# 快照,列是它的投影(开旧文件/重载会话时逐材质重组,图本身不需要持久化)。
+_MAT_MIRROR = None      # numpy (H, W, 4) float32 —— 表像素的权威镜像
+_MAT_NEXT_COL = [1]     # 列0 = 缺省列(模板材质自己渲的就是它),材质从列1起
+_MAT_FLUSH_QUEUED = [False]
+
+
+def _mat_table_image():
+    image = bpy.data.images.get(MAT_TABLE)
+    if image is None or tuple(image.size) != (MAT_TABLE_W, MAT_TABLE_H) or not image.is_float:
+        stale = image
+        image = bpy.data.images.new(MAT_TABLE, MAT_TABLE_W, MAT_TABLE_H,
+                                    float_buffer=True, alpha=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.use_fake_user = True
+        if stale is not None:
+            stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
+            bpy.data.images.remove(stale)
+            image.name = MAT_TABLE
+    return image
+
+
+def _mat_defaults(part):
+    """一列声明缺省(生成期从真源 Properties 反射而来;列0 常驻这份)。"""
+    import numpy as np
+    column = np.zeros((MAT_TABLE_H, 4), dtype=np.float32)
+    for name, kind, texel, comp, dvec, dw in PARAMS.get(part, ()):
+        if kind == 'F':
+            column[texel, comp] = dvec
+        else:
+            column[texel, 0:3] = dvec
+            column[texel, 3] = dw
+    return column
+
+
+def _mat_compose(part, floats, st, colors):
+    """材质快照 → 一列像素:缺省打底,声明值覆写。raw 直灌语义原样保留 ——
+    行名 = 游戏属性名,_ST 后缀 = 平铺偏移,零映射表。"""
+    column = _mat_defaults(part)
+    merged = dict(floats or {})
+    for prop, value in (st or {}).items():
+        merged[prop + '_ST'] = value
+    merged.update(colors or {})
+    for name, kind, texel, comp, _dv, _dw in PARAMS.get(part, ()):
+        value = merged.get(name)
+        if value is None:
+            continue
+        if kind == 'F':
+            try:
+                column[texel, comp] = float(value)
+            except (TypeError, ValueError):
+                pass
+        else:
+            vec = [float(x) for x in value] + [0.0] * 4 if hasattr(value, '__len__') \
+                else [float(value)] * 3 + [0.0]
+            column[texel, 0:3] = vec[0:3]
+            column[texel, 3] = vec[3]
+    return column
+
+
+def _mat_mirror():
+    """镜像惰性建立:会话冷启/开旧文件时按材质快照逐列重组 —— 真源在材质,
+    列号在 mat['ruri_param_col'],谁在场谁的列就有效。"""
+    global _MAT_MIRROR
+    if _MAT_MIRROR is not None:
+        return _MAT_MIRROR
+    import numpy as np
+    _MAT_MIRROR = np.zeros((MAT_TABLE_H, MAT_TABLE_W, 4), dtype=np.float32)
+    top = 0
+    for mat in bpy.data.materials:
+        if mat.get('ruri_uber_stack') != PANEL_KEY or mat.get('ruri_param_col') is None:
+            continue
+        col = int(mat['ruri_param_col'])
+        if not (0 < col < MAT_TABLE_W):
+            continue
+        top = max(top, col)
+        part = mat.get('ruri_uber_part', '')
+        _MAT_MIRROR[:, col, :] = _mat_compose(
+            part, dict(mat.get('ruri_uber_floats') or {}),
+            {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()},
+            {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()})
+    _MAT_NEXT_COL[0] = max(_MAT_NEXT_COL[0], top + 1)
+    for part in PARAMS:
+        _MAT_MIRROR[:, 0, :] = _mat_defaults(part)   # 列0:任一 part 的缺省(模板渲染用)
+        break
+    return _MAT_MIRROR
+
+
+def _param_flush():
+    _MAT_FLUSH_QUEUED[0] = False
+    image = _mat_table_image()
+    image.pixels.foreach_set(_mat_mirror().ravel())
+    _image_uploaded(image)   # 见 prelude:update/update_tag 都不够,要 gl_free
+    return None      # timer 协议:None = 注销
+
+
+def _param_flush_soon():
+    """批量导入几百材质 = 几百次列写;整图 foreach_set 按帧去抖成一次。
+    headless 没有事件循环(timers 永不触发)⇒ 直接刷。"""
+    if bpy.app.background:
+        _param_flush()
+        return
+    if not _MAT_FLUSH_QUEUED[0]:
+        _MAT_FLUSH_QUEUED[0] = True
+        bpy.app.timers.register(_param_flush, first_interval=0.1)
+
+
+def _param_write(mat):
+    """材质的 ruri_uber_* 快照 → 它的表列。分配列号(首次)并返回。"""
+    part = mat.get('ruri_uber_part', '')
+    mirror = _mat_mirror()
+    col = mat.get('ruri_param_col')
+    if col is None:
+        col = _MAT_NEXT_COL[0]
+        if col >= MAT_TABLE_W:
+            raise RuntimeError('[ruri-uber] 材质表 {0} 列耗尽——同栈材质超容量'.format(MAT_TABLE_W))
+        _MAT_NEXT_COL[0] = col + 1
+        mat['ruri_param_col'] = col
+    col = int(col)
+    mirror[:, col, :] = _mat_compose(
+        part, dict(mat.get('ruri_uber_floats') or {}),
+        {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()},
+        {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()})
+    _param_flush_soon()
+    return col
+
+
+def _param_read(mat, name):
+    """面板回读兜底:镜像列里的当前值(缺省已在列里)。F 返回标量,V 返回 [x,y,z,w]。"""
+    col = mat.get('ruri_param_col')
+    if col is None:
+        return None
+    mirror = _mat_mirror()
+    for row_name, kind, texel, comp, _dv, _dw in PARAMS.get(mat.get('ruri_uber_part', ''), ()):
+        if row_name != name:
+            continue
+        cell = mirror[texel, int(col)]
+        if kind == 'F':
+            return float(cell[comp])
+        return [float(cell[0]), float(cell[1]), float(cell[2]), float(cell[3])]
+    return None
+
+
+def _wire_params(g, insts, part):
+    """把本 part 的全部材质 uniform 从表列接进级联/循环体实例 —— 模板建图时跑一次。
+    从此「一张材质的参数」= 表里的一列像素:实例化零 socket 写,面板改参零树更新。
+    列号住在 RuriMatCol 值节点上,是拷贝里唯一逐材质的图内状态。
+    已链接的 socket(varying/fetch/能力答案)天然跳过 —— 顺序上本函数最后跑。"""
+    rows = PARAMS.get(part, ())
+    if not rows:
+        return
+    image = _mat_table_image()
+    _param_flush_soon()          # 列0 缺省得先在像素里,模板渲染才不是全零
+    colv = g._nd('ShaderNodeValue')
+    colv.label = 'RuriMatCol'
+    colv.outputs[0].default_value = 0.0
+    u = g.math('DIVIDE', g.math('ADD', colv.outputs[0], 0.5), float(MAT_TABLE_W))
+    texels = {}
+    seps = {}
+    for name, kind, texel, comp, _dv, _dw in rows:
+        nd = texels.get(texel)
+        if nd is None:
+            nd = g._nd('ShaderNodeTexImage')
+            nd.image = image
+            nd.interpolation = 'Closest'
+            nd.extension = 'EXTEND'
+            nd.label = 'RuriMatParam'
+            g._set(nd.inputs['Vector'], g.comb(u, (texel + 0.5) / MAT_TABLE_H, 0.0))
+            texels[texel] = nd
+        if kind == 'F' and comp < 3:
+            parts3 = seps.get(texel)
+            if parts3 is None:
+                parts3 = seps[texel] = g.sep(nd.outputs['Color'])
+            value = parts3[comp]
+        elif kind == 'F':
+            value = nd.outputs['Alpha']
+        else:
+            value = nd.outputs['Color']
+        for inst in insts:
+            sock = inst.inputs.get(name)
+            if sock is not None and not sock.is_linked:
+                g._set(sock, value)
+            if kind == 'V4':
+                tail = inst.inputs.get(name + '_w')
+                if tail is not None and not tail.is_linked:
+                    g._set(tail, nd.outputs['Alpha'])
+
+
 _ANCHOR_SLOTS = ('_BaseMap', '_BaseColorMap', '_MainTex')
 
 
@@ -13727,6 +15558,9 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
         _wire_capability(g, insts, c, {'material': mat})
     for z in ZONES.get(part, ()):
         _wire_zone(g, insts, z, images, all_insts, part, {'material': mat})
+    # 材质 uniform 最后接:此刻 varying/fetch/能力答案已全部占线,剩下的
+    # 未链接 socket 恰是 PARAMS 的行 —— 全部改从表列读(材质 = 数据行)。
+    _wire_params(g, all_insts, part)
     if anchor is not None:
         nt.nodes.active = anchor
         anchor.select = True
@@ -13781,6 +15615,82 @@ def _apply_cull(g, shader_sock, cull, outline_fac):
     g._set(cmix.inputs[1], shader_sock)
     g._set(cmix.inputs[2], ctr.outputs[0])
     return cmix.outputs[0]
+
+
+# ==================== 模板材质 + 实例化(唯一的逐材质路径) ====================
+_TEMPLATE_KEY = 'ruri_uber_template'
+
+
+def _template_images(part):
+    """模板必须用**中性占位图**建满全部采样槽 —— 占位图名 == 槽名,这正是
+    实例化时按名认槽换真图的依据。漏了这步模板里根本没有 TexImage 节点,
+    instantiate 的换图循环无处可换、每张材质都变成无贴图(实测:与直建路
+    渲染 peak|Δ|≈1.0,而断链等价测试却是 0 —— 差异全在这)。
+    没绑真图的槽保持占位,语义就是该槽的声明中性值,与直建路一致。"""
+    _images()
+    slots = {}
+    for fetch in FETCHES.get(part, ()):
+        if not fetch['env']:
+            slots[fetch['slot']] = None
+    for zone in ZONES.get(part, ()):
+        for fetch in zone['fetches']:
+            if not fetch['env']:
+                slots[fetch['slot']] = None
+    out = {}
+    for slot in slots:
+        img = bpy.data.images.get(slot)
+        if img is not None:
+            out[slot] = img
+    return out
+
+
+def _template(part, opaque, multiply_blend, cull):
+    """每 (part, 透明形态, 剔除) 一张模板材质,整棵图只建这一次:级联、循环、割点、
+    兑现面、参数表接线、**全部采样槽的占位图节点**全在这里付清 ——
+    之后每张材质 = copy + 换图指针 + 一列像素。
+    模板列号恒 0(缺省列),自己渲染出来就是声明缺省的样子。"""
+    name = '{0}{1} {2}{3} c{4:g}'.format(TEMPLATE_MAT, part,
+                                         int(bool(opaque)), int(bool(multiply_blend)), float(cull))
+    tpl = bpy.data.materials.get(name)
+    if tpl is not None and tpl.get(STAMP_KEY) == STAMP and tpl.node_tree is not None:
+        return tpl
+    stale = tpl
+    if stale is not None:
+        stale.name = name + '.old'
+    tpl = bpy.data.materials.new(name)
+    if tpl.node_tree is None:
+        tpl.use_nodes = True
+    build_material(tpl, part=part, opaque=opaque, multiply_blend=multiply_blend,
+                   cull=cull, images=_template_images(part))
+    tpl[STAMP_KEY] = STAMP
+    tpl[_TEMPLATE_KEY] = 1
+    tpl.use_fake_user = True
+    if stale is not None:
+        stale.user_remap(tpl)   # 旧模板的拷贝不受影响(各自独立树);只挪引用者
+        bpy.data.materials.remove(stale)
+        tpl.name = name
+    return tpl
+
+
+def instantiate(name, part, images=None, opaque=True, multiply_blend=False, cull=2.0):
+    """一张材质 = 模板拷贝 + 贴图指针 + (调用方随后写的)一列像素。零建图、
+    零逐 socket 灌参 —— build_material 从此只服务模板与探针。返回 (材质, 换图数)。"""
+    tpl = _template(part, opaque, multiply_blend, cull)
+    mat = tpl.copy()
+    mat.name = name
+    mat.use_fake_user = False
+    if mat.get(_TEMPLATE_KEY) is not None:
+        del mat[_TEMPLATE_KEY]
+    swapped = 0
+    if images and mat.node_tree is not None:
+        for nd in mat.node_tree.nodes:
+            if nd.type != 'TEX_IMAGE':
+                continue
+            real = images.get(_slot_of(nd.label or ''))
+            if real is not None:
+                _swap_image(nd, real)
+                swapped += 1
+    return mat, swapped
 
 
 def build_root(part=None):
@@ -14322,11 +16232,18 @@ def _slot_of(image_name):
 
 def _swap_image(node, real):
     """占位图换真图,色彩空间跟着**占位图**走(生成期按真源 .meta sRGBTexture 定死,
-    是唯一真源)。双向赋值必须:只单向强制 Non-Color,老会话里被错标过的图永远弹不回 sRGB。"""
+    是唯一真源)。双向赋值必须:只单向强制 Non-Color,老会话里被错标过的图永远弹不回 sRGB。
+
+    🔴 **色彩空间必须先比较再写**:写它会让该 image 的全部使用者失效,而一张贴图
+    被 N 张材质共用 —— 无条件写就是每换一张材质失效前面所有张,总体 O(N²)。
+    实测 300 张材质的场景窗口:无条件写 1975ms/张,比较后写 …… 差两个数量级。
+    (早先'同值重写只要 19µs'的实测是单材质场景,掩盖了使用者数量这一维。)"""
     non_color = node.image is not None and node.image.colorspace_settings.name == 'Non-Color'
     node.image = real
+    want = 'Non-Color' if non_color else 'sRGB'
     try:
-        real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+        if real.colorspace_settings.name != want:
+            real.colorspace_settings.name = want
     except Exception:
         pass
     if non_color:
@@ -14379,7 +16296,8 @@ def _load_images(builder, props):
                 props.name, name, guid), flush=True)
             continue
         try:
-            img.alpha_mode = 'CHANNEL_PACKED'
+            if img.alpha_mode != 'CHANNEL_PACKED':   # 同 _swap_image:写它会失效全部使用者
+                img.alpha_mode = 'CHANNEL_PACKED'
         except Exception:
             pass
         images[name] = img
@@ -14402,43 +16320,22 @@ def provider(builder, props):
     #   那条 gBuffer0.w 在真管线是 materialFlags 不是不透明度 —— 接成不透明度会让
     #   皮肤/眼睛整个隐形。透明 part 由 [StylePart(Transparent)] 定,是风格自己的事实。
     opaque = props.floats.get('_SurfaceType', 0.0) < 0.5 and not meta['transparent']
-    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-    if mat.node_tree is None:
-        mat.use_nodes = True
-    insts = build_material(mat, part=part_name, opaque=opaque,
-                           multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
-                           cull=_cull_mode(props), images=images)
-    filled = [0]
+    # 材质 = 数据行:模板拷贝 + 贴图指针 + 一列像素。逐 socket 灌参(整棵图从零建 +
+    # 798 次 put)已整删 —— 那条路把 300 材质的场景窗口拖成 8 分钟,而一张材质的
+    # 真实信息量只有十个图指针加几百字节参数。
+    mat, swapped = instantiate(name, part_name, images=images, opaque=opaque,
+                               multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
+                               cull=_cull_mode(props))
+    stale = bpy.data.materials.get(name)
+    if stale is not None and stale is not mat:
+        stale.user_remap(mat)   # 重导同名:旧材质的使用者全体改指新的,再删旧
+        bpy.data.materials.remove(stale)
+        mat.name = name
     bst = props.texture_st.get('_BaseMap') or [1.0, 1.0, 0.0, 0.0]
     for node in mat.node_tree.nodes:
         if node.label == 'RuriBaseMapST':
             node.inputs['Scale'].default_value = (float(bst[0]), float(bst[1]), 1.0)
             node.inputs['Location'].default_value = (float(bst[2]), float(bst[3]), 0.0)
-
-    def put(sock_name, value):
-        for grp in insts:
-            sock = grp.inputs.get(sock_name)
-            if sock is None or sock.is_linked:
-                continue
-            if sock.type == 'VECTOR':
-                sock.default_value = value if isinstance(value, tuple) else (value, value, value)
-            else:
-                sock.default_value = value[0] if isinstance(value, tuple) else value
-            filled[0] += 1
-
-    # raw 直灌:socket 名 = 游戏属性名(生成期就是这么命名的),零映射表。
-    for prop, value in props.floats.items():
-        put(prop, float(value))
-    for prop, value in props.colors.items():
-        put(prop, (float(value[0]), float(value[1]), float(value[2])))
-        put(prop + '_w', float(value[3]))
-    for prop, st in props.texture_st.items():
-        put(prop + '_ST', (float(st[0]), float(st[1]), float(st[2])))
-        put(prop + '_ST_w', float(st[3]))
-    put('_ScenePartID', float(part_id))
-    # 透明特效 part 的游戏 shader 靠 pass 状态透明、不声明 _SurfaceType,补上内核开关。
-    if meta['transparent']:
-        put('_SurfaceType', 1.0)
     try:
         mat.surface_render_method = 'BLENDED' if meta['transparent'] else 'DITHERED'
     except Exception:
@@ -14447,18 +16344,27 @@ def provider(builder, props):
     # 栈身份:一个会话里同时装着 N 个生成栈,而 ruri_uber_part 每个栈都写 ——
     # 材质面板要认领得准(只画选中材质那一个栈的参数),判据只能是这一枚烙印。
     mat['ruri_uber_stack'] = PANEL_KEY
-    # 顶点腿参数真源:只有顶点消费的属性(_FurLengthIntensity/_OutlineWidth…)在着色组上
-    # 没有 socket,不落这里就永远丢 —— apply_vertex_stage 按名回收。
+    # 快照 = 参数唯一真源(表列/顶点腿/面板全部从这里投影)。透明特效 part 的游戏
+    # shader 靠 pass 状态透明、不声明 _SurfaceType —— 内核开关折进快照本身,
+    # 冷启重组列时才不会丢(曾是 put() 的旁路补写,快照里没有)。
+    snapshot_floats = {k: float(v) for k, v in props.floats.items()}
+    if meta['transparent']:
+        snapshot_floats['_SurfaceType'] = 1.0
     mat['ruri_uber_images'] = {k: v.name for k, v in images.items()}
-    mat['ruri_uber_floats'] = {k: float(v) for k, v in props.floats.items()}
+    mat['ruri_uber_floats'] = snapshot_floats
     mat['ruri_uber_st'] = {k: [float(x) for x in v] for k, v in props.texture_st.items()}
     mat['ruri_uber_colors'] = {k: [float(x) for x in v] for k, v in props.colors.items()}
     mat['ruri_uber_disabled_passes'] = list(getattr(props, 'disabled_passes', ()))
     ref = props.shader_ref
     mat['ruri_uber_shader_guid'] = str(ref.get('guid', '')) if isinstance(ref, dict) else ''
     mat['ruri_uber_shader'] = _shader_name(builder, props) or ''
-    print('[ruri-uber] {0}: shader={1} part={2} images={3} sockets={4} insts={5}'.format(
-        name, mat['ruri_uber_shader'], part_name, len(images), filled[0], len(insts)), flush=True)
+    col = _param_write(mat)
+    for node in mat.node_tree.nodes:
+        if node.label == 'RuriMatCol':
+            node.outputs[0].default_value = float(col)
+            break
+    print('[ruri-uber] {0}: shader={1} part={2} images={3} col={4}'.format(
+        name, mat['ruri_uber_shader'], part_name, swapped, col), flush=True)
     return mat
 
 
@@ -14503,22 +16409,6 @@ def rewire_capabilities(mat):
     nt.update_tag()
     mat.update_tag()
     return True
-
-
-def refresh_light_tables():
-    """灯只是动了 / 换了色 / 调了能量 —— **重写灯表像素即可,一个节点都不用碰**。
-    灯集合本身没变时走这条:代价是几十个浮点写,与重建图不在一个量级。
-    (集合变了才需要重接:0 盏↔有盏会换整条兑现分支。)"""
-    touched = 0
-    for mat in bpy.data.materials:
-        if mat.get('ruri_uber_part') is None:
-            continue
-        lights = _additional_lights(mat)
-        if not lights:
-            continue
-        _light_table(mat, lights)
-        touched += 1
-    return touched
 
 
 # ============================ 材质参数接口 ============================
@@ -15439,7 +17329,9 @@ def panel_claims(mat):
 
 
 def panel_write(mat, row, value):
-    """面板值 → 全部级联实例 socket + 快照字典 + 顶点腿克隆输入,一次到位。"""
+    """面板值 → 快照字典(真源)→ 表列像素 + 顶点腿克隆输入,一次到位。
+    着色面的 socket 已被表列占线(is_linked 天然跳过)—— 改参 = 改像素,
+    零树更新:这是拖杆不再卡顿的全部原因。"""
     name = row['name']
     kind = row['kind']
     insts = _panel_insts(mat)
@@ -15456,6 +17348,7 @@ def panel_write(mat, row, value):
         floats = dict(mat.get('ruri_uber_floats') or {})
         floats[name] = scalar
         mat['ruri_uber_floats'] = floats
+        _param_write(mat)
     else:
         vec4 = [float(v) for v in value] + [0.0] * 4
         vec4 = vec4[:4]
@@ -15477,6 +17370,7 @@ def panel_write(mat, row, value):
         colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
         colors[name] = vec4
         mat['ruri_uber_colors'] = colors
+        _param_write(mat)
     _panel_touch(mat)
 
 
@@ -15559,6 +17453,7 @@ def panel_write_st(mat, row, tiling, offset):
     st = {k: list(v) for k, v in dict(mat.get('ruri_uber_st') or {}).items()}
     st[name] = st_value
     mat['ruri_uber_st'] = st
+    _param_write(mat)
     for grp in _panel_insts(mat):
         sock = grp.inputs.get(name + '_ST')
         if sock is not None and not sock.is_linked:
@@ -15621,6 +17516,8 @@ def panel_read(mat):
             images[name] = img
             value = st.get(name)
             if value is None:
+                value = _param_read(mat, name + '_ST')   # 表列(缺省已在列里)
+            if value is None:
                 sock = first.inputs.get(name + '_ST')
                 if sock is not None and not sock.is_linked:
                     tail = first.inputs.get(name + '_ST_w')
@@ -15633,6 +17530,10 @@ def panel_read(mat):
         sock = first.inputs.get(name)
         if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
             value = floats.get(name)
+            if value is None:
+                value = _param_read(mat, name)   # 表列(缺省已在列里)
+                if isinstance(value, list):
+                    value = value[0]
             if value is None and sock is not None and not sock.is_linked and sock.type == 'VALUE':
                 value = sock.default_value
             if value is None:
@@ -15641,6 +17542,10 @@ def panel_read(mat):
                             else int(value) if kind == 'INT' else float(value))
         else:
             value = colors.get(name)
+            if value is None:
+                value = _param_read(mat, name)   # 表列(缺省已在列里)
+                if isinstance(value, float):
+                    value = None
             if value is None and sock is not None and not sock.is_linked and sock.type == 'VECTOR':
                 tail = first.inputs.get(name + '_w')
                 raw = sock.default_value
