@@ -702,6 +702,22 @@ LIGHT_TABLE_ROWS = 4
 LIGHT_TABLE_COLS = 64
 
 
+def _image_uploaded(image):
+    """像素写完之后让它真的到达 GPU。
+
+    🔴 `update()` + `update_tag()` **都不够**:EEVEE 会继续用已上传的那份纹理,
+    症状是「表里写对了、画面纹丝不动,下一次渲染才跟上」(实测:加一盏灯后
+    peak|Δ|=0,再渲一次才变)。`gl_free()` 丢掉 GPU 端句柄,下次求值重新上传。
+    表都是极小的图(灯表 64×4、参数表 1024×68),重传成本可以忽略;而这正是
+    「数据一改、几百张材质立刻跟随且零重接」得以成立的最后一环。"""
+    image.update()
+    image.update_tag()
+    try:
+        image.gl_free()
+    except Exception:
+        pass
+
+
 def _light_table_image():
     """场景全局灯表(全部生成栈共读同一张):64 列 × 4 行 fp32。
        列0 = 场景主光;列1.. = 附加光。行布局:
@@ -769,10 +785,7 @@ def refresh_light_tables():
     for row in rows:
         flat.extend(row)
     image.pixels = flat
-    image.update()
-    # 🔴 同 _param_flush:纯像素写不触发 GPU 纹理重传,EEVEE 会继续用旧的那份
-    # (症状=加了灯画面纹丝不动,下一次渲染才跟上)。update_tag 是 O(1) 的脏标记。
-    image.update_tag()
+    _image_uploaded(image)
     return 1
 
 

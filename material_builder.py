@@ -624,20 +624,24 @@ class MaterialBuilder:
         # the Principled fallback below, which for Unity Standard IS the faithful
         # build (same PBR model, and this fallback reads Standard's own property
         # names directly).
-        for provider in GRAPH_PROVIDERS:
-            try:
-                claimed = provider(self, props)
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                print("[material] !! provider {0} EXCEPTION on '{1}' -- falling back to Principled, "
-                      "graph is NOT the game shader".format(
-                          getattr(provider, "__module__", provider), name))
-                claimed = None
-            if claimed is not None:
-                return claimed
-        print("[material] UNCLAIMED '{0}' shader={1} -- Principled fallback".format(
-            name, _shader_identity(self, props)))
+        # 游戏着色栈是**可选**的:它按真源 1:1 重建整条 NPR 光照链,单张材质的代价
+        # 远高于内置 BSDF,而一个场景窗口动辄几百张。默认关 —— 导入先把几何/贴图拿到手,
+        # 需要真实着色时再单独开(选项 "Game Shaders")。
+        if self.options.get("game_shaders"):
+            for provider in GRAPH_PROVIDERS:
+                try:
+                    claimed = provider(self, props)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    print("[material] !! provider {0} EXCEPTION on '{1}' -- falling back to Principled, "
+                          "graph is NOT the game shader".format(
+                              getattr(provider, "__module__", provider), name))
+                    claimed = None
+                if claimed is not None:
+                    return claimed
+            print("[material] UNCLAIMED '{0}' shader={1} -- Principled fallback".format(
+                name, _shader_identity(self, props)))
 
         # 就地改写同名材质(网格按名字绑材质;另起新料会得 .001 后缀留下双份)。下方整树清空重建,幂等。
         mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)

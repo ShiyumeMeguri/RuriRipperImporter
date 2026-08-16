@@ -940,6 +940,13 @@ def draw_roster(layout, context):
     row = options.row(align=True)
     row.prop(state, "lod")
     row.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
+    # 与场景导入同一份选项(都读 ruri_cabmap.as_options),画在按 Load 的地方。
+    cabmap = context.scene.ruri_cabmap
+    shading = options.row(align=True)
+    shading.prop(cabmap, "import_materials")
+    game = shading.row(align=True)
+    game.enabled = cabmap.import_materials
+    game.prop(cabmap, "game_shaders")
     options.operator(RURI_OT_roster_load.bl_idname, icon="IMPORT")
     options.operator(RURI_OT_roster_reveal.bl_idname, icon="FILE_FOLDER")
     options.operator(RURI_OT_roster_animations.bl_idname, icon="ANIM_DATA")

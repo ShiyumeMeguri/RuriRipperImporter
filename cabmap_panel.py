@@ -909,6 +909,14 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 
     lod0_only: BoolProperty(name="LOD0 Only", default=True)
     import_materials: BoolProperty(name="Import Materials", default=True)
+    game_shaders: BoolProperty(
+        name="Game Shaders", default=False,
+        description="Rebuild the game's own shading stack (NPR lighting, SDF face "
+                    "shadows, fur shells, outlines) instead of Blender's built-in "
+                    "BSDF. Off is much faster and is what you want while you are "
+                    "still deciding WHAT to import -- geometry and textures are "
+                    "identical either way, only the shading differs. Turn it on for "
+                    "the handful of assets you actually intend to render")
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
     import_empties: BoolProperty(
@@ -941,6 +949,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         return {
             "lod0_only": self.lod0_only,
             "import_materials": self.import_materials,
+            "game_shaders": self.game_shaders,
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
@@ -2388,6 +2397,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts = gated.box()
             opts.prop(state, "lod0_only")
             opts.prop(state, "import_materials")
+            shader_row = opts.row()
+            shader_row.enabled = state.import_materials
+            shader_row.prop(state, "game_shaders")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")

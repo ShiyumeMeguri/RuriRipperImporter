@@ -720,6 +720,22 @@ LIGHT_TABLE_ROWS = 4
 LIGHT_TABLE_COLS = 64
 
 
+def _image_uploaded(image):
+    """像素写完之后让它真的到达 GPU。
+
+    🔴 `update()` + `update_tag()` **都不够**:EEVEE 会继续用已上传的那份纹理,
+    症状是「表里写对了、画面纹丝不动,下一次渲染才跟上」(实测:加一盏灯后
+    peak|Δ|=0,再渲一次才变)。`gl_free()` 丢掉 GPU 端句柄,下次求值重新上传。
+    表都是极小的图(灯表 64×4、参数表 1024×68),重传成本可以忽略;而这正是
+    「数据一改、几百张材质立刻跟随且零重接」得以成立的最后一环。"""
+    image.update()
+    image.update_tag()
+    try:
+        image.gl_free()
+    except Exception:
+        pass
+
+
 def _light_table_image():
     """场景全局灯表(全部生成栈共读同一张):64 列 × 4 行 fp32。
        列0 = 场景主光;列1.. = 附加光。行布局:
@@ -787,10 +803,7 @@ def refresh_light_tables():
     for row in rows:
         flat.extend(row)
     image.pixels = flat
-    image.update()
-    # 🔴 同 _param_flush:纯像素写不触发 GPU 纹理重传,EEVEE 会继续用旧的那份
-    # (症状=加了灯画面纹丝不动,下一次渲染才跟上)。update_tag 是 O(1) 的脏标记。
-    image.update_tag()
+    _image_uploaded(image)
     return 1
 
 
@@ -1605,12 +1618,7 @@ def _param_flush():
     _MAT_FLUSH_QUEUED[0] = False
     image = _mat_table_image()
     image.pixels.foreach_set(_mat_mirror().ravel())
-    image.update()
-    # 🔴 纯像素写**不会**让 EEVEE 重传 GPU 纹理:它会继续用已上传的那份,
-    # 症状是「表里明明写对了、渲出来还是上一版」(实测:同一张材质连渲两次
-    # 结果差 0.8,第二次才对)。update_tag 让依赖图把这个 ID 判脏 —— O(1),
-    # 不需要碰任何材质,正是表化架构成立的前提。
-    image.update_tag()
+    _image_uploaded(image)   # 见 prelude:update/update_tag 都不够,要 gl_free
     return None      # timer 协议:None = 注销
 
 
@@ -2439,11 +2447,18 @@ def _slot_of(image_name):
 
 def _swap_image(node, real):
     """占位图换真图,色彩空间跟着**占位图**走(生成期按真源 .meta sRGBTexture 定死,
-    是唯一真源)。双向赋值必须:只单向强制 Non-Color,老会话里被错标过的图永远弹不回 sRGB。"""
+    是唯一真源)。双向赋值必须:只单向强制 Non-Color,老会话里被错标过的图永远弹不回 sRGB。
+
+    🔴 **色彩空间必须先比较再写**:写它会让该 image 的全部使用者失效,而一张贴图
+    被 N 张材质共用 —— 无条件写就是每换一张材质失效前面所有张,总体 O(N²)。
+    实测 300 张材质的场景窗口:无条件写 1975ms/张,比较后写 …… 差两个数量级。
+    (早先'同值重写只要 19µs'的实测是单材质场景,掩盖了使用者数量这一维。)"""
     non_color = node.image is not None and node.image.colorspace_settings.name == 'Non-Color'
     node.image = real
+    want = 'Non-Color' if non_color else 'sRGB'
     try:
-        real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+        if real.colorspace_settings.name != want:
+            real.colorspace_settings.name = want
     except Exception:
         pass
     if non_color:
@@ -2496,7 +2511,8 @@ def _load_images(builder, props):
                 props.name, name, guid), flush=True)
             continue
         try:
-            img.alpha_mode = 'CHANNEL_PACKED'
+            if img.alpha_mode != 'CHANNEL_PACKED':   # 同 _swap_image:写它会失效全部使用者
+                img.alpha_mode = 'CHANNEL_PACKED'
         except Exception:
             pass
         images[name] = img
@@ -2525,10 +2541,15 @@ def provider(builder, props):
     mat, swapped = instantiate(name, part_name, images=images, opaque=opaque,
                                multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
                                cull=_cull_mode(props))
+    # 🔴 同名旧材质**只改名让位,不删**。删了会让宿主 MaterialBuilder 的两层缓存
+    # (guid → mat、内容摘要 → mat)攥着已释放的数据块 —— 同一次导入里下一个
+    # 命中缓存的网格拿到悬垂指针,`materials.append` 抛
+    # `ReferenceError: StructRNA of type Material has been removed`。
+    # 让位后没有使用者的旧材质会被 Blender 自己回收(不设 fake user),
+    # 还在被别的网格用的那份则原样活着 —— 两种情况都对。
     stale = bpy.data.materials.get(name)
     if stale is not None and stale is not mat:
-        stale.user_remap(mat)   # 重导同名:旧材质的使用者全体改指新的,再删旧
-        bpy.data.materials.remove(stale)
+        stale.name = name + '.old'
         mat.name = name
     bst = props.texture_st.get('_BaseMap') or [1.0, 1.0, 0.0, 0.0]
     for node in mat.node_tree.nodes:

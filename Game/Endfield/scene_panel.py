@@ -500,11 +500,19 @@ def _draw_estimate(layout, state):
         box.label(text="Turn Size down, or expect it to swap.", icon="INFO")
 
 
-def _draw_actions(layout, state, enabled):
+def _draw_actions(layout, state, enabled, context):
     options = layout.column(align=True)
     options.enabled = enabled
     options.prop(state, "scene_state_id")
     options.prop(state, "lod0_only")
+    # 导入选项住在核心面板的 ruri_cabmap 上(场景导入也是读它的 as_options),
+    # 但一个场景窗口是几百上千张材质 —— 着色栈开不开在这里就是几秒和几分钟的差别,
+    # 所以这两个直接画在按 Import 的地方,别让人跑去另一个 tab 找。
+    cabmap = context.scene.ruri_cabmap
+    options.prop(cabmap, "import_materials")
+    shading = options.row()
+    shading.enabled = enabled and cabmap.import_materials
+    shading.prop(cabmap, "game_shaders")
     options.operator(RURI_OT_scene_discover.bl_idname, icon="VIEWZOOM").kind = state.KIND
     _draw_estimate(layout, state)
     tail = layout.column(align=True)
@@ -517,7 +525,7 @@ def _draw_self_contained(layout, context):
     """The self-contained scenes: nothing to window, so nothing to choose."""
     state = context.scene.ruri_scene_box
     _draw_list(layout, state)
-    _draw_actions(layout, state, _selected(state) is not None)
+    _draw_actions(layout, state, _selected(state) is not None, context)
 
 
 def _draw_streaming(layout, context):
@@ -547,7 +555,7 @@ def _draw_streaming(layout, context):
     rect = _rect(state) if entry is not None else None
     if rect is not None:
         size.label(text="{0:.0f} x {1:.0f} m".format(rect[2] - rect[0], rect[3] - rect[1]))
-    _draw_actions(layout, state, entry is not None)
+    _draw_actions(layout, state, entry is not None, context)
 
 
 # The tab's two halves, left to right: the kind's own id, the button's text, its

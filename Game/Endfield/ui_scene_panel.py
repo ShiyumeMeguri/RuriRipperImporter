@@ -234,6 +234,13 @@ def draw_ui_scene_tab(layout, context):
 
     options = layout.column(align=True)
     options.enabled = row is not None
+    # 与 Scene/World 同一份导入选项(都读 ruri_cabmap.as_options),画在按 Load 的地方。
+    cabmap = context.scene.ruri_cabmap
+    options.prop(cabmap, "import_materials")
+    shading = options.row()
+    shading.enabled = row is not None and cabmap.import_materials
+    shading.prop(cabmap, "game_shaders")
+    options.separator()
     options.prop(state, "apply_environment")
     exposure_row = options.row()
     exposure_row.enabled = state.apply_environment

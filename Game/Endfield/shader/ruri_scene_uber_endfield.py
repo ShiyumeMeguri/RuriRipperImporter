@@ -16326,10 +16326,15 @@ def provider(builder, props):
     mat, swapped = instantiate(name, part_name, images=images, opaque=opaque,
                                multiply_blend=meta['transparent'] and part_name == 'OverlayShadow',
                                cull=_cull_mode(props))
+    # 🔴 同名旧材质**只改名让位,不删**。删了会让宿主 MaterialBuilder 的两层缓存
+    # (guid → mat、内容摘要 → mat)攥着已释放的数据块 —— 同一次导入里下一个
+    # 命中缓存的网格拿到悬垂指针,`materials.append` 抛
+    # `ReferenceError: StructRNA of type Material has been removed`。
+    # 让位后没有使用者的旧材质会被 Blender 自己回收(不设 fake user),
+    # 还在被别的网格用的那份则原样活着 —— 两种情况都对。
     stale = bpy.data.materials.get(name)
     if stale is not None and stale is not mat:
-        stale.user_remap(mat)   # 重导同名:旧材质的使用者全体改指新的,再删旧
-        bpy.data.materials.remove(stale)
+        stale.name = name + '.old'
         mat.name = name
     bst = props.texture_st.get('_BaseMap') or [1.0, 1.0, 0.0, 0.0]
     for node in mat.node_tree.nodes:
