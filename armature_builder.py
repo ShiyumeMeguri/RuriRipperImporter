@@ -62,7 +62,13 @@ def stamp_rig(arm_obj, paths):
 
     THE one writer: every code path that builds an armature out of Unity data owes
     the same stamp, and a second copy of this encoding is how a rig ends up carrying
-    a shape the reader does not accept. See read_rig for the other half."""
+    a shape the reader does not accept. See read_rig for the other half.
+
+    The bone NAME lives in here, and renaming a bone therefore has to update it --
+    that is the renamer's job, not something the stamp defends against: see
+    AnimationRetarget.skeleton_rename.rewrite_rig_stamp, which the rename operator
+    calls right after it renames the bones. A rename done by hand outside that tool
+    is the user's own to reconcile."""
     if arm_obj is None:
         return
     arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": paths}, separators=(",", ":"))

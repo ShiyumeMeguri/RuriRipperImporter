@@ -155,41 +155,63 @@ def _needs_armature(prefab):
     return not prefab.all("MeshRenderer") and not prefab.all("MeshFilter")
 
 
-def _root_animator(prefab, maps):
-    """The prefab's OWN Animator: the one on a hierarchy ROOT GameObject (a prefab
-    routinely carries more -- weapon sub-rigs), else the first in document order."""
+def root_animator(prefab, maps):
+    """The Animator on a hierarchy ROOT GameObject, or None when this prefab has
+    none there.
+
+    STRICT on purpose: "the animated thing IS this prefab" versus "this prefab
+    merely contains something animated" is the whole difference between a
+    character's own model prefab and a scene that places one, and the two build
+    completely different rigs -- a placed instance carries the scene's pose, not
+    the authored rest (measured: 595/595 bones differ, up to 612 units, between
+    a character's postmodel and a levelseq prefab that stages it). Anything that
+    identifies a rig by its animator has to ask this question and no weaker one;
+    see cross_game_retarget._resolve_host_cab."""
     root_go_ids = {node.go_id for node in maps.get("roots") or ()}
-    first = None
     for doc in prefab.documents:
         if doc.class_name != "Animator":
             continue
-        if first is None:
-            first = doc
         go_ref = doc.data.get("m_GameObject")
         if isinstance(go_ref, dict) and go_ref.get("fileID") in root_go_ids:
             return doc
-    return first
+    return None
+
+
+def _root_animator(prefab, maps):
+    """The prefab's OWN Animator: root_animator, else the first in document order
+    (a prefab routinely carries more -- weapon sub-rigs). The fallback is for
+    STAMPING, where a nested animator's avatar still beats no avatar at all; a
+    caller deciding WHICH rig it is wants root_animator alone."""
+    return root_animator(prefab, maps) or next(
+        (doc for doc in prefab.documents if doc.class_name == "Animator"), None)
+
+
+def animator_avatar(db, animator):
+    """The Avatar document an Animator names, or None when it names none / the
+    closure does not carry it. Resolved by the m_Avatar guid -- IDENTITY, never a
+    name match."""
+    avatar_ref = animator.data.get("m_Avatar") if animator is not None else None
+    guid = avatar_ref.get("guid") if isinstance(avatar_ref, dict) else None
+    if not guid:
+        return None
+    avatar_file = db.load_guid(str(guid))
+    return avatar_file.first("Avatar") if avatar_file is not None else None
 
 
 def _stamp_prefab_avatar(db, prefab, arm_obj, maps, warnings):
     """Bake the rig's whole Avatar document onto the armature (armature_builder.
-    UNITY_AVATAR_PROP) -- the humanoid retarget contract. Resolved by IDENTITY:
-    the root Animator's m_Avatar guid, never a name match. A prefab with no
+    UNITY_AVATAR_PROP) -- the humanoid retarget contract. A prefab with no
     animator or no avatar reference simply carries no stamp (a static prop, a
     generic rig dump); a reference that fails to resolve is a real gap and says
     so."""
     animator = _root_animator(prefab, maps)
     if animator is None:
         return
-    avatar_ref = animator.data.get("m_Avatar")
-    guid = avatar_ref.get("guid") if isinstance(avatar_ref, dict) else None
-    if not guid:
-        return
-    avatar_file = db.load_guid(str(guid))
-    avatar_doc = avatar_file.first("Avatar") if avatar_file is not None else None
+    avatar_doc = animator_avatar(db, animator)
     if avatar_doc is None:
-        warnings.append(f"Animator references Avatar {guid} but the closure does not carry it "
-                        f"-- muscle-encoded clips will not solve on this rig.")
+        if animator.data.get("m_Avatar"):
+            warnings.append("Animator references an Avatar the closure does not carry "
+                            "-- muscle-encoded clips will not solve on this rig.")
         return
     armature_builder.stamp_avatar(arm_obj, avatar_doc.data)
     _sort_bones_into_collections(arm_obj, warnings)
