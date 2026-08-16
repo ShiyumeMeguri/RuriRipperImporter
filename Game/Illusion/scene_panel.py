@@ -201,7 +201,7 @@ class RURI_OT_kk_scene_import(bpy.types.Operator):
             bpy.ops.object.select_all(action="SELECT")
             bpy.ops.object.delete(use_global=False)
 
-        options = context.scene.ruri_cabmap.as_options()
+        options = context.scene.ruri_cabmap.as_options(scene=True)
         try:
             assets, roots, _seeds, _clips, scene_roots = cabmap_state.BRIDGE.import_cabs(
                 cabs, _class_ids(options))

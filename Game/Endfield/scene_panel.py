@@ -431,7 +431,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
 
         try:
             report = scene_importer.import_scene_window(
-                context, cabmap_state.BRIDGE, context.scene.ruri_cabmap.as_options())
+                context, cabmap_state.BRIDGE, context.scene.ruri_cabmap.as_options(scene=True))
         except Exception as exc:
             _report_exception(self, "Scene import failed", exc)
             return {"CANCELLED"}
@@ -512,7 +512,7 @@ def _draw_actions(layout, state, enabled, context):
     options.prop(cabmap, "import_materials")
     shading = options.row()
     shading.enabled = enabled and cabmap.import_materials
-    shading.prop(cabmap, "game_shaders")
+    shading.prop(cabmap, "scene_shaders")
     options.operator(RURI_OT_scene_discover.bl_idname, icon="VIEWZOOM").kind = state.KIND
     _draw_estimate(layout, state)
     tail = layout.column(align=True)

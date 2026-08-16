@@ -946,7 +946,7 @@ def draw_roster(layout, context):
     shading.prop(cabmap, "import_materials")
     game = shading.row(align=True)
     game.enabled = cabmap.import_materials
-    game.prop(cabmap, "game_shaders")
+    game.prop(cabmap, "character_shaders")
     options.operator(RURI_OT_roster_load.bl_idname, icon="IMPORT")
     options.operator(RURI_OT_roster_reveal.bl_idname, icon="FILE_FOLDER")
     options.operator(RURI_OT_roster_animations.bl_idname, icon="ANIM_DATA")

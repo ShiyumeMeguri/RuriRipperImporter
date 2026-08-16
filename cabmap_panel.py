@@ -909,14 +909,23 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
 
     lod0_only: BoolProperty(name="LOD0 Only", default=True)
     import_materials: BoolProperty(name="Import Materials", default=True)
-    game_shaders: BoolProperty(
-        name="Game Shaders", default=False,
+    # 着色栈开不开是**按导入什么**分的,不是一个全局偏好:一个角色十几张材质,
+    # 那点代价换来的是它本来的样子(NPR/SDF 脸影/毛壳/描边),当然默认开;
+    # 一个场景窗口几百上千张,同样的代价就是几秒对几分钟 —— 而地形石头用内置
+    # BSDF 看着并不差。所以两条路各有各的默认,谁也不该迁就谁。
+    character_shaders: BoolProperty(
+        name="Game Shaders", default=True,
         description="Rebuild the game's own shading stack (NPR lighting, SDF face "
                     "shadows, fur shells, outlines) instead of Blender's built-in "
-                    "BSDF. Off is much faster and is what you want while you are "
-                    "still deciding WHAT to import -- geometry and textures are "
-                    "identical either way, only the shading differs. Turn it on for "
-                    "the handful of assets you actually intend to render")
+                    "BSDF. On by default for characters -- a character is a dozen "
+                    "materials and this is what makes it look like itself")
+    scene_shaders: BoolProperty(
+        name="Game Shaders", default=False,
+        description="Rebuild the game's own shading stack instead of Blender's "
+                    "built-in BSDF. Off by default for scenes -- a scene window is "
+                    "hundreds of materials, and geometry/textures are identical "
+                    "either way. Turn it on when you are actually rendering this "
+                    "window rather than still deciding what to import")
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
     import_empties: BoolProperty(
@@ -945,11 +954,13 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)
     available_clips_active_index: IntProperty()
 
-    def as_options(self):
+    def as_options(self, scene=False):
+        """``scene=True`` 是场景窗口/展示台那条路 —— 它和角色路的唯一区别就是
+        着色栈的默认(见 character_shaders / scene_shaders 的注)。"""
         return {
             "lod0_only": self.lod0_only,
             "import_materials": self.import_materials,
-            "game_shaders": self.game_shaders,
+            "game_shaders": self.scene_shaders if scene else self.character_shaders,
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
@@ -2399,7 +2410,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             opts.prop(state, "import_materials")
             shader_row = opts.row()
             shader_row.enabled = state.import_materials
-            shader_row.prop(state, "game_shaders")
+            shader_row.prop(state, "character_shaders")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")

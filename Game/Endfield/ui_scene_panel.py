@@ -198,7 +198,7 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
             mesh_blobs=bridge.mesh_blobs_by_guid,
             asset_paths=bridge.asset_paths_by_guid)
         return ui_scene_importer.import_stage(
-            context, db, roots, context.scene.ruri_cabmap.as_options())
+            context, db, roots, context.scene.ruri_cabmap.as_options(scene=True))
 
 
 def draw_ui_scene_tab(layout, context):
@@ -239,7 +239,7 @@ def draw_ui_scene_tab(layout, context):
     options.prop(cabmap, "import_materials")
     shading = options.row()
     shading.enabled = row is not None and cabmap.import_materials
-    shading.prop(cabmap, "game_shaders")
+    shading.prop(cabmap, "scene_shaders")
     options.separator()
     options.prop(state, "apply_environment")
     exposure_row = options.row()
