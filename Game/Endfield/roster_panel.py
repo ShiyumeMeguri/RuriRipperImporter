@@ -54,7 +54,7 @@ def _filter_fields():
 
 
 ROSTER_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="EndField:character", fields=_filter_fields,
+    key="Endfield:character", fields=_filter_fields,
     state_for=lambda context: context.scene.ruri_roster,
     apply=lambda context: _rebuild(context.scene.ruri_roster)))
 
@@ -107,7 +107,7 @@ def _on_kind_change(self, context):
 
 
 class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
-    FILTER_SPEC_KEY = "EndField:character"
+    FILTER_SPEC_KEY = "Endfield:character"
 
     pane: EnumProperty(
         name="Pane",

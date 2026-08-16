@@ -38,7 +38,7 @@ from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, roster_panel
 
-STORY_SPEC_KEY = "EndField:story"
+STORY_SPEC_KEY = "Endfield:story"
 
 # Column labels worth spelling out; any other column the hook adds to the table
 # shows up under its own name with no edit here.

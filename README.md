@@ -116,7 +116,7 @@ prefab。已端到端验证:真实角色 FBX → dump → Blender,骨架、贴�
   分解全部整通道数组化(分解逐分支复刻 Blender 自己的 Mike-Day 实现,与逐帧
   `decompose()` 数值等价到 fp32 噪声级);`foreach_set` 批量写 fcurve;Blender 4.4+
   slotted action。humanoid clip 走完整肌肉重定向(Avatar referential + TwistSolve +
-  根运动轨迹语义),EndField 风格 rig 另有距离权重 IK 矫正。
+  根运动轨迹语义),Endfield 风格 rig 另有距离权重 IK 矫正。
 - **三级 clip 数据通道,按可用性自动降级** ——
   ① 桥模式(cabmap):C# 侧导出时直接把曲线打成 float32 blob 跨 pythonnet 传来,
   Python 端 `numpy.frombuffer` 零解析(82.6MB YAML 的 clip = 9.2MB blob,导入
@@ -131,18 +131,24 @@ prefab。已端到端验证:真实角色 FBX → dump → Blender,骨架、贴�
 hook 是针对具体游戏写的,面板也该是。所以**一个游戏一个文件夹**:`Game/<游戏>/` 里放
 这个游戏专属的 tab、面板和导入通道,`Game/__init__.py` 只是个注册表。
 
-联结方式不是约定而是精确推导:hook id 就是 `{GameName}_{Version}`
-(`Ruri.Hook.RuriHook.BuildHookId`,如 `EndField_1.4.4`),所以一个 hook 属于哪个游戏 =
-最后一个下划线之前的部分,而一个游戏模块的 `game_name` 就是上游那个 `GameType` 成员。
-于是:
+联结方式不是约定而是**同一个字符串**:一个游戏模块的 `game_name` 就是这个游戏 player 的
+Unity productName(`<Product>_Data/app.info` 第二行),也正是上游解码器声明的 `GameName`
+和它 hook id(`产品名_版本`,如 `Endfield_1.4.4`)的前半段。没有映射表、没有别名清单、
+没有模糊匹配。于是:
 
-- **勾上某个游戏的任意版本 hook → 它的 tab 才出现**,不需要维护版本清单;
-- 取消勾选,tab 连同它的操作符一起消失,停留在该 tab 的界面自动退回 `VirtualAssetBundle`;
-- `cabmap_panel.py`(微内核:hook 选择、cabmap 构建/加载、虚拟资源浏览、导入)
+- **指向哪个安装,就出现哪个游戏的 tab**。选文件夹的那一刻插件读它自己发布的身份
+  (`app.info` 两行 + `globalgamemanagers` 头里的 Unity 版本,两个小文件,亚毫秒),
+  tab 随之改名、解码器随之解析;
+- **每个浏览器 tab 各自一个解码器**。tab = 一个安装,它的 `decoder_id` 只属于它,换 tab
+  不会动别的 tab 的解码器或它已经加载好的 cabmap。手动改也只改当前这一个;
+- **AR 特性不在 UI 里**。它们是宿主能力不是游戏前提,Blender 这条内存路径要哪些由上游
+  `RipperBlenderBridge.HostFeatures` 一处常量声明并强制加载(当前只有
+  `HumanoidToGeneric`——Blender 根本没有 Unity humanoid 这个概念);
+- `cabmap_panel.py`(微内核:身份探测、解码器选择、cabmap 构建/加载、虚拟资源浏览、导入)
   **代码里出现不了任何游戏名**,加一个游戏 = 新建一个文件夹,核心零改动。
 
-目前 `Game/EndField/` 提供 Scene(流式场景整图导入)与 Character(SkeletalMorph 表情
-系统)两个 tab,覆盖 Endfield 全部已 hook 的版本。
+目前 `Game/Endfield/` 提供 StreamingScene(流式场景整图导入)与 Character(SkeletalMorph
+表情系统)两个 tab,`Game/Illusion/` 一个文件夹服务四个同源标题。
 
 **游戏专属代码一律留在插件里,不许进 `RuriRipperPyBridge`。** 共用层是和 Substance Painter
 插件共享的那一半,它只描述 Unity 和 RipperHook 桥本身;Scene / Character 是 Blender
@@ -162,11 +168,11 @@ RuriRipperImporter/            ← 插件本体(装这个)
   derived_state.py             ← 派生态调度器:顶点腿/兑现节点/灯表/后处理什么时候重建,
                                  只在这里回答一次。导入路径只管造东西并 announce,
                                  面板一行收尾都不写(漏一个入口 = 画面静默缺失)
-  cabmap_panel.py              ← 微内核面板:hook / cabmap / 浏览 / 导入,零游戏知识
+  cabmap_panel.py              ← 微内核面板:身份 / 解码器 / cabmap / 浏览 / 导入,零游戏知识
   Game/                        ← 按游戏解耦的 GUI(见上)
-    __init__.py                ← 注册表:GameModule / GameTab + hook id → 游戏
-    EndField/                  ← Endfield 全版本专属,连不碰 bpy 的部分也在这里
-      __init__.py              ← GAME_MODULE 声明(两个 tab + 默认 hook id)
+    __init__.py                ← 注册表:GameModule / GameTab,按 productName 认领
+    Endfield/                  ← Endfield 全版本专属,连不碰 bpy 的部分也在这里
+      __init__.py              ← GAME_MODULE 声明(productName + 两个 tab)
       scene_panel.py scene_importer.py    场景 tab
       scene_state.py                      ← 场景 placement(寻址路径与 LOD 规则在 hook 侧)
       character_panel.py                  表情 tab
@@ -207,7 +213,7 @@ python RuriRipperPyBridge/run_tests.py
   R10G10B10A2(SNorm/UNorm 双解释试探)都能解码;**任何**解码结果都要过单位向量场信任门,
   过不了才退回 Blender 自算(私有魔改编码仍会触发退回 —— 永远不会把垃圾法线塞给你)。
 - humanoid 肌肉/重定向:**完整应用**(Avatar referential、swing-twist、TwistSolve、根运动
-  轨迹、EndField 扩展肌肉枚举重映射与 IK 矫正)。前提是 Avatar 在作用域内(桥模式闭包
+  轨迹、Endfield 扩展肌肉枚举重映射与 IK 矫正)。前提是 Avatar 在作用域内(桥模式闭包
   co-seed / 角色导入时盖章到骨架);找不到 Avatar 时 body 动作丢弃并明确警告。
 - 材质:Principled BSDF 上接 base/normal/emission,外加实测过 HLSL 的打包 PBR 通道
   (`_MROMap` R=金属 G=粗糙 B=AO、`_MetallicGlossMap` R=金属 A=光滑度、发丝分离法线);

@@ -1,4 +1,4 @@
-"""EndField 材质栈 —— 本包**没有业务代码**,只是生成物的门面。
+"""Endfield 材质栈 —— 本包**没有业务代码**,只是生成物的门面。
 
 ``ruri_*_endfield.py`` 全是生成物(AzureNihil C# 着色栈 → Ruri.CodeGen.Blender,
 用 ``Ruri.App --codegen-only`` 重生成后定点拷入,**禁止手改**),各自自包含:

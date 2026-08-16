@@ -47,12 +47,12 @@ _FILTER_FIELDS = (("name", "Name"), ("id", "Id"), ("group", "Group"))
 _FILTER_COLUMNS = tuple(key for key, _label in _FILTER_FIELDS)
 
 SCENE_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="EndField:scene", fields=_FILTER_FIELDS,
+    key="Endfield:scene", fields=_FILTER_FIELDS,
     state_for=lambda context: context.scene.ruri_scene_box,
     apply=lambda context: _rebuild(context.scene.ruri_scene_box)))
 
 WORLD_FILTER_SPEC = filter_ui.register_spec(filter_ui.FilterSpec(
-    key="EndField:world", fields=_FILTER_FIELDS,
+    key="Endfield:world", fields=_FILTER_FIELDS,
     state_for=lambda context: context.scene.ruri_scene_world,
     apply=lambda context: _rebuild(context.scene.ruri_scene_world)))
 

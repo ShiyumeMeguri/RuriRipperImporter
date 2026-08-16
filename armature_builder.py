@@ -50,7 +50,7 @@ UNITY_AVATAR_PROP = "ruri_unity_avatar"
 
 
 # Custom-property key under which an import records WHICH GAME this skeleton came from (the
-# upstream GameType member, e.g. "EndField"/"Koikatu"). Two rigs' stamps are what select a
+# upstream GameType member, e.g. "Endfield"/"Koikatu"). Two rigs' stamps are what select a
 # cross-game retarget table by identity instead of by guessing at bone-name shapes -- see
 # cross_game_retarget.
 UNITY_GAME_PROP = "ruri_source_game"

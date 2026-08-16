@@ -32,8 +32,7 @@ try:
     from . import Game, armature_builder, cross_game_retarget, filter_ui, prefab_importer
     from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from .RuriRipperPyBridge.session import cabmap_state
-    from .RuriRipperPyBridge.unity import (bridge_asset_db, build_identity, class_registry,
-                                           clip_paths, discovery)
+    from .RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 except ImportError:  # standalone (non-package) testing
     import Game
     import armature_builder
@@ -42,13 +41,12 @@ except ImportError:  # standalone (non-package) testing
     import prefab_importer
     from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from RuriRipperPyBridge.session import cabmap_state
-    from RuriRipperPyBridge.unity import (bridge_asset_db, build_identity, class_registry,
-                                          clip_paths, discovery)
+    from RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
 
 # The only tab this module owns, because it is the only one that is not about a
 # game: the cabmap itself. Every other tab is contributed by a game module (see
-# Game) and shows up exactly while one of that game's hooks is ticked -- which is
-# why nothing here names a game or knows how many tabs exist.
+# Game) and shows up exactly while the current tab's install IS that game -- which
+# is why nothing here names a game or knows how many tabs exist.
 BROWSER_TAB_ID = "assetbundle"
 BROWSER_TAB_LABEL = "VirtualAssetBundle"
 # 后处理是**宿主级**的:它占的是 scene.compositing_node_group / view transform,
@@ -214,22 +212,31 @@ def _on_search_edit(self, context):
                      lambda: (_rebuild_window(context.scene.ruri_cabmap), _redraw_all(context)))
 
 
-# game root -> the Unity identities that install carries. Cached: a redraw asks
-# for it, and an install does not rename itself mid-session.
-_PROJECT_NAMES = {}
+# game root -> the identity that install published about itself, as the ONE player
+# the install IS (RipperBlenderBridge.ReadInstall). Cached: an install does not
+# rename itself mid-session, and this is read where a folder is typed, never from a
+# draw callback -- crossing the CLR boundary while Blender paints is not allowed.
+_INSTALL_IDENTITY = {}
 
 
-def _project_names(state):
-    """Which game the picked folder IS, read off the build itself (its players'
-    Unity productName/companyName). The second way a game module can be
-    recognised, and the only one a game with no upstream hook has."""
-    root = state.game_root or ""
-    if root not in _PROJECT_NAMES:
+def _install_identity(root):
+    """What the install at ``root`` says it is: {"company", "product", "engine_version"},
+    or None for a folder that is no Unity install (or before the DLL is up).
+
+    Two small files per player and nothing else -- see pythonnet_bridge.read_install.
+    A build whose engine assets are not plain still names itself; it just reports no
+    engine version, which is a fact about that install, not a failure."""
+    root = str(root or "")
+    if not root:
+        return None
+    if root not in _INSTALL_IDENTITY:
         try:
-            _PROJECT_NAMES[root] = build_identity.names(root) if root else set()
+            players = pythonnet_bridge.read_install(root)
         except Exception:
-            _PROJECT_NAMES[root] = set()
-    return _PROJECT_NAMES[root]
+            return None  # DLL not up yet -- do NOT cache, or one early miss would stick
+        project = next((player for player in players if player["is_project"]), None)
+        _INSTALL_IDENTITY[root] = project
+    return _INSTALL_IDENTITY[root]
 
 
 def _game_tabs(state):
@@ -275,10 +282,10 @@ def _post_tab():
 def _active_tab(state):
     """The game tab actually being shown, or None for the browser.
 
-    The stored tab only counts while its own game is still recognised -- unticking
-    its hook, or pointing the panel at a different install, must take its tabs away
-    rather than leave the panel drawing a game that is no longer there. Read-only,
-    so a draw callback can call it."""
+    The stored tab only counts while its own game is still the one in front of the
+    panel -- pointing a tab at a different install must take its tabs away rather
+    than leave the panel drawing a game that is no longer there. Read-only, so a
+    draw callback can call it."""
     for tab in _game_tabs(state):
         if tab.key == state.active_tab:
             return tab
@@ -314,14 +321,12 @@ def _active_game_name(state):
 # entry.
 #
 # Which install a tab is comes from the FOLDER, the moment one is typed: the
-# product name the build carries in its own app.info (build_identity.product) is
-# the tab's key and its label. A folder that names no product -- an empty tab, a
-# path that is not a Unity install -- gets UNNAMED_TAB_PREFIX_N instead, which is
-# what lets a second unnamed tab exist at all. Which GAME that install is
-# (config.game_name, the upstream GameType member that decodes it) is a SEPARATE
-# question, answered by Game.recognised_game: two installs of one title are two
-# tabs and one game, and a title with no game module is still a perfectly good
-# tab.
+# productName the build publishes about itself (pythonnet_bridge.read_install) is
+# the tab's key and its label. A folder that publishes none -- an empty tab, a path
+# that is not a Unity install -- gets UNNAMED_TAB_PREFIX_N instead, which is what
+# lets a second unnamed tab exist at all. That same productName IS the game
+# (config.game_name), so two installs of one title are two tabs and one game, and a
+# title this add-on ships no panels for is still a perfectly good tab.
 UNNAMED_TAB_PREFIX = "unknown"
 
 
@@ -462,38 +467,15 @@ def _close_tab(state, key, context):
     _reapply_and_refresh(context)
 
 
-def _ticked_game_hooks(state, game_name):
-    """The ticked game-hook item(s) that belong to ``game_name``."""
-    games = _game_hook_ids()
-    return [item for item in state.available_hooks
-            if item.selected and item.id.lower() in games
-            and Game.game_of(item.id).lower() == (game_name or "").lower()]
-
-
-def _current_game_hooks(state, game):
-    """The hook ids the bridge should Initialize with for ``game``: that game's own
-    ticked game-hook(s) PLUS every ticked non-game (AR_*) feature hook. NOT every
-    ticked game hook -- the bridge decodes one game at a time, and the others are
-    ticked for other tabs' installs, not this decode."""
-    games = _game_hook_ids()
-    non_game = [item.id for item in state.available_hooks
-                if item.selected and item.id.lower() not in games]
-    mine = [item.id for item in state.available_hooks
-            if item.selected and item.id.lower() in games
-            and Game.game_of(item.id).lower() == (game or "").lower()]
-    return mine + non_game
-
-
 _FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
 
 def _default_cabmap_filename(key):
     """A cabmap is named after the INSTALL it maps -- the product name the build
     itself carries, which is this tab's key ("HoneyCome.cabmap"). Not after the
-    hook(s): which decoder happens to be ticked while the map is built is a passing
-    state of the session, while the map is a fact about that folder, and naming it
-    after the hooks meant a map built before the game was recognised landed as a
-    nondescript "output.cabmap" next to the install it belongs to."""
+    decoder: which decoder read it is a passing state of the session, while the map
+    is a fact about that folder, and naming it after the decoder meant a map built
+    before the install was identified landed as a nondescript "output.cabmap"."""
     return _FILENAME_UNSAFE.sub("_", key).strip() + ".cabmap"
 
 
@@ -555,184 +537,113 @@ class RURI_PG_cabmap_row(bpy.types.PropertyGroup):
     selected: BoolProperty(default=False)
 
 
-# The ids that name a game, straight from the DLL (see pythonnet_bridge.list_game_hooks).
-# Read once per session: the set is compiled into the loaded DLL and cannot change under it.
-_GAME_HOOK_IDS = None
+# Every decoder compiled into the loaded DLL, as (product, version, engine_version),
+# newest version first within a product. Read ONCE per process: the set is compiled
+# in and pythonnet loads that DLL once, for good -- this is not a cache of something
+# that might move, it is the one reading there is. A miss (no bin dir yet, install
+# still running) is deliberately not cached, so one early call cannot empty the menu
+# for the session.
+_DECODERS = None
 
 
-def _game_hook_ids():
-    global _GAME_HOOK_IDS
-    if _GAME_HOOK_IDS is not None:
-        return _GAME_HOOK_IDS
+def _decoders():
+    global _DECODERS
+    if _DECODERS is not None:
+        return _DECODERS
     try:
-        # Not cached on failure: the DLL is simply not up yet (no bin dir, install
-        # still running), and one early miss must not disable the rule for the session.
-        _GAME_HOOK_IDS = {str(hook_id).lower() for hook_id in pythonnet_bridge.list_game_hooks()}
-    except Exception:
-        return set()
-    return _GAME_HOOK_IDS
-
-
-def _recognised_game(state):
-    """The game module the picked Game Root IS, or None."""
-    return Game.recognised_game(_project_names(state))
-
-
-def _hook_version(hook_id):
-    """A hook id's version as comparable numbers -- "EndField_1.4.4" -> (1, 4, 4).
-    Non-numeric pieces sort first, so a plain id never outranks a real version."""
-    _game, _, version = (hook_id or "").rpartition("_")
-    parts = []
-    for piece in version.split("."):
-        parts.append(int(piece) if piece.isdigit() else -1)
-    return tuple(parts)
-
-
-def _newest_game_hook(state, game_name):
-    """The id of ``game_name``'s newest-version game hook among the listed hooks, or
-    "" when the game ships none. The single place "which hook a game wants" is
-    decided -- recognition and the +tab menu both read it, so newest-selection never
-    forks into two rules that could drift apart."""
-    games = _game_hook_ids()
-    mine = [item.id for item in state.available_hooks
-            if item.id.lower() in games and Game.game_of(item.id).lower() == game_name.lower()]
-    return max(mine, key=_hook_version) if mine else ""
-
-
-# Every hook id compiled into the loaded DLL. Read ONCE per process, exactly like
-# _GAME_HOOK_IDS below and for the same reason: the set is compiled in and cannot
-# change under a running session (pythonnet loads that DLL once, for good). So this
-# is not a cache of something that might move -- it is the one reading there is.
-_DLL_HOOK_IDS = None
-
-# Set while the hook list is being re-listed, so the per-item update callback does
-# not read a bulk rewrite as the user ticking things.
-_RELISTING = False
-
-
-def _dll_hook_ids():
-    """The DLL's hook ids, or [] while it is not up yet (no bin dir, install still
-    running) -- a miss is deliberately NOT cached, so one early call cannot disable
-    the list for the session."""
-    global _DLL_HOOK_IDS
-    if _DLL_HOOK_IDS is not None:
-        return _DLL_HOOK_IDS
-    try:
-        _DLL_HOOK_IDS = [str(hook_id) for hook_id in pythonnet_bridge.list_available_hooks()]
+        _DECODERS = pythonnet_bridge.list_decoders()
     except Exception:
         return []
-    return _DLL_HOOK_IDS
+    return _DECODERS
 
 
-def _ensure_hooks_listed(state):
-    """Bring the hook checklist in step with the DLL, keeping every tick that still
-    exists. Returns whether the list is now real.
+def _decoders_of(product):
+    """One product's decoders, newest first -- exactly the choices a tab may pick from."""
+    wanted = (product or "").lower()
+    return [entry for entry in _decoders() if entry[0].lower() == wanted]
 
-    WHY this exists at all: the checklist is DERIVED data that happens to be stored
-    in the .blend (a UIList needs a collection to draw). The hook set is compiled
-    into the DLL, so a list saved in a file made before a hook existed is stale by
-    construction -- and nothing re-derived it, so the game that hook decodes could
-    never be enabled, and every list it feeds came back empty while the panel said
-    "load a cabmap". Deriving it is not the user's job.
 
-    NOT polling: the DLL is read once per process (_dll_hook_ids), this is a list
-    compare over ~30 strings, and it runs only where the list is about to be USED --
-    never from a draw callback, which must neither cross the CLR boundary nor write
-    scene data."""
-    global _RELISTING
-    hook_ids = _dll_hook_ids()
-    if not hook_ids or [item.id for item in state.available_hooks] == hook_ids:
-        return len(state.available_hooks) > 0
-    ticked = {item.id for item in state.available_hooks if item.selected}
-    _RELISTING = True
+def _decoder_id(entry):
+    """A decoder's id is its product and its version, joined -- the same string the
+    kernel builds, so nothing here parses one apart."""
+    return "{0}_{1}".format(entry[0], entry[1])
+
+
+def _resolve_decoder(product, engine_version):
+    """Which decoder the KERNEL picks for this identity (HookCatalog.Resolve), or ""
+    when the product ships none -- a plain Unity build is read by the generic path.
+    Asked here and nowhere else, so the panel never re-implements the rule."""
     try:
-        state.available_hooks.clear()
-        for hook_id in hook_ids:
-            item = state.available_hooks.add()
-            item.id = hook_id
-            item.selected = hook_id in ticked
-    finally:
-        _RELISTING = False
-    return True
-
-
-def _ensure_decoder_hook(state):
-    """The current tab's own game must be the one DECODING, or the hook that publishes
-    its datasets never runs and every list it feeds comes back empty.
-
-    The folder already said which game this is (config.game_name), so the tick follows
-    from that rather than from the user remembering to set it -- the same rule
-    _apply_recognised_game applies when a root is typed, re-applied here because the
-    hook list may not have existed yet at that moment (a .blend opened before the
-    DLL was listed). Returns the hook id now decoding this tab, or ""."""
-    config = _active_config(state)
-    if config is None or not config.game_name:
+        return pythonnet_bridge.resolve_decoder(product, engine_version)
+    except Exception:
         return ""
-    _ensure_hooks_listed(state)
-    ticked = _ticked_game_hooks(state, config.game_name)
-    if ticked:
-        return ticked[0].id
-    newest = _newest_game_hook(state, config.game_name)
-    for item in state.available_hooks:
-        if item.id == newest:
-            item.selected = True
-    return newest
 
 
-def _apply_recognised_game(state):
-    """Tick the recognised game's newest hook, so the current tab decodes through it.
+def _adopt_identity(state, config):
+    """Read what the tab's folder says it is and set the tab from it: which product,
+    which engine version, and which decoder reads that.
 
-    Pointing a tab's root at an install IS the statement of which game it is, so the
-    hook follows the folder rather than a checkbox the user has to remember. The
-    newest version is taken (see _newest_game_hook): a hook id carries its game AND
-    its version, the folder only says the game, and the newest is the one an
-    up-to-date install wants. Other games' hooks stay ticked -- each open tab keeps
-    its own session, so recognising this folder must not disturb another tab's
-    decoder. An unrecognised or empty root ticks nothing and leaves the picker alone.
-    Returns the newest hook id, or ""."""
-    game = _recognised_game(state)
-    if game is None:
-        return ""
-    newest = _newest_game_hook(state, game.game_name)
-    if not newest:
-        return ""
-    for item in state.available_hooks:
-        if item.id == newest:
-            item.selected = True
-    return newest
-
-
-def _on_hook_tick(self, context):
-    """Ticking a GAME hook states which decoder the CURRENT TAB reads through;
-    unticking the last of that game's hooks takes the statement back. Tabs are
-    installs and are opened/closed by the user alone -- a hook tick never creates or
-    destroys one. AR_* feature hooks are about no game and combine freely."""
-    if _RELISTING:
-        return
-    state = context.scene.ruri_cabmap
-    config = _active_config(state)
-    if config is None or self.id.lower() not in _game_hook_ids():
-        return
-    game = Game.game_of(self.id)
-    if self.selected:
-        config.game_name = game
-    elif config.game_name.lower() == game.lower() and not _ticked_game_hooks(state, game):
+    This is the ONE place a tab learns its game. It runs where a folder is typed and
+    where the user asks to re-read one -- never from a draw, which may neither cross
+    the CLR boundary nor write scene data. A folder that is no Unity install (or a
+    DLL that is not up yet) clears the identity rather than keeping a stale one."""
+    identity = _install_identity(bpy.path.abspath(config.game_root) if config.game_root else "")
+    if identity is None:
         config.game_name = ""
-    _set_current_tab(state, config.key)
-    _redraw_all(context)
+        config.engine_version = ""
+        config.decoder_id = ""
+        return ""
+    config.game_name = identity["product"]
+    config.engine_version = identity["engine_version"]
+    _decoders()  # prime the menu's list here, so its draw never crosses the boundary
+    config.decoder_id = _resolve_decoder(identity["product"], identity["engine_version"])
+    return config.decoder_id
 
 
-class RURI_PG_hook_entry(bpy.types.PropertyGroup):
-    """One hook id ("<GameName>_<Version>") as reported live by RipperBlenderBridge.
-    ListAvailableHooks() -- see RURI_OT_refresh_hooks. `selected` drives the checkbox in the
-    N-panel's Hooks box, and ticking a game's hook states that the current tab's install
-    is that game (which is also what reveals its own tabs -- see Game).
+class RURI_OT_set_decoder(bpy.types.Operator):
+    """Read THIS tab's install through one named decoder, overriding what its identity
+    resolved to. Only this tab moves: another tab's install keeps its own decoder and
+    its own loaded cabmap (the bridge switches between them per install)."""
 
-    Several game hooks may be ticked at once (one per open tab's install), plus any
-    number of AR_* features -- the bridge Initialize() for a decode takes one game's
-    hooks at a time (see _current_game_hooks)."""
-    id: StringProperty()
-    selected: BoolProperty(default=False, update=_on_hook_tick)
+    bl_idname = "ruri.set_decoder"
+    bl_label = "Decoder"
+    bl_options = {"INTERNAL"}
+    decoder_id: StringProperty()
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        config = _ensure_active_config(state)
+        config.decoder_id = self.decoder_id
+        _set_current_tab(state, config.key)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_MT_decoder(bpy.types.Menu):
+    """The decoders this tab may be read through: every version its product ships,
+    plus none at all. Not an EnumProperty -- Blender stores a dynamic enum's value as
+    an index into a list that changes with the loaded DLL, and the id is the thing
+    worth storing."""
+
+    bl_idname = "RURI_MT_decoder"
+    bl_label = "Decoder"
+
+    def draw(self, context):
+        layout = self.layout
+        state = context.scene.ruri_cabmap
+        config = _active_config(state)
+        product = config.game_name if config is not None else ""
+        entries = _decoders_of(product)
+        if not entries:
+            layout.label(text="No decoder ships for {0}".format(product or "this install"),
+                         icon="INFO")
+        for entry in entries:
+            label = "{0}  ·  Unity {1}".format(entry[1], entry[2]) if entry[2] else entry[1]
+            layout.operator(RURI_OT_set_decoder.bl_idname,
+                            text=label).decoder_id = _decoder_id(entry)
+        layout.separator()
+        layout.operator(RURI_OT_set_decoder.bl_idname,
+                        text="None (plain Unity build)").decoder_id = ""
 
 
 class RURI_PG_animation_clip(bpy.types.PropertyGroup):
@@ -859,27 +770,23 @@ def _seed_cabmap_default(state):
 
 def _on_game_root_set(state):
     """Runs at the tail of Game Root's setter (a get/set property gets no separate
-    update callback). The folder that was just typed IS the statement of which
-    install this tab is, so three things follow from it here and nowhere else:
+    update callback). The folder that was just typed IS the statement of which install
+    this tab is, so everything else follows from it here and nowhere else: the tab
+    reads the identity the build publishes (_adopt_identity), takes the install's own
+    productName as its name while keeping its session and any loaded cabmap
+    (_rename_tab), and gets its Cabmap field seeded from that name.
 
-    * the tab takes the install's OWN name -- the productName its build carries
-      (build_identity.product) -- and keeps its session and any loaded cabmap while
-      being refiled under it (_rename_tab). A folder that names no product leaves the
-      tab on its unknown_N key, which is a perfectly usable identity, not an error;
-    * WHICH GAME that install is (config.game_name) is recognised from the same
-      folder and its newest hook ticked, so the decoder follows the folder rather
-      than a checkbox the user has to remember;
-    * the Cabmap field is seeded afterwards, so its default filename is built from
-      the game just recognised.
+    A folder that publishes no identity leaves the tab on its unknown_N key with no
+    decoder, which is a usable state -- a plain Unity build needs none -- not an error.
 
-    Nothing moves between tabs any more: a tab is the install in front of it -- and
-    when that install is already open on another tab, this one gives the folder back
-    and the browser goes there, rather than minting a second identity for one folder."""
+    Nothing moves between tabs: a tab is the install in front of it -- and when that
+    install is already open on another tab, this one gives the folder back and the
+    browser goes there, rather than minting a second identity for one folder."""
     config = _active_config(state)
     if config is None:
         return
     root = bpy.path.abspath(config.game_root) if config.game_root else ""
-    _PROJECT_NAMES.pop(config.game_root or "", None)
+    _INSTALL_IDENTITY.pop(root, None)
     if root:
         already = _tab_on_root(state, os.path.normcase(os.path.normpath(root)),
                               excluding_key=config.key)
@@ -887,13 +794,10 @@ def _on_game_root_set(state):
             config.game_root = ""
             _set_current_tab(state, already.key)
             return
-    module = _recognised_game(state)
-    config.game_name = module.game_name if module is not None else ""
-    _ensure_hooks_listed(state)
-    _apply_recognised_game(state)
-    product = build_identity.product(root) if root else ""
-    if product:
-        _rename_tab(state, config, _unique_tab_key(state, product, held_by_key=config.key))
+    _adopt_identity(state, config)
+    if config.game_name:
+        _rename_tab(state, config,
+                    _unique_tab_key(state, config.game_name, held_by_key=config.key))
     _set_current_tab(state, config.key)
     _seed_cabmap_default(state)
 
@@ -905,13 +809,20 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     currently on (state.current_tab).
 
     ``key`` is WHICH INSTALL: the productName the build itself carries, or
-    ``unknown_N`` for a folder that names none. It is the tab's label and the
+    ``unknown_N`` for a folder that publishes none. It is the tab's label and the
     identity its browser session and cabmap slot are filed under. ``game_name`` is
-    WHICH GAME decodes it (the upstream GameType member, "" when no game module
-    claims the folder) -- a different question, so two installs of one title are two
-    tabs sharing one game."""
+    that same productName as the install PUBLISHED it -- two installs of one title
+    are two tabs (two keys) sharing one game -- and ``engine_version`` is the Unity
+    version its serialized files state. Both are read once, where the folder is
+    typed (_adopt_identity), never re-derived.
+
+    ``decoder_id`` is the ONE decoder this tab reads through: resolved from that
+    identity by the kernel, replaceable per tab (RURI_MT_decoder), and empty for a
+    plain Unity build that needs none."""
     key: StringProperty()
     game_name: StringProperty()
+    engine_version: StringProperty()
+    decoder_id: StringProperty()
     game_root: StringProperty()
     cabmap_path: StringProperty()
     browsed_dir: StringProperty()
@@ -935,20 +846,14 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                               get=_get_game_root, set=_set_game_root)
     cabmap_path: StringProperty(name="Cabmap", subtype="FILE_PATH",
                                 description="Existing cabmap FILE to load, or output path to build one -- "
-                                            "defaults to a filename built from the checked hook(s), editable",
+                                            "defaults to a filename built from the install's own name, editable",
                                 get=_get_cabmap_path, set=_set_cabmap_path)
-    available_hooks: CollectionProperty(type=RURI_PG_hook_entry)
-    available_hooks_active_index: IntProperty()
-    # The list derives itself where it is used (see _ensure_hooks_listed); Refresh
-    # is the explicit re-read, not a step the user has to know about.
-    hooks_status: StringProperty(
-        default="Hooks list themselves from Ruri.RipperHook.dll when a game folder is picked.")
     loaded: BoolProperty(get=_get_loaded, set=_set_loaded)
-    # A plain string, not an EnumProperty: the tab set is whatever the enabled
-    # games contribute, and Blender's dynamic-enum items callback stores an index
-    # into a list that changes the moment a hook is ticked -- the stored value
-    # would then point at a different tab. A key nobody offers any more simply
-    # falls back to the browser (see _active_tab).
+    # A plain string, not an EnumProperty: the tab set is whatever the current
+    # install's game contributes, and Blender's dynamic-enum items callback stores an
+    # index into a list that changes the moment the browser moves to another install
+    # -- the stored value would then point at a different tab. A key nobody offers
+    # any more simply falls back to the browser (see _active_tab).
     active_tab: StringProperty(default=BROWSER_TAB_ID)
     search: StringProperty(name="Search", update=_on_search_edit,
                            description="Filter by Name / Container / Source / Type")
@@ -1042,19 +947,16 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         }
 
 
-class RURI_OT_refresh_hooks(bpy.types.Operator):
-    """Populate the Hooks checklist straight from RipperBlenderBridge.ListAvailableHooks() --
-    the C# side's own reflection over every hook type compiled into Ruri.RipperHook.dll.
+class RURI_OT_reprobe_install(bpy.types.Operator):
+    """Re-read what this tab's folder says it is, and re-resolve its decoder from that.
 
-    Ticked state survives a re-refresh for any id still listed. Nothing at all is pre-ticked:
-    WHICH GAME is answered by Game Root, not by a default, so a fresh session starts empty and
-    the game's own hook is enabled the moment that folder names one -- see
-    _apply_recognised_game. A default game hook used to be ticked on sight, which meant a
-    session pointed at some other title still had it on.
-    """
-    bl_idname = "ruri.refresh_hooks"
-    bl_label = "Refresh Hooks"
-    bl_description = "List the hook ids compiled into Ruri.RipperHook.dll"
+    Needed only when the identity could not be read at the moment the folder was typed
+    -- a .blend opened before the bridge was up, or a bin dir configured afterwards.
+    Everything it does is what typing the folder already does."""
+
+    bl_idname = "ruri.reprobe_install"
+    bl_label = "Re-read Install"
+    bl_description = "Re-read this install's own identity (product, Unity version) and re-resolve its decoder"
 
     @classmethod
     def poll(cls, context):
@@ -1062,30 +964,21 @@ class RURI_OT_refresh_hooks(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
+        config = _ensure_active_config(state)
+        _INSTALL_IDENTITY.pop(bpy.path.abspath(config.game_root) if config.game_root else "", None)
         try:
-            hook_ids = pythonnet_bridge.list_available_hooks()
+            decoder = _adopt_identity(state, config)
         except Exception as exc:
-            _report_exception(self, "Refresh hooks failed", exc)
+            _report_exception(self, "Re-read install failed", exc)
             return {"CANCELLED"}
-
-        global _DLL_HOOK_IDS
-        _DLL_HOOK_IDS = [str(hook_id) for hook_id in hook_ids]
-        _ensure_hooks_listed(state)
-        # Which GAME is decided by the current tab's folder, not by a default (see
-        # _apply_recognised_game) -- so a fresh session starts with nothing
-        # ticked and picks up a game the moment Game Root names one.
-        _ensure_active_config(state)
-        selected = _apply_recognised_game(state)
-        config = _active_config(state)
-        if selected and config is not None:
-            config.game_name = Game.game_of(selected)
-            _set_current_tab(state, config.key)
-        state.hooks_status = (
-            "No hooks found in Ruri.RipperHook.dll." if not hook_ids
-            else f"{len(hook_ids)} hook(s) available · {selected} (from the game folder)."
-            if selected else f"{len(hook_ids)} hook(s) available.")
+        if config.game_name:
+            _rename_tab(state, config,
+                        _unique_tab_key(state, config.game_name, held_by_key=config.key))
+        _set_current_tab(state, config.key)
         _auto_default_cabmap_filename(state)
-        self.report({"INFO"}, state.hooks_status)
+        self.report({"INFO"}, "{0} · Unity {1} · {2}".format(
+            config.game_name or "no identity", config.engine_version or "unknown",
+            decoder or "no decoder"))
         return {"FINISHED"}
 
 
@@ -1094,11 +987,11 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
     bl_label = "Build Cabmap"
     bl_description = "Scan the game root and build a fresh cabmap (can take a long time for a full game)"
 
-    # Zero checked hooks is a VALID configuration, not a missing prerequisite: a plain
+    # No decoder is a VALID configuration, not a missing prerequisite: a plain
     # un-bundled/un-encrypted Unity player build (level0/sharedassetsN.assets/resources.assets)
-    # needs no game hook at all -- the generic scan handles it, with readable names harvested
-    # straight from the assets' own m_Name fields (GameBundleHook.HarvestAssetNames). Hooks are
-    # only for games with custom encryption/VFS/typetree drift.
+    # needs none at all -- the generic scan handles it, with readable names harvested
+    # straight from the assets' own m_Name fields (GameBundleHook.HarvestAssetNames). Decoders
+    # are only for games with custom encryption/VFS/typetree drift.
     @classmethod
     def poll(cls, context):
         return bootstrap.is_ready()
@@ -1120,10 +1013,8 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, f"Can't create output folder '{out_dir}': {exc}")
             return {"CANCELLED"}
         config = _ensure_active_config(state)
-        _ensure_decoder_hook(state)
         try:
-            hooks = _current_game_hooks(state, config.game_name)
-            bridge = cabmap_state.ensure_bridge(hooks, root)
+            bridge = cabmap_state.ensure_bridge(config.decoder_id, root)
             code = bridge.build_cab_map(root, out)
             if code != 0:
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
@@ -1144,10 +1035,9 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             state.loaded = False
             self.report({"ERROR"}, (
                 "Built 0 CABs from '{0}'. This build decoded with {1} -- a game's "
-                "bundles are only readable through its own hook. Tick this game's "
-                "hook on this tab, or switch to the tab whose game that folder "
-                "belongs to, then build again.").format(
-                    root, ", ".join(hooks) if hooks else "no game hook"))
+                "bundles are only readable through its own decoder. Pick this install's "
+                "decoder on this tab, then build again.").format(
+                    root, config.decoder_id or "no decoder"))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Cabmap built: {len(cabmap_state.ROWS)} CABs.")
         return {"FINISHED"}
@@ -1158,7 +1048,7 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
     bl_label = "Load Cabmap"
     bl_description = "Load an existing cabmap file -- required before browsing/importing anything"
 
-    # Zero checked hooks is valid -- see RURI_OT_build_cabmap.poll.
+    # No decoder is valid -- see RURI_OT_build_cabmap.poll.
     @classmethod
     def poll(cls, context):
         return bootstrap.is_ready()
@@ -1170,9 +1060,8 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             self.report({"ERROR"}, "Pick a valid cabmap file first.")
             return {"CANCELLED"}
         config = _ensure_active_config(state)
-        _ensure_decoder_hook(state)
         try:
-            bridge = cabmap_state.ensure_bridge(_current_game_hooks(state, config.game_name),
+            bridge = cabmap_state.ensure_bridge(config.decoder_id,
                                                 bpy.path.abspath(state.game_root) if state.game_root else "")
             bridge.load_cab_map(path, key=config.key)
             cabmap_state.activate(config.key, config.game_name)
@@ -2222,16 +2111,6 @@ def _populate_animation_browser(state, report):
         report.db, report.armature.name, report.maps, report.path_to_meshobjects)
 
 
-class RURI_UL_hooks(bpy.types.UIList):
-    """Checkbox-per-hook list -- template_list gives this a fixed, scrollable height
-    (see RURI_PT_cabmap.draw's rows=) instead of the box growing to fit every hook id
-    Ruri.RipperHook.dll reports, which gets long once more than a couple games are hooked."""
-    bl_idname = "RURI_UL_hooks"
-
-    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        layout.prop(item, "selected", text=item.id)
-
-
 class RURI_UL_cabmap(bpy.types.UIList):
     """A FOLDER row (item.is_folder, only ever present in the browse view --
     see _rebuild_window) is one full-width button that navigates instead of
@@ -2367,15 +2246,6 @@ class RURI_PT_cabmap(bpy.types.Panel):
             return
 
         top = layout.column()
-        hooks_box = top.box()
-        hooks_header = hooks_box.row(align=True)
-        hooks_header.label(text="Hooks")
-        hooks_header.operator(RURI_OT_refresh_hooks.bl_idname, text="", icon="FILE_REFRESH")
-        if not state.available_hooks:
-            hooks_box.label(text=state.hooks_status, icon="INFO")
-        else:
-            hooks_box.template_list(RURI_UL_hooks.bl_idname, "", state, "available_hooks",
-                                    state, "available_hooks_active_index", rows=6)
 
         # Above the Game Root/Cabmap fields (which belong to the current tab) and on
         # `top`, not `gated`, so tabs open/switch/close before any cabmap is loaded.
@@ -2394,6 +2264,23 @@ class RURI_PT_cabmap(bpy.types.Panel):
         tab_bar.operator(RURI_OT_open_tab.bl_idname, text="", icon="ADD").key = ""
 
         top.prop(state, "game_root")
+
+        # What the install SAID it is, and which decoder reads it. Both are read from
+        # the build itself when the folder is typed; the menu is the override, and it
+        # moves this tab alone.
+        config = _active_config(state)
+        identity = top.row(align=True)
+        identity.label(text=("{0}  ·  Unity {1}".format(
+            config.game_name, config.engine_version or "unknown")
+            if config is not None and config.game_name else "No install identity"),
+            icon="FILE_3D")
+        identity.operator(RURI_OT_reprobe_install.bl_idname, text="", icon="FILE_REFRESH")
+        decoder = top.row(align=True)
+        decoder.menu(RURI_MT_decoder.bl_idname,
+                     text=(config.decoder_id if config is not None and config.decoder_id
+                           else "No decoder (plain Unity build)"),
+                     icon="MODIFIER")
+
         top.prop(state, "cabmap_path")
         row = top.row(align=True)
         row.operator(RURI_OT_build_cabmap.bl_idname, text="Build")
@@ -2784,11 +2671,9 @@ _CLASSES = (
     # RURI_PG_install_config specifically before RURI_PG_cabmap -- Blender requires a
     # CollectionProperty's target type to already be registered.
     RURI_PG_cabmap_row,
-    RURI_PG_hook_entry,
     RURI_PG_animation_clip,
     RURI_PG_install_config,
     RURI_PG_cabmap,
-    RURI_UL_hooks,
     RURI_UL_cabmap,
     RURI_UL_animation_clips,
     RURI_OT_cabmap_click,
@@ -2799,9 +2684,11 @@ _CLASSES = (
     RURI_OT_cabmap_goto_row_folder,
     RURI_OT_cabmap_select_all,
     RURI_MT_quick_filter,
+    RURI_MT_decoder,
     RURI_PT_column_widths_popover,
     RURI_PT_cabmap,
-    RURI_OT_refresh_hooks,
+    RURI_OT_set_decoder,
+    RURI_OT_reprobe_install,
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
     RURI_OT_select_tab,
@@ -2876,6 +2763,4 @@ def unregister():
     filter_ui.ACTIVE_SPEC_KEY = None
     filter_ui.unregister()
     cabmap_state.reset()
-    _PROJECT_NAMES.clear()
-    global _GAME_HOOK_IDS
-    _GAME_HOOK_IDS = None
+    _INSTALL_IDENTITY.clear()

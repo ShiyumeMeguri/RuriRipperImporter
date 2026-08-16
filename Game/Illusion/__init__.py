@@ -24,9 +24,9 @@ Two tabs:
                drive her face through the head's own blend-shape pattern system,
                and put the catalogued animations on her.
 
-Each title is recognised by the identity its own build carries (``project_names``,
-matched against the Unity productName/companyName its players report) -- pointing
-the panel at the install already says which one it is.
+Each title is recognised by the identity its own build carries: a module's name IS
+the productName its player reports, so pointing the panel at the install already
+says which one it is.
 """
 
 from __future__ import annotations
@@ -65,11 +65,10 @@ def _unregister():
     _registered.clear()
 
 
-def _title(game_name, label, project_names, tabs):
+def _title(game_name, label, tabs):
     return GameModule(
         game_name=game_name,
         label=label,
-        project_names=project_names,
         tabs=tuple(GameTab(*tab) for tab in tabs),
         register=_register,
         unregister=_unregister,
@@ -81,14 +80,8 @@ def _title(game_name, label, project_names, tabs):
 # title), so all four state both tabs. A list a title does not ship comes back empty
 # from its own section rather than costing the whole tab.
 GAME_MODULE = [
-    _title("Koikatu", "Koikatu",
-           ("Koikatu", "KoikatuVR", "illusion__Koikatu", "illusion_Koikatu"),
-           (_SCENE_TAB, _CHARACTER_TAB)),
-    _title("KoikatsuSunshine", "Koikatsu Sunshine",
-           ("KoikatsuSunshine", "KoikatsuSunshine_VR",
-            "illusion__KoikatsuSunshine", "illusion_KoikatsuSunshine"),
-           (_SCENE_TAB, _CHARACTER_TAB)),
-    _title("HoneyCome", "HoneyCome", ("HoneyCome",), (_SCENE_TAB, _CHARACTER_TAB)),
-    _title("SamabakeScramble", "Summer Vacation! Scramble",
-           ("SamabakeScramble",), (_SCENE_TAB, _CHARACTER_TAB)),
+    _title("Koikatu", "Koikatu", (_SCENE_TAB, _CHARACTER_TAB)),
+    _title("KoikatsuSunshine", "Koikatsu Sunshine", (_SCENE_TAB, _CHARACTER_TAB)),
+    _title("HoneyCome", "HoneyCome", (_SCENE_TAB, _CHARACTER_TAB)),
+    _title("SamabakeScramble", "Summer Vacation! Scramble", (_SCENE_TAB, _CHARACTER_TAB)),
 ]

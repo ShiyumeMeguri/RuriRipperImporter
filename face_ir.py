@@ -2,7 +2,7 @@
 
 Two games state a face in completely different terms. Koikatu drives blend
 shapes through a per-head *pattern table*, so an expression is a pattern index
-per channel plus an openness rate. EndField drives BONES through named *ctrl*
+per channel plus an openness rate. Endfield drives BONES through named *ctrl*
 drivers, each carrying a per-bone TRS delta. Neither vocabulary can be derived
 from the other, and neither game should learn the other's -- so the join is a
 data file, exactly as the bone side already does it with ``<A>To<B>.json``.
@@ -16,7 +16,7 @@ Three layers, and this module is only the middle one:
 2. **Contract** (this module) -- ``<Source>To<Dest>.face.json`` maps IR keys to
    destination driver weights. A new game pair is a new file, not new code.
 3. **Destination applier** -- a game takes ``{driver: weight}`` and drives its
-   own rig (EndField: the SkeletalMorph ctrl bindings). It has never heard of
+   own rig (Endfield: the SkeletalMorph ctrl bindings). It has never heard of
    the source.
 
 Direction matters here, unlike the bone tables. A bone mapping is a bijection

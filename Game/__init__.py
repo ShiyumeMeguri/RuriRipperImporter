@@ -1,34 +1,27 @@
 """One folder per hooked game, holding every panel and importer that is about
 that game and nothing else.
 
-A game module is DATA: it declares which upstream game it belongs to and which
-tabs it contributes, and the core panel reads that off this registry. No module
-outside these folders names a game, so adding a title is a new folder here plus
-zero edits anywhere else -- and removing one is deleting a folder.
+A game module is DATA: it declares which game it is and which tabs it contributes,
+and the core panel reads that off this registry. No module outside these folders
+names a game, so adding a title is a new folder here plus zero edits anywhere else
+-- and removing one is deleting a folder.
 
-The join to the upstream hook set is exact rather than conventional. A hook id is
-``{GameName}_{Version}`` (``Ruri.Hook.RuriHook.BuildHookId``, e.g.
-``EndField_1.4.4``), so the game a hook belongs to is everything before its last
-underscore, and a module's ``game_name`` is that same ``GameType`` member. A
-module's tabs are therefore visible exactly while one of its game's hooks is
-enabled -- every version of it, with no per-version list to maintain.
+The join to an install is EXACT and needs no table. A module's ``game_name`` is the
+Unity productName the game's own player carries (the second line of its
+``<Product>_Data/app.info``, which is PlayerSettings.productName), spelled exactly
+as the build spells it -- the same string the upstream decoder declares as its
+GameName and the same one its hook id starts with. So "which module is this
+install" is a dictionary lookup on the identity the folder itself published, and
+there is no mapping table, no alias list and no fuzzy match anywhere in the chain.
 
-A hook is not the only way to name a game. A module also declares
-``project_names``: the identities the BUILD itself carries -- its Unity
-``productName``/``companyName``, read off the install by
-``RuriRipperPyBridge.unity.build_identity``. Pointing the panel at an install IS
-saying which game it is, so that join is what actually selects a game, and it
-needs no hook ticked to work.
-
-A BROWSER TAB IS AN INSTALL, NOT A GAME. The panel keeps a game root, a cabmap
-and a browser session per install key (the product name the build carries -- see
+A BROWSER TAB IS AN INSTALL, NOT A GAME. The panel keeps a game root, a cabmap and
+a browser session per install key (the product name the build carries -- see
 ``cabmap_state.GameSession``) and lets the user pick which one the browser is
 currently on; several can be open at once, including two copies of one title. A
-tab's ``game_name`` is what THIS registry answers about its folder, and that is
-what selects its tabs, its face system and its retarget tables. The upstream
-still decodes ONE game at a time -- game hooks are mutually exclusive there (they
-patch the same methods with different layouts, see ``RuriHook.ApplyHooks``) -- so
-switching tabs re-selects the decoder (``pythonnet_bridge.use_session``).
+tab's game is what THIS registry answers about its product, and that is what
+selects its tabs, its face system and its retarget tables. The upstream still
+decodes ONE game at a time, so switching tabs re-selects the decoder
+(``pythonnet_bridge.use_session``).
 """
 
 from __future__ import annotations
@@ -66,15 +59,15 @@ class GameTab:
 
 
 class GameModule:
-    """One game's whole contribution: its upstream identity, the tabs it adds,
-    and the register/unregister pair for the bpy classes those tabs need."""
+    """One game's whole contribution: its identity, the tabs it adds, and the
+    register/unregister pair for the bpy classes those tabs need."""
 
-    __slots__ = ("game_name", "label", "tabs", "project_names", "face_retarget",
-                 "_register", "_unregister")
+    __slots__ = ("game_name", "label", "tabs", "face_retarget", "_register", "_unregister")
 
-    def __init__(self, game_name, label, tabs, register, unregister, project_names=(),
-                 face_retarget=None):
-        self.game_name = game_name          # the upstream GameType member, e.g. "EndField"
+    def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None):
+        # The Unity productName this game's player builds under -- the install's own
+        # word for itself, and the upstream decoder's GameName. Nothing translates it.
+        self.game_name = game_name
         self.label = label
         # How this game states a face, if it states one at all. A clip whose facial
         # animation is baked into its bone tracks means nothing on another character's
@@ -91,10 +84,6 @@ class GameModule:
         # plays one action, so a face given its own would replace the body it came with.
         self.face_retarget = face_retarget
         self.tabs = tuple(tabs)
-        # The Unity productName/companyName values this game's players build
-        # under -- one project can ship several (a game, its VR build, its
-        # studio), and any of them identifies it.
-        self.project_names = frozenset(name.lower() for name in project_names)
         self._register = register
         self._unregister = unregister
         for tab in self.tabs:
@@ -108,14 +97,6 @@ class GameModule:
 
     def __repr__(self):
         return "<GameModule {0} ({1} tab(s))>".format(self.game_name, len(self.tabs))
-
-
-def game_of(hook_id):
-    """The game a hook id belongs to -- ``EndField_1.4.4`` -> ``EndField``,
-    ``AR_ShaderDecompiler_`` -> ``AR_ShaderDecompiler``. Derived from the same
-    ``{GameName}_{Version}`` rule the DLL builds its ids with, so no mapping
-    table exists to drift away from the ids it actually reports."""
-    return (hook_id or "").rsplit("_", 1)[0]
 
 
 def discover():
@@ -150,39 +131,33 @@ def all_tabs():
 
 def tab_by_key(key):
     """Any declared tab by its stored key, enabled or not -- what a tooltip
-    needs, which must read the same whether or not the hook is ticked."""
+    needs, which must read the same whether or not that game is in front of the
+    panel."""
     return next((tab for tab in all_tabs() if tab.key == key), None)
+
+
+def module_for(product):
+    """The module that IS ``product``, or None when this add-on ships no panels for
+    it. An exact, case-insensitive match on the productName the install published:
+    a game with no module is still a perfectly good install to browse."""
+    wanted = (product or "").lower()
+    return next((game for game in _MODULES if game.game_name.lower() == wanted), None)
 
 
 def face_retarget_of(game_name):
     """The facial restatement ONE game contributes, or None. What the clip-loading
     path asks before it decides whether a face can travel between characters -- the
     host never learns which games have faces, only whether this one answered."""
-    for game in _MODULES:
-        if game.game_name == game_name:
-            return game.face_retarget
-    return None
+    game = module_for(game_name)
+    return game.face_retarget if game is not None else None
 
 
 def tabs_of(game_name):
     """The tabs ONE game contributes. Several installs are open at once, each its own
     browser tab, so a panel draws the tabs of the game the CURRENT tab's install is
     -- never the union, which would show two games' content tabs side by side."""
-    for game in _MODULES:
-        if game.game_name == game_name:
-            return list(game.tabs)
-    return []
-
-
-def recognised_game(project_names):
-    """The game an install IS, from the identity its own build carries -- or None
-    when nothing matches, or when more than one module claims it.
-
-    This is what selects a game now. Nothing is pre-ticked on a guess: a hook is
-    enabled because the folder in front of the panel is that game."""
-    identities = {str(name).lower() for name in project_names}
-    matched = [game for game in _MODULES if game.project_names & identities]
-    return matched[0] if len(matched) == 1 else None
+    game = module_for(game_name)
+    return list(game.tabs) if game is not None else []
 
 
 def register():
