@@ -617,8 +617,25 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
         if not baked_actions:
             raise CrossGameRetargetError("No source action baked from the selected clip(s).")
 
+        settings = dict(spec.get("settings") or {})
+        if settings.get("animated_only"):
+            table = clip_paths.build_suffix_crc_table(host_maps["path_to_bone"])
+            animated = set()
+            for guid in clip_guids:
+                clip = db.clip_curves(guid)
+                if clip is None:
+                    continue
+                for channels in clip.transform_channel_lists():
+                    for channel in channels:
+                        if not channel.path:
+                            continue
+                        full = table.get(clip_paths.entry_crc(channel.path))
+                        bone = host_maps["path_to_bone"].get(full) if full else None
+                        if bone:
+                            animated.add(bone)
+            settings["animated_bones"] = sorted(animated)
         results, errors = api.retarget_actions(
-            host_arm, dest_arm, mappings, spec.get("settings") or {}, baked_actions)
+            host_arm, dest_arm, mappings, settings, baked_actions)
         for action_name, message in errors:
             warnings.append("{0}: {1}".format(action_name, message))
         products = [dest_action for _source_action, dest_action, _info in results]
