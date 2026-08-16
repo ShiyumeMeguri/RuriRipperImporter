@@ -87,6 +87,10 @@ class SceneReport:
         self.unresolved_paths = []
         self.no_geometry = 0
         self.no_geometry_assets = []
+        # 引擎内置 primitive:按规格重建的,不是从游戏数据导出的。既不是丢失(它在场景里)
+        # 也不能混进普通计数(它的来源不同),所以自己一栏。
+        self.builtin = 0
+        self.builtin_paths = []
         # A material path a placement names that the closure did not hand back.
         # The mesh still builds, with one slot fewer -- which is a silent visual
         # difference unless it is counted here.
@@ -107,6 +111,8 @@ class SceneReport:
                 + (", {0} camera(s)".format(self.cameras) if self.cameras else "")
                 + (", {0} collision-only placement(s) the game ships with no geometry".format(
                     self.no_geometry) if self.no_geometry else "")
+                + (", {0} engine built-in primitive(s) rebuilt to spec".format(
+                    self.builtin) if self.builtin else "")
                 + (", !! {0} UNRESOLVED".format(self.unresolved) if self.unresolved else "")
                 + ", {0:.1f}s".format(self.seconds))
         return text
@@ -190,6 +196,50 @@ def _place_anchored(collection, parts, matrices, name):
                 obj = part.copy()
                 link(obj)
             obj.parent = anchor
+
+
+# 引擎内置 primitive:这些 CAB 里装的是 `unity default resources`(PathID 10200 段),
+# 不是游戏资产。AssetRipper **按设计**不导出内置资源 —— 真实 Unity 工程里它们本来就在 ——
+# 所以它们永远 join 不到导出 guid,放宽路径匹配也救不回来(导出侧压根没产出)。
+# 这不是数据丢失,但把它算进 unresolved 就等于说"我们弄丢了模型",同样是口径撒谎。
+# 按引擎自己的规格重建,并在报告里单独记一笔。
+_BUILTIN_MESH_MARKER = "renderpipelineresources/mesh/"
+
+# Unity 内置 Quad 的规格(引擎的确定值,不是猜):1×1、XY 平面、法线 -Z、UV 铺满 0-1。
+# 顶点写在 UNITY 语义下,下面经导入器自己的换轴落到 Blender —— 与其它网格同一条路。
+_UNITY_QUAD_VERTS = ((-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0))
+_UNITY_QUAD_UVS = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+
+
+def _builtin_primitive(path):
+    """这个 seed 是引擎内置 primitive 吗 -> 它的名字,否则 None。"""
+    lowered = path.lower()
+    if _BUILTIN_MESH_MARKER not in lowered:
+        return None
+    stem = lowered.split("##")[0].rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return stem if stem == "quad" else None
+
+
+def _build_builtin_primitive(context, kind, name, materials, options):
+    """按引擎规格重建一个内置 primitive。目前只有 Quad 真被场景用到 ——
+    其余(plane/cube/sphere/capsule/cylinder)遇到了再按各自规格加,
+    不预先造没人要的东西。"""
+    if kind != "quad":
+        return None
+    unity = np.asarray(_UNITY_QUAD_VERTS, dtype=np.float64)
+    verts = [tuple(float(c) for c in row) for row in _BLENDER.convert_points(unity)]
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+    layer = mesh.uv_layers.new(name="UVMap")
+    for loop in mesh.loops:
+        layer.data[loop.index].uv = _UNITY_QUAD_UVS[loop.vertex_index]
+    mesh.validate()
+    mesh.update()
+    for material in materials or ():
+        mesh.materials.append(material)
+    obj = bpy.data.objects.new(name, mesh)
+    context.collection.objects.link(obj)
+    return obj
 
 
 def _build_mesh_source(context, db, guid, name, materials, options, report):
@@ -337,7 +387,29 @@ def import_scene_window(context, bridge, options=None):
         entry = key_to_entry.get(key)
         if entry is None:
             guid = guids.get(path)
-            if guid is None:
+            builtin = _builtin_primitive(path) if guid is None else None
+            if builtin is not None:
+                materials = []
+                if mat_builder is not None:
+                    for material_path in materials_by_row.get(row, ()):
+                        material_guid = guids.get(material_path)
+                        if material_guid is not None:
+                            material = _timed_material(mat_builder, {"guid": material_guid}, report)
+                            if material is not None:
+                                materials.append(material)
+                display = path.split("##")[-1] or builtin
+                obj = _build_builtin_primitive(context, builtin, display, materials, options)
+                if obj is None:
+                    key_to_entry[key] = entry = ("missing", path)
+                else:
+                    collection = _asset_collection(root, display)
+                    _adopt(obj, collection)
+                    sources.append(obj)
+                    report.builtin += 1
+                    if path not in report.builtin_paths:
+                        report.builtin_paths.append(path)
+                    key_to_entry[key] = entry = ("mesh", len(sources) - 1, collection)
+            elif guid is None:
                 key_to_entry[key] = entry = ("missing", path)
             elif is_prefab:
                 prefab_file = db.load_guid(guid)

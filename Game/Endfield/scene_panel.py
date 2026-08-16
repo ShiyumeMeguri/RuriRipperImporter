@@ -453,8 +453,23 @@ class RURI_OT_scene_import(bpy.types.Operator):
         # channel, not a number buried in an INFO line -- that is exactly how 3
         # missing foliage imposters hid inside a count for a whole session.
         if report.unresolved:
+            # 光有路径不够 —— 「为什么没 join 上」才是能动手的信息。三个判据当场问清:
+            # cabmap 里有没有这条容器路径、它落在哪个 CAB、那个 CAB 进没进本次闭包。
+            # 缺一个就只能靠猜(这条 UNRESOLVED 曾经只印路径,查一次要重跑整个导入)。
+            closure = set(scene_state.RESOLVED_CABS)
             for path in report.unresolved_paths:
-                print("[RuriRipper] scene: UNRESOLVED " + path)
+                stem = path.split("##")[0]
+                try:
+                    cabs = list(cabmap_state.BRIDGE.resolve_cabs_for_paths([stem]))
+                except Exception:
+                    cabs = []
+                if not cabs:
+                    why = "cabmap 里没有这条容器路径"
+                elif not any(c in closure for c in cabs):
+                    why = "所在 CAB {0} 不在本次闭包(种子没带上它)".format(cabs[:2])
+                else:
+                    why = "CAB {0} 在闭包内,但导出后按路径 join 不到资产".format(cabs[:2])
+                print("[RuriRipper] scene: UNRESOLVED {0}\n    → {1}".format(path, why))
             self.report({"ERROR"}, "{0} placement(s) of {1} asset(s) did NOT resolve and are "
                                    "MISSING from the scene (paths in the console). {2}".format(
                                        report.unresolved, len(report.unresolved_paths),
