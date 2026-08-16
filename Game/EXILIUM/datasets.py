@@ -19,6 +19,7 @@ LANGUAGE = "exilium.roster.language"
 CAST = "exilium.roster.cast"
 SCENES = "exilium.scene.list"
 SELECT = "exilium.asset.select"
+ROLE_MESHES = "exilium.model.meshes"
 CATALOGS = "exilium.catalog.catalogs"
 ARCHIVES = "exilium.vfs.archives"
 
@@ -59,6 +60,13 @@ def cast(kind, language):
 def scenes():
     """Every scene the game ships, under the path its own catalog states."""
     return _table(SCENES)
+
+
+def role_meshes(asset_text):
+    """The meshes one character prefab wears, which its renderers do not carry:
+    (transform, path, name, lod, container, cab), already resolved against the
+    loaded map. Empty for a prefab that keeps no such list."""
+    return _rows(ROLE_MESHES, assetText=str(asset_text or ""))
 
 
 def cabs_for(addresses):

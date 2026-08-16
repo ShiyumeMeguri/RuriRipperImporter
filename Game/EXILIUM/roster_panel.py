@@ -21,7 +21,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import datasets
+from . import datasets, mesh_resolver
 
 CHARACTERS = datasets.CHARACTERS
 MODELS = datasets.MODELS
@@ -274,14 +274,20 @@ def load_address(operator, address, label):
                         "download it in the game first.".format(label) if known else
                         "'{0}' is not in this install's catalog.".format(label))
         return {"CANCELLED"}
+    # A character's renderers carry no mesh of their own, and the meshes its list
+    # names live in other archives -- seed those too or the closure has nothing for
+    # the resolver to find (see mesh_resolver).
+    name = _asset_name(address)
+    seeds = (mesh_resolver.seeds_for(address, cabs, name)
+             if address.lower().endswith(".prefab") else cabs)
     cabmap_state.clear_selection()
-    for cab in cabs:
+    for cab in seeds:
         cabmap_state.SELECTED_CABS.add(cab)
     # This game pools dozens of unrelated archives into one file, so one cab's resolved
     # closure exports over a thousand roots that have nothing to do with what was asked
     # for -- loading one character used to bring in a scene's worth of strangers. The
     # address named exactly one asset, so name it to the import.
-    result = bpy.ops.ruri.import_selected(only_root_names=_asset_name(address))
+    result = bpy.ops.ruri.import_selected(only_root_names=name)
     if "FINISHED" not in result:
         return {"CANCELLED"}
     operator.report({"INFO"}, "Loaded '{0}' from {1} cab(s).".format(label, len(cabs)))

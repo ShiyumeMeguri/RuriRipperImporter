@@ -417,10 +417,10 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats):
         if renderer.is_skinned and arm_obj is not None:
             obj = _import_skinned(context, db, renderer, arm_obj, maps,
-                                  mat_builder, options, report)
+                                  mat_builder, options, report, prefab)
         else:
             obj = _import_static(context, db, renderer, mat_builder, options, report,
-                                 top_level, place=arm_obj is not None)
+                                 top_level, place=arm_obj is not None, prefab_file=prefab)
         if obj is None:
             continue
         report.mesh_objects.append(obj)
@@ -564,10 +564,43 @@ def _build_materials(renderer, mat_builder):
     return [mat_builder.build_from_ref(ref) for ref in renderer.material_refs]
 
 
-def _decode_renderer_mesh(db, renderer, report):
+# Renderers whose own m_Mesh is empty. In some games that is not a broken prefab:
+# the prefab ships the rig and the renderers, and the geometry is attached at run
+# time from a list the game keeps beside them. A game module registers a callable
+# ``resolver(db, prefab_file, renderer) -> mesh_ref | None`` and SELF-selects by
+# what the prefab itself carries, returning None to decline -- this core never
+# learns which games do it. First claimant wins; no claimant leaves the renderer
+# with no geometry, exactly as before.
+MESH_RESOLVERS = []
+
+
+def register_mesh_resolver(resolver):
+    if resolver not in MESH_RESOLVERS:
+        MESH_RESOLVERS.append(resolver)
+
+
+def unregister_mesh_resolver(resolver):
+    if resolver in MESH_RESOLVERS:
+        MESH_RESOLVERS.remove(resolver)
+
+
+def _renderer_mesh_ref(db, prefab_file, renderer, options):
+    """The mesh a renderer draws: its own reference, or -- when it carries none --
+    whatever the game that owns this prefab says belongs there."""
+    if isinstance(renderer.mesh_ref, dict) and renderer.mesh_ref.get("guid"):
+        return renderer.mesh_ref
+    for resolver in MESH_RESOLVERS:
+        resolved = resolver(db, prefab_file, renderer, options)
+        if resolved:
+            return resolved
+    return renderer.mesh_ref
+
+
+def _decode_renderer_mesh(db, renderer, report, prefab_file=None, options=None):
     """Follow a renderer's mesh reference through the shared resolver and turn
     whatever went wrong into this add-on's own wording. None means no geometry."""
-    loaded = prefab_scan.load_mesh(db, renderer.mesh_ref, renderer.name)
+    loaded = prefab_scan.load_mesh(db, _renderer_mesh_ref(db, prefab_file, renderer, options),
+                                   renderer.name)
     if loaded.ok:
         if loaded.dropped_topologies:
             report.warnings.append(
@@ -581,8 +614,9 @@ def _decode_renderer_mesh(db, renderer, report):
     return None
 
 
-def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, report):
-    decoded = _decode_renderer_mesh(db, renderer, report)
+def _import_skinned(context, db, renderer, arm_obj, maps, mat_builder, options, report,
+                    prefab_file=None):
+    decoded = _decode_renderer_mesh(db, renderer, report, prefab_file, options)
     if decoded is None:
         return None
     materials = _build_materials(renderer, mat_builder)
@@ -673,8 +707,9 @@ def _build_object_tree(context, nodes, roots, content, options, top_level, repor
         build(root, None, False)
 
 
-def _import_static(context, db, renderer, mat_builder, options, report, top_level, place=True):
-    decoded = _decode_renderer_mesh(db, renderer, report)
+def _import_static(context, db, renderer, mat_builder, options, report, top_level, place=True,
+                   prefab_file=None):
+    decoded = _decode_renderer_mesh(db, renderer, report, prefab_file, options)
     if decoded is None:
         return None
     materials = _build_materials(renderer, mat_builder)

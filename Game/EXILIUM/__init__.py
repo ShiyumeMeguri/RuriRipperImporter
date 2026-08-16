@@ -27,15 +27,23 @@ exactly while the install in front of it IS this game, and never names it itself
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import roster_panel, scene_panel
+from ... import prefab_importer
+from . import mesh_resolver, roster_panel, scene_panel
 
 
 def _register():
     roster_panel.register()
     scene_panel.register()
+    # A character prefab here carries renderers with no mesh in them: the geometry
+    # is listed beside the rig and attached at run time. The host's ONE prefab path
+    # asks whoever owns the prefab for the missing mesh; this is that answer, and a
+    # prefab keeping no such list simply declines.
+    prefab_importer.register_mesh_resolver(mesh_resolver.provide)
 
 
 def _unregister():
+    prefab_importer.unregister_mesh_resolver(mesh_resolver.provide)
+    mesh_resolver.forget()
     scene_panel.unregister()
     roster_panel.unregister()
 
