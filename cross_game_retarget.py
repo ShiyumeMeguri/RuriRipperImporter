@@ -2,8 +2,9 @@
 
   clip 绑定 CRC ─(m_TOS 覆盖率)─> 源 Avatar ─(cabmap 反向依赖 + 根 Animator 身份)─> 宿主角色 prefab
 
-One decision: a rig that names a table (``ruri_retarget_table``) retargets, a rig that
-names none binds directly. One builder: the host is imported through the ordinary prefab
+One decision: a rig whose declared skeleton family (``ruri_skeleton``, stamped game as
+default) differs from the session's retargets through the declared table graph; equal
+families bind directly. One builder: the host is imported through the ordinary prefab
 path, the same one a user's own character import runs. One maths: the named preset goes
 verbatim (mappings AND settings) to AnimationRetarget, which skips missing bones itself.
 Nothing here reads a name, a folder or a game; faces alone stay game-specific
@@ -52,19 +53,21 @@ def available():
     return _addon() is not None
 
 
-RETARGET_TABLE_PROP = "ruri_retarget_table"
+SKELETON_PROP = "ruri_skeleton"
 
 
-def table_name_of(arm_obj):
-    """The AnimationRetarget preset this rig declares for itself, "" when none."""
+def skeleton_of(arm_obj):
+    """The skeleton family this rig belongs to: its own declaration, else the game it
+    was imported from. One studio ships one family across many titles, so families are
+    declared -- in-file on presets, on the rig here -- and filenames mean nothing."""
     if arm_obj is None:
         return ""
-    return str(arm_obj.get(RETARGET_TABLE_PROP) or "")
+    return str(arm_obj.get(SKELETON_PROP) or "") or armature_builder.read_game(arm_obj)
 
 
-def set_table_name(arm_obj, name):
+def set_skeleton(arm_obj, name):
     if arm_obj is not None:
-        arm_obj[RETARGET_TABLE_PROP] = str(name or "")
+        arm_obj[SKELETON_PROP] = str(name or "")
 
 
 def _load_spec(presets, name):
@@ -102,41 +105,58 @@ def _flip_spec(spec):
     return flipped
 
 
-def resolve_retarget_spec(session_key, dest_arm):
-    """(spec, label) deciding whether this import retargets, and through what.
+def _spec_sides(spec):
+    declared = spec.get("skeletons") or {}
+    return ({str(name).lower() for name in declared.get("source") or [] if name},
+            {str(name).lower() for name in declared.get("dest") or [] if name})
 
-    The rig's own declaration (``ruri_retarget_table``, comma-chainable) wins; with no
-    declaration, two different stamped games fall back to the ``<Source>To<Dest>``
-    preset pair -- the game-to-game DEFAULT, either direction, flipped when the file is
-    named the other way. Same game or no table anywhere = ({}, ""), the direct-bind
-    path. Specs travel verbatim; composition and flipping are pure row data."""
+
+def resolve_retarget_spec(session_key, dest_arm):
+    """(composed spec, label) joining the session's skeleton family to this rig's.
+
+    Every preset declares which two families it bridges (``skeletons.source/dest``,
+    alias lists so sister titles sharing one rig share one table); the rig declares
+    its family (``ruri_skeleton``, stamped game as default). Equal or unknown
+    families = ({}, ""), the direct-bind path. A missing direct table composes the
+    shortest declared chain -- breadth-first, either direction per hop, deterministic
+    by preset name."""
     addon = _addon()
     if addon is None:
         return {}, ""
     _core, presets, _api = addon
-
-    declared = table_name_of(dest_arm)
-    if declared:
-        names = [part.strip() for part in declared.split(",") if part.strip()]
-        specs = [_load_spec(presets, name) for name in names]
-        if any(not spec.get("mappings") for spec in specs):
-            return {}, declared
-        return (specs[0] if len(specs) == 1 else _compose_specs(specs)), declared
-
-    source_game = cabmap_state.game_of(session_key)
-    dest_game = armature_builder.read_game(dest_arm)
-    if not source_game or not dest_game or source_game == dest_game:
+    source_id = str(cabmap_state.game_of(session_key) or "").lower()
+    dest_id = skeleton_of(dest_arm).lower()
+    if not source_id or not dest_id or source_id == dest_id:
         return {}, ""
-    known = {name.lower(): name for name in presets.list_presets()}
-    forward = "{0}To{1}".format(source_game, dest_game)
-    reverse = "{0}To{1}".format(dest_game, source_game)
-    name = known.get(forward.lower())
-    if name is not None:
-        return _load_spec(presets, name), name
-    name = known.get(reverse.lower())
-    if name is not None:
+
+    edges = []
+    for name in sorted(presets.list_presets()):
         spec = _load_spec(presets, name)
-        return (_flip_spec(spec) if spec.get("mappings") else {}), name
+        side_a, side_b = _spec_sides(spec)
+        if spec.get("mappings") and side_a and side_b:
+            edges.append((name, spec, side_a, side_b))
+
+    frontier = [({source_id}, [], [])]
+    seen = [frozenset({source_id})]
+    while frontier:
+        position, specs, names = frontier.pop(0)
+        if dest_id in position:
+            return ((specs[0] if len(specs) == 1 else _compose_specs(specs)),
+                    ",".join(names))
+        if len(specs) >= 4:
+            continue
+        for name, spec, side_a, side_b in edges:
+            steps = []
+            if position & side_a:
+                steps.append((spec, side_b))
+            if position & side_b:
+                steps.append((_flip_spec(spec), side_a))
+            for crossed, landing in steps:
+                key = frozenset(landing)
+                if key in seen:
+                    continue
+                seen.append(key)
+                frontier.append((set(landing), specs + [crossed], names + [name]))
     return {}, ""
 
 
@@ -661,15 +681,18 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
 
     spec, table_label = resolve_retarget_spec(session_key, dest_arm)
-    if table_name_of(dest_arm) and not (spec.get("mappings") or []):
-        raise CrossGameRetargetError(
-            "Armature '{0}' names bone table {1!r}, but it could not be read or is empty."
-            .format(dest_arm.name, table_label))
     if spec.get("mappings"):
         products, warnings = retarget_clips_onto(
             context, session_key, clip_cab, clip_guids, db, dest_arm, options,
             spec, table_label, display_names, activate)
         return len(products), warnings
+    source_id = str(cabmap_state.game_of(session_key) or "")
+    dest_id = skeleton_of(dest_arm)
+    if source_id and dest_id and source_id.lower() != dest_id.lower():
+        raise CrossGameRetargetError(
+            "No declared table chain joins skeleton family '{0}' to '{1}' -- declare the "
+            "pair in a preset's skeletons.source/dest lists (chains compose "
+            "automatically).".format(source_id, dest_id))
 
     if maps is None:
         raise CrossGameRetargetError(
@@ -679,8 +702,8 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
     if checked and ratio == 0.0:
         raise CrossGameRetargetError(
             "None of the clip's curve paths match armature '{0}', and it names no bone "
-            "table to retarget through -- select the right skeleton, or set its {1} "
-            "property to a preset name.".format(dest_arm.name, RETARGET_TABLE_PROP))
+            "table to retarget through -- select the right skeleton, or declare its {1} "
+            "family.".format(dest_arm.name, SKELETON_PROP))
 
     built, warnings, actions = prefab_importer.build_selected_animations(
         db, dest_arm, maps, None, clip_guids, options, display_names, activate)

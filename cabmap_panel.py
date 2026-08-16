@@ -2503,7 +2503,11 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                     return {"CANCELLED"}
                 ratio, checked = cross_game_retarget._binding_match(
                     clip_db, selected_guids, target_maps["path_to_bone"])
-                if not checked or ratio > 0.0 or cross_game_retarget.table_name_of(target):
+                target_family = cross_game_retarget.skeleton_of(target)
+                session_family = cabmap_state.game_of(cabmap_state.active_key()) or ""
+                retargetable = (target_family and session_family
+                                and target_family.lower() != session_family.lower())
+                if not checked or ratio > 0.0 or retargetable:
                     try:
                         built, warnings = cross_game_retarget.load_clips_onto(
                             context, cabmap_state.active_key(),
