@@ -67,18 +67,77 @@ def set_table_name(arm_obj, name):
         arm_obj[RETARGET_TABLE_PROP] = str(name or "")
 
 
-def table_spec_of(arm_obj):
-    """(the declared preset verbatim, its name) -- never filtered, oriented or
-    re-configured here: missing bones and settings are AnimationRetarget's own job."""
-    addon = _addon()
-    name = table_name_of(arm_obj)
-    if addon is None or not name:
-        return {}, name
-    _core, presets, _api = addon
+def _load_spec(presets, name):
     try:
-        return presets.load_preset(name), name
+        return presets.load_preset(name)
     except Exception:
-        return {}, name
+        return {}
+
+
+def _compose_specs(specs):
+    """Chain tables by joining on the intermediate rig's bone names: rows (a->m) then
+    (m->d) become (a->d), each carrying the LAST hop's per-row params and the last
+    spec's settings -- KoikatuToEndfield,EndfieldToWaifu needs no new file."""
+    spec = specs[0]
+    for hop_spec in specs[1:]:
+        join = {}
+        for row in hop_spec.get("mappings") or []:
+            join.setdefault(str(row.get("source") or ""), row)
+        rows = []
+        for row in spec.get("mappings") or []:
+            hop = join.get(str(row.get("dest") or ""))
+            if hop is not None:
+                rows.append(dict(hop, source=str(row.get("source") or ""),
+                                 dest=str(hop.get("dest") or "")))
+        spec = dict(hop_spec)
+        spec["mappings"] = rows
+    return spec
+
+
+def _flip_spec(spec):
+    flipped = dict(spec)
+    flipped["mappings"] = [dict(row, source=str(row.get("dest") or ""),
+                                dest=str(row.get("source") or ""))
+                           for row in spec.get("mappings") or []]
+    return flipped
+
+
+def resolve_retarget_spec(session_key, dest_arm):
+    """(spec, label) deciding whether this import retargets, and through what.
+
+    The rig's own declaration (``ruri_retarget_table``, comma-chainable) wins; with no
+    declaration, two different stamped games fall back to the ``<Source>To<Dest>``
+    preset pair -- the game-to-game DEFAULT, either direction, flipped when the file is
+    named the other way. Same game or no table anywhere = ({}, ""), the direct-bind
+    path. Specs travel verbatim; composition and flipping are pure row data."""
+    addon = _addon()
+    if addon is None:
+        return {}, ""
+    _core, presets, _api = addon
+
+    declared = table_name_of(dest_arm)
+    if declared:
+        names = [part.strip() for part in declared.split(",") if part.strip()]
+        specs = [_load_spec(presets, name) for name in names]
+        if any(not spec.get("mappings") for spec in specs):
+            return {}, declared
+        return (specs[0] if len(specs) == 1 else _compose_specs(specs)), declared
+
+    source_game = cabmap_state.game_of(session_key)
+    dest_game = armature_builder.read_game(dest_arm)
+    if not source_game or not dest_game or source_game == dest_game:
+        return {}, ""
+    known = {name.lower(): name for name in presets.list_presets()}
+    forward = "{0}To{1}".format(source_game, dest_game)
+    reverse = "{0}To{1}".format(dest_game, source_game)
+    name = known.get(forward.lower())
+    if name is not None:
+        return _load_spec(presets, name), name
+    name = known.get(reverse.lower())
+    if name is not None:
+        spec = _load_spec(presets, name)
+        return (_flip_spec(spec) if spec.get("mappings") else {}), name
+    return {}, ""
 
 
 class CrossGameRetargetError(RuntimeError):
@@ -515,7 +574,7 @@ def _host_rig_for(context, session_key, clip_cab, clip_crcs, options):
 
 
 def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, options,
-                        display_names=None, activate=False):
+                        spec, table_label, display_names=None, activate=False):
     """Import ``clip_guids`` (already resolved into ``db``, a source-game closure) onto
     ``dest_arm`` -- a rig that names a bone table -- by way of the clips' OWN host
     character. Resolves the avatar the clips measurably bind to, resolves and imports the
@@ -542,12 +601,11 @@ def retarget_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm
     if not clip_crcs:
         raise CrossGameRetargetError("The selected clip(s) carry no transform bindings to retarget.")
 
-    spec, table_label = table_spec_of(dest_arm)
     mappings = list(spec.get("mappings") or [])
     if not mappings:
         raise CrossGameRetargetError(
-            "Armature '{0}' names bone table {1!r}, but it could not be read or is empty."
-            .format(dest_arm.name, table_label))
+            "Bone table {0!r} for armature '{1}' could not be read or is empty."
+            .format(table_label, dest_arm.name))
 
     host_arm, host_maps = _host_rig_for(context, session_key, clip_cab, clip_crcs, options)
 
@@ -602,10 +660,15 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
     if maps is None:
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
 
-    if table_name_of(dest_arm):
+    spec, table_label = resolve_retarget_spec(session_key, dest_arm)
+    if table_name_of(dest_arm) and not (spec.get("mappings") or []):
+        raise CrossGameRetargetError(
+            "Armature '{0}' names bone table {1!r}, but it could not be read or is empty."
+            .format(dest_arm.name, table_label))
+    if spec.get("mappings"):
         products, warnings = retarget_clips_onto(
             context, session_key, clip_cab, clip_guids, db, dest_arm, options,
-            display_names, activate)
+            spec, table_label, display_names, activate)
         return len(products), warnings
 
     if maps is None:
