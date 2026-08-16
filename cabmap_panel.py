@@ -2494,6 +2494,34 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                     if guid not in selected_guids:
                         selected_guids.append(guid)
 
+            # 🔴 这个操作符的本意写在它自己的 bl_description 里: "Build the character
+            # IF NOT ALREADY IN THE SCENE"。而上面那个判断问的是**缓存**
+            # (build_state["arm_name"]), 不是场景 —— 『发现动画』
+            # (set_animation_discovery_state) 会把刚导完角色时记下的 arm_name 整个
+            # 覆盖掉, 于是"缓存没了"被当成了"角色不在场景里", 每导一次动画就重建一个
+            # 角色, 再来一次就是第三个。缓存会过期, 场景不会: 所以这里直接问场景。
+            #
+            # find_target_armature 就是 standalone 那条路一直在用的同一个判据(用户的
+            # 活动骨架 / 选中的网格所绑定的骨架 / 场景里唯一的骨架), 复用它, 不另立一套。
+            if arm_obj is None and selected_guids:
+                already_there = prefab_importer.find_target_armature(context)
+                present_maps = (prefab_importer.maps_from_stamped_armature(already_there)
+                                if already_there is not None else None)
+                # 是不是"这个角色已经在场景里"不靠猜, 靠量: 这批 clip 的曲线路径有没有
+                # 落在它的骨骼上。
+                #   落得上            -> 就是它, 直接用;
+                #   量出来一条都落不上 -> 场景里那个确实是别的角色, 才走 lazy build;
+                #   压根没得量(clip 没有 transform 曲线, 例如 *_empty) -> 没有证据说它
+                #     是错的, 而重建的代价是场景里凭空多一个角色 —— 所以也直接用。
+                # 只有**量出来确实不匹配**才重建, 缺证据一律不重建。
+                if present_maps is not None:
+                    ratio, checked = cross_game_retarget._binding_match(
+                        db, selected_guids, present_maps["path_to_bone"])
+                    if not checked or ratio > 0.0:
+                        return _import_clips_standalone(
+                            self, context, state, seed_cabs[0] if seed_cabs else None,
+                            selected_guids, db)
+
             if not roots:
                 # Animation-only closure (the discovered row(s) were clip
                 # CABs): attach onto the user's selected skeleton instead of
