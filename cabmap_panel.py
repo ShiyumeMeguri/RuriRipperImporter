@@ -220,8 +220,9 @@ _INSTALL_IDENTITY = {}
 
 
 def _install_identity(root):
-    """What the install at ``root`` says it is: {"company", "product", "engine_version"},
-    or None for a folder that is no Unity install (or before the DLL is up).
+    """What the install at ``root`` says it is: {"company", "product", "game_version",
+    "engine_version"}, or None for a folder that is no Unity install (or before the DLL
+    is up).
 
     Two small files per player and nothing else -- see pythonnet_bridge.read_install.
     A build whose engine assets are not plain still names itself; it just reports no
@@ -569,12 +570,13 @@ def _decoder_id(entry):
     return "{0}_{1}".format(entry[0], entry[1])
 
 
-def _resolve_decoder(product, engine_version):
+def _resolve_decoder(identity):
     """Which decoder the KERNEL picks for this identity (HookCatalog.Resolve), or ""
     when the product ships none -- a plain Unity build is read by the generic path.
     Asked here and nowhere else, so the panel never re-implements the rule."""
     try:
-        return pythonnet_bridge.resolve_decoder(product, engine_version)
+        return pythonnet_bridge.resolve_decoder(
+            identity["product"], identity["game_version"], identity["engine_version"])
     except Exception:
         return ""
 
@@ -590,13 +592,15 @@ def _adopt_identity(state, config):
     identity = _install_identity(bpy.path.abspath(config.game_root) if config.game_root else "")
     if identity is None:
         config.game_name = ""
+        config.game_version = ""
         config.engine_version = ""
         config.decoder_id = ""
         return ""
     config.game_name = identity["product"]
+    config.game_version = identity["game_version"]
     config.engine_version = identity["engine_version"]
     _decoders()
-    config.decoder_id = _resolve_decoder(identity["product"], identity["engine_version"])
+    config.decoder_id = _resolve_decoder(identity)
     return config.decoder_id
 
 
@@ -812,15 +816,17 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     ``unknown_N`` for a folder that publishes none. It is the tab's label and the
     identity its browser session and cabmap slot are filed under. ``game_name`` is
     that same productName as the install PUBLISHED it -- two installs of one title
-    are two tabs (two keys) sharing one game -- and ``engine_version`` is the Unity
-    version its serialized files state. Both are read once, where the folder is
-    typed (_adopt_identity), never re-derived.
+    are two tabs (two keys) sharing one game -- ``game_version`` is its own
+    bundleVersion and ``engine_version`` the Unity version its serialized files
+    state. All are read once, where the folder is typed (_adopt_identity), never
+    re-derived.
 
     ``decoder_id`` is the ONE decoder this tab reads through: resolved from that
     identity by the kernel, replaceable per tab (RURI_MT_decoder), and empty for a
     plain Unity build that needs none."""
     key: StringProperty()
     game_name: StringProperty()
+    game_version: StringProperty()
     engine_version: StringProperty()
     decoder_id: StringProperty()
     game_root: StringProperty()
@@ -976,9 +982,9 @@ class RURI_OT_reprobe_install(bpy.types.Operator):
                         _unique_tab_key(state, config.game_name, held_by_key=config.key))
         _set_current_tab(state, config.key)
         _auto_default_cabmap_filename(state)
-        self.report({"INFO"}, "{0} · Unity {1} · {2}".format(
-            config.game_name or "no identity", config.engine_version or "unknown",
-            decoder or "no decoder"))
+        self.report({"INFO"}, "{0} {1} · Unity {2} · {3}".format(
+            config.game_name or "no identity", config.game_version or "(no version)",
+            config.engine_version or "unknown", decoder or "no decoder"))
         return {"FINISHED"}
 
 
@@ -2270,8 +2276,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
         # moves this tab alone.
         config = _active_config(state)
         identity = top.row(align=True)
-        identity.label(text=("{0}  ·  Unity {1}".format(
-            config.game_name, config.engine_version or "unknown")
+        identity.label(text=("{0} {1}  ·  Unity {2}".format(
+            config.game_name, config.game_version or "(no version)",
+            config.engine_version or "unknown")
             if config is not None and config.game_name else "No install identity"),
             icon="FILE_3D")
         identity.operator(RURI_OT_reprobe_install.bl_idname, text="", icon="FILE_REFRESH")
