@@ -595,7 +595,7 @@ def _adopt_identity(state, config):
         return ""
     config.game_name = identity["product"]
     config.engine_version = identity["engine_version"]
-    _decoders()  # prime the menu's list here, so its draw never crosses the boundary
+    _decoders()
     config.decoder_id = _resolve_decoder(identity["product"], identity["engine_version"])
     return config.decoder_id
 
