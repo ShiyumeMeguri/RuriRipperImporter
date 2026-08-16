@@ -20,43 +20,7 @@ C# 侧是秒级且能并行。把逻辑放在 py 里等于给整条链装一个�
 
 新游戏 = hook 侧新增数据集 + `Game/<游戏>/` 一个只画面板的文件夹。
 
-## 🔴 2. 着色器 .py 是生成物,禁止手改
-
-`Game/*/shader/ruri_*.py` 全部由 `Ruri.RenderPipelines.Generator`
-(`E:\SpeedProject\AzureNihil\RuriTools\Ruri.RenderPipelines.Generator`,后端
-`Source/Ruri.CodeGen.Blender`)生成,配方的 `destination` 指向本目录 ⇒ 生成即就地部署。
-**直接编辑下次生成就被冲掉**;改行为 → 改生成器 → 重生成。
-
-```bash
-dotnet build Source/Ruri.App/Ruri.App.csproj
-dotnet run --project Source/Ruri.App/Ruri.App.csproj --no-build -- --codegen-only Recipes/Blender.json
-```
-`--codegen-only` **必须带配方**(单个 .json 或 `Recipes/` 全量);Blender 系共 5 个配方:
-`Blender / BlenderEffect / BlenderScene / BlenderShadowReceiver / BlenderPost`。
-
-材质参数面板**不在生成物里**:生成物只交出 `INTERFACE` 表与本栈的读写路径,注册进
-`material_builder.register_material_panel`;面板本体全场一个,在 `material_panel.py`,
-画的是选中网格所持有的那张材质。认领判据 = 建图时烙的 `mat['ruri_uber_stack']`。
-
-## 🔴 3. 派生态收尾不许在导入路径里写
-
-顶点腿、材质环境查询兑现、灯表、后处理链的**重建时机**只有一个真源:`derived_state.py`。
-导入路径只管造东西(`mesh_builder` / `MaterialBuilder` 造完自己 announce),
-**任何面板/operator 都不许再调 `apply_vertex_stages` / `apply_post_stages` / `rewire_capabilities`**。
-漏调一次 = 画面上毫无痕迹的静默缺失(NPC/浏览器/场景窗口/剧情四条路都栽过)。
-
-## 4. 共用层边界
+## 2. 共用层边界
 
 `RuriRipperPyBridge/` 是与 Substance Painter 插件共享的 git 子模块:**禁止出现 bpy / mathutils**,
 也禁止出现任何一个游戏的知识。改它单独提交再 bump 父仓。
-
-## 5. 验收
-
-- 纯 python 部分:`RuriRipperPyBridge/run_tests.py`。
-- 插件机制部分:headless 真插件跑
-  `BLENDER_USER_SCRIPTS=<profile>/scripts blender.exe --background --python <探针>`
-  (**不加 `--factory-startup`**,那会让 profile 的 addons 整个不加载却照样返回 FINISHED)。
-  后台没有事件循环 ⇒ `bpy.app.timers` 不会被调用,计时器路径只能手动 tick;
-  `depsgraph_update_post` 手动 `view_layer.update()` 即一拍。
-- 🛑 不要写 headless 脚本去 cabmap 里全量导角色做诊断(用户 GUI 里 10 秒的事,headless 每次重付
-  bootstrap;实测挂 20 分钟只涨 0.59s CPU)。
