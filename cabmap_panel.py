@@ -2434,7 +2434,13 @@ class RURI_OT_discover_animations(bpy.types.Operator):
             item.folder = _clip_folder(row.container_path())
             item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
         _apply_animation_filter(state)
-        cabmap_state.set_animation_discovery_state(seed_cabs, state.as_options())
+        carry = None
+        prior = cabmap_state.ANIMATION_BUILD_STATE
+        if prior and prior.get("arm_name"):
+            prior_arm = bpy.data.objects.get(prior["arm_name"])
+            if prior_arm is not None and prior_arm.type == "ARMATURE":
+                carry = prior
+        cabmap_state.set_animation_discovery_state(seed_cabs, state.as_options(), carry)
 
         if clip_rows:
             self.report({"INFO"}, f"Found {len(clip_rows)} clip(s). Check the ones you want, then Import Checked Animations.")
@@ -2468,15 +2474,51 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             return {"CANCELLED"}
 
         arm_obj = bpy.data.objects.get(build_state["arm_name"]) if build_state["arm_name"] else None
-        if arm_obj is None or arm_obj.type != "ARMATURE":
-            # Discovery-only state (or the armature was deleted since) --
-            # THIS is the first point the closure actually gets resolved/
-            # exported at all. checked_keys are still CAB names here (the
-            # cheap discovery lists CAB rows); clips_by_cab from the export
-            # translates them to real clip guids through the cabmap's own
-            # identity -- a clip CAB's fbx display name and its clips'
-            # m_Names genuinely differ, so there is nothing to join by name.
+        if arm_obj is not None and arm_obj.type != "ARMATURE":
+            arm_obj = None
+        if arm_obj is None or build_state["db"] is None:
             seed_cabs = list(build_state["seed_cabs"] or [])
+            target = arm_obj or prefab_importer.find_target_armature(context)
+            target_maps = (prefab_importer.maps_from_stamped_armature(target)
+                           if target is not None and target.type == "ARMATURE" else None)
+            if target_maps is not None:
+                clip_id = class_registry.id_for_name("AnimationClip")
+                try:
+                    clip_assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
+                        cabmap_state.BRIDGE.import_cabs(seed_cabs, export_class_ids=[clip_id])
+                except Exception as exc:
+                    _report_exception(self, "Import (bridge) failed", exc)
+                    return {"CANCELLED"}
+                clip_db = bridge_asset_db.BridgeAssetDatabase(
+                    clip_assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+                    mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+                    asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+                selected_guids = []
+                for cab in checked_keys:
+                    for guid in clips_by_cab.get(cab.lower(), []):
+                        if guid not in selected_guids:
+                            selected_guids.append(guid)
+                if not selected_guids:
+                    self.report({"ERROR"}, "The checked row(s) exported no AnimationClip -- see console.")
+                    return {"CANCELLED"}
+                ratio, checked = cross_game_retarget._binding_match(
+                    clip_db, selected_guids, target_maps["path_to_bone"])
+                if not checked or ratio > 0.0 or cross_game_retarget.table_name_of(target):
+                    try:
+                        built, warnings = cross_game_retarget.load_clips_onto(
+                            context, cabmap_state.active_key(),
+                            seed_cabs[0] if seed_cabs else None,
+                            selected_guids, clip_db, target, target_maps,
+                            state.as_options())
+                    except cross_game_retarget.CrossGameRetargetError as exc:
+                        self.report({"ERROR"}, str(exc))
+                        return {"CANCELLED"}
+                    for warning in warnings[:5]:
+                        self.report({"WARNING"}, warning)
+                    self.report({"INFO"}, "Imported %d animation(s) onto '%s'."
+                                          % (built, target.name))
+                    return {"FINISHED"}
+
             try:
                 assets, roots, seed_roots, clips_by_cab, _scene_roots = \
                     cabmap_state.BRIDGE.import_cabs(seed_cabs)
@@ -2493,34 +2535,6 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 for guid in clips_by_cab.get(cab.lower(), []):
                     if guid not in selected_guids:
                         selected_guids.append(guid)
-
-            # 🔴 这个操作符的本意写在它自己的 bl_description 里: "Build the character
-            # IF NOT ALREADY IN THE SCENE"。而上面那个判断问的是**缓存**
-            # (build_state["arm_name"]), 不是场景 —— 『发现动画』
-            # (set_animation_discovery_state) 会把刚导完角色时记下的 arm_name 整个
-            # 覆盖掉, 于是"缓存没了"被当成了"角色不在场景里", 每导一次动画就重建一个
-            # 角色, 再来一次就是第三个。缓存会过期, 场景不会: 所以这里直接问场景。
-            #
-            # find_target_armature 就是 standalone 那条路一直在用的同一个判据(用户的
-            # 活动骨架 / 选中的网格所绑定的骨架 / 场景里唯一的骨架), 复用它, 不另立一套。
-            if arm_obj is None and selected_guids:
-                already_there = prefab_importer.find_target_armature(context)
-                present_maps = (prefab_importer.maps_from_stamped_armature(already_there)
-                                if already_there is not None else None)
-                # 是不是"这个角色已经在场景里"不靠猜, 靠量: 这批 clip 的曲线路径有没有
-                # 落在它的骨骼上。
-                #   落得上            -> 就是它, 直接用;
-                #   量出来一条都落不上 -> 场景里那个确实是别的角色, 才走 lazy build;
-                #   压根没得量(clip 没有 transform 曲线, 例如 *_empty) -> 没有证据说它
-                #     是错的, 而重建的代价是场景里凭空多一个角色 —— 所以也直接用。
-                # 只有**量出来确实不匹配**才重建, 缺证据一律不重建。
-                if present_maps is not None:
-                    ratio, checked = cross_game_retarget._binding_match(
-                        db, selected_guids, present_maps["path_to_bone"])
-                    if not checked or ratio > 0.0:
-                        return _import_clips_standalone(
-                            self, context, state, seed_cabs[0] if seed_cabs else None,
-                            selected_guids, db)
 
             if not roots:
                 # Animation-only closure (the discovered row(s) were clip
