@@ -250,6 +250,14 @@ class RURI_OT_exilium_roster_load(bpy.types.Operator):
         return load_address(self, entry.address, entry.label)
 
 
+def _asset_name(address):
+    """The asset an address names, by the game's own leaf. This game builds every asset
+    under its GUID, so the exported file is named after the asset itself and the leaf of
+    the address is the one thing both sides agree on."""
+    leaf = str(address).replace("\\", "/").rsplit("/", 1)[-1]
+    return leaf.rsplit(".", 1)[0]
+
+
 def load_address(operator, address, label):
     """Put whatever one address resolves to in the browser's own selection and run
     its own import. Shared by both tabs, because "load this one thing" is the same
@@ -269,7 +277,11 @@ def load_address(operator, address, label):
     cabmap_state.clear_selection()
     for cab in cabs:
         cabmap_state.SELECTED_CABS.add(cab)
-    result = bpy.ops.ruri.import_selected()
+    # This game pools dozens of unrelated archives into one file, so one cab's resolved
+    # closure exports over a thousand roots that have nothing to do with what was asked
+    # for -- loading one character used to bring in a scene's worth of strangers. The
+    # address named exactly one asset, so name it to the import.
+    result = bpy.ops.ruri.import_selected(only_root_names=_asset_name(address))
     if "FINISHED" not in result:
         return {"CANCELLED"}
     operator.report({"INFO"}, "Loaded '{0}' from {1} cab(s).".format(label, len(cabs)))
@@ -325,6 +337,10 @@ class RURI_OT_exilium_roster_outfits(bpy.types.Operator):
             bpy.ops.ruri.exilium_roster_refresh()
         state.filter_rules.clear()
         rule = state.filter_rules.add()
+        # A rule offers the fields of the list it belongs to, and it learns which list
+        # that is from its own spec_key -- stamp it before naming a field, or the enum
+        # still holds the empty fallback vocabulary and the assignment raises.
+        rule.spec_key = ROSTER_FILTER_SPEC.key
         rule.field = "character"
         rule.relation = "is"
         rule.value = wanted

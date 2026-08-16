@@ -1594,6 +1594,25 @@ def _selected_target_rows(state):
     return [row] if row is not None else []
 
 
+def _roots_named(wanted, roots):
+    """The roots that ARE the named assets, out of everything a closure exported.
+
+    A root is named by the asset itself (its exported file's stem is its own m_Name),
+    and the caller names it from what the GAME states -- an addressable's own leaf. So
+    this is two of the game's own names meeting, not a display-string guess: what it
+    cannot do is tell apart two assets the game genuinely gave the same name, and both
+    are then imported rather than one silently chosen."""
+    names = {piece.strip().lower() for piece in wanted.split(";") if piece.strip()}
+    paths = cabmap_state.BRIDGE.asset_paths_by_guid or {}
+    kept = []
+    for guid in roots:
+        path = paths.get(guid) or ""
+        leaf = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if leaf.rsplit(".", 1)[0].lower() in names:
+            kept.append(guid)
+    return kept
+
+
 def _import_single_asset(op, context, state, db, guid, class_name, name):
     """Import exactly one non-hierarchy asset by class: a per-asset browser
     row (a non-bundled file's Mesh/Material/Texture2D/Avatar/TextAsset, keyed
@@ -1824,6 +1843,14 @@ class RURI_OT_import_selected(bpy.types.Operator):
     bl_description = "Resolve every selected row's dependency closure in memory and import them into the scene"
     bl_options = {"REGISTER", "UNDO"}
     reset_scene: BoolProperty(default=False)
+    only_root_names: StringProperty(
+        default="",
+        description="Semicolon-separated asset names. Set, the import keeps only the roots that "
+                    "ARE those assets instead of every root the closure exports -- what a caller "
+                    "that already knows which asset it asked for means. A game whose archives are "
+                    "pooled (one file carrying dozens of unrelated bundles) exports a closure of "
+                    "roots that have nothing to do with the request, and without this a roster "
+                    "entry loads a scene's worth of strangers")
 
     @classmethod
     def poll(cls, context):
@@ -1996,6 +2023,12 @@ class RURI_OT_import_selected(bpy.types.Operator):
             else:
                 unrestricted = True
         import_roots = list(roots) if unrestricted else restricted_roots
+        if self.only_root_names:
+            import_roots = _roots_named(self.only_root_names, import_roots)
+            if not import_roots:
+                self.report({"ERROR"}, f"The closure exports no root named "
+                                       f"'{self.only_root_names}' -- nothing was imported.")
+                return False, imported
         if unrestricted and any(guid in scene_roots for guid in restricted_roots):
             self.report({"WARNING"}, "Mixing a scene row with bundled prefab rows imports the "
                                      "bundled rows' full root set -- import scenes on their own "

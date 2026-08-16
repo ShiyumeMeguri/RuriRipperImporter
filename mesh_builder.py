@@ -92,7 +92,7 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
     mesh.validate(clean_customdata=False)
     mesh.update()
 
-    _bake_tangents(mesh, decoded, loop_verts)
+    _bake_tangents(mesh, decoded)
 
     obj = bpy.data.objects.new(name, mesh)
     context.collection.objects.link(obj)
@@ -120,12 +120,19 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
     return obj
 
 
-def _bake_tangents(mesh, decoded, loop_verts):
+def _bake_tangents(mesh, decoded):
     """切线写进 corner 域属性,着色图直读 —— 属性**恒存在**,免去"缺属性静默读到零向量"
     (实锤:半边脸紫)。有游戏切线用游戏的(w 按 Unity 原值:换轴与图内 b2u 两次反射抵消);
-    没有就退回 Blender 自算的 UV 切线,并翻一次手性(只经 b2u 一次反射)。"""
+    没有就退回 Blender 自算的 UV 切线,并翻一次手性(只经 b2u 一次反射)。
+
+    corner→顶点的对照**从建好的网格上现读**,不能沿用建面时那份:`mesh.validate()` 会
+    丢掉退化面/重复面,活下来的 corner 少于当初写进去的,拿旧数组去 foreach_set 长度对不上,
+    Blender 只回一句 "internal error setting the array" 就把整趟导入打断
+    (EXILIUM 的场景网格实测会踩)。"""
     tan_attr = mesh.attributes.new(name="ruri_tangent", type="FLOAT_VECTOR", domain="CORNER")
     sign_attr = mesh.attributes.new(name="ruri_tangent_sign", type="FLOAT", domain="CORNER")
+    loop_verts = np.empty(len(mesh.loops), dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", loop_verts)
 
     if decoded.tangents is not None:
         per_vertex = coordinate.convert_points(decoded.tangents[:, :3])
