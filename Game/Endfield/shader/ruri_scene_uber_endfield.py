@@ -225,7 +225,7 @@ class G:
         nd.extension = extension
         # 数据类贴图(生成期按槽语义定)统一 Non-Color;克隆换图时按占位图的这个设定跟随。
         if non_color:
-            img.colorspace_settings.name = 'Non-Color'
+            _set_colorspace(img, 'Non-Color')
         self._set(nd.inputs[0], uv)
         r = (nd.outputs[0], nd.outputs[1])
         self._cse[k] = r
@@ -720,6 +720,54 @@ LIGHT_TABLE_ROWS = 4
 LIGHT_TABLE_COLS = 64
 
 
+def _linear_to_srgb(c):
+    """线性 → sRGB 显示值。`generated_color` 是按显示空间解释的,要它在 sRGB 图上
+    生成缓冲值 c,就得给它 c 的 sRGB 编码(实测 gen=0.7354 → 缓冲 0.5000)。"""
+    c = float(c)
+    if c <= 0.0031308:
+        return 12.92 * c
+    return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
+def _image_stored(image):
+    """把图的当前像素**存进 .blend**,并借此清掉 dirty 标记。
+
+    🔴 写过 `pixels` 的图会被 Blender 记成「已修改未保存」,关文件/切场景时弹
+    「N 张图片未保存」把用户拦住(实测 4 张参数表 + 1 张灯表 + 6 张中性图 = 11 张)。
+    `is_dirty` 是只读的,`pack()` 是唯一能清掉它的合法手段 —— 而且顺带让表的内容
+    真的进文件(重开时 _restore_projections 照样按真源重算,打包字节只是不再碍事)。
+    表都极小(灯表 64×4、参数表 1024×H),实测 pack 0.2~0.8ms,落在去抖后的一次
+    flush 上可忽略。平色图不走这里:它们用 generated_color,压根不脏。"""
+    try:
+        image.pack()
+    except Exception:
+        pass
+
+
+def _set_colorspace(image, want):
+    """给图定色彩空间 —— **只在真的不一样时才写**。
+
+    🔴 赋值 `colorspace_settings.name` 是一次「重新解释这张图」的信号,Blender 会
+    据此**丢弃并重建像素缓冲**,即使赋的是同一个值。后果按图的来源分两种,都很毒:
+
+    * `source='GENERATED'` 的图(1x1 中性图、参数表、灯表)没有可回读的字节,
+      重建 = 按 `generated_color` 重填 —— 而它恒是黑 (0,0,0,1)。于是**写进去的像素
+      被静默抹成黑**。实测症状:没绑贴图的槽全采到黑,_BaseMap 中性白→黑,
+      脸/发整片纯黑(而直建路缺图时压根不建采样节点,socket 停在接口缺省,是亮的)。
+    * 真图(有文件/打包字节)重建 = 重新解码,值不丢,但**该图的所有使用者一起失效**。
+      300 张材质共用几张贴图时就是 O(N²):实测 12.7ms/材质 退化成 1975ms/材质。
+
+    所以「设色彩空间」这件事必须幂等,而唯一的幂等写法就是先比后写。
+    每一处设色彩空间都走这里,不要就地写 —— 就地写过的地方全都踩过上面两条。"""
+    if image is None:
+        return
+    try:
+        if image.colorspace_settings.name != want:
+            image.colorspace_settings.name = want
+    except Exception:
+        pass
+
+
 def _image_uploaded(image):
     """像素写完之后让它真的到达 GPU。
 
@@ -750,7 +798,10 @@ def _light_table_image():
         stale = image
         image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
                                     float_buffer=True, alpha=True)
-        image.colorspace_settings.name = 'Non-Color'
+        _set_colorspace(image, 'Non-Color')
+        # 🔴 同参数表:alpha 这里装的是类型位/count,不是不透明度。默认 STRAIGHT
+        # 会拿它去关联 RGB(灯位/颜色/轴全被毁),必须 CHANNEL_PACKED。
+        image.alpha_mode = 'CHANNEL_PACKED'
         image.use_fake_user = True
         if stale is not None:
             stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
@@ -804,6 +855,7 @@ def refresh_light_tables():
         flat.extend(row)
     image.pixels = flat
     _image_uploaded(image)
+    _image_stored(image)   # 清 dirty:否则关文件弹「N 张图片未保存」
     return 1
 
 
@@ -959,7 +1011,7 @@ class GV(G):
             img = bpy.data.images.new(name, 4, 4)
             img.generated_color = (1.0, 1.0, 1.0, 1.0)
         if non_color:
-            img.colorspace_settings.name = 'Non-Color'
+            _set_colorspace(img, 'Non-Color')
         nd.inputs['Image'].default_value = img
         nd.label = name
         nd.interpolation = interp
@@ -1016,7 +1068,7 @@ def _img(name, rgba, non_color):
     img.generated_color = rgba
     # 色彩空间是**槽语义**,在这里定死 —— 曾经靠组内 g.tex 顺手设,贴图外提后那行
     # 不再执行,数据图就被当彩图按 sRGB 解码(法线全错)。占位图是唯一真源,内外同吃。
-    img.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
+    _set_colorspace(img, 'Non-Color' if non_color else 'sRGB')
     return img
 
 
@@ -13505,6 +13557,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 65, 2, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 65, 3, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 67, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'LitForward': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -13679,6 +13732,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 65, 2, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 65, 3, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 67, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'LitTransparent': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -13854,6 +13908,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 68, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'LitEffect': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -14029,6 +14084,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 68, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'LitEffectBlend': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -14204,6 +14260,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 65, 3, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 66, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 67, 0, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 68, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'LitHLod': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -14380,6 +14437,7 @@ PARAMS = {
         ('_RuriFogRenderDistanceEnd', 'F', 66, 0, 0.0, 0.0),
         ('_RuriFogColor', 'V4', 67, 0, (0.0, 0.0, 0.0), 0.0),
         ('_ParallaxNoiseMapTilling', 'F', 66, 1, 0.0, 0.0),
+        ('__size_ParallaxMaskMap', 'V3', 68, 0, (1.0, 1.0, 1.0), 0.0),
     ],
     'Unlit': [
         ('_TwoSidedNormal', 'F', 0, 0, 1.0, 0.0),
@@ -14927,7 +14985,7 @@ PARAMS = {
         ('_RuriFogColor', 'V4', 45, 0, (0.0, 0.0, 0.0), 0.0),
     ],
 }
-MAT_TABLE_H = 68
+MAT_TABLE_H = 69
 MAT_TABLE_W = 1024
 
 DEFAULT_PART = 'Lit'
@@ -15125,16 +15183,44 @@ def _teximage(g, fetch, image, force_closest=False):
         nd.interpolation = 'Closest'
     nd.image = image
     if image is not None:
-        try:
-            image.colorspace_settings.name = 'Non-Color' if fetch['non_color'] else 'sRGB'
-        except Exception:
-            pass
+        _set_colorspace(image, 'Non-Color' if fetch['non_color'] else 'sRGB')
         if fetch['non_color']:
             _fix_two_channel_layout(image)
     return nd
 
 
-def _sample(g, fetch, image, uv):
+def _size_row(slot):
+    return '__size' + slot
+
+
+def _mat_size_socket(g, part, fetch, image):
+    """显式 LOD 槽的纹素域尺寸,从**本 part 的表列**读(与别的材质参数同一条路)。
+    找不到该行(旧表/非表化路径)才退回建图期常量 —— 那是直建路的正确行为,
+    因为它拿到的本来就是真图。
+
+    🔴 **texel 索引是逐 part 分配的**,所以必须按 part 查,不能在 PARAMS 里
+    按名字撞见谁算谁。曾经写成遍历 PARAMS.values() 取第一个同名行:Face 的
+    _ShadowLutTex 于是去读 Standard 的 texel 39(Face 自己在 32),读到空行
+    ⇒ size=(0,0,0) ⇒ 手工双线性除以零 ⇒ **整张脸/头发/眉毛纯黑**;而字典里
+    第一个 part(Standard)恰好自洽,布料看着一切正常,极具迷惑性。"""
+    row = None
+    want = _size_row(fetch['slot'])
+    for entry in PARAMS.get(part, ()):
+        if entry[0] == want:
+            row = entry
+            break
+    if row is None:
+        return (float(image.size[0]), float(image.size[1]), 1.0)
+    nd = g._nd('ShaderNodeTexImage')
+    nd.image = _mat_table_image()
+    nd.interpolation = 'Closest'
+    nd.extension = 'EXTEND'
+    nd.label = 'RuriMatParam'
+    g._set(nd.inputs['Vector'], g.comb(_mat_col_u(g), (row[2] + 0.5) / MAT_TABLE_H, 0.0))
+    return nd.outputs['Color']
+
+
+def _sample(g, part, fetch, image, uv):
     """把割点声明的**采样语义**在宿主上兑现,返回 (Color, Alpha, 锚点节点)。
     内核只说 derivative_mip(真源写的是隐式采样形还是显式 LOD 形),不含任何滤波数学:
       · 吃屏幕导数 → 一个 TexImage,mip 交给 EEVEE;
@@ -15148,7 +15234,12 @@ def _sample(g, fetch, image, uv):
         nd = _teximage(g, fetch, image)
         g._set(nd.inputs['Vector'], uv)
         return nd.outputs['Color'], nd.outputs['Alpha'], nd
-    size = (float(image.size[0]), float(image.size[1]), 1.0)
+    # 🔴 纹素域尺寸**必须是数据不是常量**:模板按中性占位图(4x4)建,实例化才换真图 ——
+    # 把 image.size 烙成建图期常量,换上 2048² 的真图后 UV 纹素域整体错位,
+    # 而走这条路的恰是 ramp/LUT 类槽(_DiffRampMap/_ShadowLutTex/_SpecRampMap/
+    # _SDFLightmap)⇒ 症状是漫反射/影色整片错色(实测:角色漫反射变深绿)。
+    # 尺寸随材质绑的图走,所以它和别的材质参数一样住表列(_mat_size_socket)。
+    size = _mat_size_socket(g, part, fetch, image)
     texel = g.vmath('SUBTRACT', g.vmath('MULTIPLY', uv, size), (0.5, 0.5, 0.0))
     base = g.vmath('FLOOR', texel)
     frac = g.vmath('SUBTRACT', texel, base)
@@ -15177,7 +15268,7 @@ def _feed(g, heads, sock, color, alpha):
             g._set(a, alpha)
 
 
-def _wire_fetch(g, insts, fetch, image):
+def _wire_fetch(g, part, insts, fetch, image):
     src = insts[fetch['depth']]
     heads = insts[fetch['depth'] + 1:]
     if fetch['env']:
@@ -15187,7 +15278,7 @@ def _wire_fetch(g, insts, fetch, image):
         color, alpha = g.env_image(image, src.outputs[fetch['sock'] + '_dir'], mip)
         _feed(g, heads, fetch['sock'], color, alpha)
         return None
-    color, alpha, anchor = _sample(g, fetch, image, src.outputs[fetch['sock'] + '_uv'])
+    color, alpha, anchor = _sample(g, part, fetch, image, src.outputs[fetch['sock'] + '_uv'])
     _feed(g, heads, fetch['sock'], color, alpha)
     return anchor
 
@@ -15284,7 +15375,7 @@ def _wire_zone(g, insts, zone, images, inst_sink, part, ctx):
             color, alpha = g.env_image(image, src.outputs[f['sock'] + '_dir'], mip)
             _feed(g, heads, f['sock'], color, alpha)
             continue
-        color, alpha, _anchor = _sample(g, f, image, src.outputs[f['sock'] + '_uv'])
+        color, alpha, _anchor = _sample(g, part, f, image, src.outputs[f['sock'] + '_uv'])
         _feed(g, heads, f['sock'], color, alpha)
     last = binsts[-1]
     for item, is_vec in zone['states']:
@@ -15312,7 +15403,12 @@ def _mat_table_image():
         stale = image
         image = bpy.data.images.new(MAT_TABLE, MAT_TABLE_W, MAT_TABLE_H,
                                     float_buffer=True, alpha=True)
-        image.colorspace_settings.name = 'Non-Color'
+        _set_colorspace(image, 'Non-Color')
+        # 🔴 必须 CHANNEL_PACKED:默认 STRAIGHT 会拿 alpha 去关联 RGB,而这里的
+        # alpha 是**第四个参数值**不是不透明度 —— V4 行的 w(如 _CharacterParams6_w
+        # 缺省 0)会把整个 rgb 毁掉,F 打包行更毒(第 4 个 F 污染前三个)。
+        # 症状:角色漫反射整片变深绿(CP6 缺省恰是 (0,1,0))。
+        image.alpha_mode = 'CHANNEL_PACKED'
         image.use_fake_user = True
         if stale is not None:
             stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
@@ -15392,6 +15488,7 @@ def _param_flush():
     image = _mat_table_image()
     image.pixels.foreach_set(_mat_mirror().ravel())
     _image_uploaded(image)   # 见 prelude:update/update_tag 都不够,要 gl_free
+    _image_stored(image)     # 清 dirty:否则关文件弹「N 张图片未保存」
     return None      # timer 协议:None = 注销
 
 
@@ -15442,6 +15539,20 @@ def _param_read(mat, name):
     return None
 
 
+def _mat_col_u(g):
+    """本材质在参数表里的列 → U 坐标。列号住图里唯一的 RuriMatCol 值节点上
+    (CSE 让全树共用同一个),实例化时改它一处即整棵图改读自己的列。"""
+    hit = g._cse.get(('matcolu',))
+    if hit is not None:
+        return hit
+    colv = g._nd('ShaderNodeValue')
+    colv.label = 'RuriMatCol'
+    colv.outputs[0].default_value = 0.0
+    u = g.math('DIVIDE', g.math('ADD', colv.outputs[0], 0.5), float(MAT_TABLE_W))
+    g._cse[('matcolu',)] = u
+    return u
+
+
 def _wire_params(g, insts, part):
     """把本 part 的全部材质 uniform 从表列接进级联/循环体实例 —— 模板建图时跑一次。
     从此「一张材质的参数」= 表里的一列像素:实例化零 socket 写,面板改参零树更新。
@@ -15452,10 +15563,7 @@ def _wire_params(g, insts, part):
         return
     image = _mat_table_image()
     _param_flush_soon()          # 列0 缺省得先在像素里,模板渲染才不是全零
-    colv = g._nd('ShaderNodeValue')
-    colv.label = 'RuriMatCol'
-    colv.outputs[0].default_value = 0.0
-    u = g.math('DIVIDE', g.math('ADD', colv.outputs[0], 0.5), float(MAT_TABLE_W))
+    u = _mat_col_u(g)
     texels = {}
     seps = {}
     for name, kind, texel, comp, _dv, _dw in rows:
@@ -15550,7 +15658,7 @@ def build_material(mat, part=None, opaque=True, multiply_blend=False, cull=2.0, 
     anchor = None
     for f in FETCHES.get(part, ()):
         image = images.get(f['slot']) if images else None
-        nd = _wire_fetch(g, insts, f, image)
+        nd = _wire_fetch(g, part, insts, f, image)
         if nd is not None and nd.image is not None:
             if anchor is None or (f['slot'] in _ANCHOR_SLOTS and (anchor.label not in _ANCHOR_SLOTS)):
                 anchor = nd
@@ -15621,26 +15729,67 @@ def _apply_cull(g, shader_sock, cull, outline_fac):
 _TEMPLATE_KEY = 'ruri_uber_template'
 
 
+_NEUTRAL_IMAGES = {}
+
+
+def _neutral_image(rgb, alpha, non_color):
+    """一张 1x1 的图,颜色 = **该割点自己声明的 neutral**(缺图时的采样值)。
+    按 (颜色, alpha, 色彩空间) 去重,全局就几张。"""
+    key = (tuple(round(float(c), 6) for c in rgb), round(float(alpha), 6), bool(non_color))
+    img = _NEUTRAL_IMAGES.get(key)
+    if img is not None:
+        try:
+            img.name
+            return img
+        except ReferenceError:
+            pass
+    name = 'RuriNeutral_{0:.3f}_{1:.3f}_{2:.3f}_{3:.3f}_{4}'.format(
+        key[0][0], key[0][1], key[0][2], key[1], 'nc' if non_color else 'srgb')
+    img = bpy.data.images.get(name)
+    if img is None or tuple(img.size) != (1, 1):
+        if img is not None:
+            bpy.data.images.remove(img)
+        img = bpy.data.images.new(name, 1, 1, float_buffer=True, alpha=True)
+    _set_colorspace(img, 'Non-Color' if non_color else 'sRGB')
+    img.alpha_mode = 'CHANNEL_PACKED'
+    img.generated_color = (
+        key[0][0] if non_color else _linear_to_srgb(key[0][0]),
+        key[0][1] if non_color else _linear_to_srgb(key[0][1]),
+        key[0][2] if non_color else _linear_to_srgb(key[0][2]),
+        key[1])
+    img.update()
+    img['ruri_placeholder'] = 1
+    img.use_fake_user = True
+    _NEUTRAL_IMAGES[key] = img
+    return img
+
+
 def _template_images(part):
-    """模板必须用**中性占位图**建满全部采样槽 —— 占位图名 == 槽名,这正是
-    实例化时按名认槽换真图的依据。漏了这步模板里根本没有 TexImage 节点,
-    instantiate 的换图循环无处可换、每张材质都变成无贴图(实测:与直建路
-    渲染 peak|Δ|≈1.0,而断链等价测试却是 0 —— 差异全在这)。
-    没绑真图的槽保持占位,语义就是该槽的声明中性值,与直建路一致。"""
-    _images()
-    slots = {}
+    """模板必须建满全部采样槽(否则 instantiate 换图无处可换),而没绑真图的槽
+    **必须与直建路逐位等价** —— 直建路在缺图时根本不建采样节点,socket 停在
+    割点声明的 neutral 上。所以这里造的是「颜色 == 该割点 neutral」的 1x1 图,
+    不是 _images() 的槽占位图。
+
+    🔴 两套「中性」不是一回事:占位图的颜色是 [MaterialTexture(Default)] 的**槽语义**
+    (_SDFLightmap 是纯黑 (0,0,0,0)),而割点的 neutral 是**缺图时该采到什么**。
+    拿前者建模板,没绑 SDF 图的材质就真的采到 0 ⇒ 脸部 SDF 判定全黑,
+    皮肤与头发整片变黑(实测症状)。
+
+    1x1 也让 __size 行的缺省 (1,1,1) 天然自洽:没换真图时纹素域就是 1x1。"""
+    rows = []
     for fetch in FETCHES.get(part, ()):
         if not fetch['env']:
-            slots[fetch['slot']] = None
+            rows.append(fetch)
     for zone in ZONES.get(part, ()):
         for fetch in zone['fetches']:
             if not fetch['env']:
-                slots[fetch['slot']] = None
+                rows.append(fetch)
     out = {}
-    for slot in slots:
-        img = bpy.data.images.get(slot)
-        if img is not None:
-            out[slot] = img
+    for fetch in rows:
+        if fetch['slot'] in out:
+            continue
+        out[fetch['slot']] = _neutral_image(
+            fetch['neutral'], fetch['neutral_alpha'], fetch['non_color'])
     return out
 
 
@@ -15690,6 +15839,19 @@ def instantiate(name, part, images=None, opaque=True, multiply_blend=False, cull
             if real is not None:
                 _swap_image(nd, real)
                 swapped += 1
+    # 显式 LOD 槽的纹素域尺寸随真图走(模板是按占位图建的)——落进快照,
+    # 由 _param_write 一并进列。漏了它 ramp/LUT 的 UV 就整体错位。
+    sizes = {}
+    for name, kind, _t, _c, _dv, _dw in PARAMS.get(part, ()):
+        if not name.startswith('__size'):
+            continue
+        real = (images or {}).get(name[len('__size'):])
+        if real is not None and real.size[0] and real.size[1]:
+            sizes[name] = [float(real.size[0]), float(real.size[1]), 1.0, 0.0]
+    if sizes:
+        merged = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+        merged.update(sizes)
+        mat['ruri_uber_colors'] = merged
     return mat, swapped
 
 
@@ -15837,10 +15999,7 @@ def _clone_vtx(template_name, builder, clone_name, mat):
                 ph = nd.inputs['Image'].default_value
                 non_color = ph is not None and ph.colorspace_settings.name == 'Non-Color'
                 nd.inputs['Image'].default_value = real
-                try:
-                    real.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
-                except Exception:
-                    pass
+                _set_colorspace(real, 'Non-Color' if non_color else 'sRGB')
                 if non_color:
                     _fix_two_channel_layout(real)
     return clone
@@ -16240,12 +16399,7 @@ def _swap_image(node, real):
     (早先'同值重写只要 19µs'的实测是单材质场景,掩盖了使用者数量这一维。)"""
     non_color = node.image is not None and node.image.colorspace_settings.name == 'Non-Color'
     node.image = real
-    want = 'Non-Color' if non_color else 'sRGB'
-    try:
-        if real.colorspace_settings.name != want:
-            real.colorspace_settings.name = want
-    except Exception:
-        pass
+    _set_colorspace(real, 'Non-Color' if non_color else 'sRGB')
     if non_color:
         _fix_two_channel_layout(real)
 
@@ -16358,7 +16512,12 @@ def provider(builder, props):
     mat['ruri_uber_images'] = {k: v.name for k, v in images.items()}
     mat['ruri_uber_floats'] = snapshot_floats
     mat['ruri_uber_st'] = {k: [float(x) for x in v] for k, v in props.texture_st.items()}
-    mat['ruri_uber_colors'] = {k: [float(x) for x in v] for k, v in props.colors.items()}
+    # instantiate 已把显式 LOD 槽的真图尺寸写进 colors 快照(__size*),
+    # 这里是**合并**不是覆盖 —— 直接赋值会把它们连同 UV 纹素域一起抹掉。
+    snapshot_colors = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()
+                       if k.startswith('__size')}
+    snapshot_colors.update({k: [float(x) for x in v] for k, v in props.colors.items()})
+    mat['ruri_uber_colors'] = snapshot_colors
     mat['ruri_uber_disabled_passes'] = list(getattr(props, 'disabled_passes', ()))
     ref = props.shader_ref
     mat['ruri_uber_shader_guid'] = str(ref.get('guid', '')) if isinstance(ref, dict) else ''
@@ -17391,6 +17550,18 @@ def panel_write_image(mat, row, image):
     else:
         imgs[name] = image.name
     mat['ruri_uber_images'] = imgs
+    # 显式 LOD 槽的纹素域尺寸随这张图走(见 _mat_size_socket):换图不写它,
+    # ramp/LUT 的 UV 就停在上一张图的尺寸上,整片错色。
+    size_row = _size_row(name)
+    if any(r[0] == size_row for r in PARAMS.get(mat.get('ruri_uber_part', ''), ())):
+        cols = {k: list(v) for k, v in dict(mat.get('ruri_uber_colors') or {}).items()}
+        src = target if target is not None else None
+        if src is not None and src.size[0] and src.size[1]:
+            cols[size_row] = [float(src.size[0]), float(src.size[1]), 1.0, 0.0]
+        else:
+            cols.pop(size_row, None)
+        mat['ruri_uber_colors'] = cols
+        _param_write(mat)
 
     def swap(tree, depth=0):
         if tree is None or depth > 4 or tree.library is not None:
@@ -17442,10 +17613,7 @@ def panel_write_image(mat, row, image):
                 holder = node.inputs['Image'].default_value
                 non_color = holder is not None and holder.colorspace_settings.name == 'Non-Color'
                 node.inputs['Image'].default_value = target
-                try:
-                    target.colorspace_settings.name = 'Non-Color' if non_color else 'sRGB'
-                except Exception:
-                    pass
+                _set_colorspace(target, 'Non-Color' if non_color else 'sRGB')
                 if non_color:
                     _fix_two_channel_layout(target)
     _panel_touch(mat)
@@ -17608,6 +17776,20 @@ def panel_rows(mat):
     return out
 
 
+@bpy.app.handlers.persistent
+def _restore_projections(_path=None):
+    """开文件后把所有生成图按真源重算。generated 图的像素不进 .blend,
+    重开一律是 generated_color(黑)—— 不重放就是静默全黑/全零。"""
+    global _MAT_MIRROR
+    _NEUTRAL_IMAGES.clear()   # 旧会话的数据块已失效,按名重新认领并重写像素
+    for part in PARTS:
+        _template_images(part)
+    _MAT_MIRROR = None        # 强制按在场材质的快照逐列重组
+    _mat_mirror()
+    _param_flush()
+    refresh_light_tables()
+
+
 def register():
     # 宿主注册表按**绝对路径**导入(配方给的名字):相对导入会绑死部署深度,
     # 而本文件必须能被脱包 spec_from_file_location 直接加载(建图/压测探针靠它)。
@@ -17622,6 +17804,8 @@ def register():
     # 材质参数面板:本模块只交出读写路径与接口表,面板本体由宿主统一画一个
     # (每栈各画一个 = N 个面板并排堆在属性页里,而用户只关心选中网格的那张材质)。
     host.register_material_panel(sys.modules[__name__])
+    if _restore_projections not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_restore_projections)
 
 
 def unregister():
@@ -17633,6 +17817,8 @@ def unregister():
     host.unregister_vertex_stage(apply_vertex_stage)
     host.unregister_capability_rewire(rewire_capabilities)
     host.unregister_light_table_refresh(refresh_light_tables)
+    if _restore_projections in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_restore_projections)
 
 
 # 导入即清理过时预设库(见 _prune_stale_libraries):要在 register() 之外,

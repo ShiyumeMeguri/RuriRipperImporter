@@ -26,7 +26,7 @@ import bpy
 import numpy
 from mathutils import Vector
 
-from ... import coordinate, prefab_importer
+from ... import coordinate, material_panel, prefab_importer
 from . import datasets, ui_scene_state
 
 STAGE_COLLECTION = "Endfield UI Stage"
@@ -207,51 +207,61 @@ def apply_character_params(char_volume_data, materials=None):
 
     touched = written = 0
     for material in (materials if materials is not None else bpy.data.materials):
-        if not material.use_nodes or material.node_tree is None:
+        entry = material_panel.stack_of(material)
+        if entry is None:
             continue
+        stack = entry["stack"]
+        rows = {row[0]: row for row in
+                getattr(stack, "PARAMS", {}).get(material.get("ruri_uber_part", ""), ())}
+        colors = {key: list(value) for key, value
+                  in dict(material.get("ruri_uber_colors") or {}).items()}
         hits = 0
-        for node in material.node_tree.nodes:
-            if node.bl_idname != "ShaderNodeGroup" or node.node_tree is None:
-                continue
-            for slot, comps, value in pushed:
-                hits += _write_slot(node, slot, comps, value)
+        for slot, comps, value in pushed:
+            name = "_CharacterParams{0}".format(slot)
+            row = rows.get(name)
+            if row is None:
+                continue        # 这个 part 不吃这枚 CP —— 是常态,不是错
+            current = colors.get(name)
+            if current is None:
+                # 快照里没有 = 还停在声明缺省。必须从**声明缺省**起手补齐四分量,
+                # 否则只推 x 的绑定会把 yzw 一并清零。
+                current = [float(row[4][0]), float(row[4][1]), float(row[4][2]), float(row[5])]
+            current = [float(component) for component in current][:4]
+            current += [0.0] * (4 - len(current))
+            if _write_slot(current, comps, value):
+                colors[name] = current
+                hits += 1
         if hits:
+            # 🔴 快照是参数唯一真源,不能再写 socket.default_value:CP 槽的 socket
+            # 现在**接在参数表上**,而被接住的 socket 求值时根本不看自己的缺省值 ——
+            # 直写 socket 会静默无效(编译干净、控制台干净、画面纹丝不动)。
+            material["ruri_uber_colors"] = colors
+            stack._param_write(material)
             touched += 1
             written += hits
     return touched, written
 
 
-def _write_slot(node, slot, comps, value):
-    """Write one volume value into one CP slot of a uber group node. The xyz of
-    a slot is one vector socket and its w a second float socket -- the emitter
-    splits them, so a write does too."""
-    vector_socket = node.inputs.get("_CharacterParams{0}".format(slot))
-    w_socket = node.inputs.get("_CharacterParams{0}_w".format(slot))
-    written = 0
+def _write_slot(current, comps, value):
+    """Write one volume value into one CP slot's four components, in place.
+    Returns whether anything was written."""
     if comps in ("rgb", "xyzw"):
         components = _vector(value)
-        if vector_socket is not None and len(components) >= 3:
-            current = list(vector_socket.default_value)
-            for index in range(3):
-                current[index] = components[index]
-            vector_socket.default_value = current
-            written += 1
-        if comps == "xyzw" and w_socket is not None and len(components) >= 4:
-            w_socket.default_value = components[3]
-            written += 1
-        return written
+        if len(components) < 3:
+            return False
+        for index in range(3):
+            current[index] = components[index]
+        if comps == "xyzw" and len(components) >= 4:
+            current[3] = components[3]
+        return True
     if comps == "w":
-        if w_socket is not None:
-            w_socket.default_value = _scalar(value)
-            written += 1
-        return written
+        current[3] = _scalar(value)
+        return True
     index = _XYZ.get(comps)
-    if index is not None and vector_socket is not None:
-        current = list(vector_socket.default_value)
-        current[index] = _scalar(value)
-        vector_socket.default_value = current
-        written += 1
-    return written
+    if index is None:
+        return False
+    current[index] = _scalar(value)
+    return True
 
 
 def import_stage(context, db, roots, options):

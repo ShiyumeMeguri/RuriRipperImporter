@@ -207,7 +207,7 @@ class G:
         nd.extension = extension
         # 数据类贴图(生成期按槽语义定)统一 Non-Color;克隆换图时按占位图的这个设定跟随。
         if non_color:
-            img.colorspace_settings.name = 'Non-Color'
+            _set_colorspace(img, 'Non-Color')
         self._set(nd.inputs[0], uv)
         r = (nd.outputs[0], nd.outputs[1])
         self._cse[k] = r
@@ -702,6 +702,54 @@ LIGHT_TABLE_ROWS = 4
 LIGHT_TABLE_COLS = 64
 
 
+def _linear_to_srgb(c):
+    """线性 → sRGB 显示值。`generated_color` 是按显示空间解释的,要它在 sRGB 图上
+    生成缓冲值 c,就得给它 c 的 sRGB 编码(实测 gen=0.7354 → 缓冲 0.5000)。"""
+    c = float(c)
+    if c <= 0.0031308:
+        return 12.92 * c
+    return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
+def _image_stored(image):
+    """把图的当前像素**存进 .blend**,并借此清掉 dirty 标记。
+
+    🔴 写过 `pixels` 的图会被 Blender 记成「已修改未保存」,关文件/切场景时弹
+    「N 张图片未保存」把用户拦住(实测 4 张参数表 + 1 张灯表 + 6 张中性图 = 11 张)。
+    `is_dirty` 是只读的,`pack()` 是唯一能清掉它的合法手段 —— 而且顺带让表的内容
+    真的进文件(重开时 _restore_projections 照样按真源重算,打包字节只是不再碍事)。
+    表都极小(灯表 64×4、参数表 1024×H),实测 pack 0.2~0.8ms,落在去抖后的一次
+    flush 上可忽略。平色图不走这里:它们用 generated_color,压根不脏。"""
+    try:
+        image.pack()
+    except Exception:
+        pass
+
+
+def _set_colorspace(image, want):
+    """给图定色彩空间 —— **只在真的不一样时才写**。
+
+    🔴 赋值 `colorspace_settings.name` 是一次「重新解释这张图」的信号,Blender 会
+    据此**丢弃并重建像素缓冲**,即使赋的是同一个值。后果按图的来源分两种,都很毒:
+
+    * `source='GENERATED'` 的图(1x1 中性图、参数表、灯表)没有可回读的字节,
+      重建 = 按 `generated_color` 重填 —— 而它恒是黑 (0,0,0,1)。于是**写进去的像素
+      被静默抹成黑**。实测症状:没绑贴图的槽全采到黑,_BaseMap 中性白→黑,
+      脸/发整片纯黑(而直建路缺图时压根不建采样节点,socket 停在接口缺省,是亮的)。
+    * 真图(有文件/打包字节)重建 = 重新解码,值不丢,但**该图的所有使用者一起失效**。
+      300 张材质共用几张贴图时就是 O(N²):实测 12.7ms/材质 退化成 1975ms/材质。
+
+    所以「设色彩空间」这件事必须幂等,而唯一的幂等写法就是先比后写。
+    每一处设色彩空间都走这里,不要就地写 —— 就地写过的地方全都踩过上面两条。"""
+    if image is None:
+        return
+    try:
+        if image.colorspace_settings.name != want:
+            image.colorspace_settings.name = want
+    except Exception:
+        pass
+
+
 def _image_uploaded(image):
     """像素写完之后让它真的到达 GPU。
 
@@ -732,7 +780,10 @@ def _light_table_image():
         stale = image
         image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
                                     float_buffer=True, alpha=True)
-        image.colorspace_settings.name = 'Non-Color'
+        _set_colorspace(image, 'Non-Color')
+        # 🔴 同参数表:alpha 这里装的是类型位/count,不是不透明度。默认 STRAIGHT
+        # 会拿它去关联 RGB(灯位/颜色/轴全被毁),必须 CHANNEL_PACKED。
+        image.alpha_mode = 'CHANNEL_PACKED'
         image.use_fake_user = True
         if stale is not None:
             stale.user_remap(image)   # 旧尺寸的表被拷贝们的图节点攥着——换血不换指针语义
@@ -786,6 +837,7 @@ def refresh_light_tables():
         flat.extend(row)
     image.pixels = flat
     _image_uploaded(image)
+    _image_stored(image)   # 清 dirty:否则关文件弹「N 张图片未保存」
     return 1
 
 
@@ -941,7 +993,7 @@ class GV(G):
             img = bpy.data.images.new(name, 4, 4)
             img.generated_color = (1.0, 1.0, 1.0, 1.0)
         if non_color:
-            img.colorspace_settings.name = 'Non-Color'
+            _set_colorspace(img, 'Non-Color')
         nd.inputs['Image'].default_value = img
         nd.label = name
         nd.interpolation = interp
