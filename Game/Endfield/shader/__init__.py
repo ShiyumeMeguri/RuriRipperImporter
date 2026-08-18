@@ -1,16 +1,16 @@
 """Endfield 材质栈 —— 本包**没有业务代码**,只是生成物的门面。
 
-``ruri_*_endfield.py`` 全是生成物(AzureNihil C# 着色栈 → Ruri.CodeGen.Blender,
-用 ``Ruri.App --codegen-only`` 重生成后定点拷入,**禁止手改**),各自自包含:
-建图、克隆换图、按 m_Shader 身份认领 part、raw 直灌材质属性、顶点腿(壳层位移 +
-反壳描边)、以及把材质图与顶点腿**自注册**进宿主注册表 —— 全在里面。
+一个平台一份产物,只有两件(同批同 stamp,``Ruri.App --codegen-only`` 生成、``--deploy-recipe`` 落位,禁止手改):
 
-所以本文件只做两件事:发现生成物、把 register/unregister 转发过去。**一行业务逻辑都不写**
-(顶点腿怎么施加、哪些 part 有位移、modifier 叫什么,全是生成物自己的知识;
-在这里再写一遍就是第二真源)。谁都不需要"记得去跑顶点腿":生成物自注册进宿主注册表,
-宿主的 ``derived_state`` 调度器在场景真值(新对象/新材质/相机/灯)变化后统一落地。
+* ``<平台>.blend`` —— 全部生成栈(角色/场景/特效/接影/后处理)的模板节点组。逐节点建图的
+  O(全树) 代价在 codegen 机上一次付清,导入期只剩 link。
+* ``<平台>.py``    —— 数据驱动运行时 + 全部栈清单(内联)。它按清单装配材质/顶点腿/兑现面/参数表,
+  并把每个栈自注册进宿主注册表。这一个脚本是不可省的下限:.blend 没法把自己注册进宿主的
+  provider 表,那道桥只能是 python。
 
-一栈一配方一生成物:新增配方 = 多一个 ``ruri_*_endfield.py``,落盘即生效,零登记。
+所以本文件只做一件事:把 register/unregister 转发给它。**一行业务逻辑都不写**(哪些 part 有位移、
+modifier 叫什么、材质怎么读写,全是清单自己的知识;在这里再写一遍就是第二真源)。
+产物换名字也不用改这里 —— 按「有没有 register」认,不按名字认。
 """
 
 from __future__ import annotations
@@ -19,9 +19,11 @@ import importlib
 import pkgutil
 
 _generated = [
-    importlib.import_module("." + info.name, __name__)
-    for info in sorted(pkgutil.iter_modules(__path__), key=lambda i: i.name)
-    if info.name.startswith("ruri_") and info.name.endswith("_endfield")
+    module for module in (
+        importlib.import_module("." + info.name, __name__)
+        for info in sorted(pkgutil.iter_modules(__path__), key=lambda i: i.name)
+    )
+    if hasattr(module, "register") and hasattr(module, "unregister")
 ]
 
 
