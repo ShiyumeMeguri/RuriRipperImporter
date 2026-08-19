@@ -926,6 +926,21 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                     "hundreds of materials, and geometry/textures are identical "
                     "either way. Turn it on when you are actually rendering this "
                     "window rather than still deciding what to import")
+    # 模板组从哪来。默认 link 产物 .blend:体积小、多文件共享一份。开这个开关则 append,
+    # 模板成为这份文件自己的数据 —— 挪目录/换机器/被第三个文件再 link 一次都照画。
+    # (link 的代价:那条路解析不到时 Blender 不报错,塞一个同名零节点空壳顶上,
+    #  材质输出恒 0、整个模型变黑;要把文件发给别人或归档时就开这个。)
+    embed_shader_templates: BoolProperty(
+        name="Embed Shader Templates", default=False,
+        description="Where the game shading stack's node-group templates live. Off "
+                    "(default) LINKS them from the addon's shipped .blend -- smaller "
+                    "files, one shared copy across scenes. On APPENDS them so they "
+                    "become this file's own data: the .blend still renders correctly "
+                    "after you move it, hand it to someone else, archive it, or link "
+                    "it from a third file. Turn it on for anything that has to leave "
+                    "this machine -- a link that stops resolving is not an error in "
+                    "Blender, it silently substitutes an empty stand-in and the whole "
+                    "model renders black")
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
     import_empties: BoolProperty(
@@ -961,6 +976,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
             "lod0_only": self.lod0_only,
             "import_materials": self.import_materials,
             "game_shaders": self.scene_shaders if scene else self.character_shaders,
+            "embed_shader_templates": self.embed_shader_templates,
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
@@ -2411,6 +2427,10 @@ class RURI_PT_cabmap(bpy.types.Panel):
             shader_row = opts.row()
             shader_row.enabled = state.import_materials
             shader_row.prop(state, "character_shaders")
+            # 只在着色栈真的会建图时才有意义 —— 不开 Game Shaders 就没有模板组可取。
+            link_row = opts.row()
+            link_row.enabled = state.import_materials and state.character_shaders
+            link_row.prop(state, "embed_shader_templates")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")
