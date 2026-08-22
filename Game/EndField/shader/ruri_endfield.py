@@ -553,21 +553,46 @@ def _light_axis(g, light, label):
     return v
 
 
-def _light_table_image():
-    image = bpy.data.images.get(LIGHT_TABLE)
-    if image is None or tuple(image.size) != (LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS) or not image.is_float:
-        stale = image
-        image = bpy.data.images.new(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS,
-                                    float_buffer=True, alpha=True)
+def _table_base_name(name):
+    """去掉 Blender 的重名后缀(`....001`)。不引 re:运行时的 import 面越小越好。"""
+    if len(name) > 4 and name[-4] == '.' and name[-3:].isdigit():
+        return name[:-4]
+    return name
+
+
+def _projection_table_image(name, width, height):
+    """投影表 = 运行时按真源重算并写像素的那张图。**必须是本地那一张,且全场只有一张。**
+
+    🔴 从别的 .blend link/append 一个角色过来时,它的采样节点指向的是**那个文件的**表 ——
+    一份存盘那一刻的只读快照。运行时照常往本地表写,画面却在读快照:快照里没有的列(后来
+    才加进来的材质)**整列是零** ⇒ 纹素尺寸读到 0 ⇒ 显式 LOD 的手工双线性除以零 ⇒ 那些部件
+    **整片纯黑,且不报任何错**。实锤(JsspSi):cloth/hair/fx 全黑而 face/eyes 正常 —— 后者
+    恰好在 `WaifuBody.blend` 存盘时就已经有列,前者是之后才加的。
+
+    所以按「本地 + 同基名 + 尺寸对」认表,并把**每一张同基名副本**(重名的 `.001`、以及
+    link 进来的那些)的使用者一律改指到本地这张。名字不去抢:认表不靠名字精确相等,抢名
+    只会和 link 进来的数据块互相顶。"""
+    base = _table_base_name(name)
+    image = next((candidate for candidate in bpy.data.images
+                  if candidate.library is None
+                  and _table_base_name(candidate.name) == base
+                  and tuple(candidate.size) == (width, height) and candidate.is_float), None)
+    if image is None:
+        image = bpy.data.images.new(name, width, height, float_buffer=True, alpha=True)
         _set_colorspace(image, 'Non-Color')
-        # alpha 装的是类型位/count,不是不透明度:默认 STRAIGHT 会拿它关联 RGB,必须 CHANNEL_PACKED。
+        # alpha 装的是数据(类型位/count/参数第四分量)不是不透明度:默认 STRAIGHT 会拿它
+        # 关联 RGB,必须 CHANNEL_PACKED。
         image.alpha_mode = 'CHANNEL_PACKED'
         image.use_fake_user = True
-        if stale is not None:
-            stale.user_remap(image)
-            bpy.data.images.remove(stale)
-            image.name = LIGHT_TABLE
+    for other in list(bpy.data.images):
+        if other is image or _table_base_name(other.name) != base:
+            continue
+        other.user_remap(image)
     return image
+
+
+def _light_table_image():
+    return _projection_table_image(LIGHT_TABLE, LIGHT_TABLE_COLS, LIGHT_TABLE_ROWS)
 
 
 def _pack_light(light):
@@ -1029,20 +1054,7 @@ class Stack:
     # ==================== 参数表(材质 = 数据行) ====================
 
     def _mat_table_image(self):
-        image = bpy.data.images.get(self.MAT_TABLE)
-        if image is None or tuple(image.size) != (self.MAT_TABLE_W, self.MAT_TABLE_H) or not image.is_float:
-            stale = image
-            image = bpy.data.images.new(self.MAT_TABLE, self.MAT_TABLE_W, self.MAT_TABLE_H,
-                                        float_buffer=True, alpha=True)
-            _set_colorspace(image, 'Non-Color')
-            # alpha 是第四个参数值不是不透明度:默认 STRAIGHT 会拿它毁掉 RGB,必须 CHANNEL_PACKED。
-            image.alpha_mode = 'CHANNEL_PACKED'
-            image.use_fake_user = True
-            if stale is not None:
-                stale.user_remap(image)
-                bpy.data.images.remove(stale)
-                image.name = self.MAT_TABLE
-        return image
+        return _projection_table_image(self.MAT_TABLE, self.MAT_TABLE_W, self.MAT_TABLE_H)
 
     def _mat_defaults(self, part):
         import numpy as np
