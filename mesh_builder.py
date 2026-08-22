@@ -167,11 +167,20 @@ def _apply_skin(obj, decoded, smr_bones, file_id_to_bone):
     lossless for everything this importer writes -- UVs, corner colors,
     material indices, smooth flags AND custom split normals all verified
     0.0-delta on Blender 5.1 real data."""
-    # Map each m_Bones slot to a vertex-group index.
+    indices = decoded.bone_indices
+    weights = decoded.bone_weights
+    n_verts, n_inf = indices.shape
+
+    # Map each WEIGHTED m_Bones slot to a vertex-group index. Unity lists the whole
+    # skeleton in m_Bones, so binding every slot leaves hundreds of all-zero groups on
+    # every mesh, and each one is a real attribute that Join Geometry has to merge.
     n_slots = len(smr_bones)
+    valid = indices < n_slots
+    weighted_slots = np.unique(indices[valid & (weights > 1e-6)])
     slot_to_group_index = np.full(n_slots, -1, dtype=np.int64)
     group_index_by_bone = {}
-    for slot, bone_ref in enumerate(smr_bones):
+    for slot in weighted_slots.tolist():
+        bone_ref = smr_bones[slot]
         file_id = bone_ref.get("fileID") if isinstance(bone_ref, dict) else None
         bone_name = file_id_to_bone.get(file_id)
         if not bone_name:
@@ -182,11 +191,6 @@ def _apply_skin(obj, decoded, smr_bones, file_id_to_bone):
             group_index_by_bone[bone_name] = group_index
         slot_to_group_index[slot] = group_index
 
-    indices = decoded.bone_indices
-    weights = decoded.bone_weights
-    n_verts, n_inf = indices.shape
-
-    valid = indices < n_slots
     group_ids = np.where(valid, slot_to_group_index[np.where(valid, indices, 0)], -1)
     keep = (weights > 1e-6) & (group_ids >= 0)
     if not keep.any():
