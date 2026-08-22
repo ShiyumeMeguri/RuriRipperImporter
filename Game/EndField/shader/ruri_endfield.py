@@ -1622,12 +1622,28 @@ class Stack:
             tpl.name = name
         return tpl
 
+    @staticmethod
+    def _render_method(opaque, multiply_blend):
+        """EEVEE 的透明解法必须跟着 build_material 的 alpha 判据走(同一个 opaque)。
+
+        opaque ⇒ alpha 恒 1(或 clip 出来的 0/1 二值),'DITHERED' 保住真深度、景深与光追,
+        二值 alpha 下不产生任何抖动噪点。非 opaque ⇒ alpha 是连续值,'DITHERED' 会把它按
+        蓝噪声随机取舍,收敛前满屏噪点(视口里尤其难看)—— 真源那趟就是 Blend 混合,
+        'BLENDED' 才是等价物。乘法帧(Blend Zero SrcColor)是带颜色的 Transparent BSDF,
+        同理只能走 BLENDED。**判据只许在这里算一次**:早先渲染方式读 part 的 Transparent 声明、
+        alpha 读材质的 _SurfaceType,两套判据一分岔,_SurfaceType=1 却落在非透明 part 的件
+        (如 CharacterNPR 的半透明裙摆)就是连续 alpha 配抖动解法 = 噪点透明。"""
+        return 'DITHERED' if (opaque and not multiply_blend) else 'BLENDED'
+
     def instantiate(self, name, part, images=None, opaque=True, multiply_blend=False, cull=2.0):
         """一张材质 = 模板拷贝 + 贴图指针 + 一列像素。零建图、零逐 socket 灌参。"""
         tpl = self._template(part, opaque, multiply_blend, cull)
         mat = tpl.copy()
         mat.name = name
         mat.use_fake_user = False
+        # 模板可能是旧 .blend 里缓存下来的(stamp 只哈希着色语义,装配器改动不换 stamp),
+        # 所以渲染方式在**每张实例**上落一次,不靠模板带过来。
+        mat.surface_render_method = self._render_method(opaque, multiply_blend)
         if mat.get(self.TEMPLATE_KEY) is not None:
             del mat[self.TEMPLATE_KEY]
         swapped = 0
@@ -1734,10 +1750,6 @@ class Stack:
             if node.label == self.ST_NODE:
                 node.inputs['Scale'].default_value = (float(bst[0]), float(bst[1]), 1.0)
                 node.inputs['Location'].default_value = (float(bst[2]), float(bst[3]), 0.0)
-        try:
-            mat.surface_render_method = 'BLENDED' if meta['transparent'] else 'DITHERED'
-        except Exception:
-            pass
         mat['ruri_uber_part'] = part_name
         snapshot_floats = {k: float(v) for k, v in props.floats.items()}
         if meta['transparent']:
