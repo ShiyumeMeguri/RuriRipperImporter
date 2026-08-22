@@ -253,7 +253,10 @@ def _apply_blendshapes(obj, decoded):
             # correct rest pose here is every non-Basis key OFF, exactly matching that default.
             key.value = 0.0
             co = base_co.copy()
-            for index, delta_v, _delta_n in frame["deltas"]:
+            # 每条 delta 是 (下标, 位置, 法线, 切线):形变顶点的三个 delta 与 C# 侧
+            # MeshRawBlob 的 40 字节步长、解码器的 dtype 是**同一份约定**,三处必须同时改 ——
+            # 少改这一处就是 `too many values to unpack`,少改另两处就是 numpy 除不尽。
+            for index, delta_v, _delta_n, _delta_t in frame["deltas"]:
                 # Convert the Unity-space delta into Blender space (swap Y/Z).
                 co[index] += np.array((delta_v[0], delta_v[2], delta_v[1]), dtype=np.float32)
             key.data.foreach_set("co", co.reshape(-1))
