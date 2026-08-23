@@ -2768,6 +2768,21 @@ def _restore_projections(_path=None):
     # 而"扫过了"这个标记一旦被空场景置上就再也不会重扫(本次真踩)。
     RIG_DRIVEN.clear()
     RIG_SCANNED[0] = False
+    # 光清标记不够:**打开文件之后不一定有任何依赖图变更**,于是推送器一次都不跑,
+    # 基座停在存盘那一刻的属性值 —— 而存盘时的姿势未必是打开时显示的那一帧(实测开完
+    # 10 秒 RIG_DRIVEN 仍是 0)。所以补一次性计时器,加载完就推一次;它只在 GUI 会跑,
+    # headless 由 depsgraph 那条覆盖。
+    bpy.app.timers.register(_kick_rig_basis, first_interval=0.0)
+
+
+def _kick_rig_basis():
+    for stack in STACKS:
+        if stack.post is None and (stack.RIG.get('parts') or []):
+            try:
+                stack.push_rig_basis()
+            except Exception as exc:
+                print('[ruri-uber] 基座首推失败: {0}'.format(exc), flush=True)
+    return None
     for stack in STACKS:
         if stack.post is None:
             try:
