@@ -14,7 +14,7 @@ from mathutils import Matrix
 # prefab UnityFile) that appear in almost every function below.
 try:
     from . import (armature_builder, coordinate, animation_builder,
-                   material_builder, mesh_builder)
+                   material_builder, mesh_builder, rig_identity)
     from .RuriRipperPyBridge.unity import (asset_db, clip_curves,
                                       clip_paths as clip_repair, discovery,
                                       mesh_decoder, prefab as prefab_scan, skinning)
@@ -24,6 +24,7 @@ except ImportError:  # standalone (non-package) testing
     import animation_builder
     import material_builder
     import mesh_builder
+    import rig_identity
     from RuriRipperPyBridge.unity import (asset_db, clip_curves,
                                      clip_paths as clip_repair, discovery,
                                      mesh_decoder, prefab as prefab_scan, skinning)
@@ -816,58 +817,18 @@ def import_avatar_from_db(context, db, avatar_file, options=None, name=None):
     return report
 
 
-class _StampedNode:
-    """Minimal stand-in for hierarchy.Node carrying exactly the two fields
-    animation_builder.build_action reads off maps["nodes"] values: the Unity
-    transform path and the Unity-space LOCAL rest matrix. Rebuilt from the
-    rig identity build_armature stamps onto every armature it creates
-    (armature_builder.UNITY_RIG_PROP) -- see maps_from_stamped_armature."""
-    __slots__ = ("path", "local")
-
-    def __init__(self, path, local):
-        self.path = path
-        self.local = local
-
-
 def maps_from_stamped_armature(arm_obj):
-    """Rebuild the maps dict build_action needs (nodes with .path/.local +
-    path_to_bone) from the Unity rig identity stamped onto an armature at
-    import time (armature_builder.build_armature, persisted in the .blend as
-    a custom property) -- what lets a standalone animation import target ANY
-    armature this addon ever built, in any session, without the character
-    import's live state. Returns None for armatures with no stamp (imported
-    by something else, or by a build older than the stamping)."""
-    from mathutils import Matrix
+    """The maps dict build_action needs (nodes with .path/.local + path_to_bone),
+    out of the Unity identity this rig's BONES carry -- what lets a standalone
+    animation import target ANY armature this add-on ever built, in any session and
+    under any names the user has since given its bones, without the character
+    import's live state.
 
-    try:
-        from . import armature_builder
-    except ImportError:
-        import armature_builder
-
-    stamped = armature_builder.read_rig(arm_obj)
-    if not stamped:
-        return None
-
-    nodes = {}
-    path_to_bone = {}
-    live_bones = {b.name for b in arm_obj.data.bones}
-    for index, (path, entry) in enumerate(stamped.items()):
-        bone = entry.get("bone")
-        flat = entry.get("local")
-        if not bone or bone not in live_bones or not flat or len(flat) != 16:
-            continue
-        local = Matrix((flat[0:4], flat[4:8], flat[8:12], flat[12:16]))
-        nodes[index] = _StampedNode(path, local)
-        path_to_bone[path] = bone
-    if not path_to_bone:
-        return None
-    return {
-        "nodes": nodes,
-        "roots": [],
-        "file_id_to_bone": {},
-        "path_to_bone": path_to_bone,
-        "file_id_to_world": {},
-    }
+    None for a rig whose bones carry no identity: built by something else, or built
+    before the identity moved onto them (rig_identity.adopt is the one action that
+    fixes the second, and every caller says so by name)."""
+    identity = rig_identity.of(arm_obj)
+    return identity.maps() if identity is not None else None
 
 
 # --- unified entry point ----------------------------------------------------

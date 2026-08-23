@@ -19,11 +19,12 @@ import zlib
 import numpy as np
 
 try:
-    from . import coordinate, hierarchy
+    from . import coordinate, hierarchy, rig_identity
     from .RuriRipperPyBridge.unity import skinning
 except ImportError:  # standalone (non-package) testing
     import coordinate
     import hierarchy
+    import rig_identity
     from RuriRipperPyBridge.unity import skinning
 
 import bpy
@@ -31,13 +32,11 @@ from mathutils import Matrix, Vector
 
 _DEFAULT_BONE_LENGTH = 0.03
 
-# Custom-property key under which build_armature stamps the Unity rig identity
-# (transform path -> bone name + Unity-space local rest TRS) onto the armature
-# OBJECT. Persisted in the .blend, so a standalone animation import in a LATER
-# session can rebuild exactly the maps build_action needs from the armature the
-# user has selected -- no live import-session state required. See
-# prefab_importer.maps_from_stamped_armature.
-UNITY_RIG_PROP = "ruri_unity_rig"
+# Where the Unity rig identity is written down. NOT one property: the transform a
+# bone IS rides the BONE, and the per-path Unity-space rests ride the armature
+# OBJECT. rig_identity owns both halves and is the only module that encodes or
+# decodes either, which is what makes the identity survive a rename -- see there.
+UNITY_RIG_PROP = rig_identity.REST_PROP
 
 # Custom-property key under which a character import bakes the rig's WHOLE Avatar document
 # (Unity's own m_Avatar/m_Human/m_AxesArray/m_TOS field tree, JSON-encoded) onto the armature
@@ -57,36 +56,14 @@ UNITY_GAME_PROP = "ruri_source_game"
 
 
 def stamp_rig(arm_obj, paths):
-    """Record the Unity rig identity -- {transform path: {"bone", "local"}} -- on the
-    armature OBJECT (see UNITY_RIG_PROP).
+    """Record the Unity rig identity -- ``{transform path: {"bone", "local"}}`` -- on
+    this rig.
 
-    THE one writer: every code path that builds an armature out of Unity data owes
-    the same stamp, and a second copy of this encoding is how a rig ends up carrying
-    a shape the reader does not accept. See read_rig for the other half.
-
-    The bone NAME lives in here, and renaming a bone therefore has to update it --
-    that is the renamer's job, not something the stamp defends against: see
-    AnimationRetarget.skeleton_rename.rewrite_rig_stamp, which the rename operator
-    calls right after it renames the bones. A rename done by hand outside that tool
-    is the user's own to reconcile."""
-    if arm_obj is None:
-        return
-    arm_obj[UNITY_RIG_PROP] = json.dumps({"paths": paths}, separators=(",", ":"))
-
-
-def read_rig(arm_obj):
-    """The rig identity stamped on an armature, or None when it carries none (built
-    by another tool, or by a build older than the stamping)."""
-    if arm_obj is None:
-        return None
-    raw = arm_obj.get(UNITY_RIG_PROP)
-    if not raw:
-        return None
-    try:
-        paths = json.loads(str(raw))["paths"]
-    except (ValueError, KeyError, TypeError):
-        return None
-    return paths if isinstance(paths, dict) else None
+    THE one call every builder makes; rig_identity.stamp is the one encoding behind
+    it. The bone name is used here only to FIND the bone being described: what gets
+    written is the transform path, onto that bone, so the identity has no name in it
+    and a rename cannot reach it."""
+    rig_identity.stamp(arm_obj, paths)
 
 
 def stamp_avatar(arm_obj, avatar_data):
@@ -255,13 +232,13 @@ def build_armature(context, unity_file, name="UnityArmature"):
 
     file_id_to_world = hierarchy.world_matrices(nodes)
 
-    # Stamp the Unity rig identity onto the armature object (persists in the
-    # .blend): per pathed node, its final bone name and Unity-space LOCAL rest
-    # matrix (16 floats, row-major -- exactly the node.local that build_action's
-    # rest-pose math consumes). This is what lets "import an animation onto the
-    # armature the user has selected" work standalone, in any later session,
-    # without the character's import-time maps being alive; see
-    # prefab_importer.maps_from_stamped_armature.
+    # Stamp the Unity rig identity (persists in the .blend): per pathed node, the
+    # transform it IS onto the bone that stands for it, and its Unity-space LOCAL
+    # rest matrix (16 floats, row-major -- exactly the node.local that
+    # build_action's rest-pose math consumes) onto the object. This is what lets
+    # "import an animation onto the armature the user has selected" work
+    # standalone, in any later session and under any names the bones have since
+    # been given; see rig_identity.
     stamped = {}
     for node in nodes.values():
         bone_name = file_id_to_bone.get(node.file_id)
@@ -662,14 +639,16 @@ class SkeletonBinder:
 
 class _BoneRest:
     """One source bone as plain VALUES -- its name, its ancestors' names nearest-first,
-    and its rest matrix. What survives an operator call; a bpy Bone does not."""
+    its rest matrix and the Unity transform it IS. What survives an operator call; a
+    bpy Bone does not."""
 
-    __slots__ = ("name", "ancestors", "rest")
+    __slots__ = ("name", "ancestors", "rest", "path")
 
-    def __init__(self, name, ancestors, rest):
+    def __init__(self, name, ancestors, rest, path):
         self.name = name
         self.ancestors = ancestors
         self.rest = rest
+        self.path = path
 
 
 def graft_armature(context, target, source):
@@ -710,7 +689,8 @@ def graft_armature(context, target, source):
     # references do not.
     grafts = [_BoneRest(bone.name,
                         [ancestor.name for ancestor in bone.parent_recursive],
-                        bone.matrix_local.copy())
+                        bone.matrix_local.copy(),
+                        str(bone.get(rig_identity.BONE_PATH_PROP) or ""))
               for bone in source.data.bones
               if bone.name not in target_names and subtree_has_weight(bone)]
     if grafts:
@@ -730,20 +710,15 @@ def graft_armature(context, target, source):
 
 def _merge_identity(target, source, added_names):
     """Fold the source rig's Unity identity into the target's as its bones come
-    across: the paths of the bones actually grafted (a shared joint keeps the
-    target's own entry, being the same joint), and the Avatar document when the
-    source carries one and the target does not.
+    across: the rests of the bones actually grafted (a shared joint keeps the
+    target's own, being the same joint), and the Avatar document when the source
+    carries one and the target does not.
 
-    The source object is deleted at the end of the graft, so an identity left on
-    it is an identity destroyed -- and a clip that binds by the grafted part's own
-    transform path would find nothing on the rig that now owns those bones."""
-    source_paths = read_rig(source)
-    if source_paths:
-        merged = read_rig(target) or {}
-        for path, entry in source_paths.items():
-            if entry.get("bone") in added_names and path not in merged:
-                merged[path] = entry
-        stamp_rig(target, merged)
+    The grafted BONES carry their own identity across on themselves, so only the
+    rest table has to be merged here. The source object is deleted at the end of
+    the graft, and a rest left on it is a rest destroyed -- build_action would then
+    have no rest to conjugate the grafted part's curves through."""
+    rig_identity.merge(target, source, added_names)
     if read_avatar_json(target) is None:
         raw = read_avatar_json(source)
         if raw is not None:
@@ -765,6 +740,7 @@ def _graft_bones(context, target, source, grafts):
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = target.data.edit_bones
 
+    identities = []
     for graft in sorted(grafts, key=lambda entry: len(entry.ancestors)):
         eb = edit_bones.new(graft.name)
         eb.head = (0.0, 0.0, 0.0)
@@ -775,8 +751,17 @@ def _graft_bones(context, target, source, grafts):
             if ancestor in edit_bones:
                 eb.parent = edit_bones[ancestor]
                 break
+        if graft.path:
+            identities.append((eb.name, graft.path))
 
     bpy.ops.object.mode_set(mode="OBJECT")
+    # A grafted bone is a NEW bone on the target, so the identity the source bone
+    # carried does not come with it; the name it landed under is read while the
+    # edit-bones are alive, because Blender may have uniquified it.
+    for bone_name, path in identities:
+        bone = target.data.bones.get(bone_name)
+        if bone is not None:
+            bone[rig_identity.BONE_PATH_PROP] = path
     context.view_layer.objects.active = previous
 
 
