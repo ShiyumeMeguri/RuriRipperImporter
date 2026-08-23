@@ -2052,6 +2052,13 @@ class Stack:
             for stack in STACKS:
                 if stack.post is None and (stack.RIG.get('parts') or []):
                     stack.rig_rescan()
+        # 🔴 姿势解算的结果住在**求值副本**上;原始数据块的 pose_bone.matrix 只有在有人
+        # 调过 view_layer.update() 之后才被刷回。在 depsgraph handler 里读原始副本 =
+        # 读到上一次的姿势 ⇒ 载入时看着对(那一拍刚好是文件里的姿势),交互拖骨之后
+        # 基座就再也不动 —— 表现成"坐标系不实时更新"。所以这里必须走 depsgraph。
+        depsgraph = next((a for a in _args if isinstance(a, bpy.types.Depsgraph)), None)
+        if depsgraph is None:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
         axes = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
         for obj_name, (arm_name, bone_name) in list(RIG_DRIVEN.items()):
             obj = bpy.data.objects.get(obj_name)
@@ -2059,7 +2066,7 @@ class Stack:
             if obj is None or arm is None:
                 RIG_DRIVEN.pop(obj_name, None)
                 continue
-            pose = arm.pose.bones.get(bone_name)
+            pose = arm.evaluated_get(depsgraph).pose.bones.get(bone_name)
             if pose is None:
                 continue
             delta = pose.matrix.to_3x3() @ pose.bone.matrix_local.to_3x3().inverted()
