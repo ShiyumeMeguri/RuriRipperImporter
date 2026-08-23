@@ -465,9 +465,15 @@ MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
 
 # 基座三列的组输入名 —— 与物化脚本 RIG_BASIS_SOCKETS 同一个命名域(那边建组,这边接线)。
 RIG_BASIS_SOCKETS = ('_RuriRigBasis0', '_RuriRigBasis1', '_RuriRigBasis2')
-RIG_QUAT_XYZ = 'RuriRigQuatXYZ'
-RIG_QUAT_W = 'RuriRigQuatW'
-RIG_REST = 'RuriRigRest'
+RIG_ATTR_LABEL = 'RuriRigBasisAttr'
+# 基座三列写在**对象**自定义属性上(逐对象 UBO,不弄脏材质树);Attribute 节点按 ["名"] 读。
+RIG_OBJECT_PROP = 'ruri_face_basis'
+# {对象名: (骨架名, 骨名)} —— push_rig_basis 的工作单,由 rig_apply 在接线时登记。
+# 它是**进程态**:重开文件就空了,而 .blend 里只留着上次写下的属性值 ⇒ 不重建就等于
+# 基座冻结在存盘那一刻,而且完全静默。所以 load_post 把 RIG_SCANNED 打回 False,
+# 下一次 push 现扫一次重建(扫一次,不是每帧扫)。
+RIG_DRIVEN = {}
+RIG_SCANNED = [False]
 LIGHT_TABLE = 'RuriLightTable'
 LIGHT_TABLE_ROWS = 4
 LIGHT_TABLE_COLS = 64
@@ -516,27 +522,6 @@ def _drive(sock, obj, data_path, expr='v', extra=None):
         second.targets[0].id = obj
         second.targets[0].data_path = path
     driver.expression = expr
-
-
-def _drive_bone(sock, obj, bone, channel):
-    """骨骼的**世界四元数**分量 → socket。TRANSFORMS 变量是读变换的正规通道;
-    表达式恒为裸变量名,走 Blender 的 simple-expression 快路径,**不进 Python**,
-    Auto Run 关着照样求值(实测 use_scripts_auto_execute=False 下读数与真值逐位相同)。
-    bone_target 在骨骼改名时由 Blender 自己改写,所以这条绑定改名不丢(已实测)。"""
-    fcurve = sock.driver_add('default_value')
-    driver = fcurve.driver
-    driver.type = 'SCRIPTED'
-    for old in list(driver.variables):
-        driver.variables.remove(old)
-    var = driver.variables.new()
-    var.name = 'v'
-    var.type = 'TRANSFORMS'
-    var.targets[0].id = obj
-    var.targets[0].bone_target = bone
-    var.targets[0].transform_type = channel
-    var.targets[0].transform_space = 'WORLD_SPACE'
-    var.targets[0].rotation_mode = 'QUATERNION'
-    driver.expression = 'v'
 
 
 def _drive_transform(sock, obj, transform_type):
@@ -1967,16 +1952,14 @@ class Stack:
             return ''
         return api(arm, unity_name) or ''
 
-    def rig_apply(self, mat, arm, where=''):
-        """基座接到**材质**上,不写任何几何数据。
+    def rig_apply(self, mat, arm, obj):
+        """基座接到材质:三列读**对象自定义属性**,由 push_rig_basis 每帧写。
 
-        col_i = b2u( q ⊗ ( R_rest⁻¹ · u2b(a_i) ) )
-          a_i      对象轴常量;u2b/b2u 用 VectorTransform 节点,所以**与具体对象无关**
-          R_rest⁻¹ 骨骼绑定姿势世界旋转的逆(常量,烘进 DOT 的第二操作数)
-          q        骨骼当下世界四元数,4 个驱动器直连
-        四元数展开 v+2w(q×v)+2q×(q×v):欧拉节点与 Blender 欧拉约定实测差 2.6e-03(≈0.15°)。
-        接不上就把话说出来,socket 留在组缺省 = 单位阵,不静默。"""
-        import mathutils
+        为什么不是驱动器:驱动器写 shader socket = 每帧弄脏整棵材质树,实测视口
+        **468.7ms/帧(2.1fps) vs 52.7ms(19fps),8.89 倍**。对象自定义属性走逐对象 UBO,
+        不碰材质树,实测与静态基线同档(0.80x)。这与「handler 推 socket 不行」是同一条纪律。
+        为什么不是几何点属性:那会把 uniform 塞进几何管线,描边一关基座就跟着没(本次根因)。
+        接不上就说出来,socket 留在组缺省 = 单位阵。"""
         tree = mat.node_tree
         if tree is None:
             return False
@@ -1984,7 +1967,6 @@ class Stack:
                      if grp.inputs.get(RIG_BASIS_SOCKETS[0]) is not None]
         if not instances:
             return False
-        self._rig_clear(mat)
         unity_bone = self.rig_bone_of(mat)
         bone_name = self.rig_resolve_bone(arm, unity_bone)
         if arm is None or not bone_name:
@@ -1992,60 +1974,88 @@ class Stack:
                   .format(mat.name, getattr(arm, 'name', None), unity_bone or '(空)',
                           bone_name or '(这副骨架没有)'), flush=True)
             return False
-        rest = (arm.matrix_world @ arm.pose.bones[bone_name].bone.matrix_local).to_3x3()
-        rest_inverse = rest.normalized().inverted()
+        self._rig_clear(mat)
         g = G(tree, is_group=False)
-        quat_xyz = g._nd('ShaderNodeCombineXYZ')
-        quat_xyz.label = RIG_QUAT_XYZ
-        quat_w = g._nd('ShaderNodeValue')
-        quat_w.label = RIG_QUAT_W
-        for index, channel in enumerate(('ROT_X', 'ROT_Y', 'ROT_Z')):
-            _drive_bone(quat_xyz.inputs[index], arm, bone_name, channel)
-        _drive_bone(quat_w.outputs[0], arm, bone_name, 'ROT_W')
-
-        def transform(vector, frm, to):
-            node = g._nd('ShaderNodeVectorTransform')
-            node.vector_type = 'VECTOR'
-            node.convert_from = frm
-            node.convert_to = to
-            g._set(node.inputs[0], vector)
-            return node.outputs[0]
-
-        # Unity 轴序 -> Blender 对象轴(内核 +Y 上 = Blender +Z)
-        axes = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
-        for index, axis in enumerate(axes):
-            world = transform(axis, 'OBJECT', 'WORLD')
-            rows = []
-            for row in range(3):
-                node = g._nd('ShaderNodeVectorMath')
-                node.operation = 'DOT_PRODUCT'
-                node.label = RIG_REST + '%d%d' % (index, row)
-                g._set(node.inputs[0], world)
-                node.inputs[1].default_value = tuple(float(rest_inverse[row][k])
-                                                     for k in range(3))
-                rows.append(node.outputs['Value'])
-            rested = g.comb(rows[0], rows[1], rows[2])
-            cross1 = g.vmath('CROSS_PRODUCT', quat_xyz.outputs[0], rested)
-            twice = g.vmath('SCALE', cross1, s=2.0)
-            turned = g.vmath('ADD', g.vmath('ADD', rested,
-                                            g.vmath('SCALE', twice, s=quat_w.outputs[0])),
-                             g.vmath('CROSS_PRODUCT', quat_xyz.outputs[0], twice))
-            local = transform(turned, 'WORLD', 'OBJECT')
-            x, y, z = g.sep(local)
-            column = g.comb(x, z, y)
+        for index in range(3):
+            node = g._nd('ShaderNodeAttribute')
+            node.attribute_type = 'OBJECT'
+            node.attribute_name = '["{0}{1}"]'.format(RIG_OBJECT_PROP, index)
+            node.label = RIG_ATTR_LABEL + str(index)
             for grp in instances:
                 sock = grp.inputs.get(RIG_BASIS_SOCKETS[index])
                 if sock is not None:
-                    tree.links.new(column, sock)
+                    tree.links.new(node.outputs['Vector'], sock)
+        RIG_DRIVEN[obj.name] = (arm.name, bone_name)
         return True
 
     def _rig_clear(self, mat):
-        """幂等:上一次接的基座节点连同它们的驱动器一起撤掉(删节点即带走 socket 上的驱动)。"""
+        """幂等:本桥在这张材质上留下的一切先撤干净再接。
+
+        判据放宽到 `RuriRig` 前缀(不只当前那批标签):这座桥换过送值通道,旧通道留下的
+        节点与**挂在它们 socket 上的驱动器**必须一起走 —— 驱动器是每帧弄脏材质树的那个
+        8.89 倍,漏掉一张材质就等于漏掉整帧。删节点会连带删掉它 socket 上的驱动器。"""
         tree = mat.node_tree
-        owned = (RIG_QUAT_XYZ, RIG_QUAT_W)
-        for node in [n for n in tree.nodes
-                     if (n.label or '') in owned or (n.label or '').startswith(RIG_REST)]:
+        for node in [n for n in tree.nodes if (n.label or '').startswith('RuriRig')]:
             tree.nodes.remove(node)
+        animation = tree.animation_data
+        if animation is not None and not len(animation.drivers):
+            tree.animation_data_clear()
+
+    def rig_rescan(self):
+        """重建 push 工作单。**重开文件后它是空的** —— 工作单是进程态,而 .blend 里
+        只存着上次写下的属性值;没人重建就等于基座冻结在存盘那一刻(静默)。
+        所以 load_post 必须叫一次,判据从场上的材质真值现算,不依赖任何记忆。"""
+        rig_parts = set(self.RIG.get('parts') or [])
+        if not rig_parts:
+            return 0
+        found = 0
+        for obj in bpy.context.scene.objects:
+            if obj.type != 'MESH' or obj.data is None:
+                continue
+            mats = [m for m in obj.data.materials
+                    if m is not None and m.get('ruri_uber_stack') == self.PANEL_KEY
+                    and m.get('ruri_uber_part') in rig_parts]
+            if not mats:
+                continue
+            arm = self._rig_basis_armature(obj)
+            bone_name = self.rig_resolve_bone(arm, self.rig_bone_of(mats[0]))
+            if arm is not None and bone_name:
+                RIG_DRIVEN[obj.name] = (arm.name, bone_name)
+                RIG_SCANNED[0] = True
+                found += 1
+        return found
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def push_rig_basis(*_args):
+        """把 Δ = Pose·Rest⁻¹ 的三列写到对象上。**逐对象 UBO,不碰材质树**。
+
+        值没变就不写 —— 写属性会给对象打脏标记,在 depsgraph handler 里无条件写会自激。
+        列按 Unity 轴序(X / 上 / 前),与 UNITY_MATRIX_M 的列语义同源。"""
+        import mathutils
+        if not RIG_SCANNED[0]:
+            RIG_SCANNED[0] = True
+            for stack in STACKS:
+                if stack.post is None and (stack.RIG.get('parts') or []):
+                    stack.rig_rescan()
+        axes = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
+        for obj_name, (arm_name, bone_name) in list(RIG_DRIVEN.items()):
+            obj = bpy.data.objects.get(obj_name)
+            arm = bpy.data.objects.get(arm_name)
+            if obj is None or arm is None:
+                RIG_DRIVEN.pop(obj_name, None)
+                continue
+            pose = arm.pose.bones.get(bone_name)
+            if pose is None:
+                continue
+            delta = pose.matrix.to_3x3() @ pose.bone.matrix_local.to_3x3().inverted()
+            for index, axis in enumerate(axes):
+                vector = (delta @ mathutils.Vector(axis)).normalized()
+                value = (vector.x, vector.z, vector.y)
+                key = RIG_OBJECT_PROP + str(index)
+                previous = obj.get(key)
+                if previous is None or max(abs(previous[k] - value[k]) for k in range(3)) > 1e-6:
+                    obj[key] = value
 
     def apply_vertex_stage(self, objects=None, camera=None):
         """壳层位移 + 反壳描边(同树虚拟几何)+ 骨骼基座增量。幂等换血;相机基轴按当下快照。"""
@@ -2080,7 +2090,7 @@ class Stack:
             # 基座是 uniform,住在材质里:这里只负责把它接上(需要 对象→骨架 这个 join),
             # **不往几何树里写任何东西**。所以描边关不关、有没有壳位移,与脸的明暗彻底无关。
             for _slot, mat in [(i, m) for i, m in slots if m['ruri_uber_part'] in rig_parts]:
-                self.rig_apply(mat, self._rig_basis_armature(obj), obj.name)
+                self.rig_apply(mat, self._rig_basis_armature(obj), obj)
 
             def _outline_on(mat):
                 # 真判据四连:①该 part 的游戏 shader 有描边 pass;②材质没自禁它;③宽度>0;④_BaseColor.a>0。
@@ -2710,6 +2720,13 @@ class Stack:
         host.register_capability_rewire(self.rewire_capabilities)
         host.register_light_table_refresh(refresh_light_tables)
         host.register_material_panel(self)
+        # 基座每帧要跟着骨骼走。帧变化与交互摆姿两条都要挂:前者放动画,后者拖骨头。
+        # 写的是**对象自定义属性**(逐对象 UBO),不碰材质树;值没变就不写,所以挂在
+        # depsgraph 后面也不会自激。
+        for handlers in (bpy.app.handlers.frame_change_post,
+                         bpy.app.handlers.depsgraph_update_post):
+            if self.push_rig_basis not in handlers:
+                handlers.append(self.push_rig_basis)
 
     def unregister_host(self):
         host = self._host_module()
@@ -2746,6 +2763,11 @@ def _build_stacks():
 
 @bpy.app.handlers.persistent
 def _restore_projections(_path=None):
+    # 基座 push 的工作单是**进程态**:重开文件就该重建,否则基座冻结在存盘那一刻(静默)。
+    # 这里只打回标记、不当场扫 —— load_post 这一拍场景还没就绪,当场扫会扫出空,
+    # 而"扫过了"这个标记一旦被空场景置上就再也不会重扫(本次真踩)。
+    RIG_DRIVEN.clear()
+    RIG_SCANNED[0] = False
     for stack in STACKS:
         if stack.post is None:
             try:
