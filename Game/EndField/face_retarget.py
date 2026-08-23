@@ -27,7 +27,7 @@ import time as _time
 import bpy
 import numpy as np
 
-from ... import coordinate
+from ... import coordinate, rig_identity
 from ...RuriRipperPyBridge.session import cabmap_state
 
 
@@ -35,19 +35,23 @@ class FaceRetargetError(RuntimeError):
     """A facial retarget that cannot proceed, worded for the panel that shows it."""
 
 
-def _rig_bones(armature, maps):
+def _rig_bones(armature, identity):
     """Every bone of this rig that carries a Unity-space rest local, as the hook's wire
-    shape. The rest is the rig identity stamped at import time -- the same matrices the
-    clip importer keys transform curves through -- so a rig this add-on did not build
-    states none and the retarget says so rather than posing a face wrongly."""
-    rest_by_bone = {}
-    path_to_bone = maps.get("path_to_bone") or {}
-    for node in (maps.get("nodes") or {}).values():
-        bone = path_to_bone.get(getattr(node, "path", ""))
-        if bone and bone not in rest_by_bone and bone in armature.pose.bones:
-            rest_by_bone[bone] = node.local
+    shape.
+
+    Stated in UNITY's bone names, not this rig's. The whole solve is a join between
+    three name sets -- the clip's curves, the source character's tables and the
+    destination's -- and the game wrote all three; a rig whose bones the user renamed
+    would share exactly zero of them and the hook would refuse a face that is
+    perfectly present. The rest matrices are the rig's own, so what crosses is this
+    rig's geometry under the game's vocabulary."""
+    rest_by_unity_name = {}
+    for bone_name, rest in identity.rest_by_bone().items():
+        unity_name = identity.unity_name_of(bone_name)
+        if unity_name and unity_name not in rest_by_unity_name and bone_name in armature.pose.bones:
+            rest_by_unity_name[unity_name] = rest
     return [{"name": name, "rest": [float(value) for row in matrix for value in row]}
-            for name, matrix in sorted(rest_by_bone.items())]
+            for name, matrix in sorted(rest_by_unity_name.items())]
 
 
 def _sample_performance(clip, bone_order, path_to_bone, times):
@@ -105,18 +109,18 @@ def provide(context, armature, clip, options, into=None):
     (action, slot) to write the face INTO -- an object plays one action, so a face given
     its own would replace the body it came with."""
     from . import character_panel, roster_panel
-    from ... import prefab_importer
 
     bridge = cabmap_state.BRIDGE
     if bridge is None or not bridge.has_map:
         raise FaceRetargetError("No cabmap session -- load a cabmap first.")
 
-    maps = prefab_importer.maps_from_stamped_armature(armature)
-    if not maps:
+    identity = rig_identity.of(armature)
+    if identity is None:
         raise FaceRetargetError(
-            "'{0}' carries no Unity rig identity, so it has no rest pose to state -- import "
-            "the character through this add-on once.".format(armature.name))
-    bones = _rig_bones(armature, maps)
+            "'{0}' bones carry no Unity identity, so there is no rest pose to state and no "
+            "way to say which of its bones the game's are -- import the character through "
+            "this add-on, which is what puts it there.".format(armature.name))
+    bones = _rig_bones(armature, identity)
     if not bones:
         raise FaceRetargetError(
             "'{0}' has no bone carrying a Unity rest transform.".format(armature.name))
@@ -166,7 +170,7 @@ def provide(context, armature, clip, options, into=None):
     posed_bones = answer["bones"]
     if not posed_bones:
         return None
-    _key_poses(armature, maps, posed_bones, answer["poseFrames"], poses, rate, clip.name, into)
+    _key_poses(armature, identity, posed_bones, answer["poseFrames"], poses, rate, clip.name, into)
 
     named = [segment["name"] for segment in answer["timeline"]]
     distinct = sorted(set(named))
@@ -179,43 +183,45 @@ def provide(context, armature, clip, options, into=None):
                 " · " + ", ".join(distinct[:4]) if distinct else ""))
 
 
-def _key_poses(armature, maps, bones, frame_count, payload, rate, clip_name, into):
+def _key_poses(armature, identity, unity_names, frame_count, payload, rate, clip_name, into):
     """Key the composed poses onto the rig.
 
     Exactly the path an imported clip's own transform curves take -- the same rest
     conjugation and the same writer (``animation_builder``) -- because that is what these
     are: per-frame Unity-space locals for named bones. The face goes INTO the clip's own
     action, replacing the facial channels the body build keyed there from the source
-    character; an object plays one action, so a second one beside it would not play."""
+    character; an object plays one action, so a second one beside it would not play.
+
+    ``unity_names`` come back in the vocabulary the request went out in, so this is
+    where the answer lands back on THIS rig's bones -- the payload rows stay indexed by
+    the hook's order, and only the name each row is written under is translated."""
     from ... import animation_builder
 
-    rest_by_bone = {}
-    path_to_bone = maps.get("path_to_bone") or {}
-    for node in (maps.get("nodes") or {}).values():
-        bone = path_to_bone.get(getattr(node, "path", ""))
-        if bone:
-            rest_by_bone.setdefault(bone, node.local)
-
-    values = np.frombuffer(payload, dtype=np.float32).reshape(frame_count, len(bones), 10)
+    values = np.frombuffer(payload, dtype=np.float32).reshape(frame_count, len(unity_names), 10)
     frames = np.arange(frame_count, dtype=np.float64)
     conversion = coordinate.conversion_matrix()
+
+    posed = []
+    for index, unity_name in enumerate(unity_names):
+        bone = identity.bone_of(unity_name)
+        rest = identity.rest_of(bone) if bone else None
+        if bone is not None and rest is not None and bone in armature.pose.bones:
+            posed.append((index, bone, rest))
 
     if into is not None:
         action, slot = into
         fcurves = animation_builder.channels_of(action, slot)
-        replaced = animation_builder.release_bones(armature, fcurves, bones)
+        replaced = animation_builder.release_bones(
+            armature, fcurves, [bone for _index, bone, _rest in posed])
         print("[face] {0}: replaced {1} source facial channel(s) over {2} posed bone(s)"
-              .format(clip_name, replaced, len(bones)), flush=True)
+              .format(clip_name, replaced, len(posed)), flush=True)
     else:
         action = bpy.data.actions.new("RT_{0}".format(clip_name))
         if hasattr(action, "use_fake_user"):
             action.use_fake_user = True
         fcurves, slot = animation_builder._prepare_channels(action, action.name, "OBJECT")
 
-    for index, bone in enumerate(bones):
-        rest = rest_by_bone.get(bone)
-        if rest is None or bone not in armature.pose.bones:
-            continue
+    for index, bone, rest in posed:
         locations, quaternions, scales = animation_builder._conjugated_pose_arrays(
             values[:, index, 0:3].astype(np.float64),
             values[:, index, (6, 3, 4, 5)].astype(np.float64),

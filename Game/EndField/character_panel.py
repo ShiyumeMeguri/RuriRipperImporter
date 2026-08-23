@@ -41,7 +41,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty, StringProperty)
 
-from ... import animation_builder, coordinate, filter_ui, prefab_importer
+from ... import animation_builder, coordinate, filter_ui, prefab_importer, rig_identity
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import morph_state, roster_panel, skeletal_morph, story_panel
 
@@ -216,13 +216,19 @@ class BoneBinding:
 
     and that Unity-space local is turned into a pose-bone basis with the same
     conjugation identity the clip importer uses.
+
+    An avatar table names bones in UNITY's words (``browLf01Joint``) and this rig
+    answers to whatever its user renamed them to, so every name crossing in is
+    translated through the rig's own identity. Nothing below this constructor
+    speaks Unity: once ingested, every bone name here is a bone of THIS rig.
     """
 
-    def __init__(self, armature_obj, avatars, maps):
+    def __init__(self, armature_obj, avatars, identity):
         from mathutils import Matrix  # local: this module is imported headless too
 
         self.armature = armature_obj
         self.avatars = list(avatars)
+        self.identity = identity
         self.euler_order = "ZXY"
         self.euler_signs = (1.0, 1.0, 1.0)
         self.rest_error = float("nan")
@@ -231,22 +237,26 @@ class BoneBinding:
         self._bones = {}       # bone name -> (pose_bone, rest_local_inverted)
         self._base = {}        # bone name -> (position, rotation, scale)
         self._mappings = {}    # ctrl -> [(bone name, dposition, drotation, dscale)]
+        self.unmatched_unity_names = set()
 
-        # Merged BY BONE NAME, never by boneID: each avatar indexes its own
+        # Merged BY BONE, never by boneID: each avatar indexes its own
         # allBoneNames, so a face table's id 83 and an ear table's id 83 are
-        # different bones. The name is the only identity shared across them.
+        # different bones. The transform each one IS is the only identity shared
+        # across them, and that is what the rig is asked for here.
         for avatar in self.avatars:
             for base in avatar.base_pose.values():
-                if base.bone_name:
-                    self._base.setdefault(base.bone_name,
-                                          (base.position, base.rotation, base.scale))
+                bone = self._rig_bone(base.bone_name)
+                if bone:
+                    self._base.setdefault(bone, (base.position, base.rotation, base.scale))
             for ctrl, deltas in avatar.mappings.items():
                 merged = self._mappings.setdefault(ctrl, [])
-                merged.extend((delta.bone_name, delta.position, delta.rotation, delta.scale)
-                              for delta in deltas if delta.bone_name)
+                for delta in deltas:
+                    bone = self._rig_bone(delta.bone_name)
+                    if bone:
+                        merged.append((bone, delta.position, delta.rotation, delta.scale))
 
         pose_bones = armature_obj.pose.bones
-        name_to_rest = _rest_locals_by_bone_name(maps)
+        name_to_rest = identity.rest_by_bone()
         for name in sorted(self._base):
             pose_bone = pose_bones.get(name)
             rest = name_to_rest.get(name)
@@ -254,6 +264,18 @@ class BoneBinding:
                 continue
             self._bones[name] = (pose_bone, rest.inverted_safe())
         self.euler_order = self._pick_euler_order(name_to_rest)
+
+    def _rig_bone(self, unity_name):
+        """This rig's bone for a name an avatar table wrote, remembering the ones
+        it has none for -- a table half of which lands nowhere is a real fact about
+        this rig, and the panel says it rather than showing a face that does less
+        than it should for no stated reason."""
+        if not unity_name:
+            return None
+        bone = self.identity.bone_of(unity_name)
+        if bone is None:
+            self.unmatched_unity_names.add(unity_name)
+        return bone
 
     @property
     def bone_count(self):
@@ -405,22 +427,6 @@ def _radians(degrees):
     return math.radians(degrees)
 
 
-def _rest_locals_by_bone_name(maps):
-    """bone name -> its Unity-space rest local matrix, out of the rig identity
-    stamped on the armature at import time (the same maps the clip importer
-    keys transform curves through)."""
-    if not maps:
-        return {}
-    path_to_bone = maps.get("path_to_bone") or {}
-    rest = {}
-    for node in (maps.get("nodes") or {}).values():
-        path = getattr(node, "path", "")
-        bone_name = path_to_bone.get(path)
-        if bone_name:
-            rest[bone_name] = node.local
-    return rest
-
-
 class RigBinding:
     """Everything one rig can do with ctrl drivers, across every kind of target."""
 
@@ -490,26 +496,17 @@ def _avatars_for(state):
 def resolve_bindings(armature_obj, avatars=()):
     """Everything this rig exposes: baked shape keys always, plus the avatar's
     bone table when one is loaded for this character. Both are merged into one
-    RigBinding -- a ctrl bound as both drives both."""
+    RigBinding -- a ctrl bound as both drives both, which is also the seam a rig
+    stating its face as shape keys and one stating it as bones meet on."""
     providers = [ShapeKeyBinding(_resolve_shape_keys(armature_obj, rig_meshes(armature_obj)))]
     avatars = [a for a in (avatars or ()) if a.mappings]
     if avatars:
-        maps = _rig_maps(armature_obj)
-        if maps:
-            bone_binding = BoneBinding(armature_obj, avatars, maps)
+        identity = rig_identity.of(armature_obj)
+        if identity is not None:
+            bone_binding = BoneBinding(armature_obj, avatars, identity)
             if bone_binding.ctrls:
                 providers.append(bone_binding)
     return RigBinding(armature_obj.name, providers)
-
-
-def _rig_maps(armature_obj):
-    """The Unity rig identity stamped on the armature at import time. Without it
-    there is no rest matrix to conjugate against, so bone binding is impossible
-    and says so rather than posing the face wrongly."""
-    try:
-        return prefab_importer.maps_from_stamped_armature(armature_obj)
-    except Exception:
-        return None
 
 
 # Session-lived: rebuilt by Scan Rig, keyed by armature name so a stale binding
@@ -892,10 +889,32 @@ class RURI_OT_character_load_library(bpy.types.Operator):
             self.report({"WARNING"}, "No SkeletalMorphAvatarDataSO matched this character -- "
                                      "only baked shape keys can be driven. Check the Character "
                                      "token names the right operator.")
+        elif bone_binding is None:
+            self.report({"WARNING"}, _no_bone_binding_reason(armature_obj))
+        elif bone_binding.unmatched_unity_names:
+            missing = sorted(bone_binding.unmatched_unity_names)
+            self.report({"WARNING"},
+                        "{0} face bone(s) this character's tables name are not on '{1}': {2}{3}".format(
+                            len(missing), state.armature_name, ", ".join(missing[:4]),
+                            " ..." if len(missing) > 4 else ""))
         _populate_items(state)
         _populate_drivers(state)
         self.report({"INFO"}, state.status)
         return {"FINISHED"}
+
+
+def _no_bone_binding_reason(armature_obj):
+    """Why this rig's face tables reached no bone, said in the words of the ONE
+    thing that fixes it. A ctrl-to-bone table that binds nothing looks exactly like
+    "this character has no face", so the difference is never left to be guessed."""
+    identity = rig_identity.of(armature_obj)
+    if identity is None:
+        return ("'{0}' bones carry no Unity identity, so a face table naming Unity's bones "
+                "cannot reach them -- import the character through this add-on, which is "
+                "what puts it there.".format(armature_obj.name if armature_obj else "this rig"))
+    return ("None of this character's face-table bones exist on '{0}' -- its {1} bone(s) are "
+            "a different skeleton, or the Face Tables declaration names another "
+            "character.".format(armature_obj.name, len(identity)))
 
 
 def _bridge_asset_db_module():
