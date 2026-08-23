@@ -4,35 +4,55 @@ Two games state a face in completely different terms. Koikatu drives blend
 shapes through a per-head *pattern table*, so an expression is a pattern index
 per channel plus an openness rate. Endfield drives BONES through named *ctrl*
 drivers, each carrying a per-bone TRS delta. Neither vocabulary can be derived
-from the other, and neither game should learn the other's -- so the join is a
-data file, exactly as the bone side already does it with ``<A>To<B>.json``.
+from the other, and neither game should learn the other's -- so the join is data.
 
 Three layers, and this module is only the middle one:
 
 1. **Source adapter** -- a game turns its own expression statement into the IR:
    ``{"<channel>:<pattern>": weight}``. Lives with the game that owns those
-   words (Koikatu: ``Game/Koikatu/face_importer.expression_ir``). It has never
+   words (Koikatu: ``Game/Illusion/face_importer.expression_ir``). It has never
    heard of the destination.
-2. **Contract** (this module) -- ``<Source>To<Dest>.face.json`` maps IR keys to
-   destination driver weights. A new game pair is a new file, not new code.
+2. **Contract** (this module) -- IR keys mapped to destination driver weights.
 3. **Destination applier** -- a game takes ``{driver: weight}`` and drives its
    own rig (Endfield: the SkeletalMorph ctrl bindings). It has never heard of
    the source.
 
-Direction matters here, unlike the bone tables. A bone mapping is a bijection
+**THE CONTRACT LIVES IN THE BONE TABLE.** One pair of skeletons, one file: the
+``face`` section of ``<A>To<B>.json``, beside the bone ``mappings`` that already
+join those two rigs. Faces and bodies travel together and are chosen by the same
+fact -- which skeleton family this rig declares -- so they are resolved by the
+same code (``cross_game_retarget.resolve_retarget_spec``) out of the same file. A
+second directory of face-only files would be a second lookup that can disagree
+with the first about which pair is even joined.
+
+AnimationRetarget does not read the ``face`` section and does not need to: its
+readers take ``mappings``/``renames``/``settings`` and ignore everything else, so
+the extra section rides along untouched through load, edit and save. That is the
+whole of "no face -> bones only": a table with no ``face`` section retargets the
+body and says nothing about the head.
+
+Direction matters here, unlike the bone rows. A bone mapping is a bijection
 between named bones and reads the same both ways; a face mapping is a weighted
-many-to-many sum, and summing is not invertible -- so a table states one
-direction and inverting it is refused rather than faked.
+many-to-many sum, and summing is not invertible -- so the section states which
+way it runs. Nothing here has to enforce that: AnimationRetarget's composer only
+carries the sections it understands across a flip or a chain (see
+``AnimationRetarget.compose``), so a reversed or composed table simply arrives
+without one, and ``section_of`` returning None is the caller's answer.
+
+**A driver is a NAME, and how a rig realizes it is the rig's own business.** That
+is what makes a bone-driven face and a shape-key-driven face interchangeable in
+either direction: a contract never says "bone" or "shape key", it says a driver
+name and a weight, and the destination resolves that name against whatever it
+actually has (Endfield: ``character_panel.RigBinding``, which merges a
+ShapeKeyBinding and a BoneBinding into one vocabulary, so a driver bound as both
+drives both). A rig that grows shape keys for drivers it used to move with bones
+needs no new code and no new table -- only the keys, named after the drivers.
 """
 
 from __future__ import annotations
 
-import json
-import os
-
-FORMAT = "RuriFaceTable"
-VERSION = 1
-SUFFIX = ".face.json"
+# The section of a bone table that states what happens to the FACE.
+SECTION = "face"
 
 # An IR key names the channel and the pattern the source selected. ``#closed``
 # is the same pattern at the other end of its openness rate: Koikatu's pattern
@@ -45,31 +65,26 @@ def ir_key(channel, pattern, closed=False):
     return "{0}:{1}{2}".format(channel, int(pattern), CLOSED_MARK if closed else "")
 
 
-def table_dir():
-    """Where the contracts live -- beside this add-on's other presets, so a
-    user editing one is in the same place they edit everything else."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), "presets", "RuriFaceTable")
+def section_of(spec):
+    """The ``face`` section of a bone table, or None when it states none.
+
+    None is the answer to "can this pair carry a face at all", and the caller
+    says so rather than retargeting a body and leaving the head silently behind."""
+    section = (spec or {}).get(SECTION)
+    return section if isinstance(section, dict) else None
 
 
-def table_path(source_game, dest_game):
-    return os.path.join(table_dir(), "{0}To{1}{2}".format(source_game, dest_game, SUFFIX))
+def mappings_of(spec):
+    """``{IR key: [(driver, factor)]}`` from a bone table's face section, or {}.
 
-
-def find_table(source_game, dest_game):
-    """(mappings, label) for source -> dest, or (None, path we looked for).
-
-    Directional on purpose: see the module docstring.
-    """
-    path = table_path(source_game, dest_game)
-    if not os.path.isfile(path):
-        return None, path
-    with open(path, "r", encoding="utf-8") as handle:
-        document = json.load(handle)
-    if document.get("format") != FORMAT:
-        raise ValueError("{0} is not a {1} document".format(path, FORMAT))
+    A row's ``to`` is either a bare driver name (factor 1.0) or a
+    ``[name, factor]`` pair; several source keys legitimately push the same
+    driver, so the reader keeps every row and ``convert`` sums them."""
+    section = section_of(spec)
+    if section is None:
+        return {}
     mappings = {}
-    for entry in document.get("mappings") or ():
+    for entry in section.get("mappings") or ():
         key = entry.get("from")
         if not key:
             continue
@@ -80,7 +95,7 @@ def find_table(source_game, dest_game):
             if name:
                 targets.append((name, factor))
         mappings[key] = targets
-    return mappings, os.path.basename(path)
+    return mappings
 
 
 def convert(expression_ir, mappings):

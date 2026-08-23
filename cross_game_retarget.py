@@ -2,13 +2,20 @@
 
   clip 绑定 CRC ─(m_TOS 覆盖率)─> 源 Avatar ─(cabmap 反向依赖 + 根 Animator 身份)─> 宿主角色 prefab
 
-One decision: a rig whose declared skeleton family (``ruri_skeleton``, stamped game as
-default) differs from the session's retargets through the declared table graph; equal
-families bind directly. One builder: the host is imported through the ordinary prefab
-path, the same one a user's own character import runs. One maths: the named preset goes
-verbatim (mappings AND settings) to AnimationRetarget, which skips missing bones itself.
-Nothing here reads a name, a folder or a game; faces alone stay game-specific
-(``Game.face_retarget_of``).
+One decision, and it is a MEASUREMENT: a clip whose bindings land on the target rig
+binds directly, and only one that does not goes through the declared table graph.
+The rig's bones carry the Unity transform each of them is (``rig_identity``), so
+"is this that clip's skeleton" is counted rather than inferred from what the rig is
+called or which family it declares -- see load_clips_onto for why the inferred
+answer was the wrong one.
+
+One builder: the host is imported through the ordinary prefab path, the same one a
+user's own character import runs. One maths: the named preset goes verbatim
+(mappings AND settings) to AnimationRetarget, which skips missing bones itself.
+One file per pair: that preset also carries the ``face`` section this pair's
+expressions cross on (``face_ir``), so a body and its head are never chosen out of
+two places that can disagree. Nothing here reads a name, a folder or a game; what a
+face IS stays game-specific (``Game.face_retarget_of``).
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ import collections
 import bpy
 
 try:
-    from . import Game, armature_builder, prefab_importer
+    from . import Game, armature_builder, face_ir, prefab_importer
     from .RuriRipperPyBridge.session import cabmap_state
     from .RuriRipperPyBridge.unity import (avatar as avatar_module, bridge_asset_db,
                                            class_registry, clip_paths,
@@ -26,6 +33,7 @@ try:
 except ImportError:  # standalone (non-package) testing
     import Game
     import armature_builder
+    import face_ir
     import prefab_importer
     from RuriRipperPyBridge.session import cabmap_state
     from RuriRipperPyBridge.unity import (avatar as avatar_module, bridge_asset_db,
@@ -34,6 +42,13 @@ except ImportError:  # standalone (non-package) testing
 
 
 ADDON_MODULE = "AnimationRetarget"
+
+# How much of a clip's own bindings must land on a rig for it to BE that clip's
+# skeleton. A renamed, grafted or merged rig still binds every path it kept, so a
+# real match is total or near it; a genuinely different skeleton shares a handful
+# of standard names at most. Anything in between is the interesting case, and it
+# takes the table -- which is the branch that can say what it could not carry.
+DIRECT_BINDING_RATIO = 0.95
 
 
 def _addon():
@@ -46,6 +61,19 @@ def _addon():
     except ImportError:
         return None
     return core, presets, api
+
+
+def _compose():
+    """AnimationRetarget's preset-composition engine, or None.
+
+    THE one implementation of "which tables join these two skeleton families, and
+    what does the joined table look like". It lives over there because that is
+    where the presets live -- a second copy here would be a second answer to the
+    same question, and the two would drift the first time either grew a rule."""
+    try:
+        return __import__(ADDON_MODULE + ".compose", fromlist=["compose"])
+    except ImportError:
+        return None
 
 
 def available():
@@ -69,94 +97,31 @@ def set_skeleton(arm_obj, name):
         arm_obj[SKELETON_PROP] = str(name or "")
 
 
-def _load_spec(presets, name):
-    try:
-        return presets.load_preset(name)
-    except Exception:
-        return {}
-
-
-def _compose_specs(specs):
-    """Chain tables by joining on the intermediate rig's bone names: rows (a->m) then
-    (m->d) become (a->d), each carrying the LAST hop's per-row params and the last
-    spec's settings -- KoikatuToEndfield,EndfieldToWaifu needs no new file."""
-    spec = specs[0]
-    for hop_spec in specs[1:]:
-        join = {}
-        for row in hop_spec.get("mappings") or []:
-            join.setdefault(str(row.get("source") or ""), row)
-        rows = []
-        for row in spec.get("mappings") or []:
-            hop = join.get(str(row.get("dest") or ""))
-            if hop is not None:
-                rows.append(dict(hop, source=str(row.get("source") or ""),
-                                 dest=str(hop.get("dest") or "")))
-        spec = dict(hop_spec)
-        spec["mappings"] = rows
-    return spec
-
-
-def _flip_spec(spec):
-    flipped = dict(spec)
-    flipped["mappings"] = [dict(row, source=str(row.get("dest") or ""),
-                                dest=str(row.get("source") or ""))
-                           for row in spec.get("mappings") or []]
-    return flipped
-
-
-def _spec_sides(spec):
-    declared = spec.get("skeletons") or {}
-    return ({str(name).lower() for name in declared.get("source") or [] if name},
-            {str(name).lower() for name in declared.get("dest") or [] if name})
-
-
 def resolve_retarget_spec(session_key, dest_arm):
     """(composed spec, label) joining the session's skeleton family to this rig's.
 
     Every preset declares which two families it bridges (``skeletons.source/dest``,
     alias lists so sister titles sharing one rig share one table); the rig declares
     its family (``ruri_skeleton``, stamped game as default). Equal or unknown
-    families = ({}, ""), the direct-bind path. A missing direct table composes the
-    shortest declared chain -- breadth-first, either direction per hop, deterministic
-    by preset name."""
-    addon = _addon()
-    if addon is None:
+    families = ({}, ""), the direct-bind path.
+
+    The graph walk and the join are AnimationRetarget's (see ``compose``), because
+    they are about ITS presets -- this only supplies the two ends and words the
+    answer. A pair with no direct table composes through whatever chain the graph
+    offers, so KoikatuToEndfield + EndfieldToWaifu already IS Koikatu -> Waifu.
+    """
+    compose = _compose()
+    if compose is None:
         return {}, ""
-    _core, presets, _api = addon
     source_id = str(cabmap_state.game_of(session_key) or "").lower()
     dest_id = skeleton_of(dest_arm).lower()
     if not source_id or not dest_id or source_id == dest_id:
         return {}, ""
-
-    edges = []
-    for name in sorted(presets.list_presets()):
-        spec = _load_spec(presets, name)
-        side_a, side_b = _spec_sides(spec)
-        if spec.get("mappings") and side_a and side_b:
-            edges.append((name, spec, side_a, side_b))
-
-    frontier = [({source_id}, [], [])]
-    seen = [frozenset({source_id})]
-    while frontier:
-        position, specs, names = frontier.pop(0)
-        if dest_id in position:
-            return ((specs[0] if len(specs) == 1 else _compose_specs(specs)),
-                    ",".join(names))
-        if len(specs) >= 4:
-            continue
-        for name, spec, side_a, side_b in edges:
-            steps = []
-            if position & side_a:
-                steps.append((spec, side_b))
-            if position & side_b:
-                steps.append((_flip_spec(spec), side_a))
-            for crossed, landing in steps:
-                key = frozenset(landing)
-                if key in seen:
-                    continue
-                seen.append(key)
-                frontier.append((set(landing), specs + [crossed], names + [name]))
-    return {}, ""
+    edges = compose.load_edges()
+    route = compose.route_for(source_id, dest_id, edges)
+    if route is None or not route.hops:
+        return {}, ""
+    return compose.compose(route, edges), route.via
 
 
 class CrossGameRetargetError(RuntimeError):
@@ -655,10 +620,21 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
                     display_names=None, activate=False):
     """THE animation-loading entry point. Every panel calls this and nothing else.
 
-    Whether a clip needs a cross-game retarget is one decision, made from one fact --
-    the game stamped on the target armature versus the game whose session the clip
-    came from -- so it is made here, once. A second copy of this branch in a game's
-    own panel is how the two quietly stop agreeing.
+    ONE decision, from ONE measurement: **do this clip's own bindings land on this
+    rig?** A rig's bones carry the Unity transform each of them IS (rig_identity), so
+    that question is answered by counting -- not by comparing the game a rig was
+    stamped with against the game a session is browsing.
+
+    Which matters because those two answers disagree, and the name-based one is
+    wrong. A rig renamed into another naming convention, or grafted, or merged, is
+    still bit for bit the skeleton its clips were authored on; asking its declared
+    family sends it through a retarget it does not need, and a retarget solves
+    world ROTATIONS -- so the face, which is 97.6% translation, is left behind. The
+    measurement puts it back on the direct path, where its curves bind exactly and
+    its face travels with it.
+
+    So: bindings land -> bind them, and the face rides along. They do not -> this is
+    a genuinely different skeleton, and the declared bone table is what bridges it.
 
     Returns (built, warnings): ``built`` counts the actions that ended up on
     ``dest_arm``.
@@ -674,39 +650,54 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
     if maps is None:
         maps = prefab_importer.maps_from_stamped_armature(dest_arm)
 
-    spec, table_label = resolve_retarget_spec(session_key, dest_arm)
-    if spec.get("mappings"):
-        products, warnings = retarget_clips_onto(
-            context, session_key, clip_cab, clip_guids, db, dest_arm, options,
-            spec, table_label, display_names, activate)
-        return len(products), warnings
-    source_id = str(cabmap_state.game_of(session_key) or "")
-    dest_id = skeleton_of(dest_arm)
-    if source_id and dest_id and source_id.lower() != dest_id.lower():
-        raise CrossGameRetargetError(
-            "No declared table chain joins skeleton family '{0}' to '{1}' -- declare the "
-            "pair in a preset's skeletons.source/dest lists (chains compose "
-            "automatically).".format(source_id, dest_id))
-
-    if maps is None:
-        raise CrossGameRetargetError(
-            "'{0}' carries no Unity rig identity -- import the character through this "
-            "add-on once, then animations attach to it from then on.".format(dest_arm.name))
-    ratio, checked = _binding_match(db, clip_guids, maps["path_to_bone"])
-    if checked and ratio == 0.0:
-        raise CrossGameRetargetError(
-            "None of the clip's curve paths match armature '{0}', and it names no bone "
-            "table to retarget through -- select the right skeleton, or declare its {1} "
-            "family.".format(dest_arm.name, SKELETON_PROP))
+    ratio, checked = ((0.0, False) if maps is None
+                      else _binding_match(db, clip_guids, maps["path_to_bone"]))
+    if not (checked and ratio >= DIRECT_BINDING_RATIO):
+        spec, table_label = resolve_retarget_spec(session_key, dest_arm)
+        if spec.get("mappings"):
+            products, warnings = retarget_clips_onto(
+                context, session_key, clip_cab, clip_guids, db, dest_arm, options,
+                spec, table_label, display_names, activate)
+            warnings.extend(_face_gap(spec, table_label, dest_arm, options))
+            return len(products), warnings
+        source_id = str(cabmap_state.game_of(session_key) or "")
+        dest_id = skeleton_of(dest_arm)
+        if source_id and dest_id and source_id.lower() != dest_id.lower():
+            raise CrossGameRetargetError(
+                "No declared table chain joins skeleton family '{0}' to '{1}' -- declare the "
+                "pair in a preset's skeletons.source/dest lists (chains compose "
+                "automatically).".format(source_id, dest_id))
+        if maps is None:
+            raise CrossGameRetargetError(
+                "'{0}' carries no Unity rig identity -- import the character through this "
+                "add-on once, then animations attach to it from then on.".format(dest_arm.name))
+        if checked and ratio == 0.0:
+            raise CrossGameRetargetError(
+                "None of the clip's curve paths match armature '{0}', and it names no bone "
+                "table to retarget through -- select the right skeleton, or declare its {1} "
+                "family.".format(dest_arm.name, SKELETON_PROP))
 
     built, warnings, actions = prefab_importer.build_selected_animations(
         db, dest_arm, maps, None, clip_guids, options, display_names, activate)
-    if checked and ratio < 0.5:
+    if checked and ratio < DIRECT_BINDING_RATIO:
         warnings.insert(0, "Only {0:.0%} of curve paths match armature '{1}' -- "
                            "imported anyway.".format(ratio, dest_arm.name))
     warnings.extend(_retarget_faces(context, session_key, clip_cab, clip_guids, db,
                                     dest_arm, options, actions))
     return built, warnings
+
+
+def _face_gap(spec, table_label, dest_arm, options):
+    """What the table branch could NOT do to the head, said out loud.
+
+    A retargeted body with an untouched face is the one outcome that looks like a
+    success and is not, so a pair whose table states no face section says so by
+    name instead of letting the user work out why the head never moves."""
+    if not options.get("retarget_face") or face_ir.section_of(spec) is not None:
+        return []
+    return ["Bone table '{0}' states no face section, so '{1}' got the body only -- add a "
+            "\"face\" section to that table to carry expressions across this pair.".format(
+                table_label, dest_arm.name)]
 
 
 def _retarget_faces(context, session_key, clip_cab, clip_guids, db, dest_arm, options,
