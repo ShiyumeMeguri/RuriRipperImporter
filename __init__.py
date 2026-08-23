@@ -23,7 +23,7 @@ bl_info = {
 import importlib
 import sys
 
-from . import (Game, coordinate, hierarchy, armature_builder,
+from . import (Game, coordinate, hierarchy, rig_identity, armature_builder,
                mesh_builder, material_builder, material_panel, derived_state, animation_builder,
                prefab_importer, cabmap_panel, cross_game_retarget, post_panel)
 from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
@@ -48,7 +48,7 @@ _shared_prefix = __package__ + ".RuriRipperPyBridge."
 for _name, _mod in list(sys.modules.items()):
     if _name.startswith(_shared_prefix) and not _holds_process_state(_mod):
         importlib.reload(_mod)
-for _mod in (coordinate, hierarchy, armature_builder,
+for _mod in (coordinate, hierarchy, rig_identity, armature_builder,
              mesh_builder, material_builder, material_panel, derived_state, animation_builder,
              prefab_importer, cabmap_panel, cross_game_retarget):
     importlib.reload(_mod)

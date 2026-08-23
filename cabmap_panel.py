@@ -51,6 +51,8 @@ BROWSER_TAB_ID = "assetbundle"
 BROWSER_TAB_LABEL = "VirtualAssetBundle"
 # 后处理是**宿主级**的:它占的是 scene.compositing_node_group / view transform,
 # 与哪个游戏在浏览无关 —— 所以它不是任何游戏的 GameTab,而是装了后处理栈就出现的一格。
+# 后处理是**宿主级**的:它占的是 scene.compositing_node_group / view transform,
+# 与哪个游戏在浏览无关 —— 所以它不是任何游戏的 GameTab,而是装了后处理栈就出现的一格。
 POST_TAB_ID = "post"
 POST_TAB_LABEL = "Post"
 BROWSER_TAB_DESCRIPTION = "Browse/search the loaded cabmap's rows and import individual assets"
@@ -748,12 +750,21 @@ def _set_browsed_dir(self, value):
 
 
 def _get_loaded(self):
+    """Whether THIS TAB's cabmap is loaded right now -- DERIVED from the live
+    session, never stored.
+
+    A loaded cabmap is process state: a bridge, a decoder and a row table, none of
+    which can be written into a .blend. A scene property can, and a stored flag
+    therefore comes back True in a session that has none of them -- every gate that
+    trusts it then opens onto ``cabmap_state.BRIDGE`` being None, which is not a
+    check any caller can be expected to repeat. Reading the session makes the flag
+    mean the same thing in the first draw after opening a file as it did when it
+    was set."""
     config = _active_config(self)
-    return config.loaded if config is not None else False
-
-
-def _set_loaded(self, value):
-    _ensure_active_config(self).loaded = value
+    if config is None:
+        return False
+    session = cabmap_state.SESSIONS.get(config.key)
+    return session is not None and len(session.ROWS) > 0
 
 
 def _seed_cabmap_default(state):
@@ -765,7 +776,7 @@ def _seed_cabmap_default(state):
     separately. A tab that already carries a cabmap (typed, or a loaded map) is left
     alone, and a loaded tab is never touched at all."""
     config = _active_config(state)
-    if config is None or config.loaded:
+    if config is None or state.loaded:
         return
     if not config.cabmap_path and config.game_root:
         config.cabmap_path = config.game_root
@@ -832,7 +843,6 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     game_root: StringProperty()
     cabmap_path: StringProperty()
     browsed_dir: StringProperty()
-    loaded: BoolProperty(default=False)
 
 
 class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
@@ -854,7 +864,9 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                                 description="Existing cabmap FILE to load, or output path to build one -- "
                                             "defaults to a filename built from the install's own name, editable",
                                 get=_get_cabmap_path, set=_set_cabmap_path)
-    loaded: BoolProperty(get=_get_loaded, set=_set_loaded)
+    # Read-only on purpose: it is an observation of the live session, so there is
+    # nothing for a caller to set and no way for it to disagree with reality.
+    loaded: BoolProperty(get=_get_loaded)
     # A plain string, not an EnumProperty: the tab set is whatever the current
     # install's game contributes, and Blender's dynamic-enum items callback stores an
     # index into a list that changes the moment the browser moves to another install
@@ -1065,7 +1077,6 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             cabmap_state.activate(config.key, config.game_name)
             cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
-            state.loaded = True
         except Exception as exc:
             _report_exception(self, "Build cabmap failed", exc)
             return {"CANCELLED"}
@@ -1074,7 +1085,6 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             # the process runs one decoder at a time. Scanning a real game folder
             # through a FOREIGN game's decoder yields an empty map and a success code,
             # so the emptiness is the only place that mismatch can still be caught.
-            state.loaded = False
             self.report({"ERROR"}, (
                 "Built 0 CABs from '{0}'. This build decoded with {1} -- a game's "
                 "bundles are only readable through its own decoder. Pick this install's "
@@ -1112,7 +1122,6 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
             # no such folder, so a key left over from a different game is harmless.
             cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
-            state.loaded = True
         except Exception as exc:
             _report_exception(self, "Load cabmap failed", exc)
             return {"CANCELLED"}
@@ -2365,8 +2374,6 @@ class RURI_PT_cabmap(bpy.types.Panel):
         layout.separator()
         gated = layout.column()
         gated.enabled = state.loaded
-        if not state.loaded:
-            layout.label(text="Build or load a cabmap to browse/import.", icon="LOCKED")
 
         active = _active_tab(state)
         active_key = active.key if active is not None else BROWSER_TAB_ID
@@ -2375,6 +2382,16 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op = tabs.operator(RURI_OT_select_tab.bl_idname, text=label,
                                depress=(key == active_key))
             op.tab = key
+
+        # ``enabled = False`` greys a layout out; it does NOT stop the code that
+        # fills it from running. Every tab below this line is ABOUT the loaded
+        # cabmap and reads the bridge to draw itself, so without one the draw has
+        # to stop here rather than be painted grey while it runs anyway -- which
+        # is how a stored-open tab turned "no session" into an AttributeError
+        # thrown out of a draw callback.
+        if not state.loaded:
+            layout.label(text="Build or load a cabmap to browse/import.", icon="LOCKED")
+            return
 
         if active is None:
             filter_ui.draw_search_row(gated, state)
