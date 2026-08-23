@@ -2070,10 +2070,20 @@ class Stack:
             if pose is None:
                 continue
             delta = pose.matrix.to_3x3() @ pose.bone.matrix_local.to_3x3().inverted()
+            # 🔴 着色器读的是**求值副本**上的属性。本 handler 跑在 depsgraph_update_post,
+            # 那一拍的求值副本已经建好了 —— 只写原始副本 = 画面永远慢一拍;而"值没变就不写"
+            # 的守卫又让它不再重新打脏标记,于是**永远追不上**(实测求值副本差到 1.99)。
+            # 所以本帧绘制读哪份就写哪份:求值副本每次都写,原始副本只在变了时写(它是
+            # 存盘种子,也是下一次求值的来源;无条件写会打脏标记自激)。
+            evaluated_object = obj.evaluated_get(depsgraph)
             for index, axis in enumerate(axes):
                 vector = (delta @ mathutils.Vector(axis)).normalized()
                 value = (vector.x, vector.z, vector.y)
                 key = RIG_OBJECT_PROP + str(index)
+                try:
+                    evaluated_object[key] = value
+                except Exception:
+                    pass
                 previous = obj.get(key)
                 if previous is None or max(abs(previous[k] - value[k]) for k in range(3)) > 1e-6:
                     obj[key] = value
