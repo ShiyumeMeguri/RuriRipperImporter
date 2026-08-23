@@ -56,8 +56,9 @@ CAMERA = "camera"              # 活动相机的身份/位姿/投影/输出分�
 LIGHT_SET = "light_set"        # 灯的增删/类型/可见性(生成栈的灯表:改像素即生效,零重接)
 LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(同上,表像素)
 WORLD = "world"                # 世界被换(环境采样是建组时快照,只有这件事还要重接兑现面)
+RIG = "rig"                    # 骨架的骨骼名册变了(顶点腿的骨骼基座按名字接进几何节点)
 
-ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD))
+ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD, RIG))
 
 # 去抖窗口:批量导入的几百次 announce、相机拖动的每帧变更,都收敛成末尾的一次落地。
 DEBOUNCE_SECONDS = 0.1
@@ -122,7 +123,11 @@ def _run_light_tables(_change):
 
 def _run_vertex(change):
     """顶点腿。相机基轴是逐对象烘进几何节点树的快照,所以相机一变就得全场重建;
-    单纯多了几个对象时只处理这几个。"""
+    单纯多了几个对象时只处理这几个。
+
+    骨骼名册也在这条路上:脸部基座是按**当下骨名**接进 GeometryNodeBoneInfo 的,而名字
+    是改得动的东西 —— 绑定的身份存在骨的印记上,这里负责把那份身份重新翻成当下的名字。
+    不重接就是 Exists=False、基座属性一个点都不写、SDF 悄悄回到绑定姿势。"""
     scope = None if change.whole_scene else change.objects
     return material_builder.apply_vertex_stages(objects=scope)
 
@@ -145,7 +150,7 @@ def _run_material_panels(change):
 STAGES = (
     Stage("capabilities", (WORLD,), _run_capabilities),
     Stage("light-tables", (LIGHT_SET, LIGHT_VALUES), _run_light_tables),
-    Stage("vertex", (OBJECTS, MATERIALS, CAMERA), _run_vertex),
+    Stage("vertex", (OBJECTS, MATERIALS, CAMERA, RIG), _run_vertex),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
     # 装过就跳过,所以在灯上反复触发也只是一次 installed() 判断。
@@ -296,6 +301,7 @@ _light_set = None
 _light_values = None
 _camera = None
 _world = None
+_rig = None
 
 
 def _light_set_signature(scene):
@@ -357,6 +363,26 @@ def _camera_signature(scene):
     )
 
 
+def _rig_signature(scene):
+    """骨骼名册。摆姿势不在其内 —— 那是每帧都在变的东西,而这里问的是「名字还是不是那些」。"""
+    signature = []
+    for obj in scene.objects:
+        if obj.type != "ARMATURE" or obj.data is None:
+            continue
+        signature.append((obj.name_full, tuple(bone.name for bone in obj.data.bones)))
+    signature.sort()
+    return tuple(signature)
+
+
+def _rig_touched(depsgraph):
+    """只认 **Armature 数据块**:摆姿势 / 播放动画标记的是 Object,一帧一次;改名、加删骨、
+    退出编辑模式标记的才是数据本身。判据下在这里,签名才不必每帧扫几百根骨。"""
+    for update in depsgraph.updates:
+        if isinstance(update.id, bpy.types.Armature):
+            return True
+    return False
+
+
 def _lights_touched(depsgraph):
     for update in depsgraph.updates:
         block = update.id
@@ -378,18 +404,24 @@ def _camera_touched(depsgraph):
 
 
 def _resnapshot(scene):
-    global _light_set, _light_values, _camera, _world
+    global _light_set, _light_values, _camera, _world, _rig
     _light_set = _light_set_signature(scene)
     _light_values = _light_values_signature(scene)
     _camera = _camera_signature(scene)
     _world = _world_signature(scene)
+    _rig = _rig_signature(scene)
 
 
 @bpy.app.handlers.persistent
 def _on_depsgraph_update(scene, depsgraph):
-    global _light_set, _light_values, _camera, _world
+    global _light_set, _light_values, _camera, _world, _rig
     if _flushing:
         return
+    if _rig_touched(depsgraph):
+        rig = _rig_signature(scene)
+        if rig != _rig:
+            _rig = rig
+            _mark((RIG,), whole_scene=True)
     if _lights_touched(depsgraph):
         world = _world_signature(scene)
         if world != _world:

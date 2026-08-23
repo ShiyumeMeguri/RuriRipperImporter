@@ -243,6 +243,26 @@ def of(arm_obj):
     return RigIdentity(arm_obj, paths, rest_table(arm_obj))
 
 
+def bone_for_unity_name(arm_obj, unity_name):
+    """This rig's bone for a Unity BONE NAME, or "" -- the whole join in one call.
+
+    The flat shape exists for callers that are not Python neighbours: a generated
+    shading stack states this translation as a MODULE + FUNCTION NAME in its recipe
+    and reaches it by name, so what it binds to has to be a plain function over
+    plain arguments rather than an object protocol."""
+    identity = of(arm_obj)
+    return (identity.bone_of(unity_name) or "") if identity is not None else ""
+
+
+def unity_name_for_bone(arm_obj, bone_name):
+    """The other direction: what Unity calls the bone this rig currently calls
+    ``bone_name``, or "" when that bone carries no identity. Whoever records a
+    bone reference records THIS, never the Blender name -- a name is what a rename
+    takes away."""
+    identity = of(arm_obj)
+    return (identity.unity_name_of(bone_name) or "") if identity is not None else ""
+
+
 # ── writing ───────────────────────────────────────────────────────────────────
 
 def stamp(arm_obj, paths):

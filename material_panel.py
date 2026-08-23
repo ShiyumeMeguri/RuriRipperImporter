@@ -37,6 +37,13 @@ _GUARD = [False]
 # 缓存按材质,换图 / 回读时作废 —— 那正是行集合唯一会变的两个时刻。
 _ROWS = {}
 
+# 「这张材质挂在哪副骨架上」同样要扫对象,同样按材质缓存、同样在回读时作废。
+_RIGS = {}
+
+# 基座骨这一行的镜子。它不是着色属性(图上没有它的 socket),所以名字由本模块拥有,
+# 不走 _value_attribute 那套 INTERFACE 命名域。
+_RIG_ATTRIBUTE = "ruri_rig_basis_bone"
+
 
 def _value_attribute(name):
     return "p" + name
@@ -82,9 +89,55 @@ def _st_writer(stack, row):
     return update
 
 
+def _rig_armature(material):
+    """这张材质挂在哪副骨架上。材质自己不知道 —— 得问用它的网格,而「选中的 mesh 修改器
+    指向谁」就是绑定本身(prefab_importer.armature_of 是全插件唯一那条规则)。"""
+    cached = _RIGS.get(material.name_full, False)
+    if cached is not False:
+        return cached
+    from . import prefab_importer
+
+    found = None
+    for obj in bpy.data.objects:
+        if obj.data is None or not hasattr(obj.data, "materials"):
+            continue
+        if not any(slot is material for slot in obj.data.materials):
+            continue
+        found = prefab_importer.armature_of(obj)
+        if found is not None:
+            break
+    _RIGS[material.name_full] = found
+    return found
+
+
+def _rig_writer(stack):
+    """面板选了一根活骨。生成物记的是这根骨的**身份**而不是它此刻的名字,所以拒收没有
+    印记的骨;成功与否都把话留在镜子上,由 draw 说出来 —— 静默的绑定失败在画面上
+    与「着色器本来就长这样」完全无法区分。"""
+    def update(self, _context):
+        if _GUARD[0]:
+            return
+        material = self.id_data
+        picked = getattr(self, _RIG_ATTRIBUTE)
+        armature = _rig_armature(material)
+        accepted, message = stack.panel_write_rig(material, armature, picked)
+        self["_rig_note"] = message
+        if not accepted:
+            _GUARD[0] = True
+            try:
+                state = stack.panel_rig(material, armature) or {}
+                setattr(self, _RIG_ATTRIBUTE, state.get("bone", ""))
+            finally:
+                _GUARD[0] = False
+    return update
+
+
 def _annotations_of(stack):
     """INTERFACE → PropertyGroup 注解。控件类型/量程/缺省全部来自声明,面板不发明任何一项。"""
-    annotations = {}
+    annotations = {_RIG_ATTRIBUTE: bpy.props.StringProperty(
+        name="基座骨骼",
+        description="脸部/头发/眼睛按这根骨的当下朝向判 SDF 明暗。记的是骨的身份印记,改名不丢",
+        update=_rig_writer(stack))}
     for row in _rows_of(stack):
         attribute = _value_attribute(row["name"])
         kind = row["kind"]
@@ -166,6 +219,8 @@ def sync(material):
     properties = getattr(material, entry["property"], None)
     if properties is None:
         return False
+    _RIGS.pop(material.name_full, None)
+    rig = entry["stack"].panel_rig(material, _rig_armature(material))
     _GUARD[0] = True
     try:
         for name, value in state["values"].items():
@@ -175,8 +230,11 @@ def sync(material):
         for name, transform in state["st"].items():
             setattr(properties, _tiling_attribute(name), (transform[0], transform[1]))
             setattr(properties, _offset_attribute(name), (transform[2], transform[3]))
+        # 镜子里放的是**当下的活骨名**(picker 要在活骨里搜),身份留在材质上。
+        setattr(properties, _RIG_ATTRIBUTE, rig["bone"] if rig is not None else "")
     finally:
         _GUARD[0] = False
+    properties["_rig_note"] = ""
     _ROWS.pop(material.name_full, None)
     properties["_synced"] = 1
     return True
@@ -239,6 +297,35 @@ def _draw_row(column, properties, row):
         sub.prop(properties, _offset_attribute(row["name"]), text="偏移")
 
 
+def _draw_rig(box, stack, material, properties):
+    """基座骨这一行。只在真用这座桥的 part 上出现(生成物答 None 就没有这一行)。
+
+    这不是着色参数而是一条**绑定**:脸/发/眼的 SDF 按这根骨的当下朝向判明暗,接不上就
+    静默停在绑定姿势 —— 角色一转身脸整片压黑,而同一张脸上的皮肤照亮。所以三种接不上的
+    情形(没骨架 / 没记骨 / 记的骨这副骨架上没有)都在这里明写,不留给用户去猜。"""
+    armature = _rig_armature(material)
+    rig = stack.panel_rig(material, armature)
+    if rig is None:
+        return
+    rig_box = box.box()
+    if armature is None:
+        rig_box.label(text="{0}:这张材质的网格没挂骨架,SDF 停在绑定姿势。".format(rig["label"]),
+                      icon="ERROR")
+        return
+    row = rig_box.row(align=True)
+    row.prop_search(properties, _RIG_ATTRIBUTE, armature.data, "bones", text=rig["label"])
+    if not rig["unity"]:
+        rig_box.label(text="没记基座骨:SDF 停在绑定姿势,选一根(通常是头骨)。", icon="ERROR")
+    elif not rig["bone"]:
+        rig_box.label(text="骨架 {0} 里没有 Unity 骨 {1} —— SDF 停在绑定姿势。".format(
+            armature.name, rig["unity"]), icon="ERROR")
+    else:
+        rig_box.label(text="身份 {0} · 骨架 {1}".format(rig["unity"], armature.name), icon="BONE_DATA")
+    note = properties.get("_rig_note")
+    if note:
+        rig_box.label(text=str(note), icon="INFO")
+
+
 def draw_materials(layout, context):
     """选中网格 → 它持有的材质槽 → 选中那张的参数。Blender 自己的槽列表控件,
     所以「哪张是当前材质」与属性页、与建模操作共用同一个真值(object.active_material_index)。"""
@@ -281,6 +368,7 @@ def draw_materials(layout, context):
     if not properties.get("_synced"):
         # 回读只能由 operator / derived_state 做:draw 期间禁止写数据。
         box.label(text="这张材质还没回读过参数,点上面的刷新。", icon="INFO")
+    _draw_rig(box, stack, material, properties)
 
     body = box.column()
     body.use_property_split = True
@@ -321,5 +409,6 @@ def unregister():
     for key in list(_STACKS):
         unregister_stack(_STACKS[key]["stack"])
     _ROWS.clear()
+    _RIGS.clear()
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
