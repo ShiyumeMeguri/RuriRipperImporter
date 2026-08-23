@@ -463,6 +463,12 @@ def _neutral_image(rgb, alpha, non_color):
 
 MAIN_LIGHT_OVERRIDE = 'ruri_main_light'
 
+# 场上没有主方向光时的兜底光向(**世界固定**,朝下偏前的经典三点主光位)。
+# 绝不能用 Incoming:那是头灯,漫反射会跟着相机转 —— 物理上不可能,而且把"基座对不对"
+# 这件事变得无法判断(实测用户在这个状态下连着误判了好几轮)。
+FALLBACK_LIGHT_DIRECTION = (0.0247, -0.8220, 0.5690)
+_NO_MAIN_LIGHT_SAID = [False]
+
 # 基座三列的组输入名 —— 与物化脚本 RIG_BASIS_SOCKETS 同一个命名域(那边建组,这边接线)。
 RIG_BASIS_SOCKETS = ('_RuriRigBasis0', '_RuriRigBasis1', '_RuriRigBasis2')
 RIG_ATTR_LABEL = 'RuriRigBasisAttr'
@@ -729,7 +735,15 @@ def _main_light_source(g, ctx):
     axis, angular_cos = _table_row(g, 0.0, 2)
     flags, _count = _table_row(g, 0.0, 3)
     _co, _ci, has_main = g.sep(flags)
-    direction = g.mixv(has_main, g.geo().outputs['Incoming'], axis)
+    # 🔴 无主光的兜底方向必须**钉在世界里**,不能用 Incoming(那是头灯:方向定义上等于视线)。
+    # 头灯让漫反射跟着相机转 —— 物理上不可能,而且与"基座对不对"完全无法区分:用户就是
+    # 在这个状态下判了好几轮"SDF 跟着视角变""转身黑""正面黑"。场上没有主光是**场景缺东西**,
+    # 应当给一个稳定的假光并说出来,而不是悄悄换成一个物理上错的光。
+    if not _NO_MAIN_LIGHT_SAID[0]:
+        _NO_MAIN_LIGHT_SAID[0] = True
+        print('[ruri-cap] 场上没有主方向光:主光走**世界固定方向**的兜底(不是头灯)。'
+              '加一盏 Sun 才是真值 —— 兜底只保证画面稳定,不保证像任何东西。', flush=True)
+    direction = g.mixv(has_main, FALLBACK_LIGHT_DIRECTION, axis)
     tint = g.mixv(has_main, (1.0, 1.0, 1.0), color)
     return g.vmath('NORMALIZE', direction), tint, diffuse_factor, angular_cos, has_main, True
 
