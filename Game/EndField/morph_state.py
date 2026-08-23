@@ -164,21 +164,27 @@ def load_avatars(cabs):
     """The ctrl-to-bone tables these CABs carry, read by the hook off the game's
     own typed assets (``endfield.morph.avatars``/``.ctrls``/``.bones``/
     ``.shaderparams``) rather than re-parsed out of an export. Keyed by name --
-    the identity every list here already uses. Returns how many were added."""
-    added = 0
+    the identity every list here already uses. Returns how many were added.
+
+    An avatar is built WHOLE and published once, exactly as load_assets does it,
+    and a name already in AVATARS is never touched again. That is not tidiness:
+    a ctrl's bone deltas are a LIST, and this module's state outlives a script
+    reload (HOLDS_PROCESS_STATE), so filling an avatar that already exists appends
+    a second copy of every delta it has. Nothing errors and nothing looks wrong --
+    the face just moves twice as far per unit of weight, then three times, then
+    four. Guarding only the constructor is what let that happen; the guard has to
+    cover everything that WRITES."""
+    fresh = {}
     for row in datasets.morph_avatars(cabs):
         name = row["name"]
-        if name in AVATARS:
-            continue
-        avatar = skeletal_morph.MorphAvatar(name, name, int(row["tag_id"]))
-        AVATARS[name] = avatar
-        added += 1
+        if name not in AVATARS and name not in fresh:
+            fresh[name] = skeletal_morph.MorphAvatar(name, name, int(row["tag_id"]))
     for row in datasets.morph_ctrls(cabs):
-        avatar = AVATARS.get(row["avatar"])
+        avatar = fresh.get(row["avatar"])
         if avatar is not None:
             avatar.mappings.setdefault(row["ctrl"], [])
     for row in datasets.morph_bones(cabs):
-        avatar = AVATARS.get(row["avatar"])
+        avatar = fresh.get(row["avatar"])
         if avatar is None:
             continue
         delta = skeletal_morph.MorphBoneDelta(
@@ -190,10 +196,11 @@ def load_avatars(cabs):
             if delta.bone_name and delta.bone_name not in avatar.bone_names:
                 avatar.bone_names.append(delta.bone_name)
     for row in datasets.morph_shader_params(cabs):
-        avatar = AVATARS.get(row["avatar"])
+        avatar = fresh.get(row["avatar"])
         if avatar is not None:
             avatar.shader_params[row["ctrl"]] = {"param": row["param"], "default": row["default"]}
-    return added
+    AVATARS.update(fresh)
+    return len(fresh)
 
 
 def avatars_for_tag(tag_id):
