@@ -97,13 +97,26 @@ def set_skeleton(arm_obj, name):
         arm_obj[SKELETON_PROP] = str(name or "")
 
 
-def resolve_retarget_spec(session_key, dest_arm):
-    """(composed spec, label) joining the session's skeleton family to this rig's.
+def bone_names(arm_obj):
+    """This rig's own bone names -- the observation that says WHICH of a skeleton
+    family's configs (Girl / Boy) it is, when the name it carries only says the
+    family."""
+    if arm_obj is None or arm_obj.type != "ARMATURE" or arm_obj.data is None:
+        return ()
+    return tuple(bone.name for bone in arm_obj.data.bones)
 
-    Every preset declares which two families it bridges (``skeletons.source/dest``,
-    alias lists so sister titles sharing one rig share one table); the rig declares
-    its family (``ruri_skeleton``, stamped game as default). Equal or unknown
-    families = ({}, ""), the direct-bind path.
+
+def resolve_retarget_spec(session_key, dest_arm):
+    """(composed spec, label) joining the session's skeleton to this rig's.
+
+    Every preset declares which two skeletons it bridges (``source`` / ``dest``, each
+    a ``{family, config}`` plus that family's ``aliases`` -- so a studio that changes
+    its shop sign, and sister titles sharing one rig, all share the one table). Neither
+    end of a real call names a config, though: a session knows a GAME (the alias) and a
+    rig carries a FAMILY (``ruri_skeleton``, stamped game as default). So the config is
+    settled by ``route_for`` from this rig's actual bones plus which pairs the tables
+    can reach at all -- never from the name. Same skeleton, or a name nothing declares
+    = ({}, ""), the direct-bind path.
 
     The graph walk and the join are AnimationRetarget's (see ``compose``), because
     they are about ITS presets -- this only supplies the two ends and words the
@@ -113,15 +126,68 @@ def resolve_retarget_spec(session_key, dest_arm):
     compose = _compose()
     if compose is None:
         return {}, ""
-    source_id = str(cabmap_state.game_of(session_key) or "").lower()
-    dest_id = skeleton_of(dest_arm).lower()
-    if not source_id or not dest_id or source_id == dest_id:
+    source_id = str(cabmap_state.game_of(session_key) or "")
+    dest_id = skeleton_of(dest_arm)
+    if not source_id or not dest_id:
         return {}, ""
     edges = compose.load_edges()
-    route = compose.route_for(source_id, dest_id, edges)
+    route = compose.route_for(source_id, dest_id, edges,
+                              dest_bones=bone_names(dest_arm))
     if route is None or not route.hops:
         return {}, ""
     return compose.compose(route, edges), route.via
+
+
+def _no_table_message(session_key, dest_arm):
+    """Why nothing joined these two skeletons, worded as the thing to go fix -- or ""
+    when there was nothing to join in the first place.
+
+    Four different repairs hide behind the one dead end -- a game name nobody listed as
+    an alias, a pair nobody wrote a table for, a family whose configs this rig's bones
+    do not tell apart, and a chain that exists but joins to nothing -- and sending the
+    user to the wrong one of the four costs a whole editing session. So each is named.
+
+    Whether the two names are the same skeleton at all is ``route_for``'s answer, not a
+    string comparison here: an alias makes two different names one skeleton (a session
+    browsing 'Waifu' onto a rig stamped 'Ruri'), and comparing the text would report a
+    missing table for a pair that never needed one."""
+    source_id = str(cabmap_state.game_of(session_key) or "")
+    dest_id = skeleton_of(dest_arm)
+    if not source_id or not dest_id:
+        return ""
+    compose = _compose()
+    if compose is None:
+        return ("The AnimationRetarget add-on is not enabled, so '{0}' and '{1}' cannot be "
+                "joined by any bone table.".format(source_id, dest_id))
+    edges = compose.load_edges()
+    dest_bones = bone_names(dest_arm)
+    route = compose.route_for(source_id, dest_id, edges, dest_bones=dest_bones)
+    if route is not None:
+        if not route.hops or compose.compose(route, edges).get("mappings"):
+            return ""
+        return ("{0} composes to no shared bone at all -- the chain exists but an "
+                "intermediate skeleton drops every row. Write a direct table for this "
+                "pair, or widen the one in the middle.".format(route.label()))
+    starts = compose.sides_for(source_id, edges)
+    finishes = compose.narrowed(compose.sides_for(dest_id, edges), dest_bones, edges)
+    unknown = [name for name, found in ((source_id, starts), (dest_id, finishes)) if not found]
+    if unknown:
+        return ("No preset declares the skeleton {0} -- add the name to that family's "
+                "\"aliases\" in a preset's source/dest, or write the table it belongs to."
+                .format(" or ".join(repr(name) for name in unknown)))
+    routed = compose.routes_between(starts, finishes, edges)
+    if len(routed) > 1:
+        return ("'{0}' reaches '{1}' more than one way ({2}), and '{3}' bones do not tell "
+                "those skeletons apart -- set its {4} to one of {5}.".format(
+                    source_id, dest_id, ", ".join(option.label() for option in routed),
+                    dest_arm.name, SKELETON_PROP,
+                    ", ".join(repr(side.key) for side in finishes)))
+    return ("No table chain joins skeleton '{0}' to '{1}' -- write the pair as a preset's "
+            "source/dest ({2} -> {3}); chains compose automatically, so one table to any "
+            "skeleton already reachable from the other end is enough.".format(
+                source_id, dest_id,
+                "/".join(side.key for side in starts),
+                "/".join(side.key for side in finishes)))
 
 
 class CrossGameRetargetError(RuntimeError):
@@ -660,13 +726,9 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
                 spec, table_label, display_names, activate)
             warnings.extend(_face_gap(spec, table_label, dest_arm, options))
             return len(products), warnings
-        source_id = str(cabmap_state.game_of(session_key) or "")
-        dest_id = skeleton_of(dest_arm)
-        if source_id and dest_id and source_id.lower() != dest_id.lower():
-            raise CrossGameRetargetError(
-                "No declared table chain joins skeleton family '{0}' to '{1}' -- declare the "
-                "pair in a preset's skeletons.source/dest lists (chains compose "
-                "automatically).".format(source_id, dest_id))
+        message = _no_table_message(session_key, dest_arm)
+        if message:
+            raise CrossGameRetargetError(message)
         if maps is None:
             raise CrossGameRetargetError(
                 "'{0}' carries no Unity rig identity -- import the character through this "
