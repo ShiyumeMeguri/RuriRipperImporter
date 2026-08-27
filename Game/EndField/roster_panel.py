@@ -23,6 +23,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
+from . import cloth_panel
 from . import datasets
 
 CHARACTERS = datasets.CHARACTERS
@@ -937,11 +938,15 @@ def draw_roster(layout, context):
     options = layout.column(align=True)
     options.enabled = entry is not None
     options.row(align=True).prop(state, "model_kind", expand=True)
+    # 与场景导入同一份选项(都读 ruri_cabmap.as_options),画在按 Load 的地方。
+    cabmap = context.scene.ruri_cabmap
     row = options.row(align=True)
     row.prop(state, "lod")
     row.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
-    # 与场景导入同一份选项(都读 ruri_cabmap.as_options),画在按 Load 的地方。
-    cabmap = context.scene.ruri_cabmap
+    # 布料和表情一样是"这个模型自己带的第二份东西",所以并排;它就是浏览器那一个开关,
+    # 不是这里的第二份状态 —— Load 走的本来就是浏览器自己的导入。
+    if cloth_panel.addon_present():
+        row.prop(cabmap, "import_secondary_motion", toggle=True, icon="MOD_CLOTH")
     shading = options.row(align=True)
     shading.prop(cabmap, "import_materials")
     game = shading.row(align=True)
