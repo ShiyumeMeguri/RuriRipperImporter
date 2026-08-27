@@ -35,13 +35,15 @@ itself.
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import character_panel, face_retarget, roster_panel, scene_panel, shader, story_panel
+from . import (character_panel, cloth_panel, face_retarget, roster_panel, scene_panel,
+               shader, story_panel)
 
 
 def _register():
     scene_panel.register()
     roster_panel.register()
     character_panel.register()
+    cloth_panel.register()
     story_panel.register()
     # CharacterNPR materials build as generated Ruri Uber node groups instead of
     # the host's Principled fallback -- a graph provider, so the host core stays
@@ -52,6 +54,7 @@ def _register():
 def _unregister():
     shader.unregister()
     story_panel.unregister()
+    cloth_panel.unregister()
     character_panel.unregister()
     roster_panel.unregister()
     scene_panel.unregister()
