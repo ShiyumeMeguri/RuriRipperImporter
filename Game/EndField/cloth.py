@@ -56,6 +56,7 @@ VALUE_TABLE = (
     ("connectionMode", "connection_mode", ENUM, CONNECTION_MODES),
     ("rotationalInterpolation", "rotational_interpolation", FLOAT, None),
     ("rootRotation", "root_rotation", FLOAT, None),
+    ("animationPoseRatio", "animation_pose_ratio", FLOAT, None),
     ("blendWeight", "blend_weight", FLOAT, None),
     ("stablizationTimeAfterReset", "stablization_time", FLOAT, None),
     ("normalAxis", "normal_axis", ENUM, NORMAL_AXES),
@@ -159,14 +160,6 @@ CURVE_TABLE = (
 # was forgotten or decided against, and only a list tells the two apart.
 UNMAPPED = {
     "updateMode": "which update loop the game ticks the solver on; the host has its own",
-    # 实测:把它按字面搬过来,11 条链一根骨头都不动(60 帧,角色还在 ±1.2rad 摆动,
-    # peak 2e-6),而同一批配置在游戏里显然是会动的 —— 所以两边的 1.0 不是同一个量。
-    # 这个游戏把它当真旋钮用(aglina 上有 0.5/0.7/1.0,endminm 上有 0.0),不是模板常数,
-    # 所以也不能当"作者没设过"糊弄过去。在拿到能证明两边等价的真源之前,不猜换算:
-    # 不映射,留插件自己的默认值,并在这里说清楚为什么。
-    "animationPoseRatio": "本插件同名参数在 1.0 时把布料钉死在动画姿势上(实测 peak 2e-6), "
-                          "而游戏用 1.0 的链在游戏里是会动的 —— 两边的 1.0 不等价, "
-                          "换算关系没有真源可依,所以不搬",
     "meshWriteMode": "the source is bones here, so there is no mesh to write back",
     "paintMode": "an authoring-time tool state, not a simulation parameter",
     "reductionSetting.simpleDistance": "mesh reduction, which bone chains do not go through",
