@@ -13,7 +13,7 @@ from __future__ import annotations
 import bpy
 import mathutils
 
-from ... import coordinate, rig_identity
+from ... import coordinate
 from . import cloth
 
 COLLECTION_SUFFIX = "Colliders"
@@ -34,33 +34,29 @@ def _quaternion(values):
 
 
 BONE_BASIS_REASON = (
-    "a collider is stated in the frame of the BONE it hangs under, and that frame is not "
-    "the world -- so the world's up-axis swap is the wrong transform for it, and a rig "
-    "whose bones were re-aimed on import has no fixed offset from the source's either. "
-    "What does hold is that this add-on stamps every bone it builds with the transform "
-    "path it came from and the source-space rest of that path, so the frame is recovered "
-    "per bone out of the rig's own record rather than assumed")
+    "a collider is stated in the frame of the bone it hangs under, so placing it needs the "
+    "one rotation that carries that frame into this rig's -- and nothing else. It is built "
+    "from the MODEL's own bone pose, published beside the collider, against the bone as it "
+    "stands here: for the character the model IS, the two are one skeleton, so the pair is "
+    "a pure change of axes whose origins coincide. What it must not be built from is "
+    "anything stamped on the rig, because the animation path aligns a rig before it answers "
+    "and that moves the bones, leaving every earlier record describing a pose that is gone")
 
 
-def _bone_basis(rig, bone_name, rests):
-    """Source bone-local -> this rig's bone-local, for one bone.
+def _bone_basis(rig, bone_name, collider):
+    """Model bone-local -> this rig's bone-local, from the model's own bone pose.
 
-    Composed from the rig's own stamped rest table, so it is exact for the rig in front
-    of us and needs no knowledge of how its bones happen to be aimed."""
+    Returns the basis and how far the two frames' origins ended up apart -- one skeleton
+    puts that at zero, and anything else means the pair does not describe one bone."""
     bone = rig.data.bones.get(bone_name)
     if bone is None:
-        return None
-    path = bone.get(rig_identity.BONE_PATH_PROP)
-    if not path or not rests:
-        return None
-    parts = str(path).split("/")
-    world = mathutils.Matrix.Identity(4)
-    for index in range(len(parts)):
-        local = rests.get("/".join(parts[:index + 1]))
-        if local is None:
-            return None
-        world = world @ local
-    return bone.matrix_local.inverted_safe() @ coordinate.convert_matrix(world)
+        return None, 0.0
+    rotation = _quaternion(collider["bone_rotation"]).normalized()
+    source = mathutils.Matrix.Translation(collider["bone_position"]) \
+        @ rotation.to_matrix().to_4x4()
+    here = coordinate.convert_matrix(source)
+    return (bone.matrix_local.inverted_safe() @ here,
+            (here.translation - bone.matrix_local.translation).length)
 
 
 class Report:
@@ -74,6 +70,7 @@ class Report:
         self.unknown_paths = {}
         self.unsupported_colliders = []
         self.unplaced_colliders = []
+        self.worst_bone_gap = 0.0
         self.worst_attribute_error = 0.0
         self.table = ""
 
@@ -91,6 +88,9 @@ class Report:
                          % (len(self.unknown_paths), ", ".join(sorted(self.unknown_paths)[:8])))
         if self.unsupported_colliders:
             found.append("形状不认识的碰撞体 %d 个" % len(self.unsupported_colliders))
+        if self.worst_bone_gap > 1e-4:
+            found.append("碰撞体宿主骨与模型对不上, 最大原点偏差 %.4f m —— 这不是同一副骨架"
+                         % self.worst_bone_gap)
         if self.unplaced_colliders:
             found.append("骨架没有记录来源姿势, 放不下的碰撞体 %d 个"
                          % len(self.unplaced_colliders))
@@ -145,7 +145,8 @@ def _capsule_ends(collider):
     start_length = max(start_length - start_radius, 0.0)
     end_length = max(end_length - end_radius, 0.0)
     rotation = _quaternion(collider["local_rotation"])
-    origin = mathutils.Vector(collider["local_position"])         + rotation @ mathutils.Vector(collider["center"])
+    origin = mathutils.Vector(collider["local_position"]) \
+        + rotation @ mathutils.Vector(collider["center"])
     return (origin + rotation @ (axis * start_length),
             origin - rotation @ (axis * end_length))
 
@@ -209,7 +210,6 @@ def apply(context, rig, reading, bone_names, report):
 
     collection = None
     collider_objects = {}
-    rests = rig_identity.rest_table(rig)
     for entry in reading["colliders"]:
         bone = bone_names.of(entry["bone"])
         if not bone or bone not in rig.data.bones:
@@ -218,10 +218,11 @@ def apply(context, rig, reading, bone_names, report):
         if entry["kind"] != "CAPSULE":
             report.unsupported_colliders.append(entry["index"])
             continue
-        basis = _bone_basis(rig, bone, rests)
+        basis, origin_gap = _bone_basis(rig, bone, entry)
         if basis is None:
             report.unplaced_colliders.append(entry["index"])
             continue
+        report.worst_bone_gap = max(report.worst_bone_gap, origin_gap)
         if collection is None:
             collection = _collection_for(scene, rig)
         start_radius, end_radius = _radii(entry)

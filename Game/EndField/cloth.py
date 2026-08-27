@@ -15,7 +15,12 @@ nothing is configured.
 
 from __future__ import annotations
 
-from ... import cross_game_retarget
+import json
+import pathlib
+
+import bpy
+
+from ... import armature_builder
 from ...RuriRipperPyBridge.session import cabmap_state
 
 CONFIGS = "endfield.cloth.configs"
@@ -218,7 +223,10 @@ def read(texts):
                        "local_position": (float(row["localX"]), float(row["localY"]),
                                           float(row["localZ"])),
                        "local_rotation": (float(row["localRotationX"]), float(row["localRotationY"]),
-                                          float(row["localRotationZ"]), float(row["localRotationW"]))}
+                                          float(row["localRotationZ"]), float(row["localRotationW"])),
+                       "bone_position": (float(row["boneX"]), float(row["boneY"]), float(row["boneZ"])),
+                       "bone_rotation": (float(row["boneRotationX"]), float(row["boneRotationY"]),
+                                         float(row["boneRotationZ"]), float(row["boneRotationW"]))}
                       for row in _rows(COLLIDERS, texts)],
         "config_colliders": [{"config": _int(row["config"]), "collider": _int(row["collider"])}
                              for row in _rows(CONFIG_COLLIDERS, texts)],
@@ -226,6 +234,32 @@ def read(texts):
                         "attribute": _int(row["attribute"]), "error": float(row["error"])}
                        for row in _rows(ATTRIBUTES, texts)],
     }
+
+
+SKELETON_PROP = "ruri_skeleton"
+
+PRESET_FOLDER = "AnimationRetarget"
+
+
+def _preset_files():
+    for folder in bpy.utils.script_paths(subdir="presets"):
+        directory = pathlib.Path(folder) / PRESET_FOLDER
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.json")):
+                yield path
+
+
+def _family_names(end):
+    if not isinstance(end, dict):
+        return set()
+    names = {str(end.get("family", ""))}
+    names.update(str(alias) for alias in end.get("aliases") or ())
+    return {name.lower() for name in names if name}
+
+
+def _joins(document, source, dest):
+    return (source.lower() in _family_names(document.get("source"))
+            and dest.lower() in _family_names(document.get("dest")))
 
 
 class BoneNames:
@@ -245,14 +279,40 @@ class BoneNames:
 
     @classmethod
     def resolve(cls, session_key, rig):
-        spec, label = cross_game_retarget.resolve_retarget_spec(session_key, rig)
-        pairs = {}
-        for entry in spec.get("mappings") or ():
-            name = str(entry.get("source", ""))
-            target = str(entry.get("dest", ""))
-            if name and target:
-                pairs[name] = target
-        return cls(pairs, label)
+        """The rename table joining the model's skeleton to this rig's, read as a FILE.
+
+        Deliberately not the animation path's resolver: that one aligns the two
+        skeletons before it answers, which re-poses the rig -- and a collider is
+        placed relative to a bone, so a rig that moved under it lands the collider
+        somewhere else. All that is wanted here is the pair of names, which the
+        preset states outright.
+        """
+        source = str(cabmap_state.game_of(session_key) or "")
+        dest = str(rig.get(SKELETON_PROP) or "") or armature_builder.read_game(rig)
+        if not source or not dest:
+            return cls({}, "")
+        bones = {bone.name for bone in rig.data.bones}
+        best = ({}, "", -1)
+        for path in _preset_files():
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not _joins(document, source, dest):
+                continue
+            pairs = {}
+            for entry in document.get("mappings") or ():
+                name = str(entry.get("source", ""))
+                target = str(entry.get("dest", ""))
+                if name and target:
+                    pairs[name] = target
+            # One family ships several builds (a girl's and a boy's), and they declare
+            # the same two families -- so which one this rig IS is settled by how many
+            # of its bones the table actually names, never by the file's name.
+            hits = sum(1 for target in pairs.values() if target in bones)
+            if hits > best[2]:
+                best = (pairs, path.stem, hits)
+        return cls(best[0], best[1])
 
     def __len__(self):
         return len(self._mapping)
