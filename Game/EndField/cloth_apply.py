@@ -13,6 +13,7 @@ from __future__ import annotations
 import bpy
 import mathutils
 
+from ... import coordinate, rig_identity
 from . import cloth
 
 COLLECTION_SUFFIX = "Colliders"
@@ -29,7 +30,37 @@ def _point(vector):
 
 def _quaternion(values):
     x, y, z, w = values
-    return mathutils.Quaternion((w, x, -z, y))
+    return mathutils.Quaternion((w, x, y, z))
+
+
+BONE_BASIS_REASON = (
+    "a collider is stated in the frame of the BONE it hangs under, and that frame is not "
+    "the world -- so the world's up-axis swap is the wrong transform for it, and a rig "
+    "whose bones were re-aimed on import has no fixed offset from the source's either. "
+    "What does hold is that this add-on stamps every bone it builds with the transform "
+    "path it came from and the source-space rest of that path, so the frame is recovered "
+    "per bone out of the rig's own record rather than assumed")
+
+
+def _bone_basis(rig, bone_name, rests):
+    """Source bone-local -> this rig's bone-local, for one bone.
+
+    Composed from the rig's own stamped rest table, so it is exact for the rig in front
+    of us and needs no knowledge of how its bones happen to be aimed."""
+    bone = rig.data.bones.get(bone_name)
+    if bone is None:
+        return None
+    path = bone.get(rig_identity.BONE_PATH_PROP)
+    if not path or not rests:
+        return None
+    parts = str(path).split("/")
+    world = mathutils.Matrix.Identity(4)
+    for index in range(len(parts)):
+        local = rests.get("/".join(parts[:index + 1]))
+        if local is None:
+            return None
+        world = world @ local
+    return bone.matrix_local.inverted_safe() @ coordinate.convert_matrix(world)
 
 
 class Report:
@@ -42,6 +73,7 @@ class Report:
         self.missing_bones = set()
         self.unknown_paths = {}
         self.unsupported_colliders = []
+        self.unplaced_colliders = []
         self.worst_attribute_error = 0.0
         self.table = ""
 
@@ -59,6 +91,9 @@ class Report:
                          % (len(self.unknown_paths), ", ".join(sorted(self.unknown_paths)[:8])))
         if self.unsupported_colliders:
             found.append("形状不认识的碰撞体 %d 个" % len(self.unsupported_colliders))
+        if self.unplaced_colliders:
+            found.append("骨架没有记录来源姿势, 放不下的碰撞体 %d 个"
+                         % len(self.unplaced_colliders))
         return found
 
 
@@ -92,26 +127,27 @@ def _curve_points(samples):
 
 
 def _capsule_ends(collider):
-    """The two ends of a capsule, in the frame of the bone it hangs under.
+    """The two sphere centres of a capsule, in the frame of the bone it hangs under.
 
-    The source states one component: a centre, an axis, a length and a radius at
-    each end. This add-on states two objects, one per end, each carrying its own
-    radius -- so the conversion is to walk half the length out along the axis in
-    both directions, or the whole length in one, which is what the source's own
-    switch chooses between.
+    Ported from the source's own step-data build rather than reasoned about: the axis
+    runs from the start along +dir and the end along -dir, and BOTH ends are pulled in
+    by their own radius, because the stated length is the capsule's whole extent
+    including the round caps while these two points are the centres of those caps.
     """
     axis = mathutils.Vector(AXES[collider["direction"] % 3])
+    if collider["reverse_direction"]:
+        axis = -axis
+    start_radius, end_radius = _radii(collider)
     length = collider["size"][2]
-    centre = mathutils.Vector(collider["center"])
-    if collider["aligned_on_center"]:
-        first = centre - axis * (length * 0.5)
-        second = centre + axis * (length * 0.5)
-    else:
-        first = centre
-        second = centre + axis * length
-    rotation = _quaternion((collider["local_rotation"]))
-    offset = _point(collider["local_position"])
-    return (offset + rotation @ _point(first), offset + rotation @ _point(second))
+    aligned = collider["aligned_on_center"]
+    start_length = length * 0.5 if aligned else 0.0
+    end_length = length * 0.5 if aligned else (length - start_radius)
+    start_length = max(start_length - start_radius, 0.0)
+    end_length = max(end_length - end_radius, 0.0)
+    rotation = _quaternion(collider["local_rotation"])
+    origin = mathutils.Vector(collider["local_position"])         + rotation @ mathutils.Vector(collider["center"])
+    return (origin + rotation @ (axis * start_length),
+            origin - rotation @ (axis * end_length))
 
 
 def _radii(collider):
@@ -173,6 +209,7 @@ def apply(context, rig, reading, bone_names, report):
 
     collection = None
     collider_objects = {}
+    rests = rig_identity.rest_table(rig)
     for entry in reading["colliders"]:
         bone = bone_names.of(entry["bone"])
         if not bone or bone not in rig.data.bones:
@@ -181,10 +218,14 @@ def apply(context, rig, reading, bone_names, report):
         if entry["kind"] != "CAPSULE":
             report.unsupported_colliders.append(entry["index"])
             continue
+        basis = _bone_basis(rig, bone, rests)
+        if basis is None:
+            report.unplaced_colliders.append(entry["index"])
+            continue
         if collection is None:
             collection = _collection_for(scene, rig)
         start_radius, end_radius = _radii(entry)
-        first, second = _capsule_ends(entry)
+        first, second = (basis @ point for point in _capsule_ends(entry))
         base = "%s.%s" % (rig.name, bone)
         start = _empty(collection, "Capsule.%s.01" % base, 'CIRCLE', start_radius)
         end = _empty(collection, "Capsule.%s.02" % base, 'CIRCLE', end_radius)
