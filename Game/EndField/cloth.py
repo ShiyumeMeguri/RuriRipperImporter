@@ -56,14 +56,10 @@ VALUE_TABLE = (
     ("connectionMode", "connection_mode", ENUM, CONNECTION_MODES),
     ("rotationalInterpolation", "rotational_interpolation", FLOAT, None),
     ("rootRotation", "root_rotation", FLOAT, None),
-    ("animationPoseRatio", "animation_pose_ratio", FLOAT, None),
     ("blendWeight", "blend_weight", FLOAT, None),
     ("stablizationTimeAfterReset", "stablization_time", FLOAT, None),
     ("normalAxis", "normal_axis", ENUM, NORMAL_AXES),
     ("gravity", "gravity", FLOAT, None),
-    ("gravityDirection.x", "gravity_direction.0", FLOAT, None),
-    ("gravityDirection.y", "gravity_direction.1", FLOAT, None),
-    ("gravityDirection.z", "gravity_direction.2", FLOAT, None),
     ("gravityFalloff", "gravity_falloff", FLOAT, None),
     ("customSkinningSetting.enable", "custom_skinning_enable", BOOLEAN, None),
     ("normalAlignmentSetting.alignmentMode", "normal_alignment_mode", ENUM, ALIGNMENT_MODES),
@@ -126,6 +122,26 @@ VALUE_TABLE = (
     ("springConstraint.springNoise", "spring.noise", FLOAT, None),
 )
 
+# A direction is stated in the source's own world, and that world does not stand the
+# same way up as this one. Three independent scalar rows would each be individually
+# "right" and the vector as a whole wrong, which is why a direction is one row.
+DIRECTION_TABLE = (
+    ("gravityDirection", "gravity_direction"),
+)
+
+DIRECTION_BY_SOURCE = dict(DIRECTION_TABLE)
+
+DIRECTION_COMPONENTS = ("x", "y", "z")
+
+
+def direction_source_of(path):
+    """(source vector name, component index) for a leaf that is part of a direction."""
+    head, _, component = path.rpartition(".")
+    if head in DIRECTION_BY_SOURCE and component in DIRECTION_COMPONENTS:
+        return head, DIRECTION_COMPONENTS.index(component)
+    return None, -1
+
+
 CURVE_TABLE = (
     ("damping", "damping"),
     ("radius", "radius"),
@@ -143,6 +159,14 @@ CURVE_TABLE = (
 # was forgotten or decided against, and only a list tells the two apart.
 UNMAPPED = {
     "updateMode": "which update loop the game ticks the solver on; the host has its own",
+    # 实测:把它按字面搬过来,11 条链一根骨头都不动(60 帧,角色还在 ±1.2rad 摆动,
+    # peak 2e-6),而同一批配置在游戏里显然是会动的 —— 所以两边的 1.0 不是同一个量。
+    # 这个游戏把它当真旋钮用(aglina 上有 0.5/0.7/1.0,endminm 上有 0.0),不是模板常数,
+    # 所以也不能当"作者没设过"糊弄过去。在拿到能证明两边等价的真源之前,不猜换算:
+    # 不映射,留插件自己的默认值,并在这里说清楚为什么。
+    "animationPoseRatio": "本插件同名参数在 1.0 时把布料钉死在动画姿势上(实测 peak 2e-6), "
+                          "而游戏用 1.0 的链在游戏里是会动的 —— 两边的 1.0 不等价, "
+                          "换算关系没有真源可依,所以不搬",
     "meshWriteMode": "the source is bones here, so there is no mesh to write back",
     "paintMode": "an authoring-time tool state, not a simulation parameter",
     "reductionSetting.simpleDistance": "mesh reduction, which bone chains do not go through",

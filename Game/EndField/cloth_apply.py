@@ -222,13 +222,22 @@ def apply(context, rig, reading, bone_names, report):
         config.enabled = True
         report.configs += 1
 
+        directions = {}
         for entry in values_by_config.get(index, ()):
+            source, component = cloth.direction_source_of(entry["path"])
+            if source is not None:
+                directions.setdefault(source, [0.0, 0.0, 0.0])[component] = entry["value"]
+                continue
             row = cloth.VALUE_BY_SOURCE.get(entry["path"])
             if row is None:
                 if entry["path"] not in cloth.UNMAPPED:
                     report.unknown_paths[entry["path"]] = entry["value"]
                 continue
             _assign(config, row[1], _coerce(row[2], row[3], entry["value"], entry["path"]))
+            report.values += 1
+
+        for source, components in directions.items():
+            _assign(config, cloth.DIRECTION_BY_SOURCE[source], _point(components))
             report.values += 1
 
         for entry in curves_by_config.get(index, ()):
