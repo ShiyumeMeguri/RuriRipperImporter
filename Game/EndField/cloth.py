@@ -7,15 +7,15 @@ which spelling is which, and nothing else here knows a field name -- the applier
 walks the table, so a parameter that turns up later is a row and not code.
 
 Bone names are the OTHER vocabulary, and this module does not own that one: the
-retarget presets already map one skeleton's names onto another's, and a second
-table beside them would be a second answer to the same question.
+same tables that retarget an animation onto a rig already say what this rig calls
+the bone the model calls something else, and they are resolved the same way -- off
+the session's game and the identity the rig carries -- so nothing here is asked and
+nothing is configured.
 """
 
 from __future__ import annotations
 
-import json
-import pathlib
-
+from ... import cross_game_retarget
 from ...RuriRipperPyBridge.session import cabmap_state
 
 CONFIGS = "endfield.cloth.configs"
@@ -212,32 +212,30 @@ def read(texts):
 
 
 class BoneNames:
-    """One skeleton's names read as another's, out of a retarget preset.
+    """What the rig in the scene calls each bone the model names.
 
-    A name the preset does not carry is reported rather than guessed: a bone that
-    silently keeps its source name would look like an ordinary missing bone later,
-    at a point where nothing remembers it came from a preset that had no row for it.
+    Resolved, never chosen: the session says which game the model came from and the
+    rig carries which skeleton it is, which is the same pair the animation path
+    already joins through the same tables. A rig that IS the model's own skeleton
+    joins to nothing and the names pass through unchanged, which is the right answer
+    for that case rather than a missing one.
     """
 
-    def __init__(self, mapping, source):
+    def __init__(self, mapping, label):
         self._mapping = dict(mapping)
-        self.source = source
+        self.label = label
         self.missing = set()
 
     @classmethod
-    def from_preset(cls, path):
-        document = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    def resolve(cls, session_key, rig):
+        spec, label = cross_game_retarget.resolve_retarget_spec(session_key, rig)
         pairs = {}
-        for entry in document.get("mappings", []):
+        for entry in spec.get("mappings") or ():
             name = str(entry.get("source", ""))
             target = str(entry.get("dest", ""))
             if name and target:
                 pairs[name] = target
-        return cls(pairs, str(path))
-
-    @classmethod
-    def identity(cls):
-        return cls({}, "")
+        return cls(pairs, label)
 
     def __len__(self):
         return len(self._mapping)

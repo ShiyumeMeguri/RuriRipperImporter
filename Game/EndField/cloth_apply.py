@@ -43,10 +43,12 @@ class Report:
         self.unknown_paths = {}
         self.unsupported_colliders = []
         self.worst_attribute_error = 0.0
+        self.table = ""
 
     def lines(self):
-        found = ["%d 条配置, %d 个参数, %d 条曲线, %d 个碰撞体, %d 条逐骨骼属性"
-                 % (self.configs, self.values, self.curves, self.colliders, self.attributes)]
+        found = ["%d 条配置, %d 个参数, %d 条曲线, %d 个碰撞体, %d 条逐骨骼属性%s"
+                 % (self.configs, self.values, self.curves, self.colliders, self.attributes,
+                    ("; 骨骼名经 %s" % self.table) if self.table else "; 骨骼名直接对应")]
         if self.worst_attribute_error:
             found.append("逐骨骼属性回接最大偏差 %.4f m" % self.worst_attribute_error)
         if self.missing_bones:

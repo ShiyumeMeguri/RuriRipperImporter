@@ -938,27 +938,38 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
                     "hundreds of materials, and geometry/textures are identical "
                     "either way. Turn it on when you are actually rendering this "
                     "window rather than still deciding what to import")
-    # 模板组从哪来。默认 link 产物 .blend:体积小、多文件共享一份。开这个开关则 append,
-    # 模板成为这份文件自己的数据 —— 挪目录/换机器/被第三个文件再 link 一次都照画。
-    # (link 的代价:那条路解析不到时 Blender 不报错,塞一个同名零节点空壳顶上,
-    #  材质输出恒 0、整个模型变黑;要把文件发给别人或归档时就开这个。)
-    embed_shader_templates: BoolProperty(
-        name="Embed Shader Templates", default=False,
+    # 模板组从哪来。默认 append:模板成为这份文件自己的数据 —— 挪目录/换机器/被第三个
+    # 文件再 link 一次都照画。开这个开关则改为 link 一份**放在当前 .blend 旁边**的产物
+    # 副本(相对路径 `//`,不是插件目录的绝对路径):体积小、同目录多文件共享一份,代价是
+    # 那份副本得跟着 .blend 一起搬 —— 断了 Blender 不报错,塞一个零节点空壳顶上,
+    # 材质输出恒 0、整个模型变黑。
+    link_shader_templates: BoolProperty(
+        name="Link Shader Templates", default=False,
         description="Where the game shading stack's node-group templates live. Off "
-                    "(default) LINKS them from the addon's shipped .blend -- smaller "
-                    "files, one shared copy across scenes. On APPENDS them so they "
-                    "become this file's own data: the .blend still renders correctly "
-                    "after you move it, hand it to someone else, archive it, or link "
-                    "it from a third file. Turn it on for anything that has to leave "
-                    "this machine -- a link that stops resolving is not an error in "
-                    "Blender, it silently substitutes an empty stand-in and the whole "
-                    "model renders black")
+                    "(default) APPENDS them so they become this file's own data: the "
+                    ".blend still renders correctly after you move it, hand it to "
+                    "someone else, archive it, or link it from a third file. On LINKS "
+                    "a copy of the template .blend placed NEXT TO this file and "
+                    "referenced by a relative path -- smaller files, one shared copy "
+                    "for every .blend in that folder, but the copy has to travel with "
+                    "them. A link that stops resolving is not an error in Blender: it "
+                    "silently substitutes an empty stand-in and the whole model "
+                    "renders black")
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
     import_empties: BoolProperty(
         name="Import Empties", default=False,
         description="Keep every GameObject as an Empty. Off keeps only the "
                     "empties that hold imported content in the hierarchy")
+    # 只有"把设置写在模型上"的游戏答得出这件事,所以这个开关只在那种安装前面出现
+    # (见 Game.secondary_motion_of)。核心永远不知道是哪些游戏,只知道这一个答没答。
+    import_secondary_motion: BoolProperty(
+        name="Import Cloth", default=False,
+        description="Bring the model's own secondary motion across: the hair, cloth and "
+                    "accessory chains its author tuned on the model itself, plus the "
+                    "collision volumes they collide with, written onto the imported "
+                    "armature. Replaces whatever that armature already carried. Which "
+                    "bone is which is resolved the same way an animation's is")
     retarget_face: BoolProperty(
         name="Retarget Face", default=False,
         description="For a clip whose facial animation is baked into its bone tracks "
@@ -988,12 +999,13 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
             "lod0_only": self.lod0_only,
             "import_materials": self.import_materials,
             "game_shaders": self.scene_shaders if scene else self.character_shaders,
-            "embed_shader_templates": self.embed_shader_templates,
+            "link_shader_templates": self.link_shader_templates,
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,
             "import_animations": self.import_animations,
             "import_empties": self.import_empties,
             "retarget_face": self.retarget_face,
+            "import_secondary_motion": self.import_secondary_motion,
             # THE game this session is looking at, resolved exactly once here and
             # stamped onto every armature the import builds -- what a later
             # cross-game retarget selects its table by.
@@ -2110,6 +2122,7 @@ class RURI_OT_import_selected(bpy.types.Operator):
                 self.report({"WARNING"}, warning)
             if root_guid == primary_of_single:
                 primary_report = report
+            _import_secondary_motion(self, context, state, report, rows)
 
         if populate_browser and imported and primary_report is None:
             self.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
@@ -2172,6 +2185,67 @@ class RURI_OT_import_selected(bpy.types.Operator):
         result = _import_clips_standalone(self, context, state, clip_rows[0]["cab"],
                                           clip_guids, db)
         return result == {"FINISHED"}
+
+
+def _import_secondary_motion(operator, context, state, report, rows):
+    """Hand this root's armature to the game, if the game states such settings and the
+    import was asked for them. The host neither knows what those settings are nor which
+    games have them -- it asks the registry and reports whatever comes back."""
+    if not state.import_secondary_motion or report.armature is None:
+        return
+    _run_secondary_motion(operator, context, state, report.armature,
+                          [row["cab"] for row in rows])
+
+
+def _run_secondary_motion(operator, context, state, armature, cabs):
+    """Ask the current game for the settings those CABs state, and word the answer.
+
+    The host holds no opinion about what came back beyond how to say it: a game that
+    states nothing returns nothing, and the lines are the game's own."""
+    provider = Game.secondary_motion_of(_active_game_name(state))
+    if provider is None:
+        return None
+    try:
+        result = provider(context, armature, list(cabs))
+    except Exception as failure:
+        operator.report({"WARNING"}, "Secondary motion was not imported: %s" % failure)
+        return None
+    if result is None:
+        return None
+    lines = result.lines()
+    operator.report({"INFO"}, lines[0])
+    for line in lines[1:]:
+        operator.report({"WARNING"}, line)
+    return result
+
+
+class RURI_OT_import_secondary_motion(bpy.types.Operator):
+    """The browser's own way in, for a model the game's own tables never name.
+
+    The roster lists the cast the game declares; a model that carries these settings
+    carries them whether or not anything declares it, so the rows are the other way in."""
+
+    bl_idname = "ruri.import_secondary_motion"
+    bl_label = "Import Cloth"
+    bl_description = ("Write the selected model prefab's own hair/cloth/accessory chains "
+                      "and their collision volumes onto the active armature, replacing "
+                      "whatever it already carried")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        armature = context.object
+        if armature is None or armature.type != "ARMATURE":
+            self.report({"ERROR"}, "Select the armature to write onto.")
+            return {"CANCELLED"}
+        cabs = list(cabmap_state.selected_cabs())
+        if not cabs:
+            self.report({"ERROR"}, "Select the character's model prefab row first.")
+            return {"CANCELLED"}
+        if _run_secondary_motion(self, context, state, armature, cabs) is None:
+            self.report({"WARNING"}, "The selected rows state no secondary motion.")
+            return {"CANCELLED"}
+        return {"FINISHED"}
 
 
 def _populate_animation_browser(state, report):
@@ -2447,7 +2521,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             # 只在着色栈真的会建图时才有意义 —— 不开 Game Shaders 就没有模板组可取。
             link_row = opts.row()
             link_row.enabled = state.import_materials and state.character_shaders
-            link_row.prop(state, "embed_shader_templates")
+            link_row.prop(state, "link_shader_templates")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")
@@ -2457,6 +2531,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
                 face = opts.row(align=True)
                 face.active = any(obj.type == "ARMATURE" for obj in context.scene.objects)
                 face.prop(state, "retarget_face", icon="USER")
+            # Same rule for the settings a model carries about how it swings.
+            if Game.secondary_motion_of(_active_game_name(state)) is not None:
+                opts.prop(state, "import_secondary_motion", icon="MOD_CLOTH")
 
             batch = f" {selected_count}" if selected_count > 1 else ""
             actions = gated.row(align=True)
@@ -2467,6 +2544,15 @@ class RURI_PT_cabmap(bpy.types.Panel):
             op = gated.operator(RURI_OT_cabmap_import_with_dependents.bl_idname,
                                text=f"Import{batch} (With Dependents)", icon="LOOP_BACK")
             op.reset_scene = False
+            # A model that carries its own secondary motion carries it whether or not
+            # any of the game's tables ever names that model -- so the rows get their
+            # own way in, beside the import that would have brought it along.
+            if Game.secondary_motion_of(_active_game_name(state)) is not None:
+                cloth_row = gated.row(align=True)
+                cloth_row.active = (context.object is not None
+                                    and context.object.type == "ARMATURE")
+                cloth_row.operator(RURI_OT_import_secondary_motion.bl_idname,
+                                   icon="MOD_CLOTH")
         else:
             active.draw(gated, context)
 
@@ -2843,6 +2929,7 @@ _CLASSES = (
     RURI_OT_close_tab,
     RURI_OT_cabmap_sort,
     RURI_OT_cabmap_import_with_dependents,
+    RURI_OT_import_secondary_motion,
     RURI_OT_import_selected,
     RURI_OT_discover_animations,
     RURI_OT_import_selected_animations,

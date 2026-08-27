@@ -43,7 +43,6 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from ... import animation_builder, coordinate, filter_ui, prefab_importer, rig_identity
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import cloth_panel
 from . import morph_state, roster_panel, skeletal_morph, story_panel
 
 # The game bakes a ctrl driver onto a mesh as a shape key named after the DCC
@@ -1273,8 +1272,6 @@ def draw_character_tab(layout, context):
         return
 
     state = context.scene.ruri_character
-
-    cloth_panel.draw_cloth_block(layout, context)
 
     rig_row = layout.row(align=True)
     rig_row.prop(state, "character_token", icon="OUTLINER_OB_ARMATURE")

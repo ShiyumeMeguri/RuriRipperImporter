@@ -80,6 +80,9 @@ GAME_MODULE = GameModule(
     # character's own expression vocabulary. The host's one clip-loading path asks for
     # this; the maths is the hook's (RipperBlenderBridge.SolveFaceRetarget).
     face_retarget=face_retarget.provide,
+    # The hair/cloth/accessory chains this game tunes ON the model prefab itself,
+    # which is why they can travel with an import at all (see cloth_panel.provide).
+    secondary_motion=cloth_panel.provide,
     register=_register,
     unregister=_unregister,
 )

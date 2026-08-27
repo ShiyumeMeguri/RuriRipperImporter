@@ -62,9 +62,11 @@ class GameModule:
     """One game's whole contribution: its identity, the tabs it adds, and the
     register/unregister pair for the bpy classes those tabs need."""
 
-    __slots__ = ("game_name", "label", "tabs", "face_retarget", "_register", "_unregister")
+    __slots__ = ("game_name", "label", "tabs", "face_retarget", "secondary_motion",
+                 "_register", "_unregister")
 
-    def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None):
+    def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None,
+                 secondary_motion=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
@@ -83,6 +85,14 @@ class GameModule:
         # write the face INTO, or None for a caller with no action of its own: an object
         # plays one action, so a face given its own would replace the body it came with.
         self.face_retarget = face_retarget
+        # How this game states the secondary motion its models carry -- the hair, cloth
+        # and accessory chains an author tuned on the model itself. Only a game that
+        # ships those settings WITH the model can answer, so the option that imports
+        # them appears exactly where one does and nowhere else.
+        #
+        # The callable takes (context, armature, cabs, report) and writes onto whatever
+        # cloth add-on is present, returning the report it was handed.
+        self.secondary_motion = secondary_motion
         self.tabs = tuple(tabs)
         self._register = register
         self._unregister = unregister
@@ -150,6 +160,14 @@ def face_retarget_of(game_name):
     host never learns which games have faces, only whether this one answered."""
     game = module_for(game_name)
     return game.face_retarget if game is not None else None
+
+
+def secondary_motion_of(game_name):
+    """The secondary-motion reader ONE game contributes, or None. The import path asks
+    before it offers to bring a model's own hair and cloth settings across; a game that
+    ships none simply never answers and the option never appears."""
+    game = module_for(game_name)
+    return game.secondary_motion if game is not None else None
 
 
 def tabs_of(game_name):
