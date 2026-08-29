@@ -1016,15 +1016,7 @@ class RURI_OT_story_import(bpy.types.Operator):
             if not any(cab in cabs for cabs in by_actor.values()):
                 by_actor.setdefault("", []).append(cab)
 
-        built, homeless = 0, []
-        for actor, cabs in by_actor.items():
-            rig = story_stage._rig_for(context, actor)
-            if rig is not None:
-                story_stage._make_active(context, rig)
-            elif actor:
-                homeless.append(actor)
-            if story_stage._import_cabs(context, cabs)[0]:
-                built += len(cabs)
+        built, homeless = story_stage.land_clips(context, by_actor)
         if homeless:
             self.report({"WARNING"},
                         "No rig in the scene for {0} -- use Load Whole Cutscene, or load them "

@@ -1910,6 +1910,144 @@ def resolve_import_closure(seeds, export_class_ids=None):
             "clips_by_cab": clips_by_cab, "scene_roots": scene_roots}
 
 
+def import_hierarchy_from_closure(operator, context, state, rows, resolved,
+                                  only_root_names="", populate_browser=False,
+                                  only_seeded=False):
+    """Import hierarchy/asset rows out of an ALREADY-resolved closure.
+
+    THE hierarchy import -- the operator is one caller of it, not its owner. A
+    caller that resolved the closure itself (off the main thread, for a whole cast
+    at once) gets exactly the dispatch a browser click gets: per-asset rows, scene
+    roots, the loose-asset path, secondary motion.
+
+    ``operator`` is anything with ``.report(level, message)``.
+
+    Two ways to say "just what I asked for", for the two kinds of caller:
+    ``only_root_names`` matches roots by asset NAME, for a caller that knows the
+    name it wants; ``only_seeded`` imports exactly the roots THESE rows' CABs
+    resolved to, by the bridge's own CAB identity. The second is what a caller
+    sharing one closure with other callers needs -- with a whole cast in one
+    closure, "every root the closure exports" is everybody at once, so an
+    unrestricted import would give each member the entire cast.
+
+    Returns (all_ok, imported_count)."""
+    db = resolved['db']
+    roots = resolved['roots']
+    seed_roots = resolved['seed_roots']
+    scene_roots = resolved['scene_roots']
+    options = state.as_options()
+    ok = True
+    imported = 0
+
+    # Per-asset rows that resolved to a NON-hierarchy asset (Mesh/Material/
+    # Texture2D) import exactly that one asset -- dispatched before any
+    # roots logic, since a lone mesh/texture closure legitimately exports
+    # zero .prefab/.unity roots.
+    hierarchy_targets = []  # (row, primary_guid or None)
+    for row in rows:
+        cab = row["cab"]
+        primary_guid = seed_roots.get(cab)
+        if "::" in cab:  # per-asset virtual row of a non-bundled file
+            if primary_guid is None:
+                operator.report({"ERROR"}, f"'{row['name']}' didn't export as its own file (engine "
+                                       f"built-in, or embedded in a scene/host hierarchy) -- "
+                                       f"import its host file row instead.")
+                ok = False
+                continue
+            text = db.raw_text(primary_guid)
+            class_name = discovery.peek_class_and_name(text)[0] if text else None
+            if class_name != "GameObject":
+                if _import_single_asset(operator, context, state, db,
+                                        primary_guid, class_name, row["name"]) == {"FINISHED"}:
+                    imported += 1
+                else:
+                    ok = False
+                continue
+        hierarchy_targets.append((row, primary_guid))
+
+    if not hierarchy_targets:
+        if populate_browser:
+            _populate_animation_browser(state, None)
+        return ok, imported
+
+    # Root selection, generalizing the single-row semantics row by row:
+    # a scene row and a per-asset GameObject row import exactly their OWN
+    # root (a level's closure drags in every shared .prefab the whole
+    # dependency graph exports -- the scene already instantiates what it
+    # uses); a plain bundled row imports every root its closure exports
+    # (an actor prefab routinely pulls a portrait "uimodel" variant as a
+    # second top-level asset). If any plain bundled row is in the batch,
+    # the union closure's full root set imports (deduped) -- the same
+    # outcome as importing those rows one at a time.
+    restricted_roots = []
+    unrestricted = False
+    for row, primary_guid in hierarchy_targets:
+        if primary_guid is not None and (primary_guid in scene_roots or "::" in row["cab"]):
+            restricted_roots.append(primary_guid)
+        else:
+            unrestricted = True
+    if only_seeded:
+        # The rows' own roots, by CAB identity. A CAB that seeded no root of its own
+        # contributes nothing rather than opening the whole closure -- with a shared
+        # closure that would be everybody else's models.
+        import_roots = [guid for _row, guid in hierarchy_targets if guid is not None]
+        if not import_roots:
+            operator.report({"WARNING"}, "None of {0} CAB(s) exported a root of its own.".format(
+                len(hierarchy_targets)))
+            return False, imported
+    else:
+        import_roots = list(roots) if unrestricted else restricted_roots
+    if only_root_names:
+        import_roots = _roots_named(only_root_names, import_roots)
+        if not import_roots:
+            operator.report({"ERROR"}, f"The closure exports no root named "
+                                   f"'{only_root_names}' -- nothing was imported.")
+            return False, imported
+    if unrestricted and any(guid in scene_roots for guid in restricted_roots):
+        operator.report({"WARNING"}, "Mixing a scene row with bundled prefab rows imports the "
+                                 "bundled rows' full root set -- import scenes on their own "
+                                 "for a minimal result.")
+    if not import_roots:
+        # No GameObject-rooted .prefab/.unity anywhere in the closure -- a
+        # bundled CAB of loose Mesh/Material/Avatar/TextAsset data (see
+        # _import_loose_closure_assets) rather than a dead end.
+        loose_imported = _import_loose_closure_assets(operator, context, state, db)
+        if loose_imported == 0:
+            operator.report({"WARNING"}, "No importable (.prefab/.unity) asset, and no loose "
+                                     "Mesh/Material/Avatar/TextAsset, found in the resolved closure.")
+        if populate_browser:
+            _populate_animation_browser(state, None)
+        return loose_imported > 0, imported + loose_imported
+
+    # The animation browser only applies to a SINGLE selected character --
+    # attribute it through seed_roots (the cabmap's own CAB identity, never
+    # a display-name match; see RipperBridge.import_cabs).
+    primary_of_single = (hierarchy_targets[0][1]
+                         if populate_browser and len(hierarchy_targets) == 1 else None)
+    primary_report = None
+    seen_roots = set()
+    for root_guid in import_roots:
+        if root_guid in seen_roots:
+            continue
+        seen_roots.add(root_guid)
+        prefab_file = db.load_guid(root_guid)
+        if prefab_file is None:
+            continue
+        report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
+        imported += 1
+        for warning in report.warnings[:5]:
+            operator.report({"WARNING"}, warning)
+        if root_guid == primary_of_single:
+            primary_report = report
+        _import_secondary_motion(operator, context, state, report, rows)
+
+    if populate_browser and imported and primary_report is None:
+        operator.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
+                                 "animation browser not populated.")
+    _populate_animation_browser(state, primary_report if populate_browser else None)
+    return ok, imported
+
+
 class RURI_OT_import_selected(bpy.types.Operator):
     """Batch import over the multi-selection: every selected clip-only row and
     every selected hierarchy/asset row each share ONE bridge closure resolve
@@ -2028,125 +2166,17 @@ class RURI_OT_import_selected(bpy.types.Operator):
         }
 
     def _import_hierarchy_rows(self, context, state, rows, populate_browser, preresolved=None):
-        """One shared closure resolve for every non-clip row, then per-row
+        """One shared closure resolve for every non-clip row, then the shared
         dispatch. Returns (all_ok, imported_count)."""
-        cabs = [row["cab"] for row in rows]
-        if preresolved is not None:
-            db = preresolved["db"]
-            roots = preresolved["roots"]
-            seed_roots = preresolved["seed_roots"]
-            scene_roots = preresolved["scene_roots"]
-        else:
+        resolved = preresolved
+        if resolved is None:
             try:
-                resolved = resolve_import_closure(cabs)
+                resolved = resolve_import_closure([row["cab"] for row in rows])
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return False, 0
-            db = resolved["db"]
-            roots = resolved["roots"]
-            seed_roots = resolved["seed_roots"]
-            scene_roots = resolved["scene_roots"]
-        options = state.as_options()
-        ok = True
-        imported = 0
-
-        # Per-asset rows that resolved to a NON-hierarchy asset (Mesh/Material/
-        # Texture2D) import exactly that one asset -- dispatched before any
-        # roots logic, since a lone mesh/texture closure legitimately exports
-        # zero .prefab/.unity roots.
-        hierarchy_targets = []  # (row, primary_guid or None)
-        for row in rows:
-            cab = row["cab"]
-            primary_guid = seed_roots.get(cab)
-            if "::" in cab:  # per-asset virtual row of a non-bundled file
-                if primary_guid is None:
-                    self.report({"ERROR"}, f"'{row['name']}' didn't export as its own file (engine "
-                                           f"built-in, or embedded in a scene/host hierarchy) -- "
-                                           f"import its host file row instead.")
-                    ok = False
-                    continue
-                text = db.raw_text(primary_guid)
-                class_name = discovery.peek_class_and_name(text)[0] if text else None
-                if class_name != "GameObject":
-                    if _import_single_asset(self, context, state, db,
-                                            primary_guid, class_name, row["name"]) == {"FINISHED"}:
-                        imported += 1
-                    else:
-                        ok = False
-                    continue
-            hierarchy_targets.append((row, primary_guid))
-
-        if not hierarchy_targets:
-            if populate_browser:
-                _populate_animation_browser(state, None)
-            return ok, imported
-
-        # Root selection, generalizing the single-row semantics row by row:
-        # a scene row and a per-asset GameObject row import exactly their OWN
-        # root (a level's closure drags in every shared .prefab the whole
-        # dependency graph exports -- the scene already instantiates what it
-        # uses); a plain bundled row imports every root its closure exports
-        # (an actor prefab routinely pulls a portrait "uimodel" variant as a
-        # second top-level asset). If any plain bundled row is in the batch,
-        # the union closure's full root set imports (deduped) -- the same
-        # outcome as importing those rows one at a time.
-        restricted_roots = []
-        unrestricted = False
-        for row, primary_guid in hierarchy_targets:
-            if primary_guid is not None and (primary_guid in scene_roots or "::" in row["cab"]):
-                restricted_roots.append(primary_guid)
-            else:
-                unrestricted = True
-        import_roots = list(roots) if unrestricted else restricted_roots
-        if self.only_root_names:
-            import_roots = _roots_named(self.only_root_names, import_roots)
-            if not import_roots:
-                self.report({"ERROR"}, f"The closure exports no root named "
-                                       f"'{self.only_root_names}' -- nothing was imported.")
-                return False, imported
-        if unrestricted and any(guid in scene_roots for guid in restricted_roots):
-            self.report({"WARNING"}, "Mixing a scene row with bundled prefab rows imports the "
-                                     "bundled rows' full root set -- import scenes on their own "
-                                     "for a minimal result.")
-        if not import_roots:
-            # No GameObject-rooted .prefab/.unity anywhere in the closure -- a
-            # bundled CAB of loose Mesh/Material/Avatar/TextAsset data (see
-            # _import_loose_closure_assets) rather than a dead end.
-            loose_imported = _import_loose_closure_assets(self, context, state, db)
-            if loose_imported == 0:
-                self.report({"WARNING"}, "No importable (.prefab/.unity) asset, and no loose "
-                                         "Mesh/Material/Avatar/TextAsset, found in the resolved closure.")
-            if populate_browser:
-                _populate_animation_browser(state, None)
-            return loose_imported > 0, imported + loose_imported
-
-        # The animation browser only applies to a SINGLE selected character --
-        # attribute it through seed_roots (the cabmap's own CAB identity, never
-        # a display-name match; see RipperBridge.import_cabs).
-        primary_of_single = (hierarchy_targets[0][1]
-                             if populate_browser and len(hierarchy_targets) == 1 else None)
-        primary_report = None
-        seen_roots = set()
-        for root_guid in import_roots:
-            if root_guid in seen_roots:
-                continue
-            seen_roots.add(root_guid)
-            prefab_file = db.load_guid(root_guid)
-            if prefab_file is None:
-                continue
-            report = prefab_importer.import_prefab_from_db(context, db, prefab_file, options)
-            imported += 1
-            for warning in report.warnings[:5]:
-                self.report({"WARNING"}, warning)
-            if root_guid == primary_of_single:
-                primary_report = report
-            _import_secondary_motion(self, context, state, report, rows)
-
-        if populate_browser and imported and primary_report is None:
-            self.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
-                                     "animation browser not populated.")
-        _populate_animation_browser(state, primary_report if populate_browser else None)
-        return ok, imported
+        return import_hierarchy_from_closure(self, context, state, rows, resolved,
+                                             self.only_root_names, populate_browser)
 
     def _import_clip_rows(self, context, state, clip_rows, preresolved=None):
         """One shared closure resolve for every selected clip-only row, then a

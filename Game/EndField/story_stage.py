@@ -45,10 +45,13 @@ import re
 import bpy
 
 from ...RuriRipperPyBridge.session import cabmap_state
-from . import datasets, roster_panel
+from . import cast, datasets
 
-# What a directive means, by its own word. The registry IS the extension point.
+# What a directive means, by its own word, and what it needs before it can mean
+# it. The registry IS the extension point: a new kind is one function under
+# @realizer, plus -- only if it loads something -- one under @needs.
 REALIZERS = {}
+NEEDS = {}
 
 # Where a subtitle sits in front of the camera, in metres of camera space, and how
 # tall its text is there. Not a game fact -- the game draws its box in screen space
@@ -65,6 +68,13 @@ CJK_FONTS = ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyhbd.ttc",
              "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
              "C:/Windows/Fonts/YuGothM.ttc", "C:/Windows/Fonts/malgun.ttf")
 
+# Why a CAB is wanted. The two want opposite export filters, which is exactly why
+# ACQUIRE is two crossings and not one: a model is wanted whole, a clip CAB only
+# for its AnimationClips, and a unit with five hundred of the latter cannot pay the
+# former for them.
+CLIP = "clip"
+SCENERY = "scenery"
+
 # The scene the story plays in is enormous and the story does not need it to play.
 SCENE_NONE = "none"
 SCENE_WINDOW = "window"
@@ -76,6 +86,21 @@ def realizer(*kinds):
     def register(function):
         for kind in kinds:
             REALIZERS[kind] = function
+        return function
+    return register
+
+
+def needs(*kinds):
+    """Register what a directive needs LOADED, as CAB names, from its row alone.
+
+    Declaring is separate from realizing on purpose: it runs before anything is
+    read, so everything the unit needs is known at once and one crossing covers
+    it. A kind with no declaration needs nothing loaded -- which is a statement,
+    not an omission, because the alternative (reaching for the bridge while
+    realizing) is not reachable from a realizer at all."""
+    def register(function):
+        for kind in kinds:
+            NEEDS[kind] = function
         return function
     return register
 
@@ -103,10 +128,17 @@ class Stage:
         self.beats = []
         self.placed = 0
         self.unplaced = []
+        # What a member's build could not do. Not the same fact as a clip with
+        # nothing to drive, so not the same list -- the summary says both.
+        self.notes = []
         self.unresolved = []
         self.markers = 0
         self.looking = 0
         self.unknown = set()
+        # The closure every realizer builds against. Set once, by ACQUIRE.
+        self.scenery = None
+        self.motion = None
+        self.cast = {}
 
     def frame(self, seconds):
         return seconds * self.fps
@@ -177,19 +209,28 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     for row in rows:
         stage.note(row)
 
-    shots = [row for row in rows if _drives_camera(row)]
-    # Everything read straight off the bridge -- the shots, and whatever motion
-    # lands on a stand-in rather than a rig -- marked and crossed once.
-    marked = [row["sourceCab"] for row in rows if row["sourceCab"] and not row["model"]]
-    yield _Read(lambda: prefetch_curves(marked), 0.20)
-    for row in shots:
-        _realize(stage, row)
+    # MANIFEST: everything this unit will ever need, before anything is read.
+    manifest = yield _Read(lambda: _manifest(rows), 0.25)
+    stage.cast = manifest["cast"]
+    stage.unresolved.extend(manifest["unresolved"])
+
+    # ACQUIRE, first crossing: every clip, filtered to AnimationClip. Before the
+    # models because the shots come first and they are read straight off it.
+    stage.motion = yield _Read(lambda: _acquire_clips(manifest["clips"]), 0.45)
+    _hold_curves(stage, manifest["direct"])
+    for row in rows:
+        if _drives_camera(row):
+            _realize(stage, row)
     if stage.camera is not None:
         context.scene.camera = stage.camera
-        context.scene.frame_set(int(round(min((stage.frame(row["at"]) for row in shots),
-                                              default=0.0))))
+        context.scene.frame_set(int(round(min(
+            (stage.frame(row["at"]) for row in rows if _drives_camera(row)), default=0.0))))
 
-    yield from _load_cast_steps(stage, rows)
+    # ACQUIRE, second crossing: every model, prop and effect the unit puts on
+    # stage -- the whole cast in ONE read, which is the point of the manifest.
+    stage.scenery = yield _Read(lambda: _acquire_scenery(manifest["scenery"]), 0.62)
+    yield from _cast_steps(stage, manifest)
+
     for row in rows:
         if not _drives_camera(row):
             _realize(stage, row)
@@ -199,6 +240,140 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
         _load_scene(stage, scene_mode)
     yield _Mark(1.0)
     return stage
+
+
+# -- manifest -----------------------------------------------------------------
+
+def _manifest(rows):
+    """What this unit needs, as a value: who is in it, and every CAB to mark.
+
+    Pure with respect to the scene and to the closure -- it asks the game's own
+    tables what a performer loads as, and answers with names, never with imports.
+    That is what makes the whole cast markable in one read instead of resolving
+    itself one member at a time while it builds."""
+    members = {}
+    for row in rows:
+        if not row["model"]:
+            continue
+        key = _identity(row)
+        if key and key not in members:
+            members[key] = {"key": key, "label": row["performer"] or row["actor"],
+                            "character": row["character"], "template": row["template"],
+                            "binding": row["target"]}
+    resolved = cast.resolve(list(members.values()))
+
+    scenery = cast.cabs_of(resolved.values())
+    clips = []
+    direct = []
+    by_actor = {}
+    for row in rows:
+        declare = NEEDS.get(row["kind"])
+        if declare is None:
+            continue
+        for role, cab in declare(row):
+            if not cab:
+                continue
+            if role is not CLIP:
+                scenery.append(cab)
+                continue
+            clips.append(cab)
+            key = _identity(row) if row["model"] else ""
+            if key and key in resolved:
+                # Whose clip it is, so the animation lands on the rig that IS them.
+                by_actor.setdefault(key, []).append(cab)
+            else:
+                # A clip driving something with no rig -- the camera, a prop, a
+                # performer the game ships no model for -- is read as curves onto
+                # a stand-in instead, so its CAB is wanted a second way.
+                direct.append(cab)
+    return {"cast": resolved,
+            "unresolved": [members[key]["label"] or key
+                           for key in members if key not in resolved],
+            "scenery": list(dict.fromkeys(scenery)),
+            "clips": list(dict.fromkeys(clips)),
+            "direct": list(dict.fromkeys(direct)),
+            "by_actor": {key: list(dict.fromkeys(cabs)) for key, cabs in by_actor.items()}}
+
+
+def _identity(row):
+    """The game's own identity for a performer -- the character it IS, the npc
+    template its model is assembled from, else the token the story files it under.
+
+    Never the display token when an identity exists: one person is written several
+    ways across a unit (``gentleman_hsteacher_10`` on its clip, ``npc_gentleman_
+    hsteacher_10`` on its binding), and keying on the writing makes one person two
+    performers, each loading the same model onto a rig the other cannot use."""
+    return row["character"] or row["template"] or row["actor"] or ""
+
+
+def _acquire_clips(cabs):
+    """One crossing for every clip the unit plays. Filtered to AnimationClip
+    because that is all any of them is wanted for -- a unit with five hundred clip
+    CABs would otherwise serialize five hundred bundles whole."""
+    from ...RuriRipperPyBridge.unity import class_registry
+    from ... import cabmap_panel
+    if not cabs:
+        return None
+    return cabmap_panel.resolve_import_closure(
+        cabs, [class_registry.id_for_name("AnimationClip")])
+
+
+def _acquire_scenery(cabs):
+    """One crossing for every model, prop and effect. Unfiltered: a model IS its
+    closure -- meshes, materials, textures, avatars."""
+    from ... import cabmap_panel
+    return cabmap_panel.resolve_import_closure(cabs) if cabs else None
+
+
+def _cast_steps(stage, manifest):
+    """Put the cast on stage off the two closures, and land each performer's clips
+    on the rig that IS them.
+
+    Building is per member and the animation build is per rig -- deliberately, and
+    it costs nothing: neither crosses the bridge. What used to be per member was
+    the READ, and that is now behind them both."""
+    from ... import cross_game_retarget
+    # Distinct MEMBERS, not distinct spellings: several tokens of one performer
+    # share one Loadable, and building it twice would give one person two rigs.
+    members = list({loadable.key: loadable for loadable in stage.cast.values()}.values())
+    for index, loadable in enumerate(members, start=1):
+        rig = _rig_for(stage.context, loadable)
+        if rig is None and stage.scenery is not None:
+            before = {obj.name for obj in stage.context.scene.objects
+                      if obj.type == "ARMATURE"}
+            built = cast.build(stage.context, loadable, stage.scenery)
+            stage.notes.extend(built.warnings)
+            rig = _adopt(stage.context, loadable, built, before)
+        if rig is None:
+            stage.unresolved.append(loadable.label)
+            continue
+        for spelling, found in stage.cast.items():
+            if found.key == loadable.key:
+                stage.actors[spelling] = rig
+        yield _Mark(0.62 + 0.16 * (index / max(len(members), 1)))
+
+    if stage.motion is None:
+        return
+    landing = {}
+    for spelling, rig in stage.actors.items():
+        wanted = landing.setdefault(rig.name, [rig, []])
+        wanted[1].extend(manifest["by_actor"].get(spelling, ()))
+    landing = [(name, rig, list(dict.fromkeys(cabs)))
+               for name, (rig, cabs) in landing.items()]
+    for index, (_key, rig, cabs) in enumerate(landing, start=1):
+        if not cabs:
+            continue
+        # The active object is set exactly as the per-actor import set it -- so the
+        # context each build sees is unchanged -- but the animation lands via the
+        # explicit armature, so one closure feeds every actor.
+        if not _make_active(stage.context, rig):
+            raise RuntimeError(
+                "The view layer would not make {0} the active object, so this unit's "
+                "animation has no skeleton to land on. It is usually a leftover rig in "
+                "an excluded collection -- clear the scene and load again.".format(rig.name))
+        cross_game_retarget.build_clips_onto_from_closure(
+            stage.context, rig, list(cabs), stage.motion)
+        yield _Mark(0.78 + 0.16 * (index / max(len(landing), 1)))
 
 
 def _drives_camera(row):
@@ -247,177 +422,55 @@ def _scene_fps(context, rows):
     return float(context.scene.render.fps)
 
 
-# ── the cast ────────────────────────────────────────────────────────────────
+# ── the cast ──────────────────────────────────────────────────
 
-def _load_cast_steps(stage, rows):
-    """Bring in everyone the unit animates and land each one's clips on the rig
-    that IS them -- crossing the bridge ONCE for the whole cast's animation
-    instead of once per actor, which is the last per-actor read left after the
-    models were already collapsed into one import.
-
-    Who plays in the unit is the game's own filing, which the stage states as the
-    actor a motion directive drives. A token the game ships no model for is
-    reported rather than silently skipped -- the story still plays without them.
-    """
-    wanted = {}
-    for row in rows:
-        # Only what the game ships a model for. WHICH performers those are is the
-        # hook's answer, not a kind list kept here -- that would be game vocabulary.
-        if not row["model"] or not row["sourceCab"]:
-            continue
-        actor = _actor_of(row)
-        if actor:
-            wanted.setdefault(actor, []).append(row["sourceCab"])
-    yield from _spawn_missing_steps(stage, wanted)
-
-    groups = []
-    for actor, cabs in wanted.items():
-        rig = _rig_for(stage.context, actor)
-        if rig is None:
-            stage.unresolved.append(actor)
-            continue
-        stage.actors[actor] = rig
-        groups.append((rig, list(dict.fromkeys(cabs))))
-    if not groups:
-        return
-
-    from ... import cabmap_panel, cross_game_retarget
-    from ...RuriRipperPyBridge.unity import class_registry
-    seeds = list(dict.fromkeys(cab for _rig, cabs in groups for cab in cabs))
-    clip_id = class_registry.id_for_name("AnimationClip")
-    # One crossing for every actor's clips; the per-armature build off the shared
-    # closure is the browser's own clip build (load_clips_onto), one rig at a time.
-    resolved = yield _Read(
-        lambda: cabmap_panel.resolve_import_closure(seeds, [clip_id]), 0.55)
-    total = len(groups)
-    for index, (rig, cabs) in enumerate(groups, start=1):
-        # The active object is set exactly as the per-actor import set it -- so the
-        # context each build sees is unchanged and a leftover-rig scene still says
-        # so -- but the animation lands via the explicit armature, not the active
-        # one, so a single import can feed every actor.
-        if not _make_active(stage.context, rig):
-            raise RuntimeError(
-                "The view layer would not make {0} the active object, so this unit's "
-                "animation has no skeleton to land on. It is usually a leftover rig in "
-                "an excluded collection -- clear the scene and load again.".format(rig.name))
-        cross_game_retarget.build_clips_onto_from_closure(stage.context, rig, cabs, resolved)
-        yield _Mark(0.55 + 0.35 * (index / total))
-
-
-def _spawn_missing_steps(stage, wanted):
-    """Bring in every model the unit needs, in ONE import.
-
-    A model import needs no active rig -- only a clip import does -- so importing
-    them one actor at a time buys nothing and pays a closure resolution per actor.
-    They are marked together and the rigs are matched back to their actors after,
-    by the same name rule a rig is found by in any later session.
-
-    The models go through the browser's own hierarchy import (roots, secondary
-    motion, the loose-asset fallback), so this stays a CALLER of that one path,
-    not a second copy of it -- which is why its closure is not offloaded here: read
-    and build are one operator, run as a single main-thread chunk with the bar
-    moved before it.
-    """
-    missing = {}
-    for actor in wanted:
-        if _rig_for(stage.context, actor) is not None:
-            continue
-        model_rows = _model_rows_for(actor)
-        if model_rows:
-            missing[actor] = [row["cab"] for row in model_rows]
-    if not missing:
-        return
-    yield _Mark(0.28)
-    before = {obj.name for obj in stage.context.scene.objects if obj.type == "ARMATURE"}
-    _import_cabs(stage.context, list(dict.fromkeys(
-        cab for cabs in missing.values() for cab in cabs)))
-    added = [obj for obj in stage.context.scene.objects
-             if obj.type == "ARMATURE" and obj.name not in before]
-    for actor in missing:
-        token = actor.lower()
-        for rig in added:
-            if token in rig.name.lower():
-                _ACTOR_RIGS[actor] = rig.name
-                break
-
-
-def _actor_of(row):
-    """Who a directive moves -- as the hook resolved it, never as a leaf guessed off
-    the bound object's path.
-
-    That guess is exactly what broke this: a binding path ends in the PREFAB name
-    (``P_npc_major_death_01``), which resolves to no character model, so the loader
-    fell through to loose parts and dropped 361 unskinned meshes at the origin. The
-    game states the performer in the clip's own name and the hook already parses
-    and roster-resolves exactly that."""
-    return row["actor"] or ""
-
-
+# identity -> the armature that IS them, for this session. Keyed by the game's own
+# identity rather than by the token a clip happens to spell them with.
 _ACTOR_RIGS = {}
-_CHARACTER_IDS = {}
 
 
-def _character_ids():
-    if not _CHARACTER_IDS:
-        try:
-            table = datasets.story_actors()
-        except Exception:
-            return _CHARACTER_IDS
-        for row in range(len(table)):
-            character = table.cell(row, "character")
-            if character:
-                _CHARACTER_IDS[table.cell(row, "actor")] = character
-    return _CHARACTER_IDS
-
-
-def _model_rows_for(actor):
-    """The importable rows of one performer's model, in the order the game states
-    it: the prefab its own character data declares, else the prefab named after it,
-    else whatever part the game files under that name."""
-    character = _character_ids().get(actor, "")
-    if character:
-        declared = roster_panel.character_model(character)
-        if declared:
-            rows = datasets.part_rows(declared, cast=datasets.CHARACTERS)
-            if rows:
-                return rows
-    rows = datasets.model_rows(actor, "postmodel", cast=datasets.CHARACTERS)
-    return rows or datasets.part_rows(actor)
-
-
-def _import_cabs(context, cabs):
-    """Run the browser's own import over exactly these CABs. One import path, so a
-    fix there is a fix here."""
-    before = {obj.name for obj in context.scene.objects if obj.type == "ARMATURE"}
-    cabmap_state.clear_selection()
-    cabmap_state.SELECTED_CABS.update(cabs)
-    result = bpy.ops.ruri.import_selected()
-    added = [obj for obj in context.scene.objects
-             if obj.type == "ARMATURE" and obj.name not in before]
-    return ("FINISHED" in result), added
-
-
-def _rig_for(context, actor):
-    if not actor:
-        return None
-    known = bpy.data.objects.get(_ACTOR_RIGS.get(actor, ""))
+def _rig_for(context, loadable):
+    """The armature that IS this member, if the scene already holds it."""
+    known = bpy.data.objects.get(_ACTOR_RIGS.get(loadable.key, ""))
     if known is not None and known.type == "ARMATURE" and known.name in context.scene.objects:
         return known
-    token = actor.lower()
-    matches = [obj for obj in context.scene.objects
-               if obj.type == "ARMATURE" and token in obj.name.lower()]
-    return matches[0] if len(matches) == 1 else None
+    for token in (loadable.key, loadable.label):
+        needle = (token or "").lower()
+        if not needle:
+            continue
+        matches = [obj for obj in context.scene.objects
+                   if obj.type == "ARMATURE" and needle in obj.name.lower()]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _adopt(context, loadable, built, before):
+    """Which armature the build produced -- observed, not guessed from a name.
+
+    An assembled npc hands its own rig back; a prefab import creates whatever the
+    prefab holds, so what appeared during THIS member's build is the answer. Naming
+    is what put 361 unbound meshes at the origin once already."""
+    if built is not None and getattr(built, "armature", None) not in (None, True):
+        rig = built.armature
+    else:
+        added = [obj for obj in context.scene.objects
+                 if obj.type == "ARMATURE" and obj.name not in before]
+        rig = added[0] if added else None
+    if rig is not None:
+        _ACTOR_RIGS[loadable.key] = rig.name
+    return rig
 
 
 def _make_active(context, armature):
     """Point the scene at one rig, and say whether it took.
 
-    The clip import resolves which skeleton to drive from the ACTIVE object, and
-    a view layer refuses to activate an object it does not hold -- so an object
-    left over in an excluded or unlinked collection activates silently as
-    nothing, and the import then reports the scene as having no unambiguous
-    skeleton. Which is a true statement about the scene and a useless one about
-    the cause, so this returns the fact instead of assuming it."""
+    The clip build resolves which skeleton to drive from the ACTIVE object, and a
+    view layer refuses to activate an object it does not hold -- so an object left
+    over in an excluded or unlinked collection activates silently as nothing, and
+    the build then reports the scene as having no unambiguous skeleton. Which is a
+    true statement about the scene and a useless one about the cause, so this
+    returns the fact instead of assuming it."""
     if armature.name not in context.view_layer.objects:
         context.scene.collection.objects.link(armature)
     for obj in context.selected_objects:
@@ -427,7 +480,59 @@ def _make_active(context, armature):
     return context.view_layer.objects.active is armature
 
 
+def rig_named(context, token):
+    """The armature a token names, when the scene holds exactly one."""
+    needle = (token or "").lower()
+    if not needle:
+        return None
+    matches = [obj for obj in context.scene.objects
+               if obj.type == "ARMATURE" and needle in obj.name.lower()]
+    return matches[0] if len(matches) == 1 else None
+
+
+def land_clips(context, by_actor):
+    """Build clips onto the rigs of the ones they animate. Returns (built, homeless).
+
+    ONE closure for every clip in the batch, then a build per rig -- the same shape
+    the whole-unit load has, for the same reason: resolving a closure is what costs,
+    and a loop that resolves one per actor pays it once per actor for bundles they
+    largely share. A clip whose actor has no rig in the scene lands on whatever is
+    active, which is the case the plain browser import was always for."""
+    from ... import cabmap_panel, cross_game_retarget
+    from ...RuriRipperPyBridge.unity import class_registry
+    seeds = list(dict.fromkeys(cab for cabs in by_actor.values() for cab in cabs))
+    if not seeds:
+        return 0, []
+    resolved = cabmap_panel.resolve_import_closure(
+        seeds, [class_registry.id_for_name("AnimationClip")])
+    built, homeless = 0, []
+    for actor, cabs in by_actor.items():
+        rig = rig_named(context, actor)
+        if rig is None and actor:
+            homeless.append(actor)
+        if rig is None:
+            rig = context.object if getattr(context.object, "type", "") == "ARMATURE" else None
+        if rig is None:
+            continue
+        _make_active(context, rig)
+        cross_game_retarget.build_clips_onto_from_closure(context, rig, list(cabs), resolved)
+        built += len(cabs)
+    return built, homeless
+
+
 # ── the directives ──────────────────────────────────────────────────────────
+
+@needs("motion", "additive", "camera")
+def _needs_clip(row):
+    """A motion or a shot is a clip: the timeline names it and the CAB it lives in."""
+    return [(CLIP, row["sourceCab"])]
+
+
+@needs("effect")
+def _needs_effect(row):
+    """An effect is a prefab the story ignites -- loaded like any other model."""
+    return [(SCENERY, row["referenceCab"])]
+
 
 @realizer("motion", "additive")
 def _realize_motion(stage, row):
@@ -448,8 +553,7 @@ def _target_of(stage, row):
     rig -- is a transform track on something the story spawns, so it gets a real
     camera or a stand-in and the clip is read straight onto it.
     """
-    actor = _actor_of(row)
-    rig = stage.actors.get(actor)
+    rig = stage.actors.get(_identity(row))
     if rig is not None:
         action = _action_named(row["source"])
         if action is not None:
@@ -509,7 +613,7 @@ def _realize_effect(stage, row):
     if not row["referenceCab"]:
         _realize_marker(stage, row)
         return
-    spawned = _spawn_prefab(stage.context, row)
+    spawned = _spawn_prefab(stage, row)
     if spawned is None:
         _realize_marker(stage, row)
         return
@@ -604,11 +708,23 @@ def _empty_for(context, name):
     return existing
 
 
-def _spawn_prefab(context, row):
+def _spawn_prefab(stage, row):
+    """The effect prefab, out of the closure ACQUIRE already read.
+
+    It used to run a whole import per effect row -- twenty-nine of them on one real
+    unit, twenty-eight of which re-read the same bundle. Its CAB is declared with
+    everything else now, so this only builds."""
+    from ... import cabmap_panel
+    context = stage.context
+    if stage.scenery is None:
+        return None
     before = {obj.name for obj in context.scene.objects}
-    cabmap_state.clear_selection()
-    cabmap_state.SELECTED_CABS.add(row["referenceCab"])
-    if "FINISHED" not in bpy.ops.ruri.import_selected():
+    warnings = []
+    _ok, imported = cabmap_panel.import_hierarchy_from_closure(
+        cast._Reporter(warnings), context, context.scene.ruri_cabmap,
+        [{"cab": row["referenceCab"], "name": row["reference"]}], stage.scenery,
+        only_seeded=True)
+    if not imported:
         return None
     added = [obj for obj in context.scene.objects if obj.name not in before]
     if not added:
@@ -912,41 +1028,34 @@ def _object_action(camera, cab, clip_name):
 _CURVES = {}
 
 
-def prefetch_curves(cabs):
-    """One crossing for every clip the unit will read.
+def _hold_curves(stage, cabs):
+    """Keep the curves of every clip the unit reads DIRECTLY -- the shots, and
+    whatever motion lands on a stand-in rather than a rig.
 
-    A crossing resolves a closure and lays bundles out; doing that once per clip is
-    the same work repeated, and on a unit with seventy shots it is seventy times.
-    Marking them all and crossing once is the same read, once.
-    """
-    from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
-
-    wanted = [cab for cab in dict.fromkeys(cabs) if cab and (cab, None) not in _CURVES]
-    if not wanted:
+    Out of the closure ACQUIRE already read: this used to be a crossing of its own,
+    and before that a crossing per clip, which on a unit with seventy shots was
+    seventy resolves of the same handful of bundles."""
+    from ...RuriRipperPyBridge.unity import bridge_asset_db
+    if stage.motion is None or not cabs:
         return 0
-    assets, _roots, _seeds, clips_by_cab, _scenes = cabmap_state.BRIDGE.import_cabs(
-        wanted, export_class_ids=[class_registry.id_for_name("AnimationClip")])
-    database = bridge_asset_db.BridgeAssetDatabase(
-        assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-    for cab in wanted:
+    database = stage.motion["db"]
+    assert isinstance(database, bridge_asset_db.BridgeAssetDatabase)
+    held = 0
+    for cab in cabs:
         _CURVES[(cab, None)] = True
-        for guid in clips_by_cab.get(cab.lower(), []):
+        for guid in stage.motion["clips_by_cab"].get(cab.lower(), []):
             found = database.clip_curves(guid)
             if found is not None:
                 _CURVES.setdefault((cab, found.name), found)
                 _CURVES.setdefault((cab, ""), found)
-    return len(wanted)
+                held += 1
+    return held
 
 
 def _curves_of(cab, clip_name):
-    """This clip's curves out of the prefetch, else one crossing for its own cab."""
-    found = _CURVES.get((cab, clip_name)) or _CURVES.get((cab, ""))
-    if found is not None:
-        return found
-    if (cab, None) in _CURVES:
-        return None
-    prefetch_curves([cab])
+    """This clip's curves, out of what the unit read. A clip the manifest did not
+    declare is a clip nothing asked for -- reported as unplaced, never fetched
+    behind the build's back."""
     return _CURVES.get((cab, clip_name)) or _CURVES.get((cab, ""))
 
 
@@ -1118,7 +1227,7 @@ def forget():
     all belong to a loaded install; unloading one has to forget all three together
     or the next install inherits the last one's answers."""
     _ACTOR_RIGS.clear()
-    _CHARACTER_IDS.clear()
+    cast.forget()
     _OBJECT_ACTIONS.clear()
     _CURVES.clear()
     _FONT.clear()
@@ -1141,6 +1250,10 @@ def summary(stage):
         parts.append("{0} marker(s)".format(stage.markers))
     if stage.unplaced:
         parts.append("{0} clip(s) had nothing to drive".format(len(stage.unplaced)))
+    if stage.notes:
+        parts.append(stage.notes[0] if len(stage.notes) == 1
+                     else "{0} model note(s), first: {1}".format(len(stage.notes),
+                                                                 stage.notes[0]))
     if stage.unresolved:
         parts.append("no model for " + ", ".join(stage.unresolved[:4]))
     if stage.unknown:
