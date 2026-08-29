@@ -125,18 +125,43 @@ def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     if not rows:
         return None
     stage = Stage(context, unit, _scene_fps(context, rows))
-    _load_cast(stage, rows)
     for row in rows:
         stage.note(row)
-        found = REALIZERS.get(row["kind"])
-        if found is None:
-            stage.unknown.add(row["class"] or row["kind"])
-            continue
-        found(stage, row)
+
+    # The shots first, and the scene pointed at the camera BEFORE anybody is
+    # imported: a character import builds its outline shells against the scene
+    # camera, and with none set it falls back to a default view basis and says so.
+    # A cutscene is a camera performance anyway -- the actors are what it films.
+    shots = [row for row in rows if _drives_camera(row)]
+    for row in shots:
+        _realize(stage, row)
+    if stage.camera is not None:
+        context.scene.camera = stage.camera
+        context.scene.frame_set(int(round(min((stage.frame(row["at"]) for row in shots),
+                                              default=0.0))))
+
+    _load_cast(stage, rows)
+    for row in rows:
+        if not _drives_camera(row):
+            _realize(stage, row)
     _finish(stage)
     if scene_mode != SCENE_NONE:
         _load_scene(stage, scene_mode)
     return stage
+
+
+def _drives_camera(row):
+    """Whether this directive is part of the camera performance -- either a shot
+    going live, or motion on the camera itself."""
+    return bool(row["camera"]) or row["kind"] == "camera"
+
+
+def _realize(stage, row):
+    found = REALIZERS.get(row["kind"])
+    if found is None:
+        stage.unknown.add(row["class"] or row["kind"])
+        return
+    found(stage, row)
 
 
 def _stage_rows(unit, variant, language):
@@ -810,9 +835,10 @@ def _finish(stage):
     stage.subtitles = _subtitles(stage)
     _write_script(stage)
     if stage.camera is not None:
-        # The unit films through this one; pointing the scene at it, and looking
-        # THROUGH it, is what makes the build land already in the shot the game
-        # opens on rather than in whatever the viewport happened to be showing.
+        # The scene was pointed at this camera before the cast came in, because the
+        # shells are built against it. What is left is to LOOK through it, which is
+        # the difference between a built performance and one that is already framed
+        # the way the game opens it.
         stage.context.scene.camera = stage.camera
         stage.looking = _look_through(stage.context)
     if stage.placed or stage.lines:
