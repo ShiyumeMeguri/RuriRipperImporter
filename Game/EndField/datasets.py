@@ -245,7 +245,7 @@ def chunk_summary(map_name):
     }
 
 
-def placements(map_name, min_x, min_z, max_x, max_z, scene_state_ids, lod0_only):
+def placements(map_name, min_x, min_z, max_x, max_z, scene_state_ids, detail_level):
     """One world rect's importable content. The placements, their material paths
     and the drop accounting are three datasets over ONE discovery -- the reader
     memoizes on the argument set they share, so asking for all three decodes the
@@ -257,7 +257,7 @@ def placements(map_name, min_x, min_z, max_x, max_z, scene_state_ids, lod0_only)
     dict per row was pure overhead paid before a single object existed. Only the
     sparse per-row material lists are folded into a plain dict here."""
     window = {"map": map_name, "minX": min_x, "minZ": min_z, "maxX": max_x, "maxZ": max_z,
-              "sceneState": list(scene_state_ids), "lod0Only": lod0_only}
+              "sceneState": list(scene_state_ids), "detailLevel": int(detail_level)}
     table = _table(PLACEMENTS, **window)
 
     materials = _table(PLACEMENT_MATERIALS, **window)

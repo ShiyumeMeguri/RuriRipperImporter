@@ -88,7 +88,7 @@ SEED_PATHS = []         # list[str] -- the container paths the C# reduction extr
 RESOLVED_CABS = []      # list[str] -- the seed CABs an import of it needs
 CLOSURE_CABS = 0        # how many CABs those seeds pull in, the real memory proxy
 CURRENT_MAP = ""
-CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
+CURRENT_WINDOW = ()     # (min_x, min_z, max_x, max_z, scene_state_id, detail_level)
 STATUS = "Refresh to read the game's scene list."
 
 
@@ -140,7 +140,7 @@ def load_summary(map_name):
     return SUMMARIES[map_name]
 
 
-def discover_placements(map_name, rect, scene_state_id, lod0_only):
+def discover_placements(map_name, rect, scene_state_id, detail_level):
     """What one world rect of one map places, reduced on the C# side that
     decoded it: TABLE holds only the importable rows (columnar, see
     datasets.placements), MATERIALS_BY_ROW the sparse per-row material paths,
@@ -155,7 +155,7 @@ def discover_placements(map_name, rect, scene_state_id, lod0_only):
     chosen = "" if scene_state_id is None else str(scene_state_id).strip()
     result = datasets.placements(
         map_name, min_x, min_z, max_x, max_z,
-        [chosen] if chosen else [], lod0_only)
+        [chosen] if chosen else [], detail_level)
     TABLE = result["table"]
     MATERIALS_BY_ROW = result["materials_by_row"]
     SEED_PATHS = result["seed_paths"]
@@ -163,7 +163,7 @@ def discover_placements(map_name, rect, scene_state_id, lod0_only):
     RESOLVED_CABS = []
     CLOSURE_CABS = 0
     CURRENT_MAP = map_name
-    CURRENT_WINDOW = (min_x, min_z, max_x, max_z, scene_state_id, lod0_only)
+    CURRENT_WINDOW = (min_x, min_z, max_x, max_z, scene_state_id, detail_level)
     STATUS = "{0} placement(s) in {1}, state {2}.".format(len(TABLE), map_name, scene_state_id)
     return TABLE
 

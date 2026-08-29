@@ -278,9 +278,6 @@ class _SceneListMixin(filter_ui.FilterStateMixin):
     scene_state_id: EnumProperty(name="Scene State", items=_state_items,
                                  description="Which dressing of this world to read. States are "
                                              "alternates of the same place, so one at a time")
-    lod0_only: BoolProperty(name="LOD0 Only", default=True,
-                            description="Keep only the best available LOD sibling per placed instance; "
-                                        "affects both the estimate and the import")
     reset_scene: BoolProperty(name="Reset Scene", default=True,
                               description="Delete existing scene objects and purge now-orphaned "
                                           "data (previous imports' sources) before importing")
@@ -381,7 +378,8 @@ class RURI_OT_scene_discover(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             scene_state.discover_placements(
-                map_name, rect, int(state.scene_state_id), state.lod0_only)
+                map_name, rect, int(state.scene_state_id),
+                context.scene.ruri_cabmap.detail_level)
             scene_state.resolve_cabs(cabmap_state.BRIDGE)
         except Exception as exc:
             _report_exception(self, "Read failed", exc)
@@ -413,7 +411,7 @@ class RURI_OT_scene_import(bpy.types.Operator):
             return {"CANCELLED"}
         # Staleness guard: whatever path led here, NEVER import something other
         # than what is currently selected -- re-read in place if they disagree.
-        window = rect + (int(state.scene_state_id), state.lod0_only)
+        window = rect + (int(state.scene_state_id), context.scene.ruri_cabmap.detail_level)
         if scene_state.CURRENT_MAP != map_name or scene_state.CURRENT_WINDOW != window:
             if "FINISHED" not in bpy.ops.ruri.scene_discover(kind=self.kind):
                 return {"CANCELLED"}
@@ -492,7 +490,7 @@ def _draw_estimate(layout, state):
         return
     est = scene_state.estimate()
     box = layout.box()
-    min_x, min_z, max_x, max_z, scene_state_id, _lod0_only = scene_state.CURRENT_WINDOW
+    min_x, min_z, max_x, max_z, scene_state_id, _detail = scene_state.CURRENT_WINDOW
     box.label(text="{0} state {1}".format(scene_state.CURRENT_MAP, scene_state_id)
               if min_x == float("-inf") else
               "{0} x[{1:.0f}..{2:.0f}] z[{3:.0f}..{4:.0f}] state {5}".format(
@@ -519,7 +517,7 @@ def _draw_actions(layout, state, enabled, context):
     options = layout.column(align=True)
     options.enabled = enabled
     options.prop(state, "scene_state_id")
-    options.prop(state, "lod0_only")
+    options.prop(context.scene.ruri_cabmap, "detail_level")
     # 导入选项住在核心面板的 ruri_cabmap 上(场景导入也是读它的 as_options),
     # 但一个场景窗口是几百上千张材质 —— 着色栈开不开在这里就是几秒和几分钟的差别,
     # 所以这两个直接画在按 Import 的地方,别让人跑去另一个 tab 找。
