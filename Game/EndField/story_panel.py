@@ -381,12 +381,40 @@ def _rebuild_top(state):
         _fill_top(state)
 
 
+def _elsewhere(state, query):
+    """How many rows the OTHER channel has for this query, and its label.
+
+    Only asked when this channel has none, and only of a table already read --
+    a search box must not trigger a cabmap read on every keystroke."""
+    if not query or state.mode != BY_STORY:
+        return 0, ""
+    other = datasets.DIALOG if state.channel == datasets.CUTSCENE else datasets.CUTSCENE
+    table = _UNITS.get((BY_STORY, other))
+    try:
+        if table is None:
+            table = datasets.story_units(other, _language())
+            _UNITS[(BY_STORY, other)] = table
+        return len(cabmap_state.BRIDGE.search_data_table(table, query, None)), other
+    except Exception:
+        return 0, other
+
+
 def _fill_top(state):
     state.entries.clear()
     table = _top_table(state)
     if table is None:
         return
-    matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(), state.filter_rules)
+    query = state.search.strip()
+    matched = cabmap_state.BRIDGE.search_data_table(table, query, state.filter_rules)
+    # Nothing HERE is not nothing ANYWHERE: the list is split in two and the search
+    # only sees the half in front, so an empty result is otherwise indistinguishable
+    # from the game not having it -- while the other half may be showing it.
+    hint = ""
+    if len(matched) == 0 and query:
+        elsewhere, other = _elsewhere(state, query)
+        if elsewhere:
+            hint = " \u00b7 {0} match(es) in {1} -- switch Channel".format(
+                elsewhere, other)
     by_story = state.mode == BY_STORY
     key_column = _key_column(state)
     keys = table.values(key_column)
@@ -445,7 +473,7 @@ def _fill_top(state):
         "{0} unit(s)".format(state.channel) if by_story else "actor(s)",
         "" if len(order) == len(rows) else
         " · showing {0}, narrow the filter to see the rest".format(len(rows)),
-        hidden)
+        hidden) + hint
 
 
 def _unit_group(row):
