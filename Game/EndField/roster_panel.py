@@ -21,7 +21,7 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
-from ... import filter_ui
+from ... import filter_ui, step_loader
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import cast
 from . import cloth_panel
@@ -145,6 +145,10 @@ class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         default=False,
         description="Also load this character's SkeletalMorph expression library. "
                     "Off by default: it is a separate, much larger asset family than the model")
+    # Set while a load is in flight, and the hook's own latest console line --
+    # the same two the story tab shows, because it is the same driver.
+    loading: BoolProperty(default=False)
+    load_line: StringProperty(default="")
     model_kind: EnumProperty(
         name="Model",
         items=[("postmodel", "Post", "The in-world actor model"),
@@ -309,12 +313,13 @@ from .cast import (_at_detail_level, _avatar_skeleton, _character_model,  # noqa
                    material_cabs, model_parts, npc_info, npc_template)
 
 
-class RURI_OT_roster_load(bpy.types.Operator):
+class RURI_OT_roster_load(step_loader.ModalSteps, bpy.types.Operator):
     """Import the selected cast member's model prefab.
 
     Deliberately not its own importer: it resolves the row to prefab CABs, puts
     them in the browser's own selection, and runs the browser's own import. One
     import path, so a fix there is a fix here."""
+    failure = "Loading this one's model failed"
     bl_idname = "ruri.roster_load"
     bl_label = "Load Model"
     bl_description = "Import this one's model prefab, exactly as the bundle browser would"
@@ -326,88 +331,38 @@ class RURI_OT_roster_load(bpy.types.Operator):
                 and cabmap_state.BRIDGE is not None
                 and _selected(context.scene.ruri_roster) is not None)
 
-    def execute(self, context):
+    def load_steps(self, context):
+        """What loading the selected one IS, as steps -- resolve, read, build.
+
+        The kind is not a branch here: a playable character and an npc are two
+        answers to one question (``cast.resolve``), and which one this row gets is
+        the game's own filing, not a case this operator picks."""
         state = context.scene.ruri_roster
         entry = _selected(state)
-        if entry is None:
+        member = {"key": entry.key, "label": entry.label,
+                  "character": entry.key if state.kind == CHARACTERS else "",
+                  "template": entry.key if state.kind == NPCS else ""}
+        return cast.load_steps(context, member, detail_level(context))
+
+    def status(self, context):
+        return context.scene.ruri_roster
+
+    def execute(self, context):
+        """The window-less path: the same steps, run inline."""
+        if _selected(context.scene.ruri_roster) is None:
             return {"CANCELLED"}
+        return self.settle(context, step_loader.run(self.load_steps(context)))
 
-        if state.kind == NPCS:
-            return self._load_npc(context, state, entry)
-
-        # The game states a character's model prefab in its own data asset; only
-        # the UI model is named by convention, because no asset declares one.
-        model = _character_model(entry.key)
-        if model and state.model_kind == "postmodel":
-            hits = datasets.part_rows(model, cast=state.kind)
-            if hits:
-                return self._import(context, state, entry, hits, model)
-            self.report({"WARNING"}, "'{0}' declares model '{1}', which is not in the cabmap.".format(
-                entry.label, model))
-            return {"CANCELLED"}
-
-        hits = datasets.model_rows(entry.key, state.model_kind, cast=state.kind)
-        if not hits:
-            # 只报另一个 model family(同样精确名),不做子串扫描——诊断不值得把闭包炸开。
-            other = "uimodel" if state.model_kind == "postmodel" else "postmodel"
-            alt = datasets.model_rows(entry.key, other, cast=state.kind)
-            self.report({"WARNING"},
-                        "'{0}' has no {1}_{2} prefab; it does have the {3} one.".format(
-                            entry.label, entry.key, state.model_kind, other)
-                        if alt else
-                        "No prefab named '{0}_{1}' in the loaded cabmap.".format(
-                            entry.key, state.model_kind))
-            return {"CANCELLED"}
-
-        return self._import(context, state, entry, hits, "")
-
-    def _import(self, context, state, entry, hits, declared):
-        """Put the resolved rows in the browser's own selection and run its own
-        import. ``declared`` names the prefab the game itself asked for, when one
-        did, so the report says where the choice came from."""
-        wanted = detail_level(context)
-        chosen, level = _at_detail_level(hits, wanted)
-        cabmap_state.clear_selection()
-        for row in chosen:
-            cabmap_state.SELECTED_CABS.add(row["cab"])
-
-        result = bpy.ops.ruri.import_selected()
-        if "FINISHED" not in result:
-            return {"CANCELLED"}
-        if level != wanted:
-            self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
-                entry.label, wanted, level))
-        elif declared:
-            self.report({"INFO"}, "Loaded '{0}' -- the model its own data asset declares.".format(declared))
-
-        if state.load_expressions:
-            self._load_expressions(context, entry, declared_face_morph(entry.key))
-        return {"FINISHED"}
-
-    def _load_npc(self, context, state, entry):
-        """An npc is assembled, not shipped: its template's manifest names part
-        SLOTS, its avatar-mesh family table says which mesh each slot wears, and
-        every one of those meshes is skinned onto the skeleton the avatar template
-        carries. The terminal state is ONE armature named after the model
-        template, with every mesh parented and skinned onto it."""
-        built = cast.assemble(context, entry.key, detail_level(context))
+    def settle(self, context, built):
+        state = context.scene.ruri_roster
+        entry = _selected(state)
         for warning in built.warnings:
             self.report({"WARNING"}, warning)
-        info = built.manifest
-        missing = built.missing
-        imported_any = built.armature is not None
-        if info is None:
+        if built.armature is None and not built.imported:
             return {"CANCELLED"}
-        if not imported_any:
-            return {"CANCELLED"}
-        if missing:
-            self.report({"WARNING"}, "{0} of {1} part slot(s) resolved to nothing: {2}".format(
-                len(missing), len(info["parts"]), ", ".join(missing[:4])))
-        else:
-            self.report({"INFO"}, "Assembled '{0}' from {1} part slot(s).".format(
-                entry.label, len(info["parts"])))
-        if state.load_expressions:
-            self._load_expressions(context, entry, info.get("facial_morph", ""))
+        if state.load_expressions and entry is not None:
+            self._load_expressions(context, entry,
+                                   (built.manifest or {}).get("facial_morph", ""))
         return {"FINISHED"}
 
     def _load_expressions(self, context, entry, declared=""):
@@ -523,6 +478,7 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
 def draw_roster(layout, context):
     state = context.scene.ruri_roster
 
+    step_loader.draw_progress(layout, state)
     head = layout.row(align=True)
     head.prop(state, "pane", expand=True)
     head.operator(RURI_OT_roster_refresh.bl_idname, text="", icon="FILE_REFRESH")

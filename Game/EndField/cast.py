@@ -704,6 +704,27 @@ def assemble(context, template_id, lod=0):
                         cabmap_panel.resolve_import_closure(loadable.cabs), None)
 
 
+def load_steps(context, member, level=0):
+    """Bring ONE cast member into the scene, as steps a driver can pace.
+
+    The same three moves a whole cast makes -- resolve what it is, read its
+    closure, build it -- so a tab loading one person and a unit loading fifty run
+    the identical path and cannot drift. Written as steps so the reads happen off
+    the main thread: what a member IS costs table queries, and what it is MADE of
+    costs a bundle closure, and neither has any business freezing the window."""
+    from ... import cabmap_panel, step_loader
+    loadable = yield step_loader.Read(
+        lambda: resolve([member], level).get(member.get("key") or ""), 0.3)
+    if loadable is None:
+        return Assembled(warnings=[
+            "The game states no model for '{0}'.".format(
+                member.get("label") or member.get("key") or "?")])
+    resolved = yield step_loader.Read(
+        lambda: cabmap_panel.resolve_import_closure(loadable.cabs), 0.75)
+    yield step_loader.Mark(0.85)
+    return build(context, loadable, resolved)
+
+
 def forget():
     """Drop what one session cached; an install's answers are not the next one's."""
     _CHARACTER_MODELS.clear()

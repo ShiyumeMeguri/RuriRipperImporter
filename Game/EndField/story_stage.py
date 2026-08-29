@@ -44,6 +44,7 @@ import re
 
 import bpy
 
+from ... import step_loader
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import cast, datasets
 
@@ -147,33 +148,6 @@ class Stage:
         self.end = max(self.end, self.frame(row["until"]))
 
 
-class _Read:
-    """A build step that is a pure cross-boundary read -- BRIDGE traffic and plain
-    Python, never bpy. The driver runs ``fn`` (inline for a synchronous build, on
-    a worker thread for the modal loader) and sends the result back into the
-    generator, so ONE build sequence serves both. ``progress`` is a 0..1 hint for
-    the loader's bar, ignored by the synchronous driver."""
-
-    __slots__ = ("fn", "progress")
-
-    def __init__(self, fn, progress=None):
-        self.fn = fn
-        self.progress = progress
-
-
-class _Mark:
-    """A checkpoint between main-thread build chunks: move the progress bar and let
-    the panel redraw. It carries NO text on purpose -- the one loading line the
-    panel shows is the hook's own console output, read live, never a string
-    composed here from the unit's data (which would be a second, drifting source
-    for what the hook already prints accurately)."""
-
-    __slots__ = ("progress",)
-
-    def __init__(self, progress=None):
-        self.progress = progress
-
-
 def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     """Bring one unit up on stage, synchronously, and return its Stage (whose
     counters are the report), or None when the unit places nothing.
@@ -181,14 +155,8 @@ def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     Drives the very step sequence the modal loader drives, running every read
     inline -- so a headless build and the interactive one produce byte-for-byte
     the same scene, and this stays THE single definition of what a unit becomes."""
-    steps = build_steps(context, unit, variant, language, scene_mode)
-    sent = None
-    try:
-        while True:
-            step = steps.send(sent)
-            sent = step.fn() if isinstance(step, _Read) else None
-    except StopIteration as stop:
-        return stop.value
+    return step_loader.run(build_steps(context, unit, variant, language,
+                                       scene_mode))
 
 
 def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
@@ -202,7 +170,7 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     and a cutscene is a camera performance anyway -- the actors are what it films),
     then the cast, then every remaining directive in time order.
     """
-    rows = yield _Read(lambda: _stage_rows(unit, variant, language), 0.12)
+    rows = yield step_loader.Read(lambda: _stage_rows(unit, variant, language), 0.12)
     if not rows:
         return None
     stage = Stage(context, unit, _scene_fps(context, rows))
@@ -211,13 +179,13 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
 
     # MANIFEST: everything this unit will ever need, before anything is read.
     detail = context.scene.ruri_cabmap.detail_level
-    manifest = yield _Read(lambda: _manifest(rows, detail), 0.25)
+    manifest = yield step_loader.Read(lambda: _manifest(rows, detail), 0.25)
     stage.cast = manifest["cast"]
     stage.unresolved.extend(manifest["unresolved"])
 
     # ACQUIRE, first crossing: every clip, filtered to AnimationClip. Before the
     # models because the shots come first and they are read straight off it.
-    stage.motion = yield _Read(lambda: _acquire_clips(manifest["clips"]), 0.45)
+    stage.motion = yield step_loader.Read(lambda: _acquire_clips(manifest["clips"]), 0.45)
     _hold_curves(stage, manifest["direct"])
     for row in rows:
         if _drives_camera(row):
@@ -229,17 +197,17 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
 
     # ACQUIRE, second crossing: every model, prop and effect the unit puts on
     # stage -- the whole cast in ONE read, which is the point of the manifest.
-    stage.scenery = yield _Read(lambda: _acquire_scenery(manifest["scenery"]), 0.62)
+    stage.scenery = yield step_loader.Read(lambda: _acquire_scenery(manifest["scenery"]), 0.62)
     yield from _cast_steps(stage, manifest)
 
     for row in rows:
         if not _drives_camera(row):
             _realize(stage, row)
-    yield _Mark(0.94)
+    yield step_loader.Mark(0.94)
     _finish(stage)
     if scene_mode != SCENE_NONE:
         _load_scene(stage, scene_mode)
-    yield _Mark(1.0)
+    yield step_loader.Mark(1.0)
     return stage
 
 
@@ -351,7 +319,7 @@ def _cast_steps(stage, manifest):
         for spelling, found in stage.cast.items():
             if found.key == loadable.key:
                 stage.actors[spelling] = rig
-        yield _Mark(0.62 + 0.16 * (index / max(len(members), 1)))
+        yield step_loader.Mark(0.62 + 0.16 * (index / max(len(members), 1)))
 
     if stage.motion is None:
         return
@@ -374,7 +342,7 @@ def _cast_steps(stage, manifest):
                 "an excluded collection -- clear the scene and load again.".format(rig.name))
         cross_game_retarget.build_clips_onto_from_closure(
             stage.context, rig, list(cabs), stage.motion)
-        yield _Mark(0.78 + 0.16 * (index / max(len(landing), 1)))
+        yield step_loader.Mark(0.78 + 0.16 * (index / max(len(landing), 1)))
 
 
 def _drives_camera(row):
