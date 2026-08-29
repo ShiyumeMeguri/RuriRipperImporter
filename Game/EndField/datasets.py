@@ -130,6 +130,13 @@ LINE_SPOKEN = "line"
 LINE_OPTION = "option"
 LINE_SUBTITLE = "subtitle"
 
+# Which of the game's own rosters names an actor -- a playable character, an npc
+# template, or one placement of one. Empty is the game naming them nowhere, which
+# is what a camera, a prop and a crowd model all are.
+ACTOR_CHARACTER = "character"
+ACTOR_NPC = "npc"
+ACTOR_PLACED = "placed"
+
 
 def story_units(channel="", language=""):
     """Every unit of story playback the game files animations under, as the table
@@ -168,14 +175,16 @@ def story_lines(unit="", mission="", language=""):
     return _table(STORY_LINES, unit=unit, mission=mission, language=language)
 
 
-def story_clips(channel="", unit="", actor=""):
+def story_clips(channel="", unit="", actor="", language=""):
     """The animations of ONE unit, or of ONE actor across every unit it plays in.
 
     Same columns either way: the unit and shot the row belongs to, the kind of
-    thing it moves, the actor, and whether the row is an importable clip (a
-    dialogue timeline files the morph asset next to the clip that drives it).
-    Asked by actor, the answer also carries that one's own animation library."""
-    return _table(STORY_CLIPS, channel=channel, unit=unit, actor=actor)
+    thing it moves, the actor under the name the game gives them, the mission
+    playing that unit under its own name, and whether the row is an importable
+    clip (a dialogue timeline files the morph asset next to the clip that drives
+    it). Asked by actor, the answer also carries that one's own animation
+    library."""
+    return _table(STORY_CLIPS, channel=channel, unit=unit, actor=actor, language=language)
 
 
 def story_timeline(unit, variant=""):
@@ -193,12 +202,13 @@ def story_timeline_shape(unit, variant=""):
     return _table(STORY_TIMELINE_SHAPE, unit=unit, variant=variant)
 
 
-def story_actors(channel=""):
-    """Everyone the story animates, by the token the game's own file names use,
-    joined to the character id whose data asset carries that token (empty for an
-    actor the game ships no character data for). One row per actor, with how many
-    units it appears in and how many animations each channel holds."""
-    return _table(STORY_ACTORS, channel=channel)
+def story_actors(channel="", language=""):
+    """Everyone the story animates, under the name the game gives them and with
+    the STORIES they appear in by those stories' own names -- one row per PERSON,
+    not per file shape, since the game writes the same one's morph clips under
+    several naming conventions. A token the game's roster does not know (a camera,
+    a prop, a crowd model) stays as written and is simply unnamed."""
+    return _table(STORY_ACTORS, channel=channel, language=language)
 
 
 # ── scenes ──────────────────────────────────────────────────────────────────

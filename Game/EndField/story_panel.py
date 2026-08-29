@@ -363,6 +363,16 @@ class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     quests_active_index: IntProperty()
     quest_status: StringProperty(default="")
 
+    # Who the open ACTOR is, and which stories they are in. Separate from the
+    # mission fields above on purpose: the two views open different things, and one
+    # set of strings meaning two things is how a panel starts drawing the wrong one.
+    actor_who: StringProperty()
+    actor_title: StringProperty()
+    actor_named: StringProperty()
+    actor_character: StringProperty()
+    actor_stories: StringProperty()
+    actor_places: StringProperty()
+
 
 def _rebuild_top(state):
     """Rebuild the drawn list on top -- units or actors, whichever mode is on. The
@@ -396,16 +406,19 @@ def _fill_top(state):
         order = sorted((int(index) for index in matched),
                        key=lambda index: (missions[index] or groups[index], keys[index]))
     else:
-        # Characters first, then everyone else, and inside each the most-animated
-        # first -- which puts the cast the story actually revolves around on top.
-        # Whether one IS a character is the hook's join, not a guess here.
-        characters = table.values("character")
+        # Named first, characters ahead of the rest of the named cast, and inside
+        # each the most-animated first -- which puts the cast the story revolves
+        # around on top and leaves the nameless cameras and props at the bottom.
+        # WHO one is, and whether the game names them at all, is the hook's join.
+        named = table.values("named")
         clips = table.values("clips")
         order = sorted((int(index) for index in matched),
-                       key=lambda index: (0 if characters[index] else 1, -float(clips[index])))
+                       key=lambda index: (_ACTOR_RANK.get(named[index], len(_ACTOR_RANK)),
+                                          -float(clips[index])))
     columns = ("unit", "group", "shots", "clips", "actors", "variants",
                "mission", "title", "kind", "chapter", "place", "lines") if by_story \
-        else ("actor", "character", "kinds", "units", "cutscenes", "dialogs", "clips")
+        else ("actor", "who", "title", "named", "character", "kinds", "units",
+              "cutscenes", "dialogs", "clips", "stories", "missions", "places")
     rows = [{name: table.cell(index, name) for name in columns}
             for index in order[:cabmap_state.LIST_CAP]]
     for row in rows:
@@ -424,8 +437,11 @@ def _fill_top(state):
             header.group = current_group
             header.is_group = True
         entry = state.entries.add()
-        entry.label = row["unit"] if by_story else row["actor"]
-        entry.key = entry.label
+        # The row's IDENTITY stays the game's own token either way; what is DRAWN
+        # is the name it has. Keying on the drawn name would break the moment two
+        # of them share one, which this cast does -- both protagonists are 管理员.
+        entry.key = row["unit"] if by_story else row["actor"]
+        entry.label = entry.key if by_story else (row["who"] or row["actor"])
         entry.group = row["group"]
         entry.detail = _unit_detail(row) if by_story else _actor_detail(row)
     opened = _opened(state)
@@ -470,18 +486,33 @@ def _unit_detail(row):
     return " · ".join(parts)
 
 
+# What kind of name the game has for a row, as headers, in the order a cast list
+# is worth reading in. WHICH one a row is comes from the hook's join against the
+# game's own rosters; only the wording and the order are ours.
+_ACTOR_GROUPS = {datasets.ACTOR_CHARACTER: "Characters",
+                 datasets.ACTOR_NPC: "Named cast",
+                 datasets.ACTOR_PLACED: "Named cast"}
+_ACTOR_RANK = {datasets.ACTOR_CHARACTER: 0, datasets.ACTOR_NPC: 1, datasets.ACTOR_PLACED: 2}
+_UNNAMED_GROUP = "Unnamed (cameras, props, crowd)"
+
+
 def _actor_group(row):
-    """Whether the game ships this one as a character in its own right. The join is
-    the hook's (a character data asset carrying the actor's token), so this only
-    reads the answer -- and an actor with no character data is still listed, since
-    the story animates plenty of them."""
-    return "Characters" if row["character"] else "Other actors"
+    """Whether the game gives this one a name, and of which kind. One the game's
+    own rosters do not know is still listed -- the story animates plenty of
+    cameras, props and crowd models -- it is just filed as what it is."""
+    return _ACTOR_GROUPS.get(row["named"], _UNNAMED_GROUP)
 
 
 def _actor_detail(row):
+    """The one-line summary of one person: how much of the story they are in. The
+    stories are NAMED in the box under the list rather than here, since a lead
+    appears in sixty of them and no list row is that wide."""
     parts = []
-    if row["character"]:
-        parts.append(row["character"])
+    if row["title"]:
+        parts.append(row["title"])
+    stories = int(row["stories"] or 0)
+    if stories:
+        parts.append("{0} story(s)".format(stories))
     parts.append("{0} clip(s)".format(int(row["clips"] or 0)))
     cutscenes = int(row["cutscenes"] or 0)
     dialogs = int(row["dialogs"] or 0)
@@ -489,7 +520,6 @@ def _actor_detail(row):
         parts.append("{0} cutscene".format(cutscenes))
     if dialogs:
         parts.append("{0} dialogue".format(dialogs))
-    parts.append("{0} unit(s)".format(int(row["units"] or 0)))
     return " · ".join(parts)
 
 
@@ -508,7 +538,8 @@ def _open_entry(state, key):
     try:
         table = datasets.story_clips(channel=state.channel if by_story else "",
                                      unit=key if by_story else "",
-                                     actor="" if by_story else key)
+                                     actor="" if by_story else key,
+                                     language=_language())
     except Exception as exc:
         state.clip_status = "{0}: {1}".format(type(exc).__name__, exc)
         return
@@ -516,9 +547,31 @@ def _open_entry(state, key):
     _rebuild_clips(state)
     if by_story:
         _open_context(state, key)
+    else:
+        _open_actor(state, key)
+
+
+def _open_actor(state, actor):
+    """Who this one is and which stories they are in -- both already on the row the
+    actor list was built from, since the hook answers them per actor."""
+    row = _row_of(_top_table(state), actor, "actor")
+    if row is None:
+        return
+    state.actor_who = row.get("who", "")
+    state.actor_title = row.get("title", "")
+    state.actor_named = row.get("named", "")
+    state.actor_character = row.get("character", "")
+    state.actor_stories = row.get("missions", "")
+    state.actor_places = row.get("places", "")
 
 
 def _forget_context(state):
+    state.actor_who = ""
+    state.actor_title = ""
+    state.actor_named = ""
+    state.actor_character = ""
+    state.actor_stories = ""
+    state.actor_places = ""
     state.mission = ""
     state.mission_title = ""
     state.mission_kind = ""
@@ -620,7 +673,7 @@ def _fill_clips(state, table):
     order = sorted(int(index) for index in matched)
     rows = [{name: table.cell(index, name)
              for name in ("channel", "unit", "shot", "kind", "actor", "name", "container",
-                          "cab", "clip")}
+                          "cab", "clip", "title", "place")}
             for index in order[:cabmap_state.LIST_CAP]]
 
     counts = {}
@@ -733,7 +786,11 @@ def _bucket(row, by_story):
     since that is what tells a cutscene line apart from a library state."""
     if by_story:
         return row["shot"] or row["kind"] or "(ungrouped)"
-    return "{0} · {1}".format(row["channel"], row["unit"]) if row["unit"] else row["channel"]
+    if not row["unit"]:
+        return row["channel"]
+    # Across one actor the useful header is WHICH STORY this is from, which is
+    # the whole reason the actor view raises the question in the first place.
+    return "{0} · {1}".format(row["title"] or row["channel"], row["unit"])
 
 
 def _selected_entry(state):
@@ -882,7 +939,7 @@ class RURI_OT_story_refresh(bpy.types.Operator):
         by_story = state.mode == BY_STORY
         try:
             table = datasets.story_units(state.channel, _language()) if by_story \
-                else datasets.story_actors()
+                else datasets.story_actors(language=_language())
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             self.report({"WARNING"}, state.status)
@@ -1663,6 +1720,30 @@ def _draw_context(layout, state):
             _draw_paragraph(box, text, icon)
 
 
+def _draw_actor_context(layout, state):
+    """Who the open actor is, and the answer to the question this view exists for:
+    WHICH STORIES they appear in, under those stories' own names."""
+    if not state.actor_who:
+        note = layout.box()
+        note.label(text="The game names this one nowhere -- a camera, a prop or a crowd model.",
+                   icon="QUESTION")
+        return
+    box = layout.box()
+    head = box.row(align=True)
+    head.label(text=state.actor_who, icon="OUTLINER_OB_ARMATURE")
+    tail = head.row()
+    tail.enabled = False
+    tail.alignment = "RIGHT"
+    tail.label(text=" · ".join(part for part in (state.actor_title, state.actor_character
+                                                 or state.actor_named) if part))
+    if state.actor_places:
+        where = box.row()
+        where.enabled = False
+        where.label(text=state.actor_places, icon="WORLD")
+    if state.actor_stories:
+        _draw_paragraph(box, state.actor_stories, "SEQ_STRIP_DUPLICATE")
+
+
 def _draw_paragraph(layout, text, icon):
     """Blender's label draws one line and clips it; a mission description is a
     sentence. Wrapping it is the panel's own job -- there is no wrapping label."""
@@ -1733,6 +1814,8 @@ def draw_story_tab(layout, context):
     layout.separator()
     if state.mode == BY_STORY:
         _draw_context(layout, state)
+    else:
+        _draw_actor_context(layout, state)
 
     box = layout.box()
     box.label(text=opened, icon="SEQ_STRIP_DUPLICATE" if state.mode == BY_STORY
