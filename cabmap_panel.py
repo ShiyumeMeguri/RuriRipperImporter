@@ -1139,6 +1139,12 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
         except Exception as exc:
             _report_exception(self, "Load cabmap failed", exc)
             return {"CANCELLED"}
+        gone, rows = unreachable_rows()
+        if gone:
+            self.report({"WARNING"},
+                        f"{rows} CAB(s) in this map live in {gone} archive(s) the install "
+                        f"no longer has -- the game replaced them in a patch. Anything "
+                        f"filed there loads as empty until the cabmap is rebuilt.")
         self.report({"INFO"}, f"Cabmap loaded: {len(cabmap_state.ROWS)} CABs.")
         return {"FINISHED"}
 
@@ -1892,6 +1898,69 @@ class RURI_OT_cabmap_import_with_dependents(bpy.types.Operator):
         return bpy.ops.ruri.import_selected(reset_scene=self.reset_scene)
 
 
+# {session key: ({cab: source archive}, {missing archive: row count})} for the
+# loaded map. Built once per session off one enumeration, because the answer is a
+# property of the install and the map, and neither changes while a session is open.
+_ARCHIVES = {}
+
+
+def _archives():
+    """Which archive each CAB lives in, and which of those archives are gone.
+
+    The map names 40-odd chunk files for a quarter-million CABs, so asking the
+    filesystem once per ARCHIVE answers it for every CAB in it."""
+    key = cabmap_state.active_key()
+    if key in _ARCHIVES:
+        return _ARCHIVES[key]
+    table = cabmap_state.BRIDGE.enumerate_table()
+    root = cabmap_state.BRIDGE.game_root or ""
+    by_cab = {}
+    rows = {}
+    for index in range(len(table.cabs)):
+        source = str(table.source(index))
+        by_cab[table.cab(index)] = source
+        rows[source] = rows.get(source, 0) + 1
+    gone = {source: count for source, count in rows.items()
+            if not os.path.isfile(os.path.join(root, source.replace("\\", "/")))}
+    _ARCHIVES[key] = (by_cab, gone)
+    return _ARCHIVES[key]
+
+
+def unreachable_rows():
+    """(archives gone, cab rows in them) for the loaded map -- what a rebuild would
+    bring back. (0, 0) for a map that matches the install it was built from."""
+    try:
+        _by_cab, gone = _archives()
+    except Exception:
+        return 0, 0
+    return len(gone), sum(gone.values())
+
+
+def forget_archives():
+    _ARCHIVES.clear()
+
+
+def unreachable_seeds(seeds):
+    """The seeds whose archive the install no longer has, with the archive named.
+
+    Asked BEFORE a crossing, so a load that cannot possibly work says why instead
+    of resolving a closure and reporting the empty result as the thing's own
+    shape."""
+    try:
+        by_cab, gone = _archives()
+    except Exception:
+        return []
+    return [(cab, by_cab[cab]) for cab in seeds
+            if cab in by_cab and by_cab[cab] in gone]
+
+
+class StaleCabmapError(RuntimeError):
+    """The map names an archive the install no longer has.
+
+    Its own type because the remedy is specific and is not "try again": the game
+    replaced a chunk, and the map has to be rebuilt against what is on disk now."""
+
+
 def resolve_import_closure(seeds, export_class_ids=None):
     """The one bridge crossing every import flow shares: resolve a cab set's
     dependency closure, export it in memory, and wrap it in the asset db that
@@ -1902,8 +1971,15 @@ def resolve_import_closure(seeds, export_class_ids=None):
     Touches NO bpy on purpose: a modal loader runs this on a worker thread and
     hands the result to the main thread to build from, and a synchronous caller
     runs it inline. Returns {db, roots, seed_roots, clips_by_cab, scene_roots}."""
+    seeds = list(seeds)
+    stale = unreachable_seeds(seeds)
+    if stale and len(stale) == len(seeds):
+        raise StaleCabmapError(
+            "All {0} of these CAB(s) live in '{1}', which this install no longer has -- "
+            "the game replaced that archive in a patch and the cabmap predates it. "
+            "Rebuild the cabmap.".format(len(stale), stale[0][1]))
     assets, roots, seed_roots, clips_by_cab, scene_roots = \
-        cabmap_state.BRIDGE.import_cabs(list(seeds), export_class_ids=export_class_ids)
+        cabmap_state.BRIDGE.import_cabs(seeds, export_class_ids=export_class_ids)
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
         mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
