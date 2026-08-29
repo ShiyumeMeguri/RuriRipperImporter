@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 
 from ...RuriRipperPyBridge.session import cabmap_state
+from ...RuriRipperPyBridge.unity import prefab as prefab_scan
 from . import datasets
 
 CHARACTERS = datasets.CHARACTERS
@@ -400,6 +401,11 @@ def _at_detail_level(rows, level):
     not authored at that level -- the closest one it does have, reported rather
     than silently substituted. The rank is the game's own suffix convention, read
     off the row rather than re-derived here."""
+    # Two different -1s meet here: the OPTION's means "build every level", a ROW's
+    # means "this one carries no LOD suffix". Reading the option's as a rank would
+    # quietly select only the suffix-less models and call it "all of them".
+    if level == prefab_scan.EVERY_LEVEL:
+        return list(rows), level
     exact = [row for row in rows if row["lod_rank"] == level]
     if exact:
         return exact, level
