@@ -24,6 +24,16 @@ carries the full search box + Include/Exclude rule editor (509 units across both
 channels), and the clip list carries a plain search box. Both run the same
 vectorized C# engine over the very table the rows came from; neither matches
 anything in Python.
+
+WHAT A UNIT IS is a second question the folders cannot answer, and it is the one
+a folder id like ``cutscene_c31m3_1`` is worst at: it is the cutscene of 拳心, a
+side mission of chapter two that happens in 景玉谷 and belongs to 弭弗. That
+belongs to the mission the game plays the unit from, so the unit list is asked
+for a LANGUAGE and every row carries its mission's own name, kind, chapter and
+place -- which also means the search box searches those, and typing a mission's
+name finds everything it plays. Picking a unit opens the rest of it: what the
+mission is about, its quest graph in the words the player reads, and every line
+the unit speaks with the speaker and the emotion the face is driven to.
 """
 
 from __future__ import annotations
@@ -46,7 +56,10 @@ _FIELD_LABELS = {"unit": "Story Unit", "group": "Group", "shots": "Shots", "clip
                  "assets": "Assets", "actors": "Actors", "variants": "Variants",
                  "anchor": "Folder", "channel": "Channel", "actor": "Actor",
                  "character": "Character Id", "kinds": "Kinds", "units": "Units",
-                 "cutscenes": "Cutscene Clips", "dialogs": "Dialogue Clips"}
+                 "cutscenes": "Cutscene Clips", "dialogs": "Dialogue Clips",
+                 "mission": "Mission Id", "title": "Mission", "kind": "Mission Kind",
+                 "chapter": "Chapter", "level": "Level Id", "place": "Place",
+                 "lines": "Spoken Lines", "summary": "Recap", "relation": "Attributed By"}
 
 # The two ways to come at the same library: by the演出 the game plays, or by the
 # one it animates. Both are the game's own filing -- the second is the reason this
@@ -64,10 +77,18 @@ _KIND_ICONS = {"actor": "OUTLINER_OB_ARMATURE", "npc": "OUTLINER_OB_ARMATURE",
                "morphanim": "SHAPEKEY_DATA", "morphanimso": "PRESET"}
 _DEFAULT_KIND_ICON = "DOT"
 
+# What the panel draws its two halves from: the ANIMATIONS a unit plays, or the
+# SCRIPT it plays them to. Both are the same unit; which one is on top is the
+# question the user is asking about it right now.
+BY_ANIMATION = "animation"
+BY_SCRIPT = "script"
+
 # Loaded tables, by channel. Module scope, not scene state: a redraw must not
 # cost a re-read, and a ColumnTable is not something Blender's RNA can hold.
 _UNITS = {}
 _CLIPS = {}
+_LINES = {}
+_QUESTS = {}
 
 # What is checked, per (channel, unit), as {container path: cab}. The drawn rows
 # are a WINDOW onto a filtered, capped view of the unit's table, so the checked
@@ -97,6 +118,13 @@ _MARKER_TRACKS = ("SubtitleTrack", "AudioTrack", "BigLogoTrack", "CommonMaskTrac
 _CAMERA_KIND = "cam"
 
 
+def _language():
+    """The game language this tab is shown in -- Blender's own locale, mapped onto
+    the languages the game ships. Same rule as every other list in this add-on, so
+    switching Blender's language switches the story with it."""
+    return datasets.language_for_locale(bpy.app.translations.locale)
+
+
 def _top_table(state):
     """The list on top: the story units of the current channel, or the actor index.
     Cached per (mode, channel) -- both are cabmap reads, and a redraw must not
@@ -106,6 +134,14 @@ def _top_table(state):
 
 def _clips_table(state):
     return _CLIPS.get(_selection_key(state))
+
+
+def _lines_table(state):
+    return _LINES.get(_selection_key(state))
+
+
+def _quests_table(state):
+    return _QUESTS.get(state.mission)
 
 
 def _selection_key(state):
@@ -154,6 +190,10 @@ def _on_clip_filter_edit(self, context):
     _rebuild_clips(self)
 
 
+def _on_line_filter_edit(self, context):
+    _rebuild_lines(self)
+
+
 def _on_view_change(self, context):
     """Switching mode or channel only redraws. It never calls the refresh
     operator: an operator invoked from a property update runs with the UI
@@ -162,6 +202,7 @@ def _on_view_change(self, context):
     self.actor = ""
     self.clips.clear()
     self.clip_status = ""
+    _forget_context(self)
     if _top_table(self) is None:
         self.entries.clear()
         self.status = "Refresh to read the {0} out of the loaded cabmap.".format(
@@ -221,6 +262,37 @@ class RURI_PG_story_clip(bpy.types.PropertyGroup):
     selected: BoolProperty(default=False, update=_on_clip_check)
 
 
+class RURI_PG_story_line(bpy.types.PropertyGroup):
+    """One drawn line of what a unit says: a spoken line, a reply the player is
+    offered, or a cutscene subtitle. ``who`` is the speaker's display name, which
+    a cutscene subtitle does not have -- the game files those without a speaker
+    row, so the row is drawn as the narration it is rather than blamed on nobody."""
+    label: StringProperty()
+    kind: StringProperty()
+    speaker: StringProperty()
+    who: StringProperty()
+    text: StringProperty()
+    emotion: StringProperty()
+    order: IntProperty()
+    is_group: BoolProperty(default=False)
+
+
+class RURI_PG_story_quest(bpy.types.PropertyGroup):
+    """One objective of the mission that plays the open unit, in the words the
+    player reads. ``dialog`` and ``cutscene`` are what the game itself says this
+    objective waits on, which is the one attribution that is stated rather than
+    read off a file name."""
+    label: StringProperty()
+    quest: StringProperty()
+    description: StringProperty()
+    waits: StringProperty()
+    place: StringProperty()
+    dialog: StringProperty()
+    cutscene: StringProperty()
+    main_path: IntProperty(default=-1)
+    is_group: BoolProperty(default=False)
+
+
 class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     FILTER_SPEC_KEY = STORY_SPEC_KEY
 
@@ -259,6 +331,38 @@ class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     clips_active_index: IntProperty()
     clip_status: StringProperty(default="")
 
+    content: EnumProperty(
+        name="Show",
+        items=[(BY_ANIMATION, "Animation",
+                "The animations this unit plays, grouped the way the game splits them"),
+               (BY_SCRIPT, "Script",
+                "What this unit says and what the mission playing it asks the player to do")],
+        default=BY_ANIMATION)
+
+    # What the open unit IS, as the mission that plays it states it. Flat strings
+    # rather than a re-read: the panel redraws constantly and this is what it draws.
+    mission: StringProperty()
+    mission_title: StringProperty()
+    mission_kind: StringProperty()
+    mission_chapter: StringProperty()
+    mission_level: StringProperty()
+    mission_place: StringProperty()
+    mission_description: StringProperty()
+    mission_character: StringProperty()
+    unit_summary: StringProperty()
+    unit_relation: StringProperty()
+
+    line_search: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"},
+                                update=_on_line_filter_edit,
+                                description="Filter what is said by speaker, text or emotion")
+    lines: CollectionProperty(type=RURI_PG_story_line)
+    lines_active_index: IntProperty()
+    line_status: StringProperty(default="")
+
+    quests: CollectionProperty(type=RURI_PG_story_quest)
+    quests_active_index: IntProperty()
+    quest_status: StringProperty(default="")
+
 
 def _rebuild_top(state):
     """Rebuild the drawn list on top -- units or actors, whichever mode is on. The
@@ -282,11 +386,15 @@ def _fill_top(state):
     matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(), state.filter_rules)
     by_story = state.mode == BY_STORY
     key_column = _key_column(state)
-    groups = table.values("group") if by_story else None
     keys = table.values(key_column)
     if by_story:
+        # Units of one mission belong together, and the mission is what the game
+        # plays them from -- so the folder prefix only orders the units nothing
+        # attributed, which is exactly the set it is still the best answer for.
+        missions = table.values("mission")
+        groups = table.values("group")
         order = sorted((int(index) for index in matched),
-                       key=lambda index: (groups[index], keys[index]))
+                       key=lambda index: (missions[index] or groups[index], keys[index]))
     else:
         # Characters first, then everyone else, and inside each the most-animated
         # first -- which puts the cast the story actually revolves around on top.
@@ -295,12 +403,13 @@ def _fill_top(state):
         clips = table.values("clips")
         order = sorted((int(index) for index in matched),
                        key=lambda index: (0 if characters[index] else 1, -float(clips[index])))
-    columns = ("unit", "group", "shots", "clips", "actors", "variants") if by_story \
+    columns = ("unit", "group", "shots", "clips", "actors", "variants",
+               "mission", "title", "kind", "chapter", "place", "lines") if by_story \
         else ("actor", "character", "kinds", "units", "cutscenes", "dialogs", "clips")
     rows = [{name: table.cell(index, name) for name in columns}
             for index in order[:cabmap_state.LIST_CAP]]
     for row in rows:
-        row["group"] = row["group"] if by_story else _actor_group(row)
+        row["group"] = _unit_group(row) if by_story else _actor_group(row)
 
     counts = {}
     for row in rows:
@@ -330,13 +439,29 @@ def _fill_top(state):
         hidden)
 
 
+def _unit_group(row):
+    """The header a unit is drawn under: the mission that plays it, under that
+    mission's own name. Only a unit no mission reaches falls back to the folder
+    prefix the game's own file naming leads with."""
+    if row.get("title"):
+        return row["title"]
+    return row.get("mission") or row["group"]
+
+
 def _unit_detail(row):
-    """The one-line summary of a unit: what the game's own folder holds. A shot
+    """The one-line summary of a unit: what it plays and where it happens. A shot
     count of zero is a unit whose animations the game does not ship separately,
     which is worth reading rather than hiding."""
+    parts = []
+    if row.get("place"):
+        parts.append(row["place"])
     shots = int(row["shots"] or 0)
-    parts = ["{0} shot(s)".format(shots)] if shots else []
+    if shots:
+        parts.append("{0} shot(s)".format(shots))
     parts.append("{0} clip(s)".format(int(row["clips"] or 0)))
+    lines = int(row.get("lines") or 0)
+    if lines:
+        parts.append("{0} line(s)".format(lines))
     actors = int(row["actors"] or 0)
     if actors:
         parts.append("{0} actor(s)".format(actors))
@@ -377,6 +502,7 @@ def _open_entry(state, key):
     state.actor = "" if by_story else key
     state.clips.clear()
     state.clip_status = ""
+    _forget_context(state)
     if not key or cabmap_state.BRIDGE is None:
         return
     try:
@@ -388,6 +514,93 @@ def _open_entry(state, key):
         return
     _CLIPS[_selection_key(state)] = table
     _rebuild_clips(state)
+    if by_story:
+        _open_context(state, key)
+
+
+def _forget_context(state):
+    state.mission = ""
+    state.mission_title = ""
+    state.mission_kind = ""
+    state.mission_chapter = ""
+    state.mission_level = ""
+    state.mission_place = ""
+    state.mission_description = ""
+    state.mission_character = ""
+    state.unit_summary = ""
+    state.unit_relation = ""
+    state.lines.clear()
+    state.line_status = ""
+    state.quests.clear()
+    state.quest_status = ""
+
+
+def _open_context(state, unit):
+    """What the picked unit IS and what it says. The mission columns already rode
+    in on the unit table, so this crossing is only for the two things a unit-sized
+    row cannot hold: every line the unit speaks, and the quest graph of the mission
+    playing it -- both cached by (id, args) on the C# side, so walking the list
+    with the arrow keys re-reads nothing already seen."""
+    table = _top_table(state)
+    row = _row_of(table, unit)
+    if row is None:
+        return
+    state.mission = row.get("mission", "")
+    state.mission_title = row.get("title", "")
+    state.mission_kind = row.get("kind", "")
+    state.mission_chapter = row.get("chapter", "")
+    state.mission_level = row.get("level", "")
+    state.mission_place = row.get("place", "")
+    state.unit_summary = row.get("summary", "")
+    state.unit_relation = row.get("relation", "")
+
+    language = _language()
+    try:
+        _LINES[_selection_key(state)] = datasets.story_lines(unit=unit, language=language)
+    except Exception as exc:
+        state.line_status = "{0}: {1}".format(type(exc).__name__, exc)
+    else:
+        _rebuild_lines(state)
+    if not state.mission:
+        state.quest_status = "No mission of this install names this unit."
+        return
+    try:
+        quests = datasets.story_quests(state.mission, language)
+        missions = datasets.story_missions(language)
+    except Exception as exc:
+        state.quest_status = "{0}: {1}".format(type(exc).__name__, exc)
+        return
+    _QUESTS[state.mission] = quests
+    mission = _row_of(missions, state.mission, "mission")
+    if mission is not None:
+        state.mission_description = mission.get("description", "")
+        state.mission_character = mission.get("who", "") or mission.get("character", "")
+    _fill_quests(state, quests)
+
+
+def _unit_speaking(table, spoken):
+    """Which unit plays the dialogue scene or cutscene a mission NAMES. The game
+    names those by what is said (``dlg_e7m4_4``), and the unit that says it is a
+    file next door (``dlgtl_e7m4_4_sub_1``) -- the hook already states the pairing
+    on every row, so this is a lookup and not a second naming rule here."""
+    if table is None or not spoken:
+        return ""
+    for index, found in enumerate(table.values("spoken")):
+        if found == spoken:
+            return table.cell(index, "unit")
+    return ""
+
+
+def _row_of(table, key, column="unit"):
+    """The one row of a loaded table whose key column is ``key``, as a dict. The
+    tables are small and this runs once per pick, not once per redraw."""
+    if table is None:
+        return None
+    keys = table.values(column)
+    for index, found in enumerate(keys):
+        if found == key:
+            return {name: table.cell(index, name) for name in table.names}
+    return None
 
 
 def _rebuild_clips(state):
@@ -443,6 +656,74 @@ def _fill_clips(state, table):
         len(order), len(table),
         "" if len(order) == len(rows) else " · showing {0}".format(len(rows)),
         " · {0} checked".format(len(checked)) if checked else "")
+
+
+def _rebuild_lines(state):
+    with filter_ui.rebuilding():
+        _fill_lines(state, _lines_table(state))
+
+
+def _fill_lines(state, table):
+    """What the open unit says, in the game's own playback order. Filtering runs
+    through the same C# engine the other lists use, over the very table the rows
+    came from -- so searching a speaker's name or a phrase is one vectorized pass
+    and nothing is matched here."""
+    state.lines.clear()
+    if table is None:
+        state.line_status = ""
+        return
+    matched = cabmap_state.BRIDGE.search_data_table(table, state.line_search.strip(), None)
+    order = sorted(int(index) for index in matched)
+    rows = [{name: table.cell(index, name)
+             for name in ("order", "kind", "speaker", "who", "text", "emotion")}
+            for index in order[:cabmap_state.LIST_CAP]]
+    for row in rows:
+        item = state.lines.add()
+        item.kind = row["kind"]
+        item.speaker = row["speaker"]
+        item.who = row["who"] or row["speaker"]
+        item.text = row["text"]
+        item.emotion = row["emotion"]
+        item.order = int(float(row["order"] or 0))
+        item.label = row["text"]
+    state.line_status = "{0} of {1} line(s){2}".format(
+        len(order), len(table),
+        "" if len(order) == len(rows) else " · showing {0}".format(len(rows)))
+
+
+def _fill_quests(state, table):
+    """The mission's own quest graph, in the order its main path walks it. One
+    drawn row per objective, under the quest it belongs to -- which is the shape
+    the game itself tracks, and the reason a quest with several objectives reads
+    as several things to do rather than one."""
+    state.quests.clear()
+    if table is None:
+        state.quest_status = ""
+        return
+    rows = [{name: table.cell(index, name)
+             for name in ("quest", "mainPath", "objective", "description", "waitsOn",
+                          "place", "dialog", "cutscene")}
+            for index in range(len(table))][:cabmap_state.LIST_CAP]
+    current = None
+    for row in rows:
+        if row["quest"] != current:
+            current = row["quest"]
+            header = state.quests.add()
+            header.label = row["quest"]
+            header.quest = row["quest"]
+            header.main_path = int(float(row["mainPath"] or -1))
+            header.is_group = True
+        item = state.quests.add()
+        item.quest = row["quest"]
+        item.description = row["description"]
+        item.waits = row["waitsOn"]
+        item.place = row["place"]
+        item.dialog = row["dialog"]
+        item.cutscene = row["cutscene"]
+        item.main_path = int(float(row["mainPath"] or -1))
+        item.label = row["description"] or row["waitsOn"] or row["quest"]
+    state.quest_status = "{0} objective(s) over {1} quest(s)".format(
+        len(rows), len({row["quest"] for row in rows}))
 
 
 def _bucket(row, by_story):
@@ -524,6 +805,66 @@ class RURI_UL_story_clips(bpy.types.UIList):
         return [], []
 
 
+class RURI_UL_story_lines(bpy.types.UIList):
+    bl_idname = "RURI_UL_story_lines"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_prop, index):
+        row = layout.row(align=True)
+        speaker = row.row()
+        speaker.scale_x = 0.45
+        speaker.alignment = "RIGHT"
+        if item.kind == datasets.LINE_OPTION:
+            speaker.label(text="", icon="TRIA_RIGHT")
+        elif item.who:
+            speaker.label(text=item.who)
+        else:
+            speaker.enabled = False
+            speaker.label(text="", icon="REC")
+        row.label(text=item.text)
+        if item.emotion:
+            mood = row.row()
+            mood.enabled = False
+            mood.alignment = "RIGHT"
+            mood.scale_x = 0.5
+            mood.label(text=item.emotion)
+
+    def filter_items(self, context, data, propname):
+        return [], []
+
+
+class RURI_UL_story_quests(bpy.types.UIList):
+    bl_idname = "RURI_UL_story_quests"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_prop, index):
+        if item.is_group:
+            row = layout.row(align=True)
+            title = row.row()
+            title.enabled = False
+            title.label(text=item.label,
+                        icon="KEYFRAME_HLT" if item.main_path >= 0 else "KEYFRAME")
+            return
+        row = layout.row(align=True)
+        row.label(text=item.label or "(no text)", icon="DOT")
+        # What the game itself says this objective waits on is the one link that is
+        # stated rather than read off a file name -- so it is a click, not a note.
+        played = item.dialog or item.cutscene
+        if played:
+            jump = row.row()
+            jump.alignment = "RIGHT"
+            opened = jump.operator(RURI_OT_story_goto_unit.bl_idname, text=played,
+                                   icon="ZOOM_SELECTED")
+            opened.channel = datasets.CUTSCENE if item.cutscene else datasets.DIALOG
+            opened.spoken = played
+        elif item.place:
+            where = row.row()
+            where.enabled = False
+            where.alignment = "RIGHT"
+            where.label(text=item.place)
+
+    def filter_items(self, context, data, propname):
+        return [], []
+
+
 class RURI_OT_story_refresh(bpy.types.Operator):
     """Read the story list out of the loaded cabmap -- the units of this channel,
     or the actor index, whichever mode is on."""
@@ -540,7 +881,8 @@ class RURI_OT_story_refresh(bpy.types.Operator):
         state = context.scene.ruri_story
         by_story = state.mode == BY_STORY
         try:
-            table = datasets.story_units(state.channel) if by_story else datasets.story_actors()
+            table = datasets.story_units(state.channel, _language()) if by_story \
+                else datasets.story_actors()
         except Exception as exc:
             state.status = "{0}: {1}".format(type(exc).__name__, exc)
             self.report({"WARNING"}, state.status)
@@ -1210,6 +1552,7 @@ class RURI_OT_story_goto_unit(bpy.types.Operator):
     bl_description = "Switch to By Story and open the cutscene / dialogue this animation belongs to"
     channel: StringProperty()
     unit: StringProperty()
+    spoken: StringProperty()
 
     @classmethod
     def poll(cls, context):
@@ -1217,7 +1560,7 @@ class RURI_OT_story_goto_unit(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_story
-        if not self.unit:
+        if not self.unit and not self.spoken:
             self.report({"WARNING"}, "That row belongs to no story unit.")
             return {"CANCELLED"}
         channel = self.channel if self.channel in (datasets.CUTSCENE, datasets.DIALOG)             else datasets.CUTSCENE
@@ -1225,22 +1568,27 @@ class RURI_OT_story_goto_unit(bpy.types.Operator):
         state.channel = channel
         if _top_table(state) is None:
             try:
-                _UNITS[(BY_STORY, channel)] = datasets.story_units(channel)
+                _UNITS[(BY_STORY, channel)] = datasets.story_units(channel, _language())
             except Exception as exc:
                 _report_exception(self, "Reading the {0} units failed".format(channel), exc)
                 return {"CANCELLED"}
+        unit = self.unit or _unit_speaking(_top_table(state), self.spoken)
+        if not unit:
+            self.report({"WARNING"},
+                        "The game ships no {0} playing '{1}'.".format(channel, self.spoken))
+            return {"CANCELLED"}
         # Narrow to it as well as select it: the list is hundreds of units long,
         # and a selection the user cannot see reads as nothing having happened.
-        state.search = self.unit
+        state.search = unit
         _rebuild_top(state)
         index = next((position for position, entry in enumerate(state.entries)
-                      if not entry.is_group and entry.key == self.unit), -1)
+                      if not entry.is_group and entry.key == unit), -1)
         if index < 0:
-            self.report({"WARNING"}, "'{0}' is not in the {1} list.".format(self.unit, channel))
+            self.report({"WARNING"}, "'{0}' is not in the {1} list.".format(unit, channel))
             return {"CANCELLED"}
         state.active_index = index
-        _open_entry(state, self.unit)
-        self.report({"INFO"}, "Opened {0}.".format(self.unit))
+        _open_entry(state, unit)
+        self.report({"INFO"}, "Opened {0}.".format(unit))
         return {"FINISHED"}
 
 
@@ -1289,6 +1637,79 @@ def _kinds_in(state):
     return kinds
 
 
+def _draw_context(layout, state):
+    """What the open unit IS, before anything about the files it is made of: the
+    mission the game plays it from, where and when that happens, and -- for a
+    dialogue -- the recap the game itself writes for the scene."""
+    if not state.mission:
+        note = layout.box()
+        note.label(text="No mission of this install names this unit.", icon="QUESTION")
+        return
+    box = layout.box()
+    head = box.row(align=True)
+    head.label(text=state.mission_title or state.mission, icon="OUTLINER_OB_FONT")
+    tail = head.row()
+    tail.enabled = False
+    tail.alignment = "RIGHT"
+    tail.label(text=" · ".join(part for part in (state.mission_kind, state.mission_chapter,
+                                                 state.mission) if part))
+    where = box.row(align=True)
+    where.enabled = False
+    where.label(text=state.mission_place or state.mission_level or "(no level)", icon="WORLD")
+    if state.mission_character:
+        where.label(text=state.mission_character, icon="OUTLINER_OB_ARMATURE")
+    for text, icon in ((state.mission_description, "INFO"), (state.unit_summary, "TEXT")):
+        if text:
+            _draw_paragraph(box, text, icon)
+
+
+def _draw_paragraph(layout, text, icon):
+    """Blender's label draws one line and clips it; a mission description is a
+    sentence. Wrapping it is the panel's own job -- there is no wrapping label."""
+    column = layout.column(align=True)
+    first = True
+    for chunk in _wrapped(text):
+        row = column.row()
+        row.enabled = False
+        row.label(text=chunk, icon=icon if first else "BLANK1")
+        first = False
+
+
+def _wrapped(text, width=34):
+    """CJK is the language most of this text is written in and it wraps anywhere,
+    so the split is by width rather than by word -- with a break preferred at a
+    space when the line happens to have one."""
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= width:
+            yield remaining
+            return
+        cut = remaining.rfind(" ", 0, width + 1)
+        cut = cut if cut > width // 2 else width
+        yield remaining[:cut].rstrip()
+        remaining = remaining[cut:].lstrip()
+
+
+def _draw_script(box, state):
+    """The other half of a unit: what it says, and what the mission playing it
+    asks the player to do around it."""
+    said = box.column(align=True)
+    said.label(text="Said in this unit", icon="OUTLINER_OB_FONT")
+    said.prop(state, "line_search", icon="VIEWZOOM", text="")
+    box.template_list(RURI_UL_story_lines.bl_idname, "", state, "lines",
+                      state, "lines_active_index", rows=10)
+    box.label(text=state.line_status or "This unit speaks nothing the text tables carry.",
+              icon="INFO")
+    if not state.mission:
+        return
+    box.separator()
+    box.label(text="{0} · what the player is asked to do".format(
+        state.mission_title or state.mission), icon="KEYFRAME_HLT")
+    box.template_list(RURI_UL_story_quests.bl_idname, "", state, "quests",
+                      state, "quests_active_index", rows=8)
+    box.label(text=state.quest_status, icon="INFO")
+
+
 def draw_story_tab(layout, context):
     state = context.scene.ruri_story
 
@@ -1310,9 +1731,17 @@ def draw_story_tab(layout, context):
         return
 
     layout.separator()
+    if state.mode == BY_STORY:
+        _draw_context(layout, state)
+
     box = layout.box()
     box.label(text=opened, icon="SEQ_STRIP_DUPLICATE" if state.mode == BY_STORY
               else "OUTLINER_OB_ARMATURE")
+    if state.mode == BY_STORY:
+        box.row(align=True).prop(state, "content", expand=True)
+        if state.content == BY_SCRIPT:
+            _draw_script(box, state)
+            return
     box.prop(state, "clip_search", icon="VIEWZOOM", text="")
 
     row = box.row(align=True)
@@ -1357,9 +1786,13 @@ def draw_story_tab(layout, context):
 _CLASSES = (
     RURI_PG_story_entry,
     RURI_PG_story_clip,
+    RURI_PG_story_line,
+    RURI_PG_story_quest,
     RURI_PG_story,
     RURI_UL_story_units,
     RURI_UL_story_clips,
+    RURI_UL_story_lines,
+    RURI_UL_story_quests,
     RURI_OT_story_refresh,
     RURI_OT_story_select,
     RURI_OT_story_load_unit,
@@ -1382,6 +1815,8 @@ def unregister():
         bpy.utils.unregister_class(cls)
     _UNITS.clear()
     _CLIPS.clear()
+    _LINES.clear()
+    _QUESTS.clear()
     _CHECKED.clear()
     _OBJECT_ACTIONS.clear()
     _ACTOR_RIGS.clear()

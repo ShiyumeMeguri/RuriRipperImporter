@@ -59,6 +59,9 @@ STORY_CLIPS = "endfield.story.clips"
 STORY_ACTORS = "endfield.story.actors"
 STORY_TIMELINE = "endfield.story.timeline"
 STORY_TIMELINE_SHAPE = "endfield.story.timeline_shape"
+STORY_MISSIONS = "endfield.story.missions"
+STORY_QUESTS = "endfield.story.quests"
+STORY_LINES = "endfield.story.lines"
 
 
 def _table(dataset_id, **args):
@@ -119,13 +122,50 @@ CUTSCENE = "cutscene"
 DIALOG = "dialog"
 LIBRARY = "library"
 
+# What a row of ``story_lines`` is. A spoken line has a speaker and an emotion; a
+# reply is what the player is offered back; a subtitle is a cutscene's own text,
+# which the game files without a speaker at all. A panel states WHICH it is
+# drawing, never how one is told from another.
+LINE_SPOKEN = "line"
+LINE_OPTION = "option"
+LINE_SUBTITLE = "subtitle"
 
-def story_units(channel=""):
+
+def story_units(channel="", language=""):
     """Every unit of story playback the game files animations under, as the table
     itself -- so the list searches through the same C# engine every other list
     here does. One row is a cutscene or a dialogue timeline, with the shot/actor/
-    clip counts of its own folder and the protagonist variants it ships in."""
-    return _table(STORY_UNITS, channel=channel)
+    clip counts of its own folder and the protagonist variants it ships in.
+
+    Given a language the same row also says what the unit IS: the mission that
+    plays it under that mission's own name, the place and chapter that mission
+    belongs to, how many spoken lines the unit has, and -- for a dialogue -- the
+    recap the game itself writes for that scene. Searching the list then searches
+    those too, so typing a mission's name finds everything it plays."""
+    return _table(STORY_UNITS, channel=channel, language=language)
+
+
+def story_missions(language):
+    """Every mission the game ships, read off the runtime asset it plays each one
+    from: name and description in the chosen language, the level it belongs to
+    under that level's own name, its chapter and kind, the character it belongs
+    to, and how much story it plays."""
+    return _table(STORY_MISSIONS, language=language)
+
+
+def story_quests(mission, language):
+    """One mission's quest graph in the order its own main path walks it: each
+    objective in the words the player reads, what it waits on, which quests come
+    before it, and the scene, area, npc, dialogue or cutscene it points at."""
+    return _table(STORY_QUESTS, mission=mission, language=language)
+
+
+def story_lines(unit="", mission="", language=""):
+    """What is said, in playback order -- a dialogue scene's lines with speaker,
+    display name and the emotion the face is driven to, the replies the player is
+    offered, and a cutscene's subtitles. By unit it answers that one unit; by
+    mission it answers every unit that mission plays."""
+    return _table(STORY_LINES, unit=unit, mission=mission, language=language)
 
 
 def story_clips(channel="", unit="", actor=""):
