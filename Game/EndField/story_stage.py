@@ -135,6 +135,13 @@ class Stage:
         self.unresolved = []
         self.markers = 0
         self.looking = 0
+        # The unit's own prefab, by object name: the stage the cast stands on and
+        # the virtual cameras the shots cut between.
+        self.props = {}
+        self.stood = 0
+        # Shots whose camera is an object in that stage: they cannot be realized until
+        # the stage is up, and the stage cannot be built until the cast closure is read.
+        self.pending_cuts = []
         self.unknown = set()
         # The closure every realizer builds against. Set once, by ACQUIRE.
         self.scenery = None
@@ -179,7 +186,7 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
 
     # MANIFEST: everything this unit will ever need, before anything is read.
     detail = context.scene.ruri_cabmap.detail_level
-    manifest = yield step_loader.Read(lambda: _manifest(rows, detail), 0.25)
+    manifest = yield step_loader.Read(lambda: _manifest(rows, detail, unit), 0.25)
     stage.cast = manifest["cast"]
     stage.unresolved.extend(manifest["unresolved"])
 
@@ -198,7 +205,14 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     # ACQUIRE, second crossing: every model, prop and effect the unit puts on
     # stage -- the whole cast in ONE read, which is the point of the manifest.
     stage.scenery = yield step_loader.Read(lambda: _acquire_scenery(manifest["scenery"]), 0.62)
+    _raise_stage(stage, manifest)
+    for pending in stage.pending_cuts:
+        if _cut_to(stage, pending):
+            stage.placed += 1
+        else:
+            stage.unplaced.append(pending["source"])
     yield from _cast_steps(stage, manifest)
+    _stand_cast(stage, rows)
 
     for row in rows:
         if not _drives_camera(row):
@@ -213,7 +227,7 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
 
 # -- manifest -----------------------------------------------------------------
 
-def _manifest(rows, level=0):
+def _manifest(rows, level=0, unit=""):
     """What this unit needs, as a value: who is in it, and every CAB to mark.
 
     Pure with respect to the scene and to the closure -- it asks the game's own
@@ -231,7 +245,7 @@ def _manifest(rows, level=0):
                             "binding": row["target"]}
     resolved = cast.resolve(list(members.values()), level)
 
-    scenery = cast.cabs_of(resolved.values())
+    scenery = cast.cabs_of(resolved.values()) + _stage_cabs(unit)
     clips = []
     direct = []
     by_actor = {}
@@ -259,9 +273,25 @@ def _manifest(rows, level=0):
             "unresolved": [members[key]["label"] or key
                            for key in members if key not in resolved],
             "scenery": list(dict.fromkeys(scenery)),
+            "stage": _stage_cabs(unit),
             "clips": list(dict.fromkeys(clips)),
             "direct": list(dict.fromkeys(direct)),
             "by_actor": {key: list(dict.fromkeys(cabs)) for key, cabs in by_actor.items()}}
+
+
+def _stage_cabs(unit):
+    """The CABs of the unit's own prefab -- the stage itself.
+
+    It holds what the clips do not: where each performer stands, and the virtual
+    cameras the shots cut between. Asked of the cabmap by the unit's own name
+    rather than assembled out of a path, so nothing here encodes how this game
+    lays its folders out."""
+    if not unit:
+        return []
+    try:
+        return [row["cab"] for row in datasets.named_rows(unit)]
+    except Exception:
+        return []
 
 
 def _identity(row):
@@ -343,6 +373,78 @@ def _cast_steps(stage, manifest):
         cross_game_retarget.build_clips_onto_from_closure(
             stage.context, rig, list(cabs), stage.motion)
         yield step_loader.Mark(0.78 + 0.16 * (index / max(len(landing), 1)))
+
+
+def _raise_stage(stage, manifest):
+    """Build the unit's own prefab -- the thing the performers stand on.
+
+    Imported like any other model, out of the closure already read. What it
+    contributes is a hierarchy of empties whose names are exactly the segments the
+    timeline's binding paths are written in, which is what makes standing the cast
+    on it a lookup rather than a guess."""
+    from ... import cabmap_panel
+    if stage.scenery is None or not manifest["stage"]:
+        return
+    before = {obj.name for obj in stage.context.scene.objects}
+    rows = [{"cab": cab, "name": stage.unit} for cab in manifest["stage"]]
+    try:
+        cabmap_panel.import_hierarchy_from_closure(
+            cast._Reporter(stage.notes), stage.context, stage.context.scene.ruri_cabmap,
+            rows, stage.scenery, only_seeded=True,
+            # Empties ON and skeleton OFF, both deliberately: the empties ARE the
+            # stage (a placement is a transform and nothing else), and the prefab
+            # builds its transform tree only when it has no armature -- a stage that
+            # happens to embed a character would otherwise take the skinned path and
+            # drop all 600 of its placement nodes. The cast is imported separately.
+            options=dict(stage.context.scene.ruri_cabmap.as_options(),
+                         import_empties=True, import_skeleton=False))
+    except Exception as failure:
+        stage.notes.append("The unit's own stage did not build: {0}".format(failure))
+        return
+    stage.props = {obj.name: obj for obj in stage.context.scene.objects
+                   if obj.name not in before}
+
+
+def _anchor_for(stage, binding):
+    """The object in the unit's own prefab that a binding path names.
+
+    A binding is a transform path INTO that prefab, so its deepest segment that
+    the prefab actually holds is the thing the track drives -- the same
+    deepest-first walk the cast resolution does, asked of the scene this time."""
+    for segment in reversed([part for part in (binding or "").split("/") if part]):
+        found = stage.props.get(segment)
+        if found is not None:
+            return found
+        for name, obj in stage.props.items():
+            if name.rsplit(".", 1)[0] == segment:
+                return obj
+    return None
+
+
+def _stand_cast(stage, rows):
+    """Put each performer where the unit's own prefab puts them.
+
+    Parented rather than copied, so a stage the game animates carries its cast
+    with it. A performer whose binding names nothing in the prefab is left where
+    it is and said out loud -- standing it at the origin silently is what this
+    exists to stop."""
+    from mathutils import Matrix
+    if not stage.props:
+        return
+    placed = 0
+    for row in rows:
+        if not row["model"]:
+            continue
+        rig = stage.actors.get(_identity(row))
+        if rig is None or rig.parent is not None:
+            continue
+        anchor = _anchor_for(stage, row["target"])
+        if anchor is None:
+            continue
+        rig.parent = anchor
+        rig.matrix_parent_inverse = Matrix.Identity(4)
+        placed += 1
+    stage.stood = placed
 
 
 def _drives_camera(row):
@@ -563,11 +665,46 @@ def _realize_camera(stage, row):
         return
     built = _object_action(camera, row["sourceCab"], row["source"])
     if built is None:
+        # A dialogue does not animate its camera: it stands several virtual cameras
+        # in the unit's own prefab and the shot says which one is live. So the clip
+        # name is an OBJECT here, and the shot is realized by putting the camera
+        # where that object is for the span -- which is what the runtime does.
+        if not stage.props:
+            stage.pending_cuts.append(row)
+            stage.shots.append(row)
+            return
+        if _cut_to(stage, row):
+            stage.shots.append(row)
+            stage.placed += 1
+            return
         stage.unplaced.append(row["source"])
         return
     _place_strip(camera, row, built[0], stage.fps)
     stage.shots.append(row)
     stage.placed += 1
+
+
+def _cut_to(stage, row):
+    """Put the camera on the virtual camera this shot makes live, for its span.
+
+    Keyed rather than parented: a unit cuts between several of them, and a camera
+    can only have one parent. Constant interpolation, because a cut is a cut."""
+    vcam = stage.props.get(row["source"]) or _anchor_for(stage, row["source"])
+    if vcam is None:
+        return False
+    camera = stage.camera
+    frame = int(round(stage.frame(row["at"])))
+    camera.rotation_mode = "QUATERNION"
+    world = vcam.matrix_world
+    camera.location = world.to_translation()
+    camera.rotation_quaternion = world.to_quaternion()
+    camera.keyframe_insert("location", frame=frame)
+    camera.keyframe_insert("rotation_quaternion", frame=frame)
+    animation = camera.animation_data
+    for curve in (animation.action.fcurves if animation and animation.action else []):
+        for point in curve.keyframe_points:
+            point.interpolation = "CONSTANT"
+    return True
 
 
 @realizer("show")
@@ -1213,6 +1350,8 @@ def summary(stage):
             "" if stage.looking else " (no 3D view to look through it)"))
     if stage.beats:
         parts.append("{0} beat(s)".format(len(stage.beats)))
+    if stage.stood:
+        parts.append("{0} performer(s) stood on the unit's own stage".format(stage.stood))
     if stage.spans:
         parts.append("{0} visibility window(s)".format(len(stage.spans)))
     if stage.markers:
