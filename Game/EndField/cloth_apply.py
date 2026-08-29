@@ -22,10 +22,9 @@ MINIMUM_RADIUS = 1e-5
 
 AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 
-# Unity is Y up and left handed, Blender is Z up and right handed; a point of one
-# reads as the other by this swap, which is the same one the mesh import uses.
+
 def _point(vector):
-    return mathutils.Vector((vector[0], -vector[2], vector[1]))
+    return coordinate.conversion_matrix() @ mathutils.Vector(vector)
 
 
 def _quaternion(values):
@@ -42,9 +41,22 @@ BONE_BASIS_REASON = (
     "anything stamped on the rig, because the animation path aligns a rig before it answers "
     "and that moves the bones, leaving every earlier record describing a pose that is gone")
 
+BASIS_TAKES_MODEL_AXES_REASON = (
+    "the points this basis is handed are the collider's own numbers, and those are stated "
+    "in the model's axes, not in this host's: the game says Y is up and states a capsule's "
+    "centre and its direction axis in that frame, so the change of axes has to happen "
+    "between the collider's numbers and the bone, which is why the model's bone pose is "
+    "carried across by C and NOT conjugated by it -- a conjugation C M C is the same "
+    "transform seen from here, and would be right for a point that had already been "
+    "converted, but every point coming through here still has to make that trip; the "
+    "difference is invisible on any collider whose numbers are X only, because C swaps Y "
+    "and Z and leaves X alone, which is exactly the set of colliders that used to look "
+    "correct while the ones with a Y or Z offset sat a swap away from where the game "
+    "puts them and the Z-axis capsules pointed along the host's Y")
+
 
 def _bone_basis(rig, bone_name, collider):
-    """Model bone-local -> this rig's bone-local, from the model's own bone pose.
+    """Model bone-local, in the MODEL's axes -> this rig's bone-local, in this host's.
 
     Returns the basis and how far the two frames' origins ended up apart -- one skeleton
     puts that at zero, and anything else means the pair does not describe one bone."""
@@ -54,7 +66,7 @@ def _bone_basis(rig, bone_name, collider):
     rotation = _quaternion(collider["bone_rotation"]).normalized()
     source = mathutils.Matrix.Translation(collider["bone_position"]) \
         @ rotation.to_matrix().to_4x4()
-    here = coordinate.convert_matrix(source)
+    here = coordinate.conversion_matrix() @ source
     return (bone.matrix_local.inverted_safe() @ here,
             (here.translation - bone.matrix_local.translation).length)
 
@@ -185,15 +197,31 @@ def _empty(collection, name, display_type, radius):
     return empty
 
 
+BIND_AGAINST_REST_REASON = (
+    "the collider's offset is stated against the bone the model binds it to, so the frame "
+    "this binding is taken in is the REST pose and never whatever pose the bone is wearing "
+    "when somebody presses the button: a rig with the cloth running has bones carrying a "
+    "solved pose, and binding against that freezes one frame of a simulation into the "
+    "collider's own resting place, which then never comes back -- it is what left this "
+    "file's skirt and tail colliders holding a scale of 0.92 to 1.03 with the rig standing "
+    "still; the scale channels are off for the same reason from the other side: a bone the "
+    "cloth solver drives carries a stretch because a connected bone's head can only be "
+    "moved by stretching its parent, and that stretch is how this host reaches a position, "
+    "not a size the model states -- the game's own bones are all scale 1, and a collider "
+    "that breathed with the chain would change the radius the game authored")
+
+
 def _follow_bone(view_layer, empty, rig, bone_name, location):
     view_layer.update()
     constraint = empty.constraints.new('CHILD_OF')
     constraint.name = "Ruri Follow Bone"
     constraint.target = rig
     constraint.subtarget = bone_name
-    view_layer.update()
-    pose_bone = rig.pose.bones.get(bone_name)
-    space = rig.matrix_world @ pose_bone.matrix if pose_bone is not None \
+    constraint.use_scale_x = False
+    constraint.use_scale_y = False
+    constraint.use_scale_z = False
+    bone = rig.data.bones.get(bone_name)
+    space = rig.matrix_world @ bone.matrix_local if bone is not None \
         else mathutils.Matrix.Identity(4)
     constraint.inverse_matrix = space.inverted_safe()
     empty.matrix_basis = mathutils.Matrix.Translation(space @ location)
