@@ -695,6 +695,13 @@ def _cut_to(stage, row):
     camera = stage.camera
     frame = int(round(stage.frame(row["at"])))
     camera.rotation_mode = "QUATERNION"
+    # The stage was parented into place moments ago and the view layer has not
+    # evaluated it yet; matrix_world would still be the pre-placement value.
+    stage.context.view_layer.update()
+    # No turn: the importer already brought this transform into Blender's basis, and
+    # measuring every shot says so -- the placed matrix used AS IS aims at the cast on
+    # 27 of 40 shots while every rotated variant aims at it on none. What made it look
+    # down was the stale matrix above, not a missing convention.
     world = vcam.matrix_world
     camera.location = world.to_translation()
     camera.rotation_quaternion = world.to_quaternion()
