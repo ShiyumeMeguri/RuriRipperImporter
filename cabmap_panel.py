@@ -1993,7 +1993,7 @@ def resolve_import_closure(seeds, export_class_ids=None):
 
 def import_hierarchy_from_closure(operator, context, state, rows, resolved,
                                   only_root_names="", populate_browser=False,
-                                  only_seeded=False):
+                                  only_seeded=False, options=None):
     """Import hierarchy/asset rows out of an ALREADY-resolved closure.
 
     THE hierarchy import -- the operator is one caller of it, not its owner. A
@@ -2016,7 +2016,10 @@ def import_hierarchy_from_closure(operator, context, state, rows, resolved,
     roots = resolved['roots']
     seed_roots = resolved['seed_roots']
     scene_roots = resolved['scene_roots']
-    options = state.as_options()
+    # A caller whose asset needs different options than the session's states them:
+    # a placement hierarchy is empties, and the session skips empties by default.
+    if options is None:
+        options = state.as_options()
     ok = True
     imported = 0
 
