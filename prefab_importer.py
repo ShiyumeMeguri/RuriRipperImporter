@@ -44,10 +44,11 @@ DEFAULT_OPTIONS = {
     "flip_v": False,
     "import_shadow_proxies": False,
     "import_empties": False,
-    # Game-shader node-group templates: link them from the addon's shipped .blend
-    # (False, default -- smaller and shared) or append them into this file (True --
-    # the .blend travels intact; a link that stops resolving renders the model black).
-    "embed_shader_templates": False,
+    # Game-shader node-group templates: append them into this file (False, default --
+    # the .blend travels intact) or link a copy placed next to this .blend and
+    # referenced relatively (True -- smaller and shared, but the copy has to travel
+    # with it; a link that stops resolving renders the model black).
+    "link_shader_templates": False,
     # Which game this import is of (the upstream GameType member). The host knows it;
     # the importer only stamps what it is told, so nothing here names a game.
     "source_game": "",
