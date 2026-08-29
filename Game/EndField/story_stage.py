@@ -146,7 +146,7 @@ def _stage_rows(unit, variant, language):
         for name in ("at", "until", "clipIn", "speed", "blendIn", "blendOut", "rate", "length",
                      "crossFade"):
             row[name] = _real(row.get(name))
-        for name in ("order", "jumpTo", "reverse", "onTop", "muted"):
+        for name in ("order", "branch", "becomes", "reverse", "onTop", "muted"):
             row[name] = int(_real(row.get(name)))
     return rows
 
@@ -423,7 +423,10 @@ def _write_script(stage):
         beat.text = row["text"]
         beat.emotion = row["emotion"]
         beat.options = row["options"]
-        beat.jump_to = row["jumpTo"]
+        beat.branch = row["branch"]
+        beat.reverse = row["reverse"] > 0
+        beat.becomes = row["becomes"]
+        beat.fired = False
     script.active = 0
 
 
@@ -504,6 +507,8 @@ def _subtitles(stage):
         text.parent = stage.camera
         text.location = (0.0, SUBTITLE_DROP, -SUBTITLE_DISTANCE)
         text.rotation_euler = (0.0, 0.0, 0.0)
+        if row["branch"]:
+            text[BRANCH_KEY] = row["branch"]
         _keyframe_visibility(text, [(row["at"], row["until"])], stage.fps)
         built += 1
     return built
@@ -546,6 +551,36 @@ def _cjk_font():
             continue
         return _FONT[0]
     return None
+
+
+# What a built thing belongs to, written onto it so the gate can find it again
+# without keeping a second index in module state.
+BRANCH_KEY = "ruri_story_branch"
+
+
+def gate_branches(context, option, last_option):
+    """Turn on exactly the clips the chosen option enables, and turn the rest off.
+
+    The rule is the game's own: a clip is enabled when its branch is 0 (it belongs
+    to no branch at all), or when its branch is the option now in force, or the one
+    before it. Nothing here decides which clips those are -- the timeline tagged
+    them and the stage carried the tag through.
+    """
+    switched = 0
+    for obj in context.scene.objects:
+        branch = obj.get(BRANCH_KEY)
+        if branch:
+            obj.hide_viewport = obj.hide_render = branch not in (option, last_option)
+            switched += 1
+        animation = obj.animation_data
+        for track in (animation.nla_tracks if animation else []):
+            for strip in track.strips:
+                branch = strip.action.get(BRANCH_KEY) if strip.action else None
+                if not branch:
+                    continue
+                strip.mute = branch not in (option, last_option)
+                switched += 1
+    return switched
 
 
 def _keyframe_visibility(target, spans, fps):
@@ -638,7 +673,11 @@ def _place_strip(rig, row, action, fps):
     strip.blend_in = min(row["blendIn"] * fps, span)
     strip.blend_out = min(row["blendOut"] * fps, span)
     strip.extrapolation = "NOTHING"
-    strip.mute = row["muted"] > 0
+    # A clip the timeline tags with a branch plays only while that branch is the
+    # chosen option, and nothing is chosen until the reader chooses.
+    strip.mute = row["muted"] > 0 or row["branch"] != 0
+    if row["branch"]:
+        action[BRANCH_KEY] = row["branch"]
     return strip
 
 

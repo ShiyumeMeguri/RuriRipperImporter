@@ -43,7 +43,15 @@ class RURI_PG_story_beat(bpy.types.PropertyGroup):
     text: StringProperty()
     emotion: StringProperty()
     options: StringProperty()
-    jump_to: IntProperty(default=-1)
+    # Which branch this belongs to. The runtime enables a clip only when this is
+    # 0 (part of no branch), the chosen option, or the one before it.
+    branch: IntProperty()
+    # A jump moves the playhead to its OWN edge -- back to its start when it is a
+    # reverse jump, past its end otherwise -- and makes `becomes` the current
+    # option afterwards. It is not a pointer to somewhere else in the timeline.
+    reverse: BoolProperty(default=False)
+    becomes: IntProperty(default=-1)
+    fired: BoolProperty(default=False)
 
 
 class RURI_PG_story_script(bpy.types.PropertyGroup):
@@ -59,7 +67,10 @@ class RURI_PG_story_script(bpy.types.PropertyGroup):
                 "Hold where the game holds and wait for a click, the way a dialogue plays")],
         default=RUN_CONTINUOUS)
     waiting: BoolProperty(default=False)
-    chosen: IntProperty(default=-1)
+    # The option in force. Clips tagged with another branch stay off, which is the
+    # game's own gate; 0 means nothing has been chosen and only ungated clips play.
+    option: IntProperty(default=0)
+    last_option: IntProperty(default=0)
 
 
 def _script(context):
@@ -96,6 +107,15 @@ def offered_at(script, frame):
         if beat.kind == "option" and beat.start - 1 <= frame <= beat.end + 1 and beat.options:
             return [part for part in beat.options.split(OPTION_SEPARATOR) if part]
     return []
+
+
+def _jump_at(script, frame):
+    """A jump the playhead is inside that has not fired yet. The runtime exhausts a
+    jump after taking it, so a story does not loop on one forever."""
+    for beat in script.beats:
+        if beat.kind == "jump" and not beat.fired and beat.start <= frame <= beat.end:
+            return beat
+    return None
 
 
 def _next_after(script, frame, kinds=("line",)):
@@ -136,7 +156,10 @@ class RURI_OT_story_play(bpy.types.Operator):
     def execute(self, context):
         script = _script(context)
         script.waiting = False
-        script.chosen = -1
+        script.option = 0
+        script.last_option = 0
+        for beat in script.beats:
+            beat.fired = False
         context.scene.frame_set(int(context.scene.frame_start))
         if context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel(restore_frame=False)
@@ -161,6 +184,16 @@ class RURI_OT_story_advance(bpy.types.Operator):
     def execute(self, context):
         script = _script(context)
         scene = context.scene
+        # A jump the playhead is sitting on wins: the runtime takes it before it
+        # takes anything else, and it takes it exactly once.
+        jump = _jump_at(script, scene.frame_current)
+        if jump is not None:
+            jump.fired = True
+            scene.frame_set(int(jump.start if jump.reverse else jump.end + 1))
+            if jump.becomes >= 0:
+                script.last_option, script.option = script.option, jump.becomes
+            script.waiting = False
+            return {"FINISHED"}
         held = holding_at(script, scene.frame_current)
         target = held.end + 1 if held is not None else None
         if target is None:
@@ -194,29 +227,28 @@ class RURI_OT_story_goto_beat(bpy.types.Operator):
 
 
 class RURI_OT_story_choose(bpy.types.Operator):
-    """Take one of the options the story offers here."""
+    """Take one of the options the story offers here.
+
+    Choosing does not move the playhead: it sets which OPTION is in force, and the
+    timeline's own clips are gated on that -- a clip tagged with a branch plays
+    only while its branch is the chosen one. That is the game's rule, so this
+    applies it to the strips and subtitles and then simply carries on."""
     bl_idname = "ruri.story_choose"
     bl_label = "Choose"
-    bl_description = "Take this option and carry on"
+    bl_description = "Take this option -- the branch it belongs to becomes the one that plays"
     index: IntProperty()
 
     def execute(self, context):
         script = _script(context)
-        script.chosen = self.index
-        scene = context.scene
-        # Where a chosen option carries the story is stated by the jump the game
-        # files under that option's own index. With none stated for it, the story
-        # simply carries on, which is what a dialogue with one outcome does.
-        jump = next((beat for beat in script.beats
-                     if beat.kind == "jump" and beat.jump_to == self.index
-                     and beat.start >= scene.frame_current), None)
-        if jump is not None:
-            scene.frame_set(int(jump.end + 1))
-            self.report({"INFO"}, "Took option {0}.".format(self.index + 1))
-        else:
-            return bpy.ops.ruri.story_advance()
-        script.waiting = False
-        return {"FINISHED"}
+        script.last_option = script.option
+        script.option = self.index + 1
+        from . import story_stage
+        gated = story_stage.gate_branches(context, script.option, script.last_option)
+        self.report({"INFO"}, "Option {0}{1}".format(
+            self.index + 1,
+            " · {0} clip(s) switched".format(gated) if gated
+            else " · this unit ships no branch-gated clip, so every path is the same"))
+        return bpy.ops.ruri.story_advance()
 
 
 def draw_player(layout, context):
