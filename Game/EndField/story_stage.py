@@ -105,6 +105,7 @@ class Stage:
         self.unplaced = []
         self.unresolved = []
         self.markers = 0
+        self.looking = 0
         self.unknown = set()
 
     def frame(self, seconds):
@@ -194,7 +195,11 @@ def _load_cast(stage, rows):
             stage.unresolved.append(actor)
             continue
         stage.actors[actor] = rig
-        _make_active(stage.context, rig)
+        if not _make_active(stage.context, rig):
+            raise RuntimeError(
+                "The view layer would not make {0} the active object, so this unit's "
+                "animation has no skeleton to land on. It is usually a leftover rig in "
+                "an excluded collection -- clear the scene and load again.".format(rig.name))
         _import_cabs(stage.context, list(dict.fromkeys(cabs)))
 
 
@@ -278,10 +283,21 @@ def _rig_for(context, actor):
 
 
 def _make_active(context, armature):
+    """Point the scene at one rig, and say whether it took.
+
+    The clip import resolves which skeleton to drive from the ACTIVE object, and
+    a view layer refuses to activate an object it does not hold -- so an object
+    left over in an excluded or unlinked collection activates silently as
+    nothing, and the import then reports the scene as having no unambiguous
+    skeleton. Which is a true statement about the scene and a useless one about
+    the cause, so this returns the fact instead of assuming it."""
+    if armature.name not in context.view_layer.objects:
+        context.scene.collection.objects.link(armature)
     for obj in context.selected_objects:
         obj.select_set(False)
     armature.select_set(True)
     context.view_layer.objects.active = armature
+    return context.view_layer.objects.active is armature
 
 
 # ── the directives ──────────────────────────────────────────────────────────
@@ -794,12 +810,32 @@ def _finish(stage):
     stage.subtitles = _subtitles(stage)
     _write_script(stage)
     if stage.camera is not None:
-        # The unit films through this one; pointing the scene at it is what makes
-        # pressing play BE the cutscene rather than a set of strips.
+        # The unit films through this one; pointing the scene at it, and looking
+        # THROUGH it, is what makes the build land already in the shot the game
+        # opens on rather than in whatever the viewport happened to be showing.
         stage.context.scene.camera = stage.camera
+        stage.looking = _look_through(stage.context)
     if stage.placed or stage.lines:
         animation_builder.set_frame_range(stage.context.scene, 0.0, stage.end)
     stage.context.scene.frame_set(int(stage.context.scene.frame_start))
+
+
+def _look_through(context):
+    """Put every 3D view into the scene camera.
+
+    This is the "already in the camera" half of pressing play: the game opens a
+    cutscene in its own camera, and a viewport still on the user's orbit shows the
+    performance from the side. Returns how many views were switched, which is 0 in
+    a window-less session and is reported rather than assumed."""
+    switched = 0
+    for area in getattr(context.screen, "areas", ()) if context.screen else ():
+        if area.type != "VIEW_3D":
+            continue
+        for space in area.spaces:
+            if space.type == "VIEW_3D":
+                space.region_3d.view_perspective = "CAMERA"
+                switched += 1
+    return switched
 
 
 def _load_scene(stage, mode):
@@ -929,6 +965,10 @@ def summary(stage):
         stage.unit, stage.placed, len(stage.actors), int(stage.fps))]
     if getattr(stage, "subtitles", 0):
         parts.append("{0} subtitle(s)".format(stage.subtitles))
+    if stage.camera is not None:
+        parts.append("through {0}{1}".format(
+            stage.camera.name,
+            "" if stage.looking else " (no 3D view to look through it)"))
     if stage.beats:
         parts.append("{0} beat(s)".format(len(stage.beats)))
     if stage.spans:

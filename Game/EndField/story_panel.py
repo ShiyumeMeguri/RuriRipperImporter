@@ -1041,6 +1041,12 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
                       "films through and the lines it speaks -- then press play")
     bl_options = {"REGISTER", "UNDO"}
 
+    play: BoolProperty(
+        name="Play when built",
+        description="Start the story as soon as it is on stage, looking through the "
+                    "camera the unit films with -- the way the game opens one",
+        default=True)
+
     @classmethod
     def poll(cls, context):
         state = context.scene.ruri_story
@@ -1059,6 +1065,8 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
             self.report({"WARNING"}, "This unit's timeline places nothing -- nothing to play.")
             return {"CANCELLED"}
         built = stage.placed or stage.lines
+        if built and self.play:
+            bpy.ops.ruri.story_play()
         self.report({"INFO"} if built else {"WARNING"}, story_stage.summary(stage))
         return {"FINISHED"} if built else {"CANCELLED"}
 
@@ -1143,6 +1151,16 @@ class RURI_OT_story_reveal(bpy.types.Operator):
             container, cab = drawn[0].container, drawn[0].cab
         return bpy.ops.ruri.cabmap_reveal(query=opened,
                                           folder=container.rpartition("/")[0], cab=cab)
+
+
+def _report_exception(operator, headline, error):
+    """Say what actually went wrong, with the traceback in the console.
+
+    Lives here rather than with the builder on purpose: it is how an OPERATOR
+    reports, and an operator is the panel's."""
+    import traceback
+    traceback.print_exc()
+    operator.report({"ERROR"}, "{0}: {1}: {2}".format(headline, type(error).__name__, error))
 
 
 def _opened(state):
