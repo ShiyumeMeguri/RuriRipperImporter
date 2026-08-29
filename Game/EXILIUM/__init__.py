@@ -39,9 +39,11 @@ def _register():
     # asks whoever owns the prefab for the missing mesh; this is that answer, and a
     # prefab keeping no such list simply declines.
     prefab_importer.register_mesh_resolver(mesh_resolver.provide)
+    prefab_importer.register_detail_rule(mesh_resolver.detail)
 
 
 def _unregister():
+    prefab_importer.unregister_detail_rule(mesh_resolver.detail)
     prefab_importer.unregister_mesh_resolver(mesh_resolver.provide)
     mesh_resolver.forget()
     scene_panel.unregister()

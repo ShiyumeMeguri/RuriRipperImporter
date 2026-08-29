@@ -83,20 +83,46 @@ def provide(db, prefab_file, renderer, options=None):
     this prefab keeps no such list, or the closure carries no mesh by that name --
     the caller then reports a renderer with no geometry, as it always did.
 
-    Detail level is stated by the mesh's own name here, not by an LODGroup, so the
-    host's lod0_only never sees anything to skip and a character otherwise arrives
-    wearing every level at once. Declining is what "skip this renderer" means on
-    this path, so the answer to that option belongs here."""
+    Which detail level a renderer draws is stated by this same list, but that is a
+    different question and it is answered by ``detail`` below -- this one only says
+    which mesh."""
     if prefab_file is None:
         return None
     declared = _manifest(db, prefab_file).get(renderer.name)
     if not declared:
         return None
-    name, lod = declared
-    if lod > 0 and (options or {}).get("lod0_only", True):
-        return None
-    guid = _mesh_guids(db).get(name.lower())
+    guid = _mesh_guids(db).get(declared[0].lower())
     return {"guid": guid} if guid else None
+
+
+def detail(db, prefab_file, level, options=None):
+    """Whether a renderer is at the wanted detail level, for a game that ships no
+    LODGroups at all.
+
+    This game states the level in its own per-prefab mesh list, so the host's pass
+    over the engine's LOD components finds nothing to skip and a character arrives
+    wearing every level at once. Returns None for a prefab that keeps no such list,
+    which leaves the engine's own declaration deciding -- the right answer for the
+    props and scenery that do carry LODGroups.
+
+    A renderer the list does not mention is at no level and is always kept: it is
+    not a detail variant of anything, it is simply something else."""
+    if prefab_file is None:
+        return None
+    manifest = _manifest(db, prefab_file)
+    if not manifest:
+        return None
+    stated = {lod for _name, lod in manifest.values() if lod >= 0}
+    if not stated:
+        return None
+    # A level this prefab does not author contributes its nearest one instead of
+    # nothing, exactly as a LODGroup that stops short of the wanted level does.
+    wanted = min(stated, key=lambda candidate: (abs(candidate - level), candidate))
+
+    def at_level(renderer):
+        declared = manifest.get(renderer.name)
+        return declared is None or declared[1] < 0 or declared[1] == wanted
+    return at_level
 
 
 def mesh_cabs(prefab_text):

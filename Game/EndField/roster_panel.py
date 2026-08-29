@@ -27,6 +27,15 @@ from . import cast
 from . import cloth_panel
 from . import datasets
 
+def detail_level(context):
+    """Which detail level to load, as the ONE place that states it.
+
+    Not a setting of this tab: the same number decides what the bundle browser
+    imports and what a story unit stages, and three copies of it meant picking a
+    level here changed nothing there."""
+    return context.scene.ruri_cabmap.detail_level
+
+
 CHARACTERS = datasets.CHARACTERS
 NPCS = datasets.NPCS
 
@@ -136,10 +145,6 @@ class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         default=False,
         description="Also load this character's SkeletalMorph expression library. "
                     "Off by default: it is a separate, much larger asset family than the model")
-    lod: IntProperty(
-        name="LOD",
-        default=0, min=0, max=3,
-        description="Detail level to load. 0 is the full-detail model")
     model_kind: EnumProperty(
         name="Model",
         items=[("postmodel", "Post", "The in-world actor model"),
@@ -360,7 +365,8 @@ class RURI_OT_roster_load(bpy.types.Operator):
         """Put the resolved rows in the browser's own selection and run its own
         import. ``declared`` names the prefab the game itself asked for, when one
         did, so the report says where the choice came from."""
-        chosen, level = _at_detail_level(hits, state.lod)
+        wanted = detail_level(context)
+        chosen, level = _at_detail_level(hits, wanted)
         cabmap_state.clear_selection()
         for row in chosen:
             cabmap_state.SELECTED_CABS.add(row["cab"])
@@ -368,9 +374,9 @@ class RURI_OT_roster_load(bpy.types.Operator):
         result = bpy.ops.ruri.import_selected()
         if "FINISHED" not in result:
             return {"CANCELLED"}
-        if level != state.lod:
+        if level != wanted:
             self.report({"INFO"}, "'{0}' is not authored at LOD{1}; loaded LOD{2}.".format(
-                entry.label, state.lod, level))
+                entry.label, wanted, level))
         elif declared:
             self.report({"INFO"}, "Loaded '{0}' -- the model its own data asset declares.".format(declared))
 
@@ -384,7 +390,7 @@ class RURI_OT_roster_load(bpy.types.Operator):
         every one of those meshes is skinned onto the skeleton the avatar template
         carries. The terminal state is ONE armature named after the model
         template, with every mesh parented and skinned onto it."""
-        built = cast.assemble(context, entry.key, state.lod)
+        built = cast.assemble(context, entry.key, detail_level(context))
         for warning in built.warnings:
             self.report({"WARNING"}, warning)
         info = built.manifest
@@ -507,7 +513,7 @@ class RURI_OT_roster_reveal(bpy.types.Operator):
         # An npc's own name reaches no mesh at all (the meshes are named after the
         # art family, not the template), so reveal the first mesh its slot table
         # actually names.
-        _info, hits, _missing = model_parts(entry.key, state.lod)
+        _info, hits, _missing = model_parts(entry.key, detail_level(context))
         if hits:
             cab, meshes = hits[0]
             return bpy.ops.ruri.cabmap_reveal(query=meshes[0], cab=cab)
@@ -536,7 +542,7 @@ def draw_roster(layout, context):
     # 与场景导入同一份选项(都读 ruri_cabmap.as_options),画在按 Load 的地方。
     cabmap = context.scene.ruri_cabmap
     row = options.row(align=True)
-    row.prop(state, "lod")
+    row.prop(context.scene.ruri_cabmap, "detail_level")
     row.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
     # 布料和表情一样是"这个模型自己带的第二份东西",所以并排;它就是浏览器那一个开关,
     # 不是这里的第二份状态 —— Load 走的本来就是浏览器自己的导入。

@@ -82,7 +82,7 @@ for _name, _mod in sorted(_game_modules, key=lambda entry: -entry[0].count("."))
     importlib.reload(_mod)
 
 import bpy
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 
@@ -118,11 +118,13 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
 
 
 class _ImportOptionsMixin:
-    lod0_only: BoolProperty(
-        name="LOD0 Only",
-        description="When a LODGroup is present, import only the highest-quality "
-                    "LOD0 renderers and discard the rest",
-        default=True)
+    detail_level: IntProperty(
+        name="Detail Level",
+        description="Which detail level to build: 0 is the highest the game authored. "
+                    "Read off the LOD components the model itself carries, or off "
+                    "whatever this game states detail with instead. -1 builds every "
+                    "level at once, which is for inspecting a model, not rendering one",
+        default=0, min=-1, soft_max=4)
     import_materials: BoolProperty(name="Import Materials", default=True)
     import_textures: BoolProperty(name="Import Textures", default=True)
     import_skeleton: BoolProperty(name="Import Skeleton", default=True)
@@ -134,7 +136,7 @@ class _ImportOptionsMixin:
 
     def as_options(self):
         return {
-            "lod0_only": self.lod0_only,
+            "detail_level": self.detail_level,
             "import_materials": self.import_materials,
             "import_textures": self.import_textures,
             "import_skeleton": self.import_skeleton,

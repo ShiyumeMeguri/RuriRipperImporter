@@ -919,7 +919,9 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         name="Deps", default=0.2, min=0.05, max=0.95, subtype="FACTOR",
         description="Width of the Deps column -- Source fills whatever's left")
 
-    lod0_only: BoolProperty(name="LOD0 Only", default=True)
+    detail_level: IntProperty(name="Detail Level", default=0, min=-1, soft_max=4,
+                              description="Which detail level to build: 0 is the highest "
+                                          "the game authored, -1 builds every level")
     import_materials: BoolProperty(name="Import Materials", default=True)
     # 着色栈开不开是**按导入什么**分的,不是一个全局偏好:一个角色十几张材质,
     # 那点代价换来的是它本来的样子(NPR/SDF 脸影/毛壳/描边),当然默认开;
@@ -996,7 +998,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         """``scene=True`` 是场景窗口/展示台那条路 —— 它和角色路的唯一区别就是
         着色栈的默认(见 character_shaders / scene_shaders 的注)。"""
         return {
-            "lod0_only": self.lod0_only,
+            "detail_level": self.detail_level,
             "import_materials": self.import_materials,
             "game_shaders": self.scene_shaders if scene else self.character_shaders,
             "link_shader_templates": self.link_shader_templates,
@@ -2553,7 +2555,7 @@ class RURI_PT_cabmap(bpy.types.Panel):
             row.menu(RURI_MT_quick_filter.bl_idname, text="", icon="COLLAPSEMENU")
 
             opts = gated.box()
-            opts.prop(state, "lod0_only")
+            opts.prop(state, "detail_level")
             opts.prop(state, "import_materials")
             shader_row = opts.row()
             shader_row.enabled = state.import_materials

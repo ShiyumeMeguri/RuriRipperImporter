@@ -516,8 +516,8 @@ def resolve(members, lod=0):
         key = member.get("key") or ""
         if not key or key in resolved:
             continue
-        found = (_as_character(member) or _as_template(member, lod)
-                 or _as_bound_prefab(member))
+        found = (_as_character(member, lod) or _as_template(member, lod)
+                 or _as_bound_prefab(member, lod))
         if found is None:
             continue
         # Two spellings that resolved to the same thing ARE the same one, and share
@@ -532,7 +532,7 @@ def cabs_of(loadables):
     return list(dict.fromkeys(cab for loadable in loadables for cab in loadable.cabs if cab))
 
 
-def _as_character(member):
+def _as_character(member, lod):
     """A playable character: the prefab its own data asset declares, else the one
     named after it. Exactly the roster tab's own order -- same question, same
     answer, one implementation."""
@@ -545,7 +545,7 @@ def _as_character(member):
         rows = datasets.model_rows(character, "postmodel", cast=CHARACTERS)
     if not rows:
         return None
-    chosen, _level = _at_detail_level(rows, 0)
+    chosen, _level = _at_detail_level(rows, lod)
     return Loadable(character, member.get("label") or character, PREFAB,
                     [row["cab"] for row in chosen])
 
@@ -566,7 +566,7 @@ def _as_template(member, lod):
                     paths=_mesh_paths(manifest, lod))
 
 
-def _as_bound_prefab(member):
+def _as_bound_prefab(member, lod):
     """Whatever the timeline bound the track to.
 
     A binding is a transform path, and its segments are the objects a prefab
@@ -584,7 +584,7 @@ def _as_bound_prefab(member):
                 _NAMED[segment] = []
         rows = _NAMED[segment]
         if rows:
-            chosen, _level = _at_detail_level(rows, 0)
+            chosen, _level = _at_detail_level(rows, lod)
             return Loadable(segment, member.get("label") or segment, PREFAB,
                             [row["cab"] for row in chosen])
     return None

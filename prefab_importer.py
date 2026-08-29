@@ -32,7 +32,7 @@ except ImportError:  # standalone (non-package) testing
 UNITY_TAG = "unity_tag"
 
 DEFAULT_OPTIONS = {
-    "lod0_only": True,
+    "detail_level": 0,
     "import_materials": True,
     "import_textures": True,
     "import_skeleton": True,
@@ -420,7 +420,8 @@ def _import_prefab_core(context, db, prefab, arm_name, clip_files, options, top_
     content = {}
 
     stats = prefab_scan.SkipStats()
-    for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats):
+    for renderer in prefab_scan.iter_renderers(prefab, go_to_node, options, stats,
+                                               _detail_test(db, prefab, options)):
         if renderer.is_skinned and arm_obj is not None:
             obj = _import_skinned(context, db, renderer, arm_obj, maps,
                                   mat_builder, options, report, prefab)
@@ -578,6 +579,45 @@ def _build_materials(renderer, mat_builder):
 # learns which games do it. First claimant wins; no claimant leaves the renderer
 # with no geometry, exactly as before.
 MESH_RESOLVERS = []
+
+# How a game states which renderers are at which detail level, when it does not
+# state it the way the engine does. The engine's own answer is a LODGroup
+# component listing renderers per level, and that is what the host reads; a game
+# that ships no LODGroups and encodes the level some other way (in the mesh's own
+# name, in a manifest beside the prefab) registers its answer here instead of
+# reaching into the import to special-case itself.
+#
+# A rule takes (db, prefab, level, options) and returns a PREDICATE over one
+# renderer -- true when that renderer is at the wanted level -- or None to say it
+# has no opinion about this prefab, which is what a game whose models do carry
+# LODGroups should say, so the engine's own declaration keeps deciding.
+#
+# Per renderer rather than as a set of fileIDs because that is the shape the data
+# has: a LODGroup lists fileIDs, but a game that states the level in the mesh's
+# own name has a name per renderer and no fileID index to answer with.
+DETAIL_RULES = []
+
+
+def register_detail_rule(rule):
+    if rule not in DETAIL_RULES:
+        DETAIL_RULES.append(rule)
+
+
+def unregister_detail_rule(rule):
+    if rule in DETAIL_RULES:
+        DETAIL_RULES.remove(rule)
+
+
+def _detail_test(db, prefab, options):
+    """Whether a renderer is at the wanted detail level -- the game's own answer
+    if it states one, else the LOD components the prefab itself carries."""
+    level = prefab_scan.resolve_filters(options)["detail_level"]
+    for rule in DETAIL_RULES:
+        stated = rule(db, prefab, level, options)
+        if stated is not None:
+            return stated
+    discard = prefab_scan.lod_discard_set(prefab, level)
+    return lambda renderer: renderer.file_id not in discard
 
 
 def register_mesh_resolver(resolver):

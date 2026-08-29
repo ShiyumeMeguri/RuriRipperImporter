@@ -210,7 +210,8 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
         stage.note(row)
 
     # MANIFEST: everything this unit will ever need, before anything is read.
-    manifest = yield _Read(lambda: _manifest(rows), 0.25)
+    detail = context.scene.ruri_cabmap.detail_level
+    manifest = yield _Read(lambda: _manifest(rows, detail), 0.25)
     stage.cast = manifest["cast"]
     stage.unresolved.extend(manifest["unresolved"])
 
@@ -244,7 +245,7 @@ def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
 
 # -- manifest -----------------------------------------------------------------
 
-def _manifest(rows):
+def _manifest(rows, level=0):
     """What this unit needs, as a value: who is in it, and every CAB to mark.
 
     Pure with respect to the scene and to the closure -- it asks the game's own
@@ -260,7 +261,7 @@ def _manifest(rows):
             members[key] = {"key": key, "label": row["performer"] or row["actor"],
                             "character": row["character"], "template": row["template"],
                             "binding": row["target"]}
-    resolved = cast.resolve(list(members.values()))
+    resolved = cast.resolve(list(members.values()), level)
 
     scenery = cast.cabs_of(resolved.values())
     clips = []
