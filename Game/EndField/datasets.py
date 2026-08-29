@@ -57,7 +57,6 @@ UI_BINDINGS = "endfield.ui.bindings"
 STORY_UNITS = "endfield.story.units"
 STORY_CLIPS = "endfield.story.clips"
 STORY_ACTORS = "endfield.story.actors"
-STORY_TIMELINE = "endfield.story.timeline"
 STORY_TIMELINE_SHAPE = "endfield.story.timeline_shape"
 STORY_MISSIONS = "endfield.story.missions"
 STORY_QUESTS = "endfield.story.quests"
@@ -197,15 +196,6 @@ def story_stage(unit, variant="", language=""):
     Unity-shaped, so nothing on this side has to know what an ActivationTrack is;
     a directive is a word, and the stage builder has one function per word."""
     return _table(STORY_STAGE, unit=unit, variant=variant, language=language)
-
-
-def story_timeline(unit, variant=""):
-    """One unit's playback PLAN, read off its own Timeline assets: every clip the
-    timeline places, the track and bound object it belongs to, and the times the
-    timeline gives it -- start, duration, clip-in, speed, blends, in seconds --
-    plus the clip's own sample rate. Laying these out reproduces the scene the
-    game plays; the clip list next door only says which takes exist."""
-    return _table(STORY_TIMELINE, unit=unit, variant=variant)
 
 
 def story_timeline_shape(unit, variant=""):
