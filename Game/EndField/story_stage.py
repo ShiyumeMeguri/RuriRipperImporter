@@ -146,7 +146,8 @@ def _stage_rows(unit, variant, language):
         for name in ("at", "until", "clipIn", "speed", "blendIn", "blendOut", "rate", "length",
                      "crossFade"):
             row[name] = _real(row.get(name))
-        for name in ("order", "branch", "becomes", "reverse", "onTop", "muted"):
+        for name in ("order", "branch", "becomes", "reverse", "onTop", "muted", "model",
+                     "camera"):
             row[name] = int(_real(row.get(name)))
     return rows
 
@@ -180,7 +181,9 @@ def _load_cast(stage, rows):
     """
     wanted = {}
     for row in rows:
-        if row["kind"] not in ("motion", "additive") or not row["sourceCab"]:
+        # Only what the game ships a model for. WHICH performers those are is the
+        # hook's answer, not a kind list kept here -- that would be game vocabulary.
+        if not row["model"] or not row["sourceCab"]:
             continue
         actor = _actor_of(row)
         if actor:
@@ -196,12 +199,15 @@ def _load_cast(stage, rows):
 
 
 def _actor_of(row):
-    """Who a motion directive moves. The stage states the bound object's path; the
-    performer is the leaf the game names it after."""
-    target = row["target"] or ""
-    if not target:
-        return ""
-    return target.rsplit("/", 1)[-1]
+    """Who a directive moves -- as the hook resolved it, never as a leaf guessed off
+    the bound object's path.
+
+    That guess is exactly what broke this: a binding path ends in the PREFAB name
+    (``P_npc_major_death_01``), which resolves to no character model, so the loader
+    fell through to loose parts and dropped 361 unskinned meshes at the origin. The
+    game states the performer in the clip's own name and the hook already parses
+    and roster-resolves exactly that."""
+    return row["actor"] or ""
 
 
 _ACTOR_RIGS = {}
@@ -317,13 +323,10 @@ def _target_of(stage, row):
 
 
 def _is_camera(row):
-    """Whether this directive drives the camera the unit films through. The game
-    names both the bound object and the clip after it, which is the statement --
-    a virtual camera is bound as .../VC_<unit> and its clips are a_..._cam_...."""
-    target = (row["target"] or "").lower()
-    source = (row["source"] or "").lower()
-    return "/vc_" in target or target.startswith("vc_") \
-        or "_cam_" in source or source.startswith("a_cam")
+    """Whether this directive drives the camera the unit films through -- which
+    the hook decides, because which token IS the camera is naming knowledge and
+    the game writes it two different ways."""
+    return bool(row["camera"])
 
 
 @realizer("camera")
