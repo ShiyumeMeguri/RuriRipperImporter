@@ -133,6 +133,10 @@ def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
     # camera, and with none set it falls back to a default view basis and says so.
     # A cutscene is a camera performance anyway -- the actors are what it films.
     shots = [row for row in rows if _drives_camera(row)]
+    # Everything read straight off the bridge -- the shots, and whatever motion
+    # lands on a stand-in rather than a rig -- marked and crossed once.
+    prefetch_curves([row["sourceCab"] for row in rows
+                     if row["sourceCab"] and not row["model"]])
     for row in shots:
         _realize(stage, row)
     if stage.camera is not None:
@@ -214,8 +218,9 @@ def _load_cast(stage, rows):
         actor = _actor_of(row)
         if actor:
             wanted.setdefault(actor, []).append(row["sourceCab"])
+    _spawn_missing(stage, wanted)
     for actor, cabs in wanted.items():
-        rig = _rig_for(stage.context, actor) or _spawn_actor(stage.context, actor)
+        rig = _rig_for(stage.context, actor)
         if rig is None:
             stage.unresolved.append(actor)
             continue
@@ -226,6 +231,36 @@ def _load_cast(stage, rows):
                 "animation has no skeleton to land on. It is usually a leftover rig in "
                 "an excluded collection -- clear the scene and load again.".format(rig.name))
         _import_cabs(stage.context, list(dict.fromkeys(cabs)))
+
+
+def _spawn_missing(stage, wanted):
+    """Bring in every model the unit needs, in ONE import.
+
+    A model import needs no active rig -- only a clip import does -- so importing
+    them one actor at a time buys nothing and pays a closure resolution per actor.
+    They are marked together and the rigs are matched back to their actors after,
+    by the same name rule a rig is found by in any later session.
+    """
+    missing = {}
+    for actor in wanted:
+        if _rig_for(stage.context, actor) is not None:
+            continue
+        rows = _model_rows_for(actor)
+        if rows:
+            missing[actor] = [row["cab"] for row in rows]
+    if not missing:
+        return
+    before = {obj.name for obj in stage.context.scene.objects if obj.type == "ARMATURE"}
+    _import_cabs(stage.context, list(dict.fromkeys(
+        cab for cabs in missing.values() for cab in cabs)))
+    added = [obj for obj in stage.context.scene.objects
+             if obj.type == "ARMATURE" and obj.name not in before]
+    for actor in missing:
+        token = actor.lower()
+        for rig in added:
+            if token in rig.name.lower():
+                _ACTOR_RIGS[actor] = rig.name
+                break
 
 
 def _actor_of(row):
@@ -270,17 +305,6 @@ def _model_rows_for(actor):
                 return rows
     rows = datasets.model_rows(actor, "postmodel", cast=datasets.CHARACTERS)
     return rows or datasets.part_rows(actor)
-
-
-def _spawn_actor(context, actor):
-    rows = _model_rows_for(actor)
-    if not rows:
-        return None
-    ok, added = _import_cabs(context, [row["cab"] for row in rows])
-    if not ok or not added:
-        return None
-    _ACTOR_RIGS[actor] = added[0].name
-    return added[0]
 
 
 def _import_cabs(context, cabs):
@@ -745,16 +769,7 @@ def _object_action(camera, cab, clip_name):
     if cached is not None and cached[0].users >= 0:
         return cached
 
-    assets, _roots, _seeds, clips_by_cab, _scenes = cabmap_state.BRIDGE.import_cabs(
-        [cab], export_class_ids=[class_registry.id_for_name("AnimationClip")])
-    database = bridge_asset_db.BridgeAssetDatabase(
-        assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-    curves = None
-    for guid in clips_by_cab.get(cab.lower(), []):
-        found = database.clip_curves(guid)
-        if found is not None and (clip_name in ("", found.name) or curves is None):
-            curves = found
+    curves = _curves_of(cab, clip_name)
     if curves is None:
         return None
 
@@ -811,6 +826,50 @@ def _object_action(camera, cab, clip_name):
         return None
     _OBJECT_ACTIONS[(cab, clip_name)] = (action, slot)
     return action, slot
+
+
+# The curves of every clip the unit reads straight off the bridge, by (cab, name).
+# Filled by one crossing for the whole unit; a miss falls to a crossing for that
+# one cab, which is what a clip the prefetch could not see needs.
+_CURVES = {}
+
+
+def prefetch_curves(cabs):
+    """One crossing for every clip the unit will read.
+
+    A crossing resolves a closure and lays bundles out; doing that once per clip is
+    the same work repeated, and on a unit with seventy shots it is seventy times.
+    Marking them all and crossing once is the same read, once.
+    """
+    from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
+
+    wanted = [cab for cab in dict.fromkeys(cabs) if cab and (cab, None) not in _CURVES]
+    if not wanted:
+        return 0
+    assets, _roots, _seeds, clips_by_cab, _scenes = cabmap_state.BRIDGE.import_cabs(
+        wanted, export_class_ids=[class_registry.id_for_name("AnimationClip")])
+    database = bridge_asset_db.BridgeAssetDatabase(
+        assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+    for cab in wanted:
+        _CURVES[(cab, None)] = True
+        for guid in clips_by_cab.get(cab.lower(), []):
+            found = database.clip_curves(guid)
+            if found is not None:
+                _CURVES.setdefault((cab, found.name), found)
+                _CURVES.setdefault((cab, ""), found)
+    return len(wanted)
+
+
+def _curves_of(cab, clip_name):
+    """This clip's curves out of the prefetch, else one crossing for its own cab."""
+    found = _CURVES.get((cab, clip_name)) or _CURVES.get((cab, ""))
+    if found is not None:
+        return found
+    if (cab, None) in _CURVES:
+        return None
+    prefetch_curves([cab])
+    return _CURVES.get((cab, clip_name)) or _CURVES.get((cab, ""))
 
 
 def _write_curve(curve, frames, values):
@@ -983,6 +1042,7 @@ def forget():
     _ACTOR_RIGS.clear()
     _CHARACTER_IDS.clear()
     _OBJECT_ACTIONS.clear()
+    _CURVES.clear()
     _FONT.clear()
 
 
