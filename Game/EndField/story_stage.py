@@ -115,28 +115,73 @@ class Stage:
         self.end = max(self.end, self.frame(row["until"]))
 
 
-def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
-    """Bring one unit up on stage. Returns the Stage, whose counters are the report.
+class _Read:
+    """A build step that is a pure cross-boundary read -- BRIDGE traffic and plain
+    Python, never bpy. The driver runs ``fn`` (inline for a synchronous build, on
+    a worker thread for the modal loader) and sends the result back into the
+    generator, so ONE build sequence serves both. ``progress`` is a 0..1 hint for
+    the loader's bar, ignored by the synchronous driver."""
 
-    The order is the game's own: the cast first (a clip needs the rig it drives to
-    exist), then every directive in time order.
+    __slots__ = ("fn", "progress")
+
+    def __init__(self, fn, progress=None):
+        self.fn = fn
+        self.progress = progress
+
+
+class _Mark:
+    """A checkpoint between main-thread build chunks: move the progress bar and let
+    the panel redraw. It carries NO text on purpose -- the one loading line the
+    panel shows is the hook's own console output, read live, never a string
+    composed here from the unit's data (which would be a second, drifting source
+    for what the hook already prints accurately)."""
+
+    __slots__ = ("progress",)
+
+    def __init__(self, progress=None):
+        self.progress = progress
+
+
+def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
+    """Bring one unit up on stage, synchronously, and return its Stage (whose
+    counters are the report), or None when the unit places nothing.
+
+    Drives the very step sequence the modal loader drives, running every read
+    inline -- so a headless build and the interactive one produce byte-for-byte
+    the same scene, and this stays THE single definition of what a unit becomes."""
+    steps = build_steps(context, unit, variant, language, scene_mode)
+    sent = None
+    try:
+        while True:
+            step = steps.send(sent)
+            sent = step.fn() if isinstance(step, _Read) else None
+    except StopIteration as stop:
+        return stop.value
+
+
+def build_steps(context, unit, variant="", language="", scene_mode=SCENE_NONE):
+    """The unit build as a sequence of steps a driver can pace: a cross-boundary
+    read off the main thread, the bpy write on it. Yields ``_Read`` for a read
+    whose result it needs back and ``_Mark`` to pace the writes; RETURNS the
+    finished Stage, or None when the unit places nothing.
+
+    The order is the game's own and unchanged: the shots and the scene camera
+    first (a character import builds its outline shells against the scene camera,
+    and a cutscene is a camera performance anyway -- the actors are what it films),
+    then the cast, then every remaining directive in time order.
     """
-    rows = _stage_rows(unit, variant, language)
+    rows = yield _Read(lambda: _stage_rows(unit, variant, language), 0.12)
     if not rows:
         return None
     stage = Stage(context, unit, _scene_fps(context, rows))
     for row in rows:
         stage.note(row)
 
-    # The shots first, and the scene pointed at the camera BEFORE anybody is
-    # imported: a character import builds its outline shells against the scene
-    # camera, and with none set it falls back to a default view basis and says so.
-    # A cutscene is a camera performance anyway -- the actors are what it films.
     shots = [row for row in rows if _drives_camera(row)]
     # Everything read straight off the bridge -- the shots, and whatever motion
     # lands on a stand-in rather than a rig -- marked and crossed once.
-    prefetch_curves([row["sourceCab"] for row in rows
-                     if row["sourceCab"] and not row["model"]])
+    marked = [row["sourceCab"] for row in rows if row["sourceCab"] and not row["model"]]
+    yield _Read(lambda: prefetch_curves(marked), 0.20)
     for row in shots:
         _realize(stage, row)
     if stage.camera is not None:
@@ -144,13 +189,15 @@ def build(context, unit, variant="", language="", scene_mode=SCENE_NONE):
         context.scene.frame_set(int(round(min((stage.frame(row["at"]) for row in shots),
                                               default=0.0))))
 
-    _load_cast(stage, rows)
+    yield from _load_cast_steps(stage, rows)
     for row in rows:
         if not _drives_camera(row):
             _realize(stage, row)
+    yield _Mark(0.94)
     _finish(stage)
     if scene_mode != SCENE_NONE:
         _load_scene(stage, scene_mode)
+    yield _Mark(1.0)
     return stage
 
 
@@ -202,8 +249,11 @@ def _scene_fps(context, rows):
 
 # ── the cast ────────────────────────────────────────────────────────────────
 
-def _load_cast(stage, rows):
-    """Bring in everyone the unit animates, and remember which rig IS them.
+def _load_cast_steps(stage, rows):
+    """Bring in everyone the unit animates and land each one's clips on the rig
+    that IS them -- crossing the bridge ONCE for the whole cast's animation
+    instead of once per actor, which is the last per-actor read left after the
+    models were already collapsed into one import.
 
     Who plays in the unit is the game's own filing, which the stage states as the
     actor a motion directive drives. A token the game ships no model for is
@@ -218,38 +268,66 @@ def _load_cast(stage, rows):
         actor = _actor_of(row)
         if actor:
             wanted.setdefault(actor, []).append(row["sourceCab"])
-    _spawn_missing(stage, wanted)
+    yield from _spawn_missing_steps(stage, wanted)
+
+    groups = []
     for actor, cabs in wanted.items():
         rig = _rig_for(stage.context, actor)
         if rig is None:
             stage.unresolved.append(actor)
             continue
         stage.actors[actor] = rig
+        groups.append((rig, list(dict.fromkeys(cabs))))
+    if not groups:
+        return
+
+    from ... import cabmap_panel, cross_game_retarget
+    from ...RuriRipperPyBridge.unity import class_registry
+    seeds = list(dict.fromkeys(cab for _rig, cabs in groups for cab in cabs))
+    clip_id = class_registry.id_for_name("AnimationClip")
+    # One crossing for every actor's clips; the per-armature build off the shared
+    # closure is the browser's own clip build (load_clips_onto), one rig at a time.
+    resolved = yield _Read(
+        lambda: cabmap_panel.resolve_import_closure(seeds, [clip_id]), 0.55)
+    total = len(groups)
+    for index, (rig, cabs) in enumerate(groups, start=1):
+        # The active object is set exactly as the per-actor import set it -- so the
+        # context each build sees is unchanged and a leftover-rig scene still says
+        # so -- but the animation lands via the explicit armature, not the active
+        # one, so a single import can feed every actor.
         if not _make_active(stage.context, rig):
             raise RuntimeError(
                 "The view layer would not make {0} the active object, so this unit's "
                 "animation has no skeleton to land on. It is usually a leftover rig in "
                 "an excluded collection -- clear the scene and load again.".format(rig.name))
-        _import_cabs(stage.context, list(dict.fromkeys(cabs)))
+        cross_game_retarget.build_clips_onto_from_closure(stage.context, rig, cabs, resolved)
+        yield _Mark(0.55 + 0.35 * (index / total))
 
 
-def _spawn_missing(stage, wanted):
+def _spawn_missing_steps(stage, wanted):
     """Bring in every model the unit needs, in ONE import.
 
     A model import needs no active rig -- only a clip import does -- so importing
     them one actor at a time buys nothing and pays a closure resolution per actor.
     They are marked together and the rigs are matched back to their actors after,
     by the same name rule a rig is found by in any later session.
+
+    The models go through the browser's own hierarchy import (roots, secondary
+    motion, the loose-asset fallback), so this stays a CALLER of that one path,
+    not a second copy of it -- which is why its closure is not offloaded here: read
+    and build are one operator, run as a single main-thread chunk with the bar
+    moved before it.
     """
     missing = {}
     for actor in wanted:
         if _rig_for(stage.context, actor) is not None:
             continue
-        rows = _model_rows_for(actor)
-        if rows:
-            missing[actor] = [row["cab"] for row in rows]
+        model_rows = _model_rows_for(actor)
+        if model_rows:
+            missing[actor] = [row["cab"] for row in model_rows]
     if not missing:
         return
+    yield _Mark(0.28)
     before = {obj.name for obj in stage.context.scene.objects if obj.type == "ARMATURE"}
     _import_cabs(stage.context, list(dict.fromkeys(
         cab for cabs in missing.values() for cab in cabs)))

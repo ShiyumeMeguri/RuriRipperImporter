@@ -1890,6 +1890,26 @@ class RURI_OT_cabmap_import_with_dependents(bpy.types.Operator):
         return bpy.ops.ruri.import_selected(reset_scene=self.reset_scene)
 
 
+def resolve_import_closure(seeds, export_class_ids=None):
+    """The one bridge crossing every import flow shares: resolve a cab set's
+    dependency closure, export it in memory, and wrap it in the asset db that
+    snapshots the bridge's per-call blob maps (clip curves / mesh blobs / asset
+    paths, each replaced wholesale by import_cabs -- so the db must be built here,
+    right after the crossing, before any other crossing can overwrite them).
+
+    Touches NO bpy on purpose: a modal loader runs this on a worker thread and
+    hands the result to the main thread to build from, and a synchronous caller
+    runs it inline. Returns {db, roots, seed_roots, clips_by_cab, scene_roots}."""
+    assets, roots, seed_roots, clips_by_cab, scene_roots = \
+        cabmap_state.BRIDGE.import_cabs(list(seeds), export_class_ids=export_class_ids)
+    db = bridge_asset_db.BridgeAssetDatabase(
+        assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
+        mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+    return {"db": db, "roots": roots, "seed_roots": seed_roots,
+            "clips_by_cab": clips_by_cab, "scene_roots": scene_roots}
+
+
 class RURI_OT_import_selected(bpy.types.Operator):
     """Batch import over the multi-selection: every selected clip-only row and
     every selected hierarchy/asset row each share ONE bridge closure resolve
@@ -2018,16 +2038,14 @@ class RURI_OT_import_selected(bpy.types.Operator):
             scene_roots = preresolved["scene_roots"]
         else:
             try:
-                assets, roots, seed_roots, _clips_by_cab, scene_roots = \
-                    cabmap_state.BRIDGE.import_cabs(cabs)
+                resolved = resolve_import_closure(cabs)
             except Exception as exc:
                 _report_exception(self, "Import (bridge) failed", exc)
                 return False, 0
-
-            db = bridge_asset_db.BridgeAssetDatabase(
-                assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-                mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-                asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+            db = resolved["db"]
+            roots = resolved["roots"]
+            seed_roots = resolved["seed_roots"]
+            scene_roots = resolved["scene_roots"]
         options = state.as_options()
         ok = True
         imported = 0
@@ -2142,24 +2160,16 @@ class RURI_OT_import_selected(bpy.types.Operator):
         if preresolved is not None:
             return self._build_clip_rows(context, state, clip_rows,
                                          preresolved["clips_by_cab"], preresolved["db"])
-        seeds = []
         try:
-            for row in clip_rows:
-                if row["cab"] not in seeds:
-                    seeds.append(row["cab"])
             # Export-side allowlist: this flow reads nothing but the exported clips.
-            assets, _roots, _seed_roots, clips_by_cab, _scene_roots = \
-                cabmap_state.BRIDGE.import_cabs(
-                    seeds, export_class_ids=[class_registry.id_for_name("AnimationClip")])
+            resolved = resolve_import_closure(
+                list(dict.fromkeys(row["cab"] for row in clip_rows)),
+                export_class_ids=[class_registry.id_for_name("AnimationClip")])
         except Exception as exc:
             _report_exception(self, "Import (bridge) failed", exc)
             return False
-
-        db = bridge_asset_db.BridgeAssetDatabase(
-            assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
-        return self._build_clip_rows(context, state, clip_rows, clips_by_cab, db)
+        return self._build_clip_rows(context, state, clip_rows,
+                                     resolved["clips_by_cab"], resolved["db"])
 
     def _build_clip_rows(self, context, state, clip_rows, clips_by_cab, db):
         """Shared tail of both clip resolve paths: translate the rows to real clip

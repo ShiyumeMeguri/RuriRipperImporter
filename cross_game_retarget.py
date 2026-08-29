@@ -749,6 +749,32 @@ def load_clips_onto(context, session_key, clip_cab, clip_guids, db, dest_arm, ma
     return built, warnings
 
 
+def build_clips_onto_from_closure(context, dest_arm, cabs, resolved):
+    """Build one actor's clips onto its own armature off an ALREADY-resolved
+    closure -- the per-armature half of a batch that crosses the bridge ONCE for
+    the whole cast instead of once per actor.
+
+    The browser's standalone clip flow (_import_clips_standalone) resolves the
+    target rig from the active object and its closure from that one actor's cabs;
+    this takes the armature explicitly and reads its clips out of a closure the
+    caller already resolved for everyone, so nothing crosses per actor. The build
+    itself is the sanctioned entry point (load_clips_onto), unchanged, so the
+    action a rig ends up with is identical to the per-actor import's. Returns
+    (built, warnings)."""
+    clips_by_cab = resolved["clips_by_cab"]
+    clip_guids = []
+    for cab in cabs:
+        for guid in clips_by_cab.get(cab.lower(), []):
+            if guid not in clip_guids:
+                clip_guids.append(guid)
+    if not clip_guids:
+        return 0, []
+    maps = prefab_importer.maps_from_stamped_armature(dest_arm)
+    options = context.scene.ruri_cabmap.as_options()
+    return load_clips_onto(context, cabmap_state.active_key(), cabs[0], clip_guids,
+                           resolved["db"], dest_arm, maps, options)
+
+
 def _face_gap(spec, table_label, dest_arm, options):
     """What the table branch could NOT do to the head, said out loud.
 

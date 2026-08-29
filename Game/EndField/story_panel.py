@@ -39,12 +39,13 @@ the unit speaks with the speaker and the emotion the face is driven to.
 from __future__ import annotations
 
 import re
+import threading
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        IntProperty, StringProperty)
 
-from ... import filter_ui
+from ... import console_tail, filter_ui
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, roster_panel, story_player, story_stage
 
@@ -300,6 +301,12 @@ class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     entries: CollectionProperty(type=RURI_PG_story_entry)
     active_index: IntProperty(update=_on_entry_pick)
     status: StringProperty(default="Load a cabmap, then refresh.")
+
+    # While Load Whole Cutscene runs modal: the progress bar's companion line, set
+    # from the hook's own console output (never composed here from unit data) so the
+    # panel can say what is loading while its draw only reads a string.
+    loading: BoolProperty(default=False)
+    load_line: StringProperty(default="")
 
     unit: StringProperty()
     actor: StringProperty()
@@ -1034,7 +1041,15 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
     Every decision about WHAT to build is the game's own, read off its Timeline and
     handed over as a directive stream; this operator states the two things that are
     the user's -- which unit, and whether to drag the surrounding level in with it.
-    The building itself is story_stage, one function per directive."""
+    The building itself is story_stage, one function per directive.
+
+    Interactively it runs MODAL: the cross-boundary reads (the timeline document,
+    the curve prefetch, the cast's one animation closure) cross the bridge on a
+    worker thread while a timer polls, so Blender stays live instead of freezing on
+    them; the bpy writes run on the main thread in chunks between ticks, with the
+    progress bar moving and a live line of the hook's own console saying where the
+    load is. Called with no window (a script) it falls back to the synchronous
+    build -- the same step sequence, run inline."""
     bl_idname = "ruri.story_load_unit"
     bl_label = "Load Whole Cutscene"
     bl_description = ("Build this unit's performance: its cast, their animation, the camera it "
@@ -1054,6 +1069,9 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
                 and state.mode == BY_STORY and bool(state.unit))
 
     def execute(self, context):
+        """The synchronous build -- the non-interactive path (a script, or a
+        window-less call). The same step sequence the modal path drives, run
+        inline, so it stays a real fallback rather than a second implementation."""
         state = context.scene.ruri_story
         try:
             stage = story_stage.build(context, state.unit, language=_language(),
@@ -1061,6 +1079,96 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
         except Exception as exc:
             _report_exception(self, "Building this unit's stage failed", exc)
             return {"CANCELLED"}
+        return self._settle(context, stage)
+
+    def invoke(self, context, event):
+        if context.window is None:
+            return self.execute(context)
+        state = context.scene.ruri_story
+        self._steps = story_stage.build_steps(context, state.unit, language=_language(),
+                                              scene_mode=state.scene_mode)
+        self._thread = None
+        self._result = None
+        self._error = None
+        self._stage = None
+        self._committed = False
+        self._timer = None
+        console_tail.start()
+        context.window_manager.progress_begin(0.0, 1.0)
+        state.loading = True
+        state.load_line = ""
+        self._timer = context.window_manager.event_timer_add(0.08, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC" and event.value == "PRESS":
+            return self._on_cancel(context)
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+        self._pump_line(context)
+        if self._thread is not None:
+            if self._thread.is_alive():
+                return {"RUNNING_MODAL"}   # a bridge read is still crossing -- stay live
+            self._thread = None
+            if self._error is not None:
+                return self._on_error(context, self._error)
+            sent, self._result = self._result, None
+            return self._advance(context, sent)
+        return self._advance(context, None)
+
+    def _advance(self, context, sent):
+        """Pull one step. A ``_Read`` is offloaded to a worker; every send that
+        follows a read runs a main-thread bpy chunk inside it, which is where the
+        scene actually changes -- so a resume with a real result marks the build
+        committed (an ESC after that leaves a partial stage, and says so)."""
+        if sent is not None:
+            self._committed = True
+        try:
+            step = self._steps.send(sent)
+        except StopIteration as stop:
+            self._stage = stop.value
+            self._teardown(context)
+            return self._settle(context, self._stage)
+        except Exception as exc:
+            return self._on_error(context, exc)
+        if isinstance(step, story_stage._Read):
+            self._offload(step.fn)
+        if step.progress is not None:
+            context.window_manager.progress_update(step.progress)
+        self._redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def _offload(self, fn):
+        """Run one cross-boundary read on a worker thread. It touches no bpy, and
+        the main thread only polls -- so the single-session bridge is never in two
+        threads at once (the reason _teardown waits an in-flight read out)."""
+        self._result = None
+        self._error = None
+
+        def run():
+            try:
+                self._result = fn()
+            except BaseException as exc:   # surfaced on the main thread next tick
+                self._error = exc
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def _pump_line(self, context):
+        line = console_tail.latest()
+        state = context.scene.ruri_story
+        if line and line != state.load_line:
+            state.load_line = line
+            self._redraw(context)
+
+    def _redraw(self, context):
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+
+    def _settle(self, context, stage):
         if stage is None:
             self.report({"WARNING"}, "This unit's timeline places nothing -- nothing to play.")
             return {"CANCELLED"}
@@ -1069,6 +1177,49 @@ class RURI_OT_story_load_unit(bpy.types.Operator):
             bpy.ops.ruri.story_play()
         self.report({"INFO"} if built else {"WARNING"}, story_stage.summary(stage))
         return {"FINISHED"} if built else {"CANCELLED"}
+
+    def _on_cancel(self, context):
+        if getattr(self, "_steps", None) is not None:
+            self._steps.close()
+        self._teardown(context)
+        if self._committed:
+            rigs = sum(1 for obj in context.scene.objects if obj.type == "ARMATURE")
+            self.report({"WARNING"},
+                        "Load cancelled mid-build -- the scene holds a partial load "
+                        "({0} rig(s) in). Clear the scene and load again for a clean "
+                        "stage.".format(rigs))
+        else:
+            self.report({"INFO"}, "Load cancelled before anything was built.")
+        return {"CANCELLED"}
+
+    def _on_error(self, context, exc):
+        self._teardown(context)
+        import traceback
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        self.report({"ERROR"}, "Building this unit's stage failed: {0}: {1}".format(
+            type(exc).__name__, exc))
+        return {"CANCELLED"}
+
+    def _teardown(self, context):
+        # A bridge crossing cannot be interrupted; wait an in-flight one out so no
+        # orphaned thread is left inside the single-session bridge for the next load
+        # to collide with.
+        thread = getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join()
+        self._thread = None
+        if getattr(self, "_timer", None) is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        try:
+            context.window_manager.progress_end()
+        except Exception:
+            pass
+        console_tail.stop()
+        state = context.scene.ruri_story
+        state.loading = False
+        state.load_line = ""
+        self._redraw(context)
 
 
 class RURI_OT_story_goto_unit(bpy.types.Operator):
@@ -1275,8 +1426,25 @@ def _draw_script(box, state):
     box.label(text=state.quest_status, icon="INFO")
 
 
+def _loading_line(text):
+    """The hook's newest console line, trimmed to the panel's width for DISPLAY
+    only. The content is the hook's, untouched -- this keeps the tail (the asset
+    the line names) in view instead of the long ``mem:/out`` path in front of it,
+    and shows a neutral wait mark before the first line has crossed."""
+    text = (text or "").strip()
+    if not text:
+        return "…"
+    width = 48
+    return text if len(text) <= width else "…" + text[-width:]
+
+
 def draw_story_tab(layout, context):
     state = context.scene.ruri_story
+
+    if state.loading:
+        box = layout.box()
+        row = box.row()
+        row.label(text=_loading_line(state.load_line), icon="SORTTIME")
 
     head = layout.row(align=True)
     head.prop(state, "mode", expand=True)
