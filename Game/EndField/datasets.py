@@ -62,6 +62,7 @@ STORY_TIMELINE_SHAPE = "endfield.story.timeline_shape"
 STORY_MISSIONS = "endfield.story.missions"
 STORY_QUESTS = "endfield.story.quests"
 STORY_LINES = "endfield.story.lines"
+STORY_STAGE = "endfield.story.stage"
 
 
 def _table(dataset_id, **args):
@@ -185,6 +186,17 @@ def story_clips(channel="", unit="", actor="", language=""):
     it). Asked by actor, the answer also carries that one's own animation
     library."""
     return _table(STORY_CLIPS, channel=channel, unit=unit, actor=actor, language=language)
+
+
+def story_stage(unit, variant="", language=""):
+    """One unit as a STAGE: every directive its own Timeline gives, in time order
+    and in seconds -- what moves, which shot is live, what is said and by whom,
+    where playback holds for a click and where an option jumps to.
+
+    This is the game's performance stated in what a HOST DOES. Nothing in it is
+    Unity-shaped, so nothing on this side has to know what an ActivationTrack is;
+    a directive is a word, and the stage builder has one function per word."""
+    return _table(STORY_STAGE, unit=unit, variant=variant, language=language)
 
 
 def story_timeline(unit, variant=""):
