@@ -272,7 +272,8 @@ class RURI_PG_story_quest(bpy.types.PropertyGroup):
     is_group: BoolProperty(default=False)
 
 
-class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
+class RURI_PG_story(filter_ui.FilterStateMixin, step_loader.LoadingState,
+                    bpy.types.PropertyGroup):
     FILTER_SPEC_KEY = STORY_SPEC_KEY
 
     mode: EnumProperty(
@@ -304,8 +305,6 @@ class RURI_PG_story(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
     # While Load Whole Cutscene runs modal: the progress bar's companion line, set
     # from the hook's own console output (never composed here from unit data) so the
     # panel can say what is loading while its draw only reads a string.
-    loading: BoolProperty(default=False)
-    load_line: StringProperty(default="")
 
     unit: StringProperty()
     actor: StringProperty()

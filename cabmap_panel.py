@@ -29,7 +29,8 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import Game, armature_builder, cross_game_retarget, filter_ui, prefab_importer
+    from . import (Game, armature_builder, cross_game_retarget, filter_ui,
+                   prefab_importer, step_loader)
     from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from .RuriRipperPyBridge.session import cabmap_state
     from .RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
@@ -39,6 +40,7 @@ except ImportError:  # standalone (non-package) testing
     import cross_game_retarget
     import filter_ui
     import prefab_importer
+    import step_loader
     from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
     from RuriRipperPyBridge.session import cabmap_state
     from RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
@@ -845,7 +847,8 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     browsed_dir: StringProperty()
 
 
-class RURI_PG_cabmap(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
+class RURI_PG_cabmap(filter_ui.FilterStateMixin, step_loader.LoadingState,
+                     bpy.types.PropertyGroup):
     # Which filter spec this state belongs to -- see filter_ui.FilterStateMixin.
     FILTER_SPEC_KEY = BROWSER_TAB_ID
 

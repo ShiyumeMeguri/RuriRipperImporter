@@ -117,7 +117,8 @@ def _on_kind_change(self, context):
     _rebuild(state)
 
 
-class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
+class RURI_PG_roster(filter_ui.FilterStateMixin, step_loader.LoadingState,
+                     bpy.types.PropertyGroup):
     FILTER_SPEC_KEY = "Endfield:character"
 
     pane: EnumProperty(
@@ -145,10 +146,6 @@ class RURI_PG_roster(filter_ui.FilterStateMixin, bpy.types.PropertyGroup):
         default=False,
         description="Also load this character's SkeletalMorph expression library. "
                     "Off by default: it is a separate, much larger asset family than the model")
-    # Set while a load is in flight, and the hook's own latest console line --
-    # the same two the story tab shows, because it is the same driver.
-    loading: BoolProperty(default=False)
-    load_line: StringProperty(default="")
     model_kind: EnumProperty(
         name="Model",
         items=[("postmodel", "Post", "The in-world actor model"),

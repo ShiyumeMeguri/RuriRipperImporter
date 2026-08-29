@@ -25,8 +25,19 @@ from __future__ import annotations
 import threading
 
 import bpy
+from bpy.props import BoolProperty, FloatProperty, StringProperty
 
 from . import console_tail
+
+
+class LoadingState:
+    """Mix into a panel's PropertyGroup to make it drivable, and drawable, by the
+    loader. Declared once so a panel cannot support half of it."""
+
+    loading: BoolProperty(default=False)
+    load_line: StringProperty(default="")
+    # A percentage rather than a 0..1 factor because that is what draws as a bar.
+    progress: FloatProperty(default=0.0, min=0.0, max=100.0, subtype="PERCENTAGE")
 
 
 class Read:
@@ -98,6 +109,7 @@ class ModalSteps:
         if state is not None:
             state.loading = True
             state.load_line = ""
+            state.progress = 0.0
         self._timer = context.window_manager.event_timer_add(0.08, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -136,6 +148,9 @@ class ModalSteps:
             self._offload(step.fn)
         if step.progress is not None:
             context.window_manager.progress_update(step.progress)
+            state = self.status(context)
+            if state is not None:
+                state.progress = step.progress * 100.0
         self._redraw(context)
         return {"RUNNING_MODAL"}
 
@@ -211,22 +226,28 @@ class ModalSteps:
 
 
 def draw_progress(layout, state):
-    """The one way a panel shows a load in flight: the hook's own newest console
-    line, under a wait mark. A panel that draws this draws nothing of its own about
-    progress, so every loader looks the same while it runs.
+    """The one way a panel shows a load in flight: a bar, and under it the hook's
+    own newest console line.
 
-    The line is trimmed from the FRONT for display only -- the content is the
-    hook's, untouched -- which keeps the asset the line names in view instead of
-    the long ``mem:/out`` path in front of it."""
+    This Blender ships no progress widget, so the bar is a percentage slider drawn
+    disabled -- it fills, it cannot be dragged, and it is the same control every
+    loader gets. The line is the hook's own output, trimmed from the FRONT for
+    display only, which keeps the asset it names in view instead of the long
+    ``mem:/out`` path in front of it.
+
+    Returns whether anything was drawn, so a panel can lay out around it."""
     if state is None or not getattr(state, "loading", False):
         return False
-    row = layout.box().row()
-    row.label(text=_trimmed(state.load_line), icon="SORTTIME")
+    box = layout.box()
+    bar = box.row()
+    bar.enabled = False
+    bar.prop(state, "progress", text="", slider=True)
+    box.label(text=_trimmed(getattr(state, "load_line", "")), icon="SORTTIME")
     return True
 
 
 def _trimmed(text, width=48):
     text = (text or "").strip()
     if not text:
-        return "…"
-    return text if len(text) <= width else "…" + text[-width:]
+        return "\u2026"
+    return text if len(text) <= width else "\u2026" + text[-width:]
