@@ -993,22 +993,30 @@ def _wrapped(text, width):
         remaining = remaining[cut:].lstrip()
 
 
+# The font PATH that worked, never the font itself. A datablock cached across
+# builds is a StructRNA that clearing the scene or reloading the file removes, and
+# the next build then dies on a reference to something that no longer exists
+# ("StructRNA of type VectorFont has been removed"). A path cannot go stale.
 _FONT = []
 
 
 def _cjk_font():
     """A face that can actually draw the story. Blender ships none that covers CJK,
-    so the first one the host has wins; with none, the text still builds."""
-    if _FONT:
-        return _FONT[0]
-    for path in CJK_FONTS:
+    so the first one the host has wins; with none, the text still builds.
+
+    Asked of bpy every time rather than remembered: ``check_existing`` hands back
+    the font already in the file when there is one, so this costs a name lookup and
+    can never hold a datablock that has since been freed."""
+    for path in (_FONT or CJK_FONTS):
         if not os.path.isfile(path):
             continue
         try:
-            _FONT.append(bpy.data.fonts.load(path, check_existing=True))
+            font = bpy.data.fonts.load(path, check_existing=True)
         except RuntimeError:
             continue
-        return _FONT[0]
+        if not _FONT:
+            _FONT.append(path)
+        return font
     return None
 
 
@@ -1156,8 +1164,17 @@ def _object_action(camera, cab, clip_name):
 
     # A timeline reuses takes -- the same clip is routinely placed twice -- and
     # each build is a bridge import, so one build per clip is the whole budget.
+    # A cached action is a datablock, and a scene clear or a file reload frees it --
+    # after which touching it at all raises rather than answering. Asking IS the
+    # test, so the stale entry is dropped and the clip rebuilt.
     cached = _OBJECT_ACTIONS.get((cab, clip_name))
-    if cached is not None and cached[0].users >= 0:
+    if cached is not None:
+        try:
+            cached[0].users
+        except ReferenceError:
+            _OBJECT_ACTIONS.pop((cab, clip_name), None)
+            cached = None
+    if cached is not None:
         return cached
 
     curves = _curves_of(cab, clip_name)
