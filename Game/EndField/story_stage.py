@@ -139,6 +139,9 @@ class Stage:
         # the virtual cameras the shots cut between.
         self.props = {}
         self.stood = 0
+        # Vertical field of view per virtual camera, in radians. Part of the state a
+        # shot cuts to, and different on every one of them.
+        self.lenses = {}
         # Shots whose camera is an object in that stage: they cannot be realized until
         # the stage is up, and the stage cannot be built until the cast closure is read.
         self.pending_cuts = []
@@ -406,6 +409,40 @@ def _raise_stage(stage, manifest):
         return
     stage.props = {obj.name: obj for obj in stage.context.scene.objects
                    if obj.name not in before}
+    stage.lenses = _lenses_of(stage)
+
+
+def _lenses_of(stage):
+    """{object name: vertical field of view in radians} for the virtual cameras the
+    unit's own prefab declares.
+
+    Read off the same document the stage was built from -- the vcam component states
+    its own lens, and a cut that ignored it would frame every shot at Blender's
+    default angle instead of the one the shot was composed at."""
+    import math
+
+    found = {}
+    if stage.scenery is None:
+        return found
+    database = stage.scenery["db"]
+    for guid in database.all_guids():
+        text = database.raw_text(guid)
+        if not text or "FieldOfView" not in text:
+            continue
+        # No class filter: a prefab document's own class is GameObject, and the vcam
+        # components live INSIDE it -- filtering on the document class skipped the one
+        # document that has them.
+        loaded = database.load_guid(guid)
+        for doc in (loaded.all("MonoBehaviour") if loaded else ()):
+            lens = doc.data.get("m_Lens")
+            owner = doc.data.get("m_GameObject") or {}
+            if not isinstance(lens, dict) or "FieldOfView" not in lens:
+                continue
+            holder = loaded.get(owner.get("fileID"))
+            name = str(holder.data.get("m_Name", "")) if holder else ""
+            if name:
+                found[name] = math.radians(float(lens["FieldOfView"]))
+    return found
 
 
 def _anchor_for(stage, binding):
@@ -720,6 +757,17 @@ def _cut_to(stage, row):
     camera.rotation_quaternion = world.to_quaternion()
     camera.keyframe_insert("location", frame=frame)
     camera.keyframe_insert("rotation_quaternion", frame=frame)
+    # The lens cuts with the camera: these are composed at 30, 20 and 10 degrees.
+    angle = stage.lenses.get(vcam.name)
+    if angle:
+        camera.data.sensor_fit = "VERTICAL"
+        camera.data.angle_y = angle
+        camera.data.keyframe_insert("lens", frame=frame)
+        for curve in (camera.data.animation_data.action.fcurves
+                      if camera.data.animation_data and camera.data.animation_data.action
+                      else []):
+            for point in curve.keyframe_points:
+                point.interpolation = "CONSTANT"
     animation = camera.animation_data
     for curve in (animation.action.fcurves if animation and animation.action else []):
         for point in curve.keyframe_points:
