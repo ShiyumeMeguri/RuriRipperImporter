@@ -1117,9 +1117,14 @@ def _object_action(camera, cab, clip_name):
         quaternions[frame] = (turned.w, turned.x, turned.y, turned.z)
 
     keys = numpy.arange(frames, dtype=numpy.float64)
-    if position is not None or rotation is not None:
+    # ONLY the channels the clip actually carries. A clip with position and no
+    # rotation is normal -- a recorded camera dolly is exactly that -- and writing
+    # the missing half anyway keys an all-zero quaternion, which is not "no
+    # rotation" but a degenerate one: it destroys whatever the object was aimed at.
+    if position is not None:
         for index in range(3):
             _write_curve(fcurves.new("location", index=index), keys, locations[:, index])
+    if rotation is not None:
         for index in range(4):
             _write_curve(fcurves.new("rotation_quaternion", index=index), keys, quaternions[:, index])
     # A clip that animates no transform at all animates VALUES -- a light's
