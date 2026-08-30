@@ -1113,7 +1113,11 @@ class RURI_OT_story_load_unit(step_loader.ModalSteps, bpy.types.Operator):
             self.report({"WARNING"}, "This unit's timeline places nothing -- nothing to play.")
             return {"CANCELLED"}
         built = stage.placed or stage.lines
-        if built and self.play:
+        # Ask before calling: playing needs a beat script to advance through, and a
+        # unit that speaks no lines has none. bpy.ops RAISES when a poll fails rather
+        # than declining, so an unguarded call turns "this one has nothing to step
+        # through" into a traceback on a load that otherwise succeeded.
+        if built and self.play and bpy.ops.ruri.story_play.poll():
             bpy.ops.ruri.story_play()
         self.report({"INFO"} if built else {"WARNING"}, story_stage.summary(stage))
         return {"FINISHED"} if built else {"CANCELLED"}
