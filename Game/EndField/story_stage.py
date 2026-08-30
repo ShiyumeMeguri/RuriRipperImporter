@@ -774,6 +774,17 @@ def _key_lens(stage, vcam_name, frame):
     if camera is not None and angle:
         camera.data.sensor_fit = "VERTICAL"
         camera.data.angle_y = angle
+        # The lens belongs to the camera DATA and needs an action of its own. Keying it
+        # without one lands the channel in whatever action is already reachable -- here
+        # the OBJECT's, which holds location and rotation -- and the lens curve is then
+        # never created at all: measured, the data action held only location and
+        # rotation_quaternion, and every shot showed one static focal length.
+        if camera.data.animation_data is None:
+            camera.data.animation_data_create()
+        own = camera.data.animation_data
+        shared = camera.animation_data.action if camera.animation_data else None
+        if own.action is None or own.action is shared:
+            own.action = bpy.data.actions.new(camera.name + "_lens")
         camera.data.keyframe_insert("lens", frame=frame)
         for curve in (camera.data.animation_data.action.fcurves
                       if camera.data.animation_data and camera.data.animation_data.action
