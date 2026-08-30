@@ -260,7 +260,10 @@ def _manifest(rows, level=0, unit=""):
                 scenery.append(cab)
                 continue
             clips.append(cab)
-            key = _identity(row) if row["model"] else ""
+            # Whose clip it is -- asked of the identity, not of the model flag: a face
+            # clip belongs to the performer it animates whether or not that row is the
+            # one carrying their body.
+            key = _identity(row)
             if key and key in resolved:
                 # Whose clip it is, so the animation lands on the rig that IS them.
                 by_actor.setdefault(key, []).append(cab)
@@ -593,9 +596,19 @@ def land_clips(context, by_actor):
 
 # ── the directives ──────────────────────────────────────────────────────────
 
-@needs("motion", "additive", "camera")
+@needs("motion", "additive", "camera", "morph")
 def _needs_clip(row):
-    """A motion or a shot is a clip: the timeline names it and the CAB it lives in."""
+    """A motion, a shot, or a FACE is a clip: the timeline names it and the CAB it
+    lives in.
+
+    An EXPRESSION is a clip like any other here -- the game files a dialogue's expression,
+    lipsync and blink under morphanim/ as plain AnimationClips named exactly as the
+    directive names them, not as the SkeletalMorph assets the Character tab reads.
+    So they need no reader of their own; they need to be marked.
+
+    Lipsync and auto-blink are NOT clips and are not marked: their directive names a
+    config or the object the runtime toggles, not an animation, so they stay what
+    they honestly are -- a mark on the timeline saying when the game switched them."""
     return [(CLIP, row["sourceCab"])]
 
 
@@ -605,7 +618,7 @@ def _needs_effect(row):
     return [(SCENERY, row["referenceCab"])]
 
 
-@realizer("motion", "additive")
+@realizer("motion", "additive", "morph")
 def _realize_motion(stage, row):
     target, action = _target_of(stage, row)
     if target is None or action is None:
@@ -747,7 +760,7 @@ def _realize_beat(stage, row):
     _beat(stage, row)
 
 
-@realizer("audio", "voice", "mask", "logo", "morph", "lipsync", "blink")
+@realizer("audio", "voice", "mask", "logo", "lipsync", "blink")
 def _realize_marker(stage, row):
     """Something the story does that a scene cannot literally play back. WHEN it
     happens is part of the performance and belongs on the timeline."""
