@@ -730,6 +730,7 @@ def _realize_camera(stage, row):
         stage.unplaced.append(row["source"])
         return
     _place_strip(camera, row, built[0], stage.fps)
+    _key_lens(stage, row["source"], int(round(stage.frame(row["at"]))))
     stage.shots.append(row)
     stage.placed += 1
 
@@ -757,9 +758,20 @@ def _cut_to(stage, row):
     camera.rotation_quaternion = world.to_quaternion()
     camera.keyframe_insert("location", frame=frame)
     camera.keyframe_insert("rotation_quaternion", frame=frame)
-    # The lens cuts with the camera: these are composed at 30, 20 and 10 degrees.
-    angle = stage.lenses.get(vcam.name)
-    if angle:
+    _key_lens(stage, vcam.name, frame)
+    return True
+
+
+def _key_lens(stage, vcam_name, frame):
+    """Give the camera the field of view this shot was composed at.
+
+    Every shot, not only the ones realized as a cut: a shot that resolves to a real
+    clip moves the camera through its own animation and still has to be seen through
+    that virtual camera's lens. Constant interpolation, because a lens change at a
+    cut is a cut."""
+    camera = stage.camera
+    angle = stage.lenses.get(vcam_name)
+    if camera is not None and angle:
         camera.data.sensor_fit = "VERTICAL"
         camera.data.angle_y = angle
         camera.data.keyframe_insert("lens", frame=frame)
