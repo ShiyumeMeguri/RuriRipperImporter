@@ -49,7 +49,8 @@ from mathutils import Matrix
 
 from ... import material_builder, mesh_builder, prefab_importer
 from ...RuriRipperPyBridge.math3d import coordinate as math3d
-from ...RuriRipperPyBridge.unity import (bridge_asset_db, hierarchy as unity_hierarchy,
+from ...RuriRipperPyBridge.unity import (bridge_asset_db, builtin_meshes,
+                                         hierarchy as unity_hierarchy,
                                          prefab as prefab_scan, skinning)
 from . import datasets, scene_state
 
@@ -205,10 +206,12 @@ def _place_anchored(collection, parts, matrices, name):
 # 按引擎自己的规格重建,并在报告里单独记一笔。
 _BUILTIN_MESH_MARKER = "renderpipelineresources/mesh/"
 
-# Unity 内置 Quad 的规格(引擎的确定值,不是猜):1×1、XY 平面、法线 -Z、UV 铺满 0-1。
-# 顶点写在 UNITY 语义下,下面经导入器自己的换轴落到 Blender —— 与其它网格同一条路。
-_UNITY_QUAD_VERTS = ((-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0))
-_UNITY_QUAD_UVS = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+# 内置 primitive 的规格住在 builtin_meshes(共享真源,按 fileID 寻址那条路也读它),
+# 这里只取 Quad 的顶点/UV。曾经在这里另抄过一份 —— 两份规格就是两份会各自漂的真源。
+# 顶点是 UNITY 语义,下面经导入器自己的换轴落到 Blender,与其它网格同一条路。
+def _unity_quad():
+    quad = builtin_meshes.build("Quad")
+    return quad.positions.tolist(), quad.uvs[0].tolist()
 
 
 def _builtin_primitive(path):
@@ -226,13 +229,14 @@ def _build_builtin_primitive(context, kind, name, materials, options):
     不预先造没人要的东西。"""
     if kind != "quad":
         return None
-    unity = np.asarray(_UNITY_QUAD_VERTS, dtype=np.float64)
+    quad_verts, quad_uvs = _unity_quad()
+    unity = np.asarray(quad_verts, dtype=np.float64)
     verts = [tuple(float(c) for c in row) for row in _BLENDER.convert_points(unity)]
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
     layer = mesh.uv_layers.new(name="UVMap")
     for loop in mesh.loops:
-        layer.data[loop.index].uv = _UNITY_QUAD_UVS[loop.vertex_index]
+        layer.data[loop.index].uv = quad_uvs[loop.vertex_index]
     mesh.validate()
     mesh.update()
     for material in materials or ():

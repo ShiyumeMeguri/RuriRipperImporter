@@ -69,6 +69,11 @@ class ImportReport:
         self.skipped_lod = 0
         self.skipped_shadow = 0
         self.skipped_inactive = 0
+        # "<renderer>: Cube (exact)" per renderer whose geometry came from the engine's
+        # own primitive definition rather than from the game's data -- `unity default
+        # resources` is not part of any extraction, so these are BUILT, and saying so is
+        # the difference between a rebuilt shape and a recovered one.
+        self.builtin = []
         self.warnings = []
         self.seconds = 0.0
         self.maps = None        # hierarchy/bone maps (for external clip application)
@@ -648,6 +653,11 @@ def _decode_renderer_mesh(db, renderer, report, prefab_file=None, options=None):
     loaded = prefab_scan.load_mesh(db, _renderer_mesh_ref(db, prefab_file, renderer, options),
                                    renderer.name)
     if loaded.ok:
+        if loaded.builtin:
+            # Rebuilt from the engine's own definition, not read out of the game (see
+            # builtin_meshes). Counted apart from extracted geometry so the summary
+            # never presents a shape this add-on generated as data it recovered.
+            report.builtin.append("{0}: {1}".format(renderer.name, loaded.builtin))
         if loaded.dropped_topologies:
             report.warnings.append(
                 f"{renderer.name}: dropped {len(loaded.dropped_topologies)} non-triangle "
