@@ -42,6 +42,7 @@
 
 | 函数 | 原因 |
 |---|---|
+| ApplyVariantUv | 调用类别 TexInstance(__dim) 无节点图等价 |
 | SampleArray | repeat zone 体消费了更深割点层级的值:zone 不可跨段,请把该循环改写为割点循环 |
 
 ## 栈 ruri_shadowreceiver_endfield
