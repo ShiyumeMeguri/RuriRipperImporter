@@ -223,20 +223,22 @@ def _on_search_edit(self, context):
 _INSTALL_IDENTITY = {}
 
 
-def _install_identity(root):
+def _install_identity(root, source_options=None):
     """What the install at ``root`` says it is: {"company", "product", "game_version",
-    "engine_version"}, or None for a folder that is no Unity install (or before the DLL
-    is up).
+    "engine_version", "engine"}, or None for a folder that is no install of any engine
+    the kernel probes (or before the DLL is up).
 
-    Two small files per player and nothing else -- see pythonnet_bridge.read_install.
-    A build whose engine assets are not plain still names itself; it just reports no
+    Two small files per player and nothing else for a Unity build -- see
+    pythonnet_bridge.read_install; another engine's build is read by that engine's own
+    probe, which may need this tab's source options (an archive key) to open it. A
+    build whose engine assets are not plain still names itself; it just reports no
     engine version, which is a fact about that install, not a failure."""
     root = str(root or "")
     if not root:
         return None
     if root not in _INSTALL_IDENTITY:
         try:
-            players = pythonnet_bridge.read_install(root)
+            players = pythonnet_bridge.read_install(root, source_options)
         except Exception:
             return None  # DLL not up yet -- do NOT cache, or one early miss would stick
         project = next((player for player in players if player["is_project"]), None)
@@ -244,12 +246,49 @@ def _install_identity(root):
     return _INSTALL_IDENTITY[root]
 
 
+def _module_of(config):
+    """The game module this tab's install is claimed by -- by the product it
+    published, else by the engine family it runs on -- or None."""
+    if config is None:
+        return None
+    return Game.module_for(config.game_name, config.engine_family)
+
+
+def _module_game_name(config):
+    """WHICH GAME (upstream GameType member) this tab's install is read as: the
+    module's own name when a module claims it (a family module names the family),
+    else the product the install published."""
+    module = _module_of(config)
+    if module is not None:
+        return module.game_name
+    return config.game_name if config is not None else ""
+
+
+def _source_options(config):
+    """This tab's source options as a dict -- how its install is read beyond its
+    folder, stored as JSON on the tab (see RURI_PG_install_config.source_options)."""
+    if config is None or not config.source_options:
+        return {}
+    try:
+        loaded = json.loads(config.source_options)
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def set_source_options(config, options):
+    """Store ``options`` on the tab and forget the cached identity, so the next probe
+    reads the install with them (an archive key can be what makes it readable)."""
+    config.source_options = json.dumps(options or {}, sort_keys=True)
+    _INSTALL_IDENTITY.pop(bpy.path.abspath(config.game_root) if config.game_root else "", None)
+
+
 def _game_tabs(state):
     """The content tabs of the game the CURRENT TAB's install is -- one install's,
     not every open tab's. Each install has its own browser tab, so drawing the union
     would stack two games' Scene/Character tabs into one row."""
     config = _active_config(state)
-    return Game.tabs_of(config.game_name) if config is not None else []
+    return Game.tabs_of(config.game_name, config.engine_family) if config is not None else []
 
 
 def _post_stages():
@@ -426,7 +465,7 @@ def _set_current_tab(state, key):
     that install is, which is what a game-specific table is later selected by."""
     state.current_tab = key or ""
     config = _find_config(state, key)
-    cabmap_state.activate(key or None, config.game_name if config is not None else "")
+    cabmap_state.activate(key or None, _module_game_name(config))
 
 
 def _switch_current_tab(state, key, context):
@@ -580,7 +619,8 @@ def _resolve_decoder(identity):
     Asked here and nowhere else, so the panel never re-implements the rule."""
     try:
         return pythonnet_bridge.resolve_decoder(
-            identity["product"], identity["game_version"], identity["engine_version"])
+            identity["product"], identity["game_version"], identity["engine_version"],
+            identity.get("engine", ""))
     except Exception:
         return ""
 
@@ -593,16 +633,19 @@ def _adopt_identity(state, config):
     where the user asks to re-read one -- never from a draw, which may neither cross
     the CLR boundary nor write scene data. A folder that is no Unity install (or a
     DLL that is not up yet) clears the identity rather than keeping a stale one."""
-    identity = _install_identity(bpy.path.abspath(config.game_root) if config.game_root else "")
+    identity = _install_identity(bpy.path.abspath(config.game_root) if config.game_root else "",
+                                 _source_options(config))
     if identity is None:
         config.game_name = ""
         config.game_version = ""
         config.engine_version = ""
+        config.engine_family = ""
         config.decoder_id = ""
         return ""
     config.game_name = identity["product"]
     config.game_version = identity["game_version"]
     config.engine_version = identity["engine_version"]
+    config.engine_family = identity.get("engine", "")
     _decoders()
     config.decoder_id = _resolve_decoder(identity)
     return config.decoder_id
@@ -641,12 +684,17 @@ class RURI_MT_decoder(bpy.types.Menu):
         state = context.scene.ruri_cabmap
         config = _active_config(state)
         product = config.game_name if config is not None else ""
+        family = config.engine_family if config is not None else ""
         entries = _decoders_of(product)
+        if family and family.lower() != product.lower():
+            entries = entries + _decoders_of(family)
         if not entries:
             layout.label(text="No decoder ships for {0}".format(product or "this install"),
                          icon="INFO")
         for entry in entries:
-            label = "{0}  ·  Unity {1}".format(entry[1], entry[2]) if entry[2] else entry[1]
+            label = "{0} {1}".format(entry[0], entry[1])
+            if entry[2]:
+                label = "{0}  ·  {1}".format(label, entry[2])
             layout.operator(RURI_OT_set_decoder.bl_idname,
                             text=label).decoder_id = _decoder_id(entry)
         layout.separator()
@@ -841,10 +889,19 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     game_name: StringProperty()
     game_version: StringProperty()
     engine_version: StringProperty()
+    # The engine FAMILY the install runs on ("Unity", "UnrealEngine", ...), as the
+    # kernel's probe reported it: what selects a family-wide decoder and the module
+    # that draws this engine's panels when the product itself has neither.
+    engine_family: StringProperty()
     decoder_id: StringProperty()
     game_root: StringProperty()
     cabmap_path: StringProperty()
     browsed_dir: StringProperty()
+    # How this install is READ beyond its folder, as JSON {name: value}: whatever its
+    # decoder declared it needs to open the files (an archive key, an engine version,
+    # a schema file). Stated by the module that claims the install (its source_options
+    # form), pushed to the kernel before every probe, build and load.
+    source_options: StringProperty()
 
 
 class RURI_PG_cabmap(filter_ui.FilterStateMixin, step_loader.LoadingState,
@@ -1047,9 +1104,10 @@ class RURI_OT_reprobe_install(bpy.types.Operator):
                         _unique_tab_key(state, config.game_name, held_by_key=config.key))
         _set_current_tab(state, config.key)
         _auto_default_cabmap_filename(state)
-        self.report({"INFO"}, "{0} {1} · Unity {2} · {3}".format(
+        self.report({"INFO"}, "{0} {1} · {2} {3} · {4}".format(
             config.game_name or "no identity", config.game_version or "(no version)",
-            config.engine_version or "unknown", decoder or "no decoder"))
+            config.engine_family or "Unity", config.engine_version or "unknown",
+            decoder or "no decoder"))
         return {"FINISHED"}
 
 
@@ -1085,13 +1143,13 @@ class RURI_OT_build_cabmap(bpy.types.Operator):
             return {"CANCELLED"}
         config = _ensure_active_config(state)
         try:
-            bridge = cabmap_state.ensure_bridge(config.decoder_id, root)
+            bridge = cabmap_state.ensure_bridge(config.decoder_id, root, _source_options(config))
             code = bridge.build_cab_map(root, out)
             if code != 0:
                 self.report({"ERROR"}, f"Build failed (exit {code}) -- see console.")
                 return {"CANCELLED"}
             bridge.load_cab_map(out, key=config.key)
-            cabmap_state.activate(config.key, config.game_name)
+            cabmap_state.activate(config.key, _module_game_name(config))
             cabmap_state.load_rows(cabmap_state.key_to_dir(state.browsed_dir))
             _reapply_and_refresh(context)
         except Exception as exc:
@@ -1131,9 +1189,10 @@ class RURI_OT_load_cabmap(bpy.types.Operator):
         config = _ensure_active_config(state)
         try:
             bridge = cabmap_state.ensure_bridge(config.decoder_id,
-                                                bpy.path.abspath(state.game_root) if state.game_root else "")
+                                                bpy.path.abspath(state.game_root) if state.game_root else "",
+                                                _source_options(config))
             bridge.load_cab_map(path, key=config.key)
-            cabmap_state.activate(config.key, config.game_name)
+            cabmap_state.activate(config.key, _module_game_name(config))
             # Land back on the folder the user was browsing (persisted per game on the
             # scene), not the root -- browse_dir falls back to the root if this map has
             # no such folder, so a key left over from a different game is harmless.
@@ -2552,9 +2611,9 @@ class RURI_PT_cabmap(bpy.types.Panel):
         # moves this tab alone.
         config = _active_config(state)
         identity = top.row(align=True)
-        identity.label(text=("{0} {1}  ·  Unity {2}".format(
+        identity.label(text=("{0} {1}  ·  {2} {3}".format(
             config.game_name, config.game_version or "(no version)",
-            config.engine_version or "unknown")
+            config.engine_family or "Unity", config.engine_version or "unknown")
             if config is not None and config.game_name else "No install identity"),
             icon="FILE_3D")
         identity.operator(RURI_OT_reprobe_install.bl_idname, text="", icon="FILE_REFRESH")
@@ -2563,6 +2622,15 @@ class RURI_PT_cabmap(bpy.types.Panel):
                      text=(config.decoder_id if config is not None and config.decoder_id
                            else "No decoder (plain Unity build)"),
                      icon="MODIFIER")
+
+        # The values this install is READ with beyond its folder, drawn by the module
+        # that claims it (an engine family's module, typically) -- above the gate,
+        # because an archive key is what makes building the cabmap possible at all.
+        # A module stating no such form leaves the block absent; the core never
+        # spells an option name.
+        module = _module_of(config)
+        if config is not None and module is not None and module.source_options is not None:
+            module.source_options(top.box(), context, config)
 
         top.prop(state, "cabmap_path")
         row = top.row(align=True)

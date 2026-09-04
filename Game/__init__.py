@@ -63,14 +63,27 @@ class GameModule:
     register/unregister pair for the bpy classes those tabs need."""
 
     __slots__ = ("game_name", "label", "tabs", "face_retarget", "secondary_motion",
-                 "_register", "_unregister")
+                 "engine", "source_options", "_register", "_unregister")
 
     def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None,
-                 secondary_motion=None):
+                 secondary_motion=None, engine=None, source_options=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
         self.label = label
+        # The engine FAMILY this module claims, or None. A build on an engine other
+        # than Unity publishes no productName a folder here could be named after, so
+        # such a module is joined to an install by the family the kernel's probe
+        # reports ("UnrealEngine") -- the same string the family-wide decoder declares
+        # as its GameName, which is also this module's game_name. A product-named
+        # module always wins over a family one (module_for asks the product first).
+        self.engine = engine
+        # How this module states the values its install is READ with beyond its
+        # folder, if it states any: ``draw(layout, context, config)`` painting the
+        # form onto the host's identity block, ABOVE the cabmap gate -- an archive
+        # key is needed to build the map at all. What the form contains comes from
+        # the decoder's own published schema; the host core only offers the slot.
+        self.source_options = source_options
         # How this game states a face, if it states one at all. A clip whose facial
         # animation is baked into its bone tracks means nothing on another character's
         # rig, so the ONE clip-loading path asks the game that owns the clip to restate
@@ -146,12 +159,20 @@ def tab_by_key(key):
     return next((tab for tab in all_tabs() if tab.key == key), None)
 
 
-def module_for(product):
-    """The module that IS ``product``, or None when this add-on ships no panels for
-    it. An exact, case-insensitive match on the productName the install published:
-    a game with no module is still a perfectly good install to browse."""
+def module_for(product, engine=""):
+    """The module that IS ``product``, else the one claiming the install's ``engine``
+    family, else None when this add-on ships no panels for it. Exact, case-insensitive
+    matches on what the install published: a game with no module is still a perfectly
+    good install to browse."""
     wanted = (product or "").lower()
-    return next((game for game in _MODULES if game.game_name.lower() == wanted), None)
+    by_product = next((game for game in _MODULES if game.game_name.lower() == wanted), None)
+    if by_product is not None:
+        return by_product
+    family = (engine or "").lower()
+    if not family:
+        return None
+    return next((game for game in _MODULES
+                 if game.engine is not None and game.engine.lower() == family), None)
 
 
 def face_retarget_of(game_name):
@@ -170,11 +191,11 @@ def secondary_motion_of(game_name):
     return game.secondary_motion if game is not None else None
 
 
-def tabs_of(game_name):
+def tabs_of(game_name, engine=""):
     """The tabs ONE game contributes. Several installs are open at once, each its own
     browser tab, so a panel draws the tabs of the game the CURRENT tab's install is
     -- never the union, which would show two games' content tabs side by side."""
-    game = module_for(game_name)
+    game = module_for(game_name, engine)
     return list(game.tabs) if game is not None else []
 
 
