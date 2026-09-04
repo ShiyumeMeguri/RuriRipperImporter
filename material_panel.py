@@ -170,11 +170,15 @@ def _annotations_of(stack):
             size = row["size"]
             fill = (default + [0.0] * 4)[:size]
             keywords = {"name": row["label"], "size": size, "update": _writer(stack, row)}
+            # 声明说这一格的值住 sRGB 空间(游戏 Properties 的 [Gamma];线性化在灌 uniform
+            # 那步做,见生成栈的 srgb_params)。取色控件必须跟着说同一件事,否则色板画的
+            # 是把 sRGB 数当线性看的另一个颜色 —— 面板与 Unity 检视面对不上。
+            swatch = "COLOR_GAMMA" if row.get("gamma") else "COLOR"
             if kind == "COLOR":
-                keywords.update(subtype="COLOR", min=0.0, max=1.0)
+                keywords.update(subtype=swatch, min=0.0, max=1.0)
                 fill = [min(max(value, 0.0), 1.0) for value in fill]
             elif kind == "HDRCOLOR":
-                keywords.update(subtype="COLOR", min=0.0, soft_max=1.0)
+                keywords.update(subtype=swatch, min=0.0, soft_max=1.0)
             keywords["default"] = tuple(fill)
             annotations[attribute] = bpy.props.FloatVectorProperty(**keywords)
     return annotations
