@@ -95,6 +95,10 @@ def _on_ripperhook_repo_change(self, context):
     pythonnet_bridge.set_bin_dir(self.ripperhook_repo)
 
 
+def _on_decoder_module_change(self, context):
+    pythonnet_bridge.set_module_paths([bpy.path.abspath(self.decoder_module)])
+
+
 class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     """Edit > Preferences > Add-ons > RuriRipperImporter. Holds the one path that differs per
     machine (this workspace is synced across machines that check the Ruri-RipperHook repo out
@@ -110,9 +114,19 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
                     "<your Ruri-RipperHook checkout>/AssetRipper/Source/0Bins/AssetRipper/Debug",
         update=_on_ripperhook_repo_change)
 
+    decoder_module: StringProperty(
+        name="Decoder Module DLL",
+        subtype="FILE_PATH",
+        description="One more hook assembly the kernel loads, with its dependencies beside it: "
+                    "the built Ruri.FModelHook.dll is the Unreal decoder, e.g. <your Ruri-RipperHook "
+                    "checkout>/FModel/FModel/bin/Debug/net10.0-windows/win-x64/Ruri.FModelHook.dll. "
+                    "Empty reads Unity builds only",
+        update=_on_decoder_module_change)
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "ripperhook_repo")
+        layout.prop(self, "decoder_module")
         layout.label(text="Point this directly at the folder containing the built Ruri.RipperHook.dll "
                           "(e.g. .../AssetRipper/Source/0Bins/AssetRipper/Debug).", icon="INFO")
 
@@ -210,6 +224,7 @@ def register():
     entry = bpy.context.preferences.addons.get(__package__)
     if entry is not None:
         pythonnet_bridge.set_bin_dir(entry.preferences.ripperhook_repo)
+        pythonnet_bridge.set_module_paths([bpy.path.abspath(entry.preferences.decoder_module)])
     pythonnet_bridge.set_bin_dir_hint(_BIN_DIR_HINT)
     # What container every texture crosses in. Blender reads tga natively, so
     # declaring nothing (keep each texture's authored container) looks like the

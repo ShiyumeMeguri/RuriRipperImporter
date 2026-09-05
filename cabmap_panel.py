@@ -702,6 +702,178 @@ class RURI_MT_decoder(bpy.types.Menu):
                         text="None (plain Unity build)").decoder_id = ""
 
 
+def _rows_to_options(config):
+    """The form's current values as {name: value}, every kind restated as the text the
+    kernel carries (a flag as "true"/"false", a path as typed)."""
+    options = {}
+    for row in config.source_option_rows:
+        if row.kind == "flag":
+            options[row.name] = "true" if row.flag_value else "false"
+        elif row.kind == "path":
+            options[row.name] = bpy.path.abspath(row.path_value) if row.path_value else ""
+        else:
+            options[row.name] = row.value
+    return options
+
+
+def _options_to_rows(config, options):
+    for row in config.source_option_rows:
+        value = options.get(row.name, row.default)
+        if row.kind == "flag":
+            row.flag_value = str(value).lower() in ("1", "true")
+        elif row.kind == "path":
+            row.path_value = value
+        else:
+            row.value = value
+
+
+class RURI_OT_load_source_option_schema(bpy.types.Operator):
+    """Read which values this install is READ with off its decoder -- the decoder
+    publishes them as a dataset -- and lay the form out from that. Needs the decoder
+    applied, which is what the bridge does for this tab's install; a decoder that
+    publishes no such dataset leaves the form empty."""
+
+    bl_idname = "ruri.load_source_option_schema"
+    bl_label = "Load Options Form"
+    bl_options = {"INTERNAL"}
+    dataset_id: StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return bootstrap.is_ready()
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        config = _ensure_active_config(state)
+        root = bpy.path.abspath(config.game_root) if config.game_root else ""
+        try:
+            bridge = cabmap_state.ensure_bridge(config.decoder_id, root, _source_options(config))
+            table = bridge.game_data(self.dataset_id)
+        except Exception as exc:
+            _report_exception(self, "Load options form failed", exc)
+            return {"CANCELLED"}
+        current = _source_options(config)
+        config.source_option_rows.clear()
+        for index in range(len(table)):
+            row = config.source_option_rows.add()
+            row.name = table.cell(index, "name")
+            row.kind = table.cell(index, "kind")
+            row.choices = table.cell(index, "choices")
+            row.default = table.cell(index, "default")
+            row.description = table.cell(index, "description")
+        config.source_option_schema = self.dataset_id
+        _options_to_rows(config, current)
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_apply_source_options(bpy.types.Operator):
+    """Push the form's values to the kernel and re-read the install under them -- an
+    archive key can be what makes the install readable, so its identity and decoder
+    are resolved again."""
+
+    bl_idname = "ruri.apply_source_options"
+    bl_label = "Apply"
+    bl_options = {"INTERNAL"}
+
+    @classmethod
+    def poll(cls, context):
+        return bootstrap.is_ready()
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        config = _ensure_active_config(state)
+        set_source_options(config, _rows_to_options(config))
+        try:
+            decoder = _adopt_identity(state, config)
+        except Exception as exc:
+            _report_exception(self, "Apply options failed", exc)
+            return {"CANCELLED"}
+        if config.game_name:
+            _rename_tab(state, config,
+                        _unique_tab_key(state, config.game_name, held_by_key=config.key))
+        _set_current_tab(state, config.key)
+        _auto_default_cabmap_filename(state)
+        self.report({"INFO"}, "{0} · {1}".format(config.game_name or "no identity", decoder or "no decoder"))
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_OT_set_source_option_choice(bpy.types.Operator):
+    bl_idname = "ruri.set_source_option_choice"
+    bl_label = "Choose"
+    bl_options = {"INTERNAL"}
+    option: StringProperty()
+    choice: StringProperty()
+
+    def execute(self, context):
+        config = _ensure_active_config(context.scene.ruri_cabmap)
+        for row in config.source_option_rows:
+            if row.name == self.option:
+                row.value = self.choice
+        _redraw_all(context)
+        return {"FINISHED"}
+
+
+class RURI_MT_source_option_choice(bpy.types.Menu):
+    """The choices of ONE choice-kind option, read off the row the panel put in
+    ``bl_label`` position -- Blender menus take no arguments, so the option's name
+    rides on the window manager."""
+
+    bl_idname = "RURI_MT_source_option_choice"
+    bl_label = "Choice"
+
+    def draw(self, context):
+        config = _active_config(context.scene.ruri_cabmap)
+        wanted = context.window_manager.get("ruri_source_option_menu", "")
+        row = next((r for r in config.source_option_rows if r.name == wanted), None) if config else None
+        if row is None:
+            return
+        column = self.layout.column()
+        for choice in [c for c in row.choices.split("|") if c]:
+            op = column.operator(RURI_OT_set_source_option_choice.bl_idname, text=choice)
+            op.option = row.name
+            op.choice = choice
+
+
+class RURI_OT_open_source_option_choice(bpy.types.Operator):
+    bl_idname = "ruri.open_source_option_choice"
+    bl_label = "Choose"
+    bl_options = {"INTERNAL"}
+    option: StringProperty()
+
+    def execute(self, context):
+        context.window_manager["ruri_source_option_menu"] = self.option
+        bpy.ops.wm.call_menu(name=RURI_MT_source_option_choice.bl_idname)
+        return {"FINISHED"}
+
+
+def draw_source_options(layout, context, config, schema_dataset_id):
+    """The generic form for how an install is READ: rows of the decoder's published
+    schema, one widget per kind, a Load button while the form is unknown, an Apply
+    button that pushes the values and re-reads the install. A game module names only
+    WHICH dataset states its schema."""
+    if not config.source_option_rows or config.source_option_schema != schema_dataset_id:
+        op = layout.operator(RURI_OT_load_source_option_schema.bl_idname, icon="PREFERENCES")
+        op.dataset_id = schema_dataset_id
+        return
+    box = layout.column(align=True)
+    for row in config.source_option_rows:
+        line = box.row(align=True)
+        if row.kind == "flag":
+            line.prop(row, "flag_value", text=row.name)
+        elif row.kind == "path":
+            line.prop(row, "path_value", text=row.name)
+        elif row.kind == "choice":
+            line.label(text=row.name)
+            op = line.operator(RURI_OT_open_source_option_choice.bl_idname,
+                               text=row.value or "(auto: {0})".format(row.default) if row.default else row.value or "(auto)")
+            op.option = row.name
+        else:
+            line.prop(row, "value", text=row.name)
+    layout.operator(RURI_OT_apply_source_options.bl_idname, icon="CHECKMARK")
+
+
 class RURI_PG_animation_clip(bpy.types.PropertyGroup):
     """One discovered-but-not-yet-built animation clip -- see
     discovery.discover_clip_refs. `selected` drives the
@@ -867,6 +1039,21 @@ def _on_game_root_set(state):
     _seed_cabmap_default(state)
 
 
+class RURI_PG_source_option(bpy.types.PropertyGroup):
+    """One value an install is READ with, as the decoder declared it: name, kind
+    (text|flag|choice|path|entries), the choices a choice kind offers ('|'-joined),
+    its default and what it means. The form the host draws IS the decoder's published
+    schema -- these rows are filled from that dataset, never authored here."""
+    name: StringProperty()
+    kind: StringProperty()
+    value: StringProperty(name="Value")
+    path_value: StringProperty(name="Path", subtype="FILE_PATH")
+    flag_value: BoolProperty(name="Enabled")
+    choices: StringProperty()
+    default: StringProperty()
+    description: StringProperty()
+
+
 class RURI_PG_install_config(bpy.types.PropertyGroup):
     """ONE INSTALL's browser inputs -- one open tab. Several can be set up at once
     (see RURI_PG_cabmap.games); the scalar game_root/cabmap_path/browsed_dir/loaded
@@ -902,6 +1089,9 @@ class RURI_PG_install_config(bpy.types.PropertyGroup):
     # a schema file). Stated by the module that claims the install (its source_options
     # form), pushed to the kernel before every probe, build and load.
     source_options: StringProperty()
+    # The form rows behind that JSON, filled from the decoder's own schema dataset.
+    source_option_rows: CollectionProperty(type=RURI_PG_source_option)
+    source_option_schema: StringProperty()
 
 
 class RURI_PG_cabmap(filter_ui.FilterStateMixin, step_loader.LoadingState,
@@ -3096,6 +3286,7 @@ _CLASSES = (
     # CollectionProperty's target type to already be registered.
     RURI_PG_cabmap_row,
     RURI_PG_animation_clip,
+    RURI_PG_source_option,
     RURI_PG_install_config,
     RURI_PG_cabmap,
     RURI_UL_cabmap,
@@ -3113,6 +3304,11 @@ _CLASSES = (
     RURI_PT_cabmap,
     RURI_OT_set_decoder,
     RURI_OT_reprobe_install,
+    RURI_OT_load_source_option_schema,
+    RURI_OT_apply_source_options,
+    RURI_OT_set_source_option_choice,
+    RURI_MT_source_option_choice,
+    RURI_OT_open_source_option_choice,
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
     RURI_OT_select_tab,
