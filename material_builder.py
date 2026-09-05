@@ -68,8 +68,12 @@ def _orphan_textures(builder, nt, props, claimed, origin=(-1100, 400)):
     frame = nt.nodes.new("NodeFrame")
     frame.label = _ORPHAN_FRAME_LABEL.format(_shader_identity(builder, props))
     frame.shrink = True
+    # An image a claimed slot already placed is not an orphan under another name:
+    # a converter that states a slot's part beside the slot's own name gives the
+    # same image two keys on purpose.
+    claimed_guids = {props.textures.get(name) for name in claimed if name}
     left = [(name, guid) for name, guid in sorted(props.textures.items())
-            if guid and name not in claimed]
+            if guid and name not in claimed and guid not in claimed_guids]
     for index, (name, guid) in enumerate(left):
         image = builder._load_image(guid)
         if image is None:
@@ -372,6 +376,25 @@ def _wire_packed_mro(nt, bsdf, img, location):
     nt.links.new(node.outputs["Color"], sep.inputs["Color"])
     nt.links.new(sep.outputs["Red"], bsdf.inputs["Metallic"])
     nt.links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+
+
+def _wire_packed_declared(nt, bsdf, img, channels, location):
+    """A packed map wired by the channel indices the material declares
+    (material.PACKED_MAP_PARTS): Metallic and Roughness go straight to the BSDF;
+    Occlusion and Specular have no Principled socket and stay on the sheet."""
+    x, y = location
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = img
+    node.location = (x, y)
+    node.label = "PackedMap"
+    sep = nt.nodes.new("ShaderNodeSeparateColor")
+    sep.location = (x + 300, y)
+    nt.links.new(node.outputs["Color"], sep.inputs["Color"])
+    outputs = {0: sep.outputs["Red"], 1: sep.outputs["Green"], 2: sep.outputs["Blue"], 3: node.outputs["Alpha"]}
+    for part, socket in (("Metallic", "Metallic"), ("Roughness", "Roughness")):
+        channel = channels.get(part)
+        if channel in outputs:
+            nt.links.new(outputs[channel], bsdf.inputs[socket])
 
 
 def _wire_packed_metallic_gloss(nt, bsdf, img, location):
@@ -737,10 +760,22 @@ class MaterialBuilder:
         # Packed metallic/roughness(/occlusion) -- MRO tried first, then
         # MetallicGlossMap; the ground-truthed channel layout of each is
         # documented on material.MRO_NAMES. No generic fallback for this slot.
+        _pkname, pk_guid = props.find_texture(unity_material.PACKED_MAP_NAMES)
+        claimed_slots.add(_pkname)
+        packed_channels = {}
+        if _pkname:
+            for part in unity_material.PACKED_MAP_PARTS:
+                value = props.floats.get(_pkname + part)
+                if value is not None:
+                    packed_channels[part] = int(value)
         _mroname, mro_guid = props.find_texture(unity_material.MRO_NAMES)
         claimed_slots.add(_mroname)
         _mgname, mg_guid = (None, None)
-        if mro_guid:
+        if pk_guid and packed_channels:
+            img = self._load_image(pk_guid, non_color=True)
+            if img:
+                _wire_packed_declared(nt, bsdf, img, packed_channels, (-400, -420))
+        elif mro_guid:
             img = self._load_image(mro_guid, non_color=True)
             if img:
                 _wire_packed_mro(nt, bsdf, img, (-400, -420))
@@ -751,7 +786,7 @@ class MaterialBuilder:
                 img = self._load_image(mg_guid, non_color=True)
                 if img:
                     _wire_packed_metallic_gloss(nt, bsdf, img, (-400, -420))
-        if not mro_guid and not mg_guid:
+        if not mro_guid and not mg_guid and not (pk_guid and packed_channels):
             # No packed map: the material's own scalars ARE the truth (Unity
             # Standard `_Metallic`/`_Glossiness`, HGRP `_Smoothness` -- both
             # smoothness conventions, so Roughness = 1 - x).
