@@ -38,12 +38,6 @@
 | ShadowAttenuation | 折缺席值 | Pipeline | Identity | [0,1] attenuation | CSM / ASM / 接触阴影 / 屏幕空间阴影四条链各家自选,级联划分与滤波核全是私有实现;编译器看见的是一堆 shadowmap 比较采样 |
 | SpecularRadiance | 割点(宿主兑现) | Scene | Declared | linear radiance | 反射探针的存储各家不同(cube / 八面体图集 / 聚簇),粗糙度→mip 的映射也是各家自定;编译器看见的只是一次 cube 采样加一条经验曲线 |
 
-### 不可发射函数
-
-| 函数 | 原因 |
-|---|---|
-| ApplyVariantUv | 调用类别 TexInstance(__dim) 无节点图等价 |
-| SampleArray | repeat zone 体消费了更深割点层级的值:zone 不可跨段,请把该循环改写为割点循环 |
 
 ## 栈 ruri_shadowreceiver_endfield
 
