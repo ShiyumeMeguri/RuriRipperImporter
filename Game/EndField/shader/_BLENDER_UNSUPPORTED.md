@@ -39,6 +39,18 @@
 | SpecularRadiance | 割点(宿主兑现) | Scene | Declared | linear radiance | 反射探针的存储各家不同(cube / 八面体图集 / 聚簇),粗糙度→mip 的映射也是各家自定;编译器看见的只是一次 cube 采样加一条经验曲线 |
 
 
+## 栈 ruri_effect_uber_endfield
+
+### 环境询问(能力身份)
+
+| 能力 | 处置 | 答案来源 | 缺席契约 | 结果语义 | 编译器为什么认不出 |
+|---|---|---|---|---|---|
+| AmbientIrradiance | 割点(宿主兑现) | Scene | Identity | linear irradiance | SH 的阶数/编码/打包各家不同,HG 干脆换成辐照度体 clipmap(_IrradianceVolumeClipmapTexture*)——编译器只看得见几次 3D 图读加一串点积,推不回「这是环境辐照度」 |
+| MainLight | 割点(宿主兑现) | Scene | Identity | directional light record (direction toward light, linear radiance) | 主光从哪来是**管线的组织方式**:有的走 cbuffer 单槽(HG 的 type_LightDataBuffer c0/c1),有的走聚簇灯列表首项,有的按可见性每帧重排;编译器看见的只是几次 cbuffer 读 |
+| ScreenColor | 折缺席值 | Pipeline | Declared | linear scene radiance | 有的管线是 RT 有的是 copy,分辨率/mip 链/色彩空间各不相同;而材质节点图**根本读不到**已绘制的帧缓冲 |
+| ScreenDepth | 折缺席值 | Pipeline | Declared | raw device depth | reversed-Z / 线性 / 对数深度三种约定并存,_ZBufferParams 的打包也是引擎私有;而材质节点图读不到深度缓冲 |
+
+
 ## 栈 ruri_shadowreceiver_endfield
 
 ### 环境询问(能力身份)
