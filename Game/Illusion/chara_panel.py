@@ -642,7 +642,8 @@ def _import_rows(operator, context, rows, armature):
             return {"CANCELLED"}
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+            texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
 
         guid_by_key = cabmap_state.BRIDGE.clip_guid_by_key
         wanted = sorted(guid_by_key.values())

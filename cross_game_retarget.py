@@ -295,7 +295,8 @@ def _scan_one_avatar_cab(bridge, avatar_id, dependency_count, cab):
     """Every Avatar in one CAB, as _ScannedAvatar rows (its m_TOS reduced to the CRC set
     -- the only thing coverage is measured against)."""
     assets = bridge.import_cabs([cab], export_class_ids=[avatar_id])[0]
-    cab_db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid)
+    cab_db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid,
+    texture_srgb=bridge.texture_srgb_by_guid)
     found = []
     for guid in list(cab_db.all_guids()):
         unity_file = cab_db.load_guid(guid)
@@ -384,7 +385,8 @@ def _load_source_avatar_file(bridge, session_key, cab, avatar_name):
     bridge.use_session(session_key)
     avatar_id = class_registry.id_for_name("Avatar")
     assets = bridge.import_cabs([cab], export_class_ids=[avatar_id])[0]
-    cab_db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid)
+    cab_db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid,
+    texture_srgb=bridge.texture_srgb_by_guid)
     for guid in list(cab_db.all_guids()):
         unity_file = cab_db.load_guid(guid)
         if unity_file is None:
@@ -506,7 +508,8 @@ def _prefab_roots(bridge, cab):
         raise CrossGameRetargetError("The class registry is missing a hierarchy class id.")
     assets, roots, seed_roots, _clips, _scenes = bridge.import_cabs(
         [cab], export_class_ids=class_ids)
-    db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid)
+    db = bridge_asset_db.BridgeAssetDatabase(assets, asset_paths=bridge.asset_paths_by_guid,
+    texture_srgb=bridge.texture_srgb_by_guid)
     head = seed_roots.get(cab)
     ordered = ([head] if head else []) + [guid for guid in roots if guid != head]
     return db, [(guid, db.load_guid(guid)) for guid in ordered]
@@ -559,7 +562,8 @@ def _build_host_rig(context, session_key, host, options):
     assets, roots, seed_roots, _clips, _scenes = bridge.import_cabs([host_cab])
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, clip_curve_blobs=bridge.clip_curves_by_guid,
-        mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid)
+        mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid,
+        texture_srgb=bridge.texture_srgb_by_guid)
     guid = next((candidate for candidate in roots
                  if str(bridge.asset_paths_by_guid.get(candidate) or "") == host_path),
                 None) if host_path else None

@@ -103,7 +103,8 @@ def build(context, plan, options=None, name="Character"):
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
         mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+        texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
     index = discovery.prefab_name_index(db, roots)
 
     # Row 0 is the skeleton every later part binds onto. Built apart from the loop:

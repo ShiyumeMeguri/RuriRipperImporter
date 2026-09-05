@@ -360,7 +360,8 @@ def import_scene_window(context, bridge, options=None):
     guids = bridge.seed_asset_guids_by_path
     db = bridge_asset_db.BridgeAssetDatabase(
         bridge_assets, clip_curve_blobs=bridge.clip_curves_by_guid,
-        mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid)
+        mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid,
+        texture_srgb=bridge.texture_srgb_by_guid)
     mat_builder = material_builder.MaterialBuilder(db, options) \
         if options["import_materials"] else None
 

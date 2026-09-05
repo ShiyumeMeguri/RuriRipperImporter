@@ -168,7 +168,8 @@ def _templet_skeleton(info):
     except Exception:
         return {}, [], [], None
     db = bridge_asset_db.BridgeAssetDatabase(
-        assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+        assets, asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+        texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
 
     world_rests, paths, leaves, avatar_data = {}, [], [], None
     for guid in db.all_guids():

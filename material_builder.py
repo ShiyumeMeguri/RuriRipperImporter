@@ -35,6 +35,8 @@ _DEFAULT_TABLE = []
 
 # Custom properties stamped on every material this module builds.
 UNITY_GUID_PROPERTY = "ruri_unity_guid"
+# 图数据块上的标记:色彩空间已按资产自己声明的值定死,任何按槽推断的一方都不许改写它。
+COLORSPACE_STATED_PROPERTY = "ruri_colorspace_stated"
 
 
 def unresolved_for(game):
@@ -656,9 +658,19 @@ class MaterialBuilder:
             if cached is None:
                 return None
             self._image_cache[key] = cached
-        if non_color:
+        # 色彩空间是**贴图自己的**事实,不是槽的事实:同一张图可以同时挂在法线槽和自发光槽上
+        # (实测有),而 Blender 的色彩空间住在共享的图数据块上,谁后写谁赢。所以只认资产自己
+        # 声明的那一个(TextureImporter.sRGBTexture),并打上标记,让下游着色栈别再按槽改写。
+        stated = self.db.texture_is_srgb(guid) if hasattr(self.db, "texture_is_srgb") else None
+        want = None
+        if stated is not None:
+            want = "sRGB" if stated else "Non-Color"
+            cached[COLORSPACE_STATED_PROPERTY] = True
+        elif non_color:
+            want = "Non-Color"
+        if want is not None and cached.colorspace_settings.name != want:
             try:
-                cached.colorspace_settings.name = "Non-Color"
+                cached.colorspace_settings.name = want
             except Exception:
                 pass
         return cached

@@ -196,7 +196,8 @@ class RURI_OT_ui_scene_load(bpy.types.Operator):
         db = _bridge_asset_db_module().BridgeAssetDatabase(
             assets, clip_curve_blobs=bridge.clip_curves_by_guid,
             mesh_blobs=bridge.mesh_blobs_by_guid,
-            asset_paths=bridge.asset_paths_by_guid)
+            asset_paths=bridge.asset_paths_by_guid,
+            texture_srgb=bridge.texture_srgb_by_guid)
         return ui_scene_importer.import_stage(
             context, db, roots, context.scene.ruri_cabmap.as_options(scene=True))
 

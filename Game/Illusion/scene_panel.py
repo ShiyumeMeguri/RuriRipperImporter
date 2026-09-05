@@ -211,7 +211,8 @@ class RURI_OT_kk_scene_import(bpy.types.Operator):
 
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+            texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
         # A level exports as scenes; either way the hierarchy IS the place, so the
         # generic importer builds it as-is.
         wanted = sorted(scene_roots) if scene_roots else list(roots)

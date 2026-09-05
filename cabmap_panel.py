@@ -2379,7 +2379,8 @@ def resolve_import_closure(seeds, export_class_ids=None):
     db = bridge_asset_db.BridgeAssetDatabase(
         assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
         mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+        asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+        texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
     return {"db": db, "roots": roots, "seed_roots": seed_roots,
             "clips_by_cab": clips_by_cab, "scene_roots": scene_roots}
 
@@ -2635,7 +2636,8 @@ class RURI_OT_import_selected(bpy.types.Operator):
         db = bridge_asset_db.BridgeAssetDatabase(
             assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
             mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+            texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
         return {
             "db": db,
             "roots": hierarchy_roots,
@@ -3214,7 +3216,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
                 clip_db = bridge_asset_db.BridgeAssetDatabase(
                     clip_assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
                     mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-                    asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+                    asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+                    texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
                 selected_guids = []
                 for cab in checked_keys:
                     for guid in clips_by_cab.get(cab.lower(), []):
@@ -3254,7 +3257,8 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
             db = bridge_asset_db.BridgeAssetDatabase(
                 assets, clip_curve_blobs=cabmap_state.BRIDGE.clip_curves_by_guid,
             mesh_blobs=cabmap_state.BRIDGE.mesh_blobs_by_guid,
-            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid)
+            asset_paths=cabmap_state.BRIDGE.asset_paths_by_guid,
+            texture_srgb=cabmap_state.BRIDGE.texture_srgb_by_guid)
 
             selected_guids = []
             for cab in checked_keys:
