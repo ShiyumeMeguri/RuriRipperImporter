@@ -739,15 +739,29 @@ def _load_source_option_rows(config, dataset_id):
     _fill_source_option_rows(config, bridge.game_data(dataset_id), dataset_id)
 
 
+def _option_row_value(row):
+    """The text a form row currently holds, whatever its kind. What the user typed -- which
+    is not yet what the install is read with, see _missing_required_options."""
+    if row.kind == "flag":
+        return "true" if row.flag_value else "false"
+    return row.path_value if row.kind == "path" else row.value
+
+
 def _missing_required_options(config):
-    """The required rows the tab has no value for: a flag is never missing, a path or a
-    text is missing while blank."""
+    """The required options this install cannot be read without that are not IN EFFECT.
+
+    Judged by what the tab has APPLIED -- the values the kernel actually opens the install
+    with -- and never by what is typed in the form. A path typed into the field is not a
+    value the decoder has until Apply pushes it, so counting it cleared the warning while
+    the kernel still had no schema, and the import then failed deep in the decoder instead
+    of being refused here. A flag is never missing; a path or a text is missing while the
+    applied value is blank."""
+    applied = _source_options(config)
     missing = []
     for row in config.source_option_rows:
         if not row.required or row.kind == "flag":
             continue
-        value = row.path_value if row.kind == "path" else row.value
-        if not (value or "").strip():
+        if not (applied.get(row.name) or "").strip():
             missing.append(row)
     return missing
 
@@ -768,6 +782,18 @@ def _ensure_source_option_form(config, force=False):
     except Exception as exc:
         print("[RuriRipper] options form for {0} not loaded: {1}: {2}".format(
             config.key, type(exc).__name__, exc))
+
+
+def _sync_bridge_to_tab(config):
+    """Point the bridge at THIS tab's install, decoder and applied options right before a
+    crossing. The bridge is process-wide and remembers, per install, the options that
+    install's cabmap was loaded under, so restating here is what makes the tab the single
+    source of truth at the moment of use. A no-op when it already matches; a tab with no
+    folder states nothing."""
+    if not config.game_root:
+        return
+    cabmap_state.ensure_bridge(config.decoder_id, bpy.path.abspath(config.game_root),
+                              _source_options(config))
 
 
 def _blocking_required_options(config):
@@ -911,7 +937,11 @@ def draw_source_options(layout, context, config, schema_dataset_id):
     for row in missing:
         warning = layout.box()
         warning.alert = True
-        warning.label(text="Required and not set: {0}".format(row.name), icon="ERROR")
+        if (_option_row_value(row) or "").strip():
+            warning.label(text="Typed but not applied: {0}".format(row.name), icon="ERROR")
+            warning.label(text="Click Apply to read this install with it.")
+        else:
+            warning.label(text="Required and not set: {0}".format(row.name), icon="ERROR")
         warning.label(text=row.description)
     missing_names = {row.name for row in missing}
     box = layout.column(align=True)
@@ -2577,10 +2607,12 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
-        blocked = _blocking_required_options(_ensure_active_config(state))
+        config = _ensure_active_config(state)
+        blocked = _blocking_required_options(config)
         if blocked:
             self.report({"ERROR"}, blocked)
             return {"CANCELLED"}
+        _sync_bridge_to_tab(config)
         target_rows = _selected_target_rows(state)
         if not target_rows:
             self.report({"WARNING"}, "No rows selected.")
