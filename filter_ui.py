@@ -209,7 +209,14 @@ def selected_key(state, entries="entries", index="active_index", key="key"):
 def restore_selection(state, wanted, entries="entries", index="active_index", key="key"):
     """Put the highlight back on the row carrying ``wanted``. True when it is
     still in the list; False when the current filter hides it (the caller keeps
-    whatever it opened -- the selection is the key, not the row on screen)."""
+    whatever it opened -- the selection is the key, not the row on screen).
+
+    A key the refill no longer shows leaves the highlight NOWHERE (index -1),
+    never on whatever row inherited that position. The cursor is an identity; a
+    cursor drawn on a row that is not the selection is the UI stating something
+    false -- reported from the asset browser as "searched idle, picked a clip,
+    searched dead, the highlight is on a dead clip and the import still reads
+    idle". Every reader of an active index here already guards 0 <= i < len."""
     rows = getattr(state, entries, None)
     if rows is None:
         return False
@@ -218,6 +225,8 @@ def restore_selection(state, wanted, entries="entries", index="active_index", ke
             if getattr(row, key, "") == wanted and not getattr(row, "is_group", False):
                 setattr(state, index, position)
                 return True
+        setattr(state, index, -1)
+        return False
     if getattr(state, index, 0) >= len(rows):
         setattr(state, index, 0)
     return False

@@ -103,6 +103,21 @@ def _rebuild_window(state):
         _fill_window(state)
 
 
+def _offscreen_selection_note(state):
+    """What the import will actually read that this view is NOT showing.
+
+    The selection is a set of CABs and survives a search edit on purpose (a key the
+    filter hides stays picked). Silently, though, that reads as a bug: search idle,
+    pick a clip, search dead, press Import -- and idle is what comes out, with
+    nothing on screen saying so. So the count of hidden-but-selected rows rides on
+    the status line."""
+    hidden = len(cabmap_state.SELECTED_CABS - {item.cab for item in state.window})
+    if not hidden:
+        return ""
+    return (f"  --  {hidden} selected row(s) are hidden by this view; "
+            f"Import/Read still acts on them (clear the search to see them)")
+
+
 def _fill_window(state):
     state.window.clear()
     selected = cabmap_state.SELECTED_CABS
@@ -118,7 +133,8 @@ def _fill_window(state):
         shown = len(window)
         cap_note = (f" (capped at {cabmap_state.DISPLAY_CAP} -- narrow your search to see the rest)"
                     if total > shown else "")
-        state.status = f"Showing {shown} / {total} matching virtual files{cap_note}."
+        state.status = (f"Showing {shown} / {total} matching virtual files{cap_note}."
+                        + _offscreen_selection_note(state))
         filter_ui.restore_selection(state, state.cursor_cab, "window", "active_index", "cab")
         return
 
@@ -141,7 +157,8 @@ def _fill_window(state):
     cap_note = (f" (showing the first {budget} of {total_items} items -- open a subfolder to narrow down)"
                 if total_items > shown_items else "")
     path_label = "/" + "/".join(cabmap_state.CURRENT_DIR)
-    state.status = f"{path_label}  --  {len(folders)} folder(s), {len(files)} file(s){cap_note}"
+    state.status = (f"{path_label}  --  {len(folders)} folder(s), {len(files)} file(s){cap_note}"
+                    + _offscreen_selection_note(state))
     filter_ui.restore_selection(state, state.cursor_cab, "window", "active_index", "cab")
 
 
