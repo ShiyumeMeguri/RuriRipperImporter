@@ -630,6 +630,16 @@ def _adopt_identity(state, config):
     config.engine_family = identity.get("engine", "")
     _decoders()
     config.decoder_id = _resolve_decoder(identity)
+    # The form the install is read with, loaded now rather than on a click: its rows
+    # carry which options are required, and the warning for an unset one has to be up
+    # from the moment the tab knows its decoder.
+    module = _module_of(config)
+    if module is not None and module.settings_schema and bootstrap.is_ready():
+        try:
+            _load_source_option_rows(config, module.settings_schema)
+        except Exception as exc:
+            print("[RuriRipper] options form for {0} not loaded: {1}: {2}".format(
+                config.key, type(exc).__name__, exc))
     return config.decoder_id
 
 
@@ -709,6 +719,45 @@ def _options_to_rows(config, options):
             row.value = value
 
 
+def _fill_source_option_rows(config, table, dataset_id):
+    """The decoder's published schema becomes the tab's form rows, keeping the values the
+    tab already stores; a schema that states which options are required marks them."""
+    current = _source_options(config)
+    config.source_option_rows.clear()
+    names = set(table.names)
+    for index in range(len(table)):
+        row = config.source_option_rows.add()
+        row.name = table.cell(index, "name")
+        row.kind = table.cell(index, "kind")
+        row.choices = table.cell(index, "choices")
+        row.default = table.cell(index, "default")
+        row.description = table.cell(index, "description")
+        row.required = "required" in names and str(table.cell(index, "required")) == "1"
+    config.source_option_schema = dataset_id
+    _options_to_rows(config, current)
+
+
+def _load_source_option_rows(config, dataset_id):
+    """Read the decoder's schema for this tab's install and fill the form from it -- what
+    the Load Options Form button does, run for a tab the moment its decoder resolves."""
+    root = bpy.path.abspath(config.game_root) if config.game_root else ""
+    bridge = cabmap_state.ensure_bridge(config.decoder_id, root, _source_options(config))
+    _fill_source_option_rows(config, bridge.game_data(dataset_id), dataset_id)
+
+
+def _missing_required_options(config):
+    """The required rows the tab has no value for: a flag is never missing, a path or a
+    text is missing while blank."""
+    missing = []
+    for row in config.source_option_rows:
+        if not row.required or row.kind == "flag":
+            continue
+        value = row.path_value if row.kind == "path" else row.value
+        if not (value or "").strip():
+            missing.append(row)
+    return missing
+
+
 class RURI_OT_load_source_option_schema(bpy.types.Operator):
     """Read which values this install is READ with off its decoder -- the decoder
     publishes them as a dataset -- and lay the form out from that. Needs the decoder
@@ -734,17 +783,7 @@ class RURI_OT_load_source_option_schema(bpy.types.Operator):
         except Exception as exc:
             _report_exception(self, "Load options form failed", exc)
             return {"CANCELLED"}
-        current = _source_options(config)
-        config.source_option_rows.clear()
-        for index in range(len(table)):
-            row = config.source_option_rows.add()
-            row.name = table.cell(index, "name")
-            row.kind = table.cell(index, "kind")
-            row.choices = table.cell(index, "choices")
-            row.default = table.cell(index, "default")
-            row.description = table.cell(index, "description")
-        config.source_option_schema = self.dataset_id
-        _options_to_rows(config, current)
+        _fill_source_option_rows(config, table, self.dataset_id)
         _redraw_all(context)
         return {"FINISHED"}
 
@@ -836,12 +875,25 @@ def draw_source_options(layout, context, config, schema_dataset_id):
     button that pushes the values and re-reads the install. A game module names only
     WHICH dataset states its schema."""
     if not config.source_option_rows or config.source_option_schema != schema_dataset_id:
+        pending = layout.box()
+        pending.alert = True
+        pending.label(text="How this install is read is not loaded yet: the values it cannot be "
+                           "read without (a reflection schema, archive keys) are set in this form.",
+                      icon="ERROR")
         op = layout.operator(RURI_OT_load_source_option_schema.bl_idname, icon="PREFERENCES")
         op.dataset_id = schema_dataset_id
         return
+    missing = _missing_required_options(config)
+    for row in missing:
+        warning = layout.box()
+        warning.alert = True
+        warning.label(text="Required and not set: {0}".format(row.name), icon="ERROR")
+        warning.label(text=row.description)
+    missing_names = {row.name for row in missing}
     box = layout.column(align=True)
     for row in config.source_option_rows:
         line = box.row(align=True)
+        line.alert = row.name in missing_names
         if row.kind == "flag":
             line.prop(row, "flag_value", text=row.name)
         elif row.kind == "path":
@@ -1136,6 +1188,8 @@ class RURI_PG_source_option(bpy.types.PropertyGroup):
     choices: StringProperty()
     default: StringProperty()
     description: StringProperty()
+    # The mounted build cannot be read without this one (the decoder said so).
+    required: BoolProperty(default=False)
 
 
 class RURI_PG_install_config(bpy.types.PropertyGroup):

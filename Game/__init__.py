@@ -64,10 +64,11 @@ class GameModule:
     register/unregister pair for the bpy classes those tabs need."""
 
     __slots__ = ("game_name", "label", "tabs", "face_retarget", "secondary_motion",
-                 "engine", "source_options", "directory", "_register", "_unregister")
+                 "engine", "source_options", "settings_schema", "directory", "_register",
+                 "_unregister")
 
     def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None,
-                 secondary_motion=None, engine=None, source_options=None):
+                 secondary_motion=None, engine=None, source_options=None, settings_schema=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
@@ -85,6 +86,11 @@ class GameModule:
         # key is needed to build the map at all. What the form contains comes from
         # the decoder's own published schema; the host core only offers the slot.
         self.source_options = source_options
+        # The dataset that publishes that form's schema -- which options the decoder reads,
+        # and which of them the mounted build cannot be read without. Stated as data so the
+        # host can load the form itself the moment a tab's decoder resolves, and keep a
+        # warning up for every required option still unset, without naming any option.
+        self.settings_schema = settings_schema
         # How this game states a face, if it states one at all. A clip whose facial
         # animation is baked into its bone tracks means nothing on another character's
         # rig, so the ONE clip-loading path asks the game that owns the clip to restate

@@ -50,6 +50,7 @@ GAME_MODULE = GameModule(
                 unreal_panel.draw_unreal_tab),
     ),
     source_options=unreal_panel.draw_source_options,
+    settings_schema=datasets.SETTINGS_SCHEMA,
     register=_register,
     unregister=_unregister,
 )
