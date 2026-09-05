@@ -15,6 +15,7 @@ SESSION = "unreal.session"
 ARCHIVES = "unreal.archives"
 WORLDS = "unreal.worlds"
 WORLD_CELLS = "unreal.world.cells"
+ACTORS = "unreal.actors"
 
 
 def _rows(dataset_id, **args):
@@ -36,6 +37,15 @@ def archives():
     if cabmap_state.BRIDGE is None:
         return []
     return _rows(ARCHIVES)
+
+
+def actors():
+    """Every Blueprint actor class the install ships: package, name, kind (Character / Pawn /
+    Actor by the engine's own ancestry), parent class, first engine class, and how many
+    skeletal and static mesh packages it imports directly."""
+    if cabmap_state.BRIDGE is None:
+        return []
+    return _rows(ACTORS)
 
 
 def worlds():

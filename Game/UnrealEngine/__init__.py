@@ -21,14 +21,16 @@ Declared as one GAME_MODULE row (see ``Game``).
 from __future__ import annotations
 
 from .. import GameModule, GameTab
-from . import datasets, unreal_panel
+from . import actors_panel, datasets, unreal_panel
 
 
 def _register():
     unreal_panel.register()
+    actors_panel.register()
 
 
 def _unregister():
+    actors_panel.unregister()
     unreal_panel.unregister()
 
 
@@ -39,8 +41,12 @@ GAME_MODULE = GameModule(
     label="Unreal Engine",
     engine="UnrealEngine",
     tabs=(
+        GameTab("actors", "Actors",
+                "Every Blueprint actor the install ships -- characters, pawns, props -- "
+                "found by name and kind and imported whole",
+                actors_panel.draw_actors_tab),
         GameTab("unreal", "Unreal",
-                "The mounted Unreal session: project, engine, schema, archives",
+                "The mounted Unreal session: project, engine, schema, archives, and its worlds",
                 unreal_panel.draw_unreal_tab),
     ),
     source_options=unreal_panel.draw_source_options,

@@ -68,6 +68,8 @@ class RURI_PG_unreal_world(bpy.types.PropertyGroup):
     max_y: FloatProperty(name="Max Y", default=0.0, precision=0, step=10000)
     level: IntProperty(name="Level", default=0, min=ALL_LEVELS,
                        description="The hierarchical level to list (0 = leaf cells, -1 = every level)")
+    world_filter: StringProperty(name="Filter", options={"TEXTEDIT_UPDATE"},
+                                 description="Keep the worlds whose name or package contains this")
 
 
 def _window_args(state):
@@ -114,6 +116,27 @@ class RURI_OT_unreal_world_pick(bpy.types.Operator):
     def execute(self, context):
         context.scene.ruri_unreal_world.world = self.world
         return bpy.ops.ruri.unreal_cells_refresh()
+
+
+class RURI_OT_unreal_world_import(bpy.types.Operator):
+    """Import this world's own package: its persistent level, every actor at its world place, as the browser would"""
+    bl_idname = "ruri.unreal_world_import"
+    bl_label = "Import"
+    bl_options = {"REGISTER", "UNDO"}
+    world: StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.ruri_cabmap.loaded and cabmap_state.BRIDGE is not None
+
+    def execute(self, context):
+        if cabmap_state.rows_by_cab().get(self.world) is None:
+            self.report({"ERROR"}, "'{0}' is not in this cabmap; rebuild the cabmap.".format(self.world))
+            return {"CANCELLED"}
+        cabmap_state.SELECTED_CABS.clear()
+        cabmap_state.SELECTED_CABS.add(self.world)
+        cabmap_panel._reapply_and_refresh(context)
+        return bpy.ops.ruri.import_selected()
 
 
 class RURI_OT_unreal_cells_refresh(bpy.types.Operator):
@@ -198,12 +221,18 @@ def _draw_world_partition(layout, context):
     if not worlds:
         box.label(text="Read the worlds to pick one.", icon="INFO")
         return
+    box.prop(state, "world_filter", text="", icon="VIEWZOOM")
+    needle = state.world_filter.strip().lower()
     table = box.column(align=True)
     for world in worlds:
+        if needle and needle not in world.get("name", "").lower() and needle not in world.get("world", "").lower():
+            continue
         line = table.row(align=True)
         partitioned = str(world.get("partitioned", "0")) == "1"
         line.label(text=world.get("name", ""), icon="OUTLINER_OB_GROUP_INSTANCE" if partitioned else "FILE_3D")
-        line.label(text="{0} cells".format(world.get("cells", 0)) if partitioned else "not partitioned")
+        line.label(text="{0} cells".format(world.get("cells", 0)) if partitioned else "level")
+        # A partitioned world is imported by its cells; a plain level whole, in one click.
+        line.operator(RURI_OT_unreal_world_import.bl_idname, icon="IMPORT").world = world.get("world", "")
         if partitioned:
             line.operator(RURI_OT_unreal_world_pick.bl_idname, icon="VIEWZOOM").world = world.get("world", "")
     if not state.world:
@@ -267,7 +296,8 @@ def draw_unreal_tab(layout, context):
 
 
 _CLASSES = (RURI_OT_unreal_refresh, RURI_PG_unreal_world, RURI_OT_unreal_worlds_refresh, RURI_OT_unreal_world_pick,
-            RURI_OT_unreal_cells_refresh, RURI_OT_unreal_cells_select, RURI_OT_unreal_cells_import)
+            RURI_OT_unreal_world_import, RURI_OT_unreal_cells_refresh, RURI_OT_unreal_cells_select,
+            RURI_OT_unreal_cells_import)
 
 
 def register():

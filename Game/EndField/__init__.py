@@ -34,6 +34,7 @@ itself.
 
 from __future__ import annotations
 
+from ... import post_panel
 from .. import GameModule, GameTab
 from . import (character_panel, cloth_panel, face_retarget, roster_panel, scene_panel,
                shader, story_panel)
@@ -74,6 +75,12 @@ GAME_MODULE = GameModule(
                 "Drive an imported character's face: the SkeletalMorph "
                 "emotion/pose/lipsync library and its morph animations",
                 character_panel.draw_character_tab),
+        # The post-processing chain is this game's: its generated shader stack owns the
+        # scene's compositor tree and view transform, so the tab that installs and tunes
+        # it is offered only while an Endfield install is in front of the panel.
+        GameTab("post", "Post",
+                "Install this game's post-processing chain on the scene and tune it",
+                post_panel.draw_post_tab),
     ),
     # A UI or cutscene clip carries its face in the BONE tracks, so importing one onto
     # another character needs the performance read off the geometry and restated in that
