@@ -1,11 +1,14 @@
 """Build Blender materials from Unity ``.mat`` assets.
 
-READING the .mat -- Unity's three property-table serialisations, and the
-prioritised candidate names that locate a logical slot (base colour, normal,
-packed PBR, emission) across wildly different game shaders -- is shared with the
-Painter plugin (``RuriRipperPyBridge.unity.material``), because it is a fact about
-Unity and the HGRP shader family rather than about Blender. This module is what
-Blender does with the answer: a Principled BSDF node graph.
+READING the .mat -- Unity's three property-table serialisations -- and RESOLVING
+which property is which surface input are shared with the Painter plugin
+(``RuriRipperPyBridge.unity.material`` and ``.texture_roles``), because they are
+facts about Unity data and about a game's own vocabulary rather than about Blender.
+The vocabulary is DATA: the default layer states Unity's standard names and what the
+Ruri converters write, a game module states its own in its folder, and the user
+states the rest from the unmapped names this module reports. This module is what
+Blender does with the answer: a Principled BSDF node graph. Nothing here matches a
+property by how its name looks.
 """
 
 from __future__ import annotations
@@ -16,8 +19,52 @@ import bpy
 
 try:
     from .RuriRipperPyBridge.unity import material as unity_material
+    from .RuriRipperPyBridge.unity import texture_roles
 except ImportError:  # standalone (non-package) testing
     from RuriRipperPyBridge.unity import material as unity_material
+    from RuriRipperPyBridge.unity import texture_roles
+
+# Property names no layer of the role table states, per game, gathered while building:
+# {game: {property name: {"count", "material", "texture"}}}. The host lists them for
+# the user to map; a mapping saved takes them off the list. Session state on purpose.
+_UNRESOLVED = {}
+
+# The role table a build resolves against when the host hands none in its options:
+# the default layer alone, which is Unity's own vocabulary.
+_DEFAULT_TABLE = []
+
+# Custom properties stamped on every material this module builds.
+UNITY_GUID_PROPERTY = "ruri_unity_guid"
+
+
+def unresolved_for(game):
+    """The unmapped property names met for ``game``, each with how many materials carried it
+    and one example material and texture, oldest first."""
+    return dict(_UNRESOLVED.get(game or "", {}))
+
+
+def forget_unresolved(game, names):
+    """Drop names the user has now mapped."""
+    entries = _UNRESOLVED.get(game or "")
+    if not entries:
+        return
+    for name in names:
+        entries.pop(name, None)
+
+
+def _record_unresolved(game, name, material_name, texture_name):
+    entries = _UNRESOLVED.setdefault(game or "", {})
+    entry = entries.get(name)
+    if entry is None:
+        entries[name] = {"count": 1, "material": material_name, "texture": texture_name}
+    else:
+        entry["count"] += 1
+
+
+def default_role_table():
+    if not _DEFAULT_TABLE:
+        _DEFAULT_TABLE.append(texture_roles.RoleTable.load(texture_roles.layer_paths(None, None)))
+    return _DEFAULT_TABLE[0]
 
 # Game-shader graph providers. This core stays game-blind (see Game/__init__'s
 # charter): a game module registers a callable ``provider(builder, props) ->
@@ -46,9 +93,10 @@ def _material_content_digest(doc):
 
 
 _ORPHAN_FRAME_LABEL = "Unclaimed shader: {0}"
+_UNUSED_FRAME_LABEL = "Not read by the compiled shader: {0}"
 
 
-def _orphan_textures(builder, nt, props, claimed, origin=(-1100, 400)):
+def _orphan_textures(builder, nt, props, claimed, origin=(-1100, 400), proven=False):
     """Put EVERY texture the material carries that nothing above claimed into the
     graph as an unconnected image node, inside a frame labelled with the shader.
 
@@ -66,7 +114,8 @@ def _orphan_textures(builder, nt, props, claimed, origin=(-1100, 400)):
     # shader name is the one thing worth knowing about it, and a console line is
     # not somewhere you can look a week later.
     frame = nt.nodes.new("NodeFrame")
-    frame.label = _ORPHAN_FRAME_LABEL.format(_shader_identity(builder, props))
+    label = _UNUSED_FRAME_LABEL if proven else _ORPHAN_FRAME_LABEL
+    frame.label = label.format(_shader_identity(builder, props))
     frame.shrink = True
     # An image a claimed slot already placed is not an orphan under another name:
     # a converter that states a slot's part beside the slot's own name gives the
@@ -363,59 +412,36 @@ def _disable_alpha_interpretation(image):
         pass
 
 
-def _wire_packed_mro(nt, bsdf, img, location):
-    """R=Metallic G=Roughness B=Occlusion (HGRP/Lit._MROMap convention). AO
-    isn't wired -- Principled BSDF has no direct occlusion socket."""
+def _wire_packed(nt, bsdf, img, label, channels, location):
+    """A texture whose channels carry scalar roles: metallic and roughness go straight
+    to the BSDF, smoothness through 1 - x; occlusion, specular, opacity and height have
+    no Principled socket and stay on the sheet, the node labelled with what they are."""
     x, y = location
     node = nt.nodes.new("ShaderNodeTexImage")
     node.image = img
     node.location = (x, y)
-    node.label = "MRO"
-    sep = nt.nodes.new("ShaderNodeSeparateColor")
-    sep.location = (x + 300, y)
-    nt.links.new(node.outputs["Color"], sep.inputs["Color"])
-    nt.links.new(sep.outputs["Red"], bsdf.inputs["Metallic"])
-    nt.links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
-
-
-def _wire_packed_declared(nt, bsdf, img, channels, location):
-    """A packed map wired by the channel indices the material declares
-    (material.PACKED_MAP_PARTS): Metallic and Roughness go straight to the BSDF;
-    Occlusion and Specular have no Principled socket and stay on the sheet."""
-    x, y = location
-    node = nt.nodes.new("ShaderNodeTexImage")
-    node.image = img
-    node.location = (x, y)
-    node.label = "PackedMap"
+    node.label = "{0}: {1}".format(label, ", ".join(
+        "{0}={1}".format(role, texture_roles.CHANNEL_NAMES[channel])
+        for role, channel in sorted(channels.items()) if 0 <= channel < 4))
     sep = nt.nodes.new("ShaderNodeSeparateColor")
     sep.location = (x + 300, y)
     nt.links.new(node.outputs["Color"], sep.inputs["Color"])
     outputs = {0: sep.outputs["Red"], 1: sep.outputs["Green"], 2: sep.outputs["Blue"], 3: node.outputs["Alpha"]}
-    for part, socket in (("Metallic", "Metallic"), ("Roughness", "Roughness")):
-        channel = channels.get(part)
-        if channel in outputs:
-            nt.links.new(outputs[channel], bsdf.inputs[socket])
-
-
-def _wire_packed_metallic_gloss(nt, bsdf, img, location):
-    """R=Metallic A=Smoothness (Roughness=1-Smoothness); G=Spec/B=ShadowMask
-    have no Principled BSDF equivalent and are left unconnected (HGRP/
-    CharacterNPR._MetallicGlossMap convention)."""
-    x, y = location
-    node = nt.nodes.new("ShaderNodeTexImage")
-    node.image = img
-    node.location = (x, y)
-    node.label = "MetallicGlossMap"
-    sep = nt.nodes.new("ShaderNodeSeparateColor")
-    sep.location = (x + 300, y)
-    nt.links.new(node.outputs["Color"], sep.inputs["Color"])
-    nt.links.new(sep.outputs["Red"], bsdf.inputs["Metallic"])
-    invert = nt.nodes.new("ShaderNodeMath")
-    invert.operation = "SUBTRACT"
-    invert.inputs[0].default_value = 1.0
-    invert.location = (x + 300, y - 180)
-    nt.links.new(node.outputs["Alpha"], invert.inputs[1])
-    nt.links.new(invert.outputs["Value"], bsdf.inputs["Roughness"])
+    metallic = channels.get("metallic")
+    if metallic in outputs:
+        nt.links.new(outputs[metallic], bsdf.inputs["Metallic"])
+    roughness = channels.get("roughness")
+    smoothness = channels.get("smoothness")
+    if roughness in outputs:
+        nt.links.new(outputs[roughness], bsdf.inputs["Roughness"])
+    elif smoothness in outputs:
+        invert = nt.nodes.new("ShaderNodeMath")
+        invert.operation = "SUBTRACT"
+        invert.inputs[0].default_value = 1.0
+        invert.location = (x + 300, y - 180)
+        nt.links.new(outputs[smoothness], invert.inputs[1])
+        nt.links.new(invert.outputs["Value"], bsdf.inputs["Roughness"])
+    return "metallic" in channels, "roughness" in channels or "smoothness" in channels
 
 
 def _wire_hair_split_normal(nt, bsdf, img, bump_scale, location):
@@ -598,6 +624,7 @@ class MaterialBuilder:
         mat = self._content_cache.get(digest)
         if mat is None:
             mat = self._build(doc)
+            mat[UNITY_GUID_PROPERTY] = str(guid)
             self._content_cache[digest] = mat
             # 新建的才报:两层缓存命中意味着这张材质早已在场,派生态也早已按它接过。
             _announce(mat)
@@ -639,7 +666,6 @@ class MaterialBuilder:
     def _build(self, doc):
         props = unity_material.parse_material(doc)
         name = props.name or "UnityMaterial"
-
         # Generated shader stacks first (each declines with None); fallback below.
         # Every material is asked, builtin-shader ones included -- they simply
         # resolve to no name (see shader_display_name) and no stack claims them.
@@ -665,7 +691,11 @@ class MaterialBuilder:
                     return claimed
             print("[material] UNCLAIMED '{0}' shader={1} -- Principled fallback".format(
                 name, _shader_identity(self, props)))
-
+        table = self.options.get("texture_roles") or default_role_table()
+        roles = table.resolve(props)
+        game = self.options.get("texture_roles_game") or self.options.get("source_game") or ""
+        for unmapped in roles.unmapped:
+            _record_unresolved(game, unmapped, name, self.db.asset_name(props.textures[unmapped]) or "")
         # 就地改写同名材质(网格按名字绑材质;另起新料会得 .001 后缀留下双份)。下方整树清空重建,幂等。
         mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
         mat.use_nodes = True
@@ -676,25 +706,23 @@ class MaterialBuilder:
         bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
         bsdf.location = (200, 0)
         nt.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
-
+        # Every slot this build wired, so the ones it did not can still be put on
+        # the sheet at the end (see _orphan_textures).
+        claimed_slots = set()
         # Base colour. The material's own tint (Unity Standard `_Color`, HGRP
         # `_BaseColor`) MULTIPLIES the texture exactly as those shaders do; a
         # neutral white tint adds no node.
-        tint = props.find_color(unity_material.BASE_COLOR_FACTORS)
+        tint = roles.colors.get("base_color")
+        base = roles.first("base_color")
         base_node = None
-        # Every slot this build understood, so the ones it did not can still be put
-        # on the sheet at the end (see _orphan_textures).
-        claimed_slots = set()
-        base_name, base_guid = props.find_texture(
-            unity_material.BASE_COLOR_NAMES, unity_material.GENERIC_BASE_COLOR_HINTS)
-        claimed_slots.add(base_name)
-        if base_guid:
-            img = self._load_image(base_guid)
+        if base is not None:
+            claimed_slots.add(base.name)
+            img = self._load_image(base.guid)
             if img:
                 base_node = nt.nodes.new("ShaderNodeTexImage")
                 base_node.image = img
                 base_node.location = (-400, 100)
-                base_node.label = base_name
+                base_node.label = base.name
                 color_socket = base_node.outputs["Color"]
                 if tint is not None and tuple(tint[:3]) != (1.0, 1.0, 1.0):
                     mix = nt.nodes.new("ShaderNodeMix")
@@ -708,18 +736,20 @@ class MaterialBuilder:
                                                      float(tint[2]), 1.0)
                     color_socket = mix.outputs["Result"]
                 nt.links.new(color_socket, bsdf.inputs["Base Color"])
-        elif tint is not None:
+        if base_node is None and tint is not None:
             bsdf.inputs["Base Color"].default_value = tuple(tint)
-
         # The blend state is material DATA when the material declares Unity
         # Standard's `_Mode` (0 Opaque, 1 Cutout, 2 Fade, 3 Transparent).
         # Opaque Standard materials routinely repurpose the base map's alpha
         # (smoothness lives there under _SmoothnessTextureChannel=1), so wiring
         # it as opacity turns whole walls translucent -- honour the declared
         # mode; a material stating none keeps the old connect_alpha behaviour.
-        mode = props.floats.get("_Mode")
+        mode = roles.floats.get("blend_mode")
         wire_alpha = (self.options.get("connect_alpha", True) if mode is None
                       else float(mode) >= 0.5)
+        opacity_texture, opacity_channel = roles.with_channel("opacity")
+        if opacity_texture is not None and opacity_texture is base and opacity_channel == 3:
+            wire_alpha = True
         if base_node is not None and wire_alpha:
             nt.links.new(base_node.outputs["Alpha"], bsdf.inputs["Alpha"])
         if mode is not None:
@@ -727,92 +757,71 @@ class MaterialBuilder:
                 mat.surface_render_method = "BLENDED" if float(mode) >= 1.5 else "DITHERED"
             except Exception:
                 pass
-
-        # Normal map -- hair's dual-channel split normal takes priority (see
-        # material.SPLIT_NORMAL_NAMES / _wire_hair_split_normal's docstring):
-        # its presence unambiguously identifies a hair material, and the generic
-        # DXT5nm path below would decode it completely wrong (different channel
-        # layout, different hemisphere-reconstruction order).
-        _sname, split_guid = props.find_texture(unity_material.SPLIT_NORMAL_NAMES)
-        claimed_slots.add(_sname)
-        if split_guid:
-            img = self._load_image(split_guid, non_color=True)
-            if img:
-                bump_scale = props.float("_BumpScale", 1.0)
-                _wire_hair_split_normal(nt, bsdf, img, bump_scale, (-400, -250))
-        else:
-            _nname, normal_guid = props.find_texture(
-                unity_material.NORMAL_NAMES, unity_material.GENERIC_NORMAL_HINTS)
-            claimed_slots.add(_nname)
-            if normal_guid:
-                img = self._load_image(normal_guid, non_color=True)
-                if img:
-                    node = nt.nodes.new("ShaderNodeTexImage")
-                    node.image = img
-                    node.location = (-400, -250)
-                    node.label = "Normal"
-                    nmap = nt.nodes.new("ShaderNodeNormalMap")
-                    nmap.location = (-100, -250)
-                    nmap.inputs["Strength"].default_value = float(props.floats.get("_BumpScale", 1.0))
-                    nt.links.new(node.outputs["Color"], nmap.inputs["Color"])
-                    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-
-        # Packed metallic/roughness(/occlusion) -- MRO tried first, then
-        # MetallicGlossMap; the ground-truthed channel layout of each is
-        # documented on material.MRO_NAMES. No generic fallback for this slot.
-        _pkname, pk_guid = props.find_texture(unity_material.PACKED_MAP_NAMES)
-        claimed_slots.add(_pkname)
-        packed_channels = {}
-        if _pkname:
-            for part in unity_material.PACKED_MAP_PARTS:
-                value = props.floats.get(_pkname + part)
-                if value is not None:
-                    packed_channels[part] = int(value)
-        _mroname, mro_guid = props.find_texture(unity_material.MRO_NAMES)
-        claimed_slots.add(_mroname)
-        _mgname, mg_guid = (None, None)
-        if pk_guid and packed_channels:
-            img = self._load_image(pk_guid, non_color=True)
-            if img:
-                _wire_packed_declared(nt, bsdf, img, packed_channels, (-400, -420))
-        elif mro_guid:
-            img = self._load_image(mro_guid, non_color=True)
-            if img:
-                _wire_packed_mro(nt, bsdf, img, (-400, -420))
-        else:
-            _mgname, mg_guid = props.find_texture(unity_material.METALLIC_GLOSS_NAMES)
-            claimed_slots.add(_mgname)
-            if mg_guid:
-                img = self._load_image(mg_guid, non_color=True)
-                if img:
-                    _wire_packed_metallic_gloss(nt, bsdf, img, (-400, -420))
-        if not mro_guid and not mg_guid and not (pk_guid and packed_channels):
-            # No packed map: the material's own scalars ARE the truth (Unity
-            # Standard `_Metallic`/`_Glossiness`, HGRP `_Smoothness` -- both
-            # smoothness conventions, so Roughness = 1 - x).
-            metallic = props.floats.get("_Metallic")
-            if metallic is not None:
-                bsdf.inputs["Metallic"].default_value = float(metallic)
-            smoothness = props.floats.get("_Glossiness", props.floats.get("_Smoothness"))
-            if smoothness is not None:
-                bsdf.inputs["Roughness"].default_value = 1.0 - float(smoothness)
-
+        # Normal map. A layer may state a decode by name: the HGRP hair split normal
+        # is RG diffuse / BA specular with its own hemisphere order (see
+        # _wire_hair_split_normal) and the generic DXT5nm path would read it wrong.
+        normal = roles.first("normal")
+        strength = float(roles.floats.get("normal_strength", 1.0))
+        if normal is not None:
+            claimed_slots.add(normal.name)
+            img = self._load_image(normal.guid, non_color=True)
+            if img and normal.encoding == "hair_split":
+                _wire_hair_split_normal(nt, bsdf, img, strength, (-400, -250))
+            elif img:
+                node = nt.nodes.new("ShaderNodeTexImage")
+                node.image = img
+                node.location = (-400, -250)
+                node.label = normal.name
+                nmap = nt.nodes.new("ShaderNodeNormalMap")
+                nmap.location = (-100, -250)
+                nmap.inputs["Strength"].default_value = strength
+                nt.links.new(node.outputs["Color"], nmap.inputs["Color"])
+                nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+        # Packed scalars: every texture the layers give a channel role to, each on its
+        # own separator; the first to state metallic or roughness feeds the BSDF.
+        metallic_wired = False
+        roughness_wired = False
+        for index, packed in enumerate(roles.packed()):
+            claimed_slots.add(packed.name)
+            img = self._load_image(packed.guid, non_color=True)
+            if img is None:
+                continue
+            channels = dict(packed.channels)
+            if metallic_wired:
+                channels.pop("metallic", None)
+            if roughness_wired:
+                channels.pop("roughness", None)
+                channels.pop("smoothness", None)
+            got_metallic, got_roughness = _wire_packed(nt, bsdf, img, packed.name, channels,
+                                                       (-400, -420 - index * 320))
+            metallic_wired = metallic_wired or got_metallic
+            roughness_wired = roughness_wired or got_roughness
+        # No packed map for a part: the material's own scalars ARE the truth (Unity
+        # Standard `_Metallic`/`_Glossiness`, HGRP `_Smoothness` -- both smoothness
+        # conventions, so Roughness = 1 - x; a converter states roughness directly).
+        if not metallic_wired and roles.floats.get("metallic") is not None:
+            bsdf.inputs["Metallic"].default_value = float(roles.floats["metallic"])
+        if not roughness_wired:
+            if roles.floats.get("roughness") is not None:
+                bsdf.inputs["Roughness"].default_value = float(roles.floats["roughness"])
+            elif roles.floats.get("smoothness") is not None:
+                bsdf.inputs["Roughness"].default_value = 1.0 - float(roles.floats["smoothness"])
         # Emission = map x its colour factor (Unity Standard semantics: a BLACK
         # `_EmissionColor` means emission OFF even with a map bound -- skipping
-        # the multiply made every such material glow at full map brightness).
-        _ename, emis_guid = props.find_texture(
-            unity_material.EMISSION_NAMES, unity_material.GENERIC_EMISSION_HINTS)
-        claimed_slots.add(_ename)
-        if emis_guid:
-            img = self._load_image(emis_guid)
+        # the multiply made every such material glow at full map brightness). A
+        # colour alone, when it is not black, is emission with no map.
+        emission = roles.first("emission")
+        emission_color = roles.colors.get("emission")
+        if emission is not None:
+            claimed_slots.add(emission.name)
+            img = self._load_image(emission.guid)
             if img and "Emission Color" in bsdf.inputs:
                 node = nt.nodes.new("ShaderNodeTexImage")
                 node.image = img
                 node.location = (-400, -750)
-                node.label = "Emission"
+                node.label = emission.name
                 emission_socket = node.outputs["Color"]
-                emis_color = props.find_color(unity_material.EMISSION_COLOR_FACTORS)
-                if emis_color is not None and tuple(emis_color[:3]) != (1.0, 1.0, 1.0):
+                if emission_color is not None and tuple(emission_color[:3]) != (1.0, 1.0, 1.0):
                     emix = nt.nodes.new("ShaderNodeMix")
                     emix.data_type = "RGBA"
                     emix.blend_type = "MULTIPLY"
@@ -820,11 +829,15 @@ class MaterialBuilder:
                     emix.location = (-100, -750)
                     emix.inputs["Factor"].default_value = 1.0
                     nt.links.new(emission_socket, emix.inputs["A"])
-                    emix.inputs["B"].default_value = (float(emis_color[0]), float(emis_color[1]),
-                                                      float(emis_color[2]), 1.0)
+                    emix.inputs["B"].default_value = (float(emission_color[0]), float(emission_color[1]),
+                                                      float(emission_color[2]), 1.0)
                     emission_socket = emix.outputs["Result"]
                 nt.links.new(emission_socket, bsdf.inputs["Emission Color"])
                 bsdf.inputs["Emission Strength"].default_value = 1.0
-
-        _orphan_textures(self, nt, props, claimed_slots)
+        elif emission_color is not None and tuple(emission_color[:3]) != (0.0, 0.0, 0.0) \
+                and "Emission Color" in bsdf.inputs:
+            bsdf.inputs["Emission Color"].default_value = (float(emission_color[0]), float(emission_color[1]),
+                                                           float(emission_color[2]), 1.0)
+            bsdf.inputs["Emission Strength"].default_value = 1.0
+        _orphan_textures(self, nt, props, claimed_slots, proven=roles.proven)
         return mat

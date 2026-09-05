@@ -27,6 +27,7 @@ decodes ONE game at a time, so switching tabs re-selects the decoder
 from __future__ import annotations
 
 import importlib
+import os
 import pkgutil
 
 # What a subpackage must expose to be a game module at all.
@@ -63,7 +64,7 @@ class GameModule:
     register/unregister pair for the bpy classes those tabs need."""
 
     __slots__ = ("game_name", "label", "tabs", "face_retarget", "secondary_motion",
-                 "engine", "source_options", "_register", "_unregister")
+                 "engine", "source_options", "directory", "_register", "_unregister")
 
     def __init__(self, game_name, label, tabs, register, unregister, face_retarget=None,
                  secondary_motion=None, engine=None, source_options=None):
@@ -107,6 +108,10 @@ class GameModule:
         # cloth add-on is present, returning the report it was handed.
         self.secondary_motion = secondary_motion
         self.tabs = tuple(tabs)
+        # The folder the module was declared in -- where the data files that are about
+        # this game and nothing else live (its texture role layer, ...). Filled in by
+        # discover(), which is the one place that knows which package declared what.
+        self.directory = None
         self._register = register
         self._unregister = unregister
         for tab in self.tabs:
@@ -138,6 +143,7 @@ def discover():
         declared = getattr(package, _DECLARATION, None)
         for module in (declared if isinstance(declared, (list, tuple)) else [declared]):
             if isinstance(module, GameModule):
+                module.directory = os.path.dirname(os.path.abspath(package.__file__))
                 found.append(module)
     found.sort(key=lambda game: game.game_name.lower())
     _MODULES = found

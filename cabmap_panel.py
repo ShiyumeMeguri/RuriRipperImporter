@@ -29,21 +29,24 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 try:
-    from . import (Game, armature_builder, cross_game_retarget, filter_ui,
+    from . import (Game, armature_builder, cross_game_retarget, filter_ui, material_builder,
                    prefab_importer, step_loader)
-    from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
+    from .RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge, workspace
     from .RuriRipperPyBridge.session import cabmap_state
-    from .RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from .RuriRipperPyBridge.unity import (bridge_asset_db, class_registry, clip_paths, discovery,
+                                          texture_roles)
 except ImportError:  # standalone (non-package) testing
     import Game
     import armature_builder
     import cross_game_retarget
     import filter_ui
+    import material_builder
     import prefab_importer
     import step_loader
-    from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge
+    from RuriRipperPyBridge.runtime import bootstrap, pythonnet_bridge, workspace
     from RuriRipperPyBridge.session import cabmap_state
-    from RuriRipperPyBridge.unity import bridge_asset_db, class_registry, clip_paths, discovery
+    from RuriRipperPyBridge.unity import (bridge_asset_db, class_registry, clip_paths, discovery,
+                                          texture_roles)
 
 # The only tab this module owns, because it is the only one that is not about a
 # game: the cabmap itself. Every other tab is contributed by a game module (see
@@ -1056,6 +1059,108 @@ def _on_game_root_set(state):
     _seed_cabmap_default(state)
 
 
+# --- texture roles: which property is which input, as the user states it ---------
+# The role table is DATA in layers (RuriRipperPyBridge.unity.texture_roles): the default
+# layer is Unity's own vocabulary, a title module's folder holds that game's, and what the
+# user decides in front of the names no layer states goes into the title's folder when
+# the install has one, else into the workspace under the game's own name.
+
+_TEXTURE_ROLES_WORKSPACE_DIR = "texture_roles"
+_UNMAPPED_ROLE = "unmapped"
+_ROLE_ITEMS = [(_UNMAPPED_ROLE, "(choose)", "Not decided yet")] + [
+    (role, label, description) for role, label, description in texture_roles.ROLES]
+_CHANNEL_ITEMS = [(str(index), name, "Channel " + name)
+                  for index, name in enumerate(texture_roles.CHANNEL_NAMES)]
+
+
+def _texture_role_layers(state):
+    """(game, game layer, user layer, save target) for the current install. A title module
+    -- one declared for THIS product -- owns its layer and takes the user's choices; a
+    family module or no module at all leaves them to the workspace."""
+    game = _texture_role_game(state)
+    module = _module_of(_active_config(state))
+    game_layer = (os.path.join(module.directory, texture_roles.DEFAULT_LAYER_NAME)
+                  if module is not None and module.directory else None)
+    user_layer = os.path.join(workspace.subdir(_TEXTURE_ROLES_WORKSPACE_DIR),
+                              (game or "unknown") + ".json")
+    owns = (game_layer is not None and bool(game)
+            and module.game_name.lower() == game.lower())
+    return game, game_layer, user_layer, (game_layer if owns else user_layer)
+
+
+def _texture_role_game(state):
+    """The game a role layer is filed under: the PRODUCT the install published (a Unity
+    game's productName, an Unreal project's name), not the family module that reads
+    it -- two Unreal titles are two vocabularies, not one."""
+    config = _active_config(state)
+    product = (config.game_name if config is not None else "") or ""
+    return product or _active_game_name(state)
+
+
+def _texture_role_table(state):
+    _game, game_layer, user_layer, _save = _texture_role_layers(state)
+    return texture_roles.RoleTable.load(texture_roles.layer_paths(game_layer, user_layer))
+
+
+def _sync_texture_roles(state):
+    """Mirror the builder's unmapped names into the rows the panel draws, keeping the role
+    the user already picked for a name still listed. Called where materials were just
+    built -- a draw may not write these rows."""
+    game = _texture_role_game(state)
+    unresolved = material_builder.unresolved_for(game)
+    chosen = {row.name: (row.role, row.channel) for row in state.texture_roles}
+    state.texture_roles.clear()
+    for name, entry in unresolved.items():
+        row = state.texture_roles.add()
+        row.name = name
+        row.count = int(entry["count"])
+        row.example = "{0} / {1}".format(entry["material"], entry["texture"])
+        if name in chosen:
+            row.role, row.channel = chosen[name]
+
+
+class RURI_PG_texture_role(bpy.types.PropertyGroup):
+    """One texture property name no layer of the role table states, met while building
+    the current game's materials, with the role the user picks for it."""
+    name: StringProperty()
+    count: IntProperty()
+    example: StringProperty()
+    role: EnumProperty(name="Role", items=_ROLE_ITEMS, default=_UNMAPPED_ROLE)
+    channel: EnumProperty(name="Channel", items=_CHANNEL_ITEMS, default="0")
+
+
+class RURI_OT_texture_roles_refresh(bpy.types.Operator):
+    """List the texture property names the last imports could not map"""
+    bl_idname = "ruri.texture_roles_refresh"
+    bl_label = "List Unmapped Textures"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        _sync_texture_roles(context.scene.ruri_cabmap)
+        return {"FINISHED"}
+
+
+class RURI_OT_texture_roles_save(bpy.types.Operator):
+    """Write every decided role into this game's texture role layer; materials built from now on resolve through it"""
+    bl_idname = "ruri.texture_roles_save"
+    bl_label = "Save Texture Roles"
+
+    def execute(self, context):
+        state = context.scene.ruri_cabmap
+        game, _game_layer, _user_layer, save_path = _texture_role_layers(state)
+        entries = {row.name: texture_roles.entry_for(row.role, int(row.channel))
+                   for row in state.texture_roles if row.role != _UNMAPPED_ROLE}
+        if not entries:
+            self.report({"WARNING"}, "No role chosen yet.")
+            return {"CANCELLED"}
+        texture_roles.save_entries(save_path, entries)
+        material_builder.forget_unresolved(game, entries.keys())
+        _sync_texture_roles(state)
+        self.report({"INFO"}, "Saved {0} role(s) to {1}; re-import to rebuild the materials.".format(
+            len(entries), save_path))
+        return {"FINISHED"}
+
+
 class RURI_PG_source_option(bpy.types.PropertyGroup):
     """One value an install is READ with, as the decoder declared it: name, kind
     (text|flag|choice|path|entries), the choices a choice kind offers ('|'-joined),
@@ -1260,6 +1365,7 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, step_loader.LoadingState,
         description="Filter the discovered clips by name or by the game's own folder")
     available_clips: CollectionProperty(type=RURI_PG_animation_clip)
     available_clips_active_index: IntProperty()
+    texture_roles: CollectionProperty(type=RURI_PG_texture_role)
 
     def as_options(self, scene=False):
         """``scene=True`` 是场景窗口/展示台那条路 —— 它和角色路的唯一区别就是
@@ -1279,6 +1385,10 @@ class RURI_PG_cabmap(filter_ui.FilterStateMixin, step_loader.LoadingState,
             # stamped onto every armature the import builds -- what a later
             # cross-game retarget selects its table by.
             "source_game": _active_game_name(self),
+            # Which property is which input, for THIS install: the default layer, the
+            # game module's own and the user's, merged in that order.
+            "texture_roles": _texture_role_table(self),
+            "texture_roles_game": _texture_role_game(self),
         }
 
 
@@ -1974,6 +2084,7 @@ def _import_single_asset(op, context, state, db, guid, class_name, name):
             import material_builder
         builder = material_builder.MaterialBuilder(db, prefab_importer.resolve_options(state.as_options()))
         mat = builder.build_from_ref({"guid": guid})
+        _sync_texture_roles(state)
         if mat is None:
             op.report({"ERROR"}, "Material failed to build -- see console.")
             return {"CANCELLED"}
@@ -2318,6 +2429,7 @@ def import_hierarchy_from_closure(operator, context, state, rows, resolved,
     if not hierarchy_targets:
         if populate_browser:
             _populate_animation_browser(state, None)
+        _sync_texture_roles(state)
         return ok, imported
 
     # Root selection, generalizing the single-row semantics row by row:
@@ -2395,6 +2507,7 @@ def import_hierarchy_from_closure(operator, context, state, rows, resolved,
         operator.report({"WARNING"}, "Could not match an imported root back to the selected row -- "
                                  "animation browser not populated.")
     _populate_animation_browser(state, primary_report if populate_browser else None)
+    _sync_texture_roles(state)
     return ok, imported
 
 
@@ -2921,6 +3034,21 @@ class RURI_PT_cabmap(bpy.types.Panel):
             link_row = opts.row()
             link_row.enabled = state.import_materials and state.character_shaders
             link_row.prop(state, "link_shader_templates")
+            # The texture property names no layer of the role table states, met while
+            # building this game's materials: the user says what each one is, once.
+            unmapped = material_builder.unresolved_for(_texture_role_game(state))
+            if unmapped or len(state.texture_roles):
+                roles_box = opts.box()
+                head = roles_box.row(align=True)
+                head.label(text="Unmapped textures: {0}".format(len(unmapped)), icon="QUESTION")
+                head.operator(RURI_OT_texture_roles_refresh.bl_idname, text="", icon="FILE_REFRESH")
+                for role_row in state.texture_roles:
+                    line = roles_box.row(align=True)
+                    line.label(text="{0}  x{1}  {2}".format(role_row.name, role_row.count, role_row.example))
+                    line.prop(role_row, "role", text="")
+                    if texture_roles.is_channel_role(role_row.role):
+                        line.prop(role_row, "channel", text="")
+                roles_box.operator(RURI_OT_texture_roles_save.bl_idname, icon="FILE_TICK")
             opts.prop(state, "import_textures")
             opts.prop(state, "import_skeleton")
             opts.prop(state, "import_empties")
@@ -3305,6 +3433,7 @@ _CLASSES = (
     RURI_PG_animation_clip,
     RURI_PG_source_option,
     RURI_PG_install_config,
+    RURI_PG_texture_role,
     RURI_PG_cabmap,
     RURI_UL_cabmap,
     RURI_UL_animation_clips,
@@ -3328,6 +3457,8 @@ _CLASSES = (
     RURI_OT_open_source_option_choice,
     RURI_OT_build_cabmap,
     RURI_OT_load_cabmap,
+    RURI_OT_texture_roles_refresh,
+    RURI_OT_texture_roles_save,
     RURI_OT_select_tab,
     RURI_OT_select_install,
     RURI_OT_open_tab,

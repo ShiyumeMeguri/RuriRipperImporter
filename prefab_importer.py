@@ -52,6 +52,12 @@ DEFAULT_OPTIONS = {
     # Which game this import is of (the upstream GameType member). The host knows it;
     # the importer only stamps what it is told, so nothing here names a game.
     "source_game": "",
+    # The layered role table materials resolve their properties through
+    # (RuriRipperPyBridge.unity.texture_roles.RoleTable): the host loads the default
+    # layer, the game module's own and the user's; None means the default alone.
+    "texture_roles": None,
+    # The product the role layers are filed under (see cabmap_panel._texture_role_game).
+    "texture_roles_game": "",
 }
 
 
