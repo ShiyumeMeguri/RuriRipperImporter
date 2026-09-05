@@ -130,6 +130,11 @@ class RURI_OT_unreal_world_import(bpy.types.Operator):
         return context.scene.ruri_cabmap.loaded and cabmap_state.BRIDGE is not None
 
     def execute(self, context):
+        blocked = cabmap_panel._blocking_required_options(
+            cabmap_panel._ensure_active_config(context.scene.ruri_cabmap))
+        if blocked:
+            self.report({"ERROR"}, blocked)
+            return {"CANCELLED"}
         if cabmap_state.rows_by_cab().get(self.world) is None:
             self.report({"ERROR"}, "'{0}' is not in this cabmap; rebuild the cabmap.".format(self.world))
             return {"CANCELLED"}

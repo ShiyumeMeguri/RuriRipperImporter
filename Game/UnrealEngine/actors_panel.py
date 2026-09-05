@@ -146,6 +146,11 @@ class RURI_OT_unreal_actor_import(bpy.types.Operator):
                 and _selected(context.scene.ruri_unreal_actors) is not None)
 
     def execute(self, context):
+        blocked = cabmap_panel._blocking_required_options(
+            cabmap_panel._ensure_active_config(context.scene.ruri_cabmap))
+        if blocked:
+            self.report({"ERROR"}, blocked)
+            return {"CANCELLED"}
         entry = _selected(context.scene.ruri_unreal_actors)
         if cabmap_state.rows_by_cab().get(entry.package) is None:
             self.report({"ERROR"}, "'{0}' is not in this cabmap; rebuild the cabmap.".format(entry.package))

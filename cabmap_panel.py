@@ -633,13 +633,7 @@ def _adopt_identity(state, config):
     # The form the install is read with, loaded now rather than on a click: its rows
     # carry which options are required, and the warning for an unset one has to be up
     # from the moment the tab knows its decoder.
-    module = _module_of(config)
-    if module is not None and module.settings_schema and bootstrap.is_ready():
-        try:
-            _load_source_option_rows(config, module.settings_schema)
-        except Exception as exc:
-            print("[RuriRipper] options form for {0} not loaded: {1}: {2}".format(
-                config.key, type(exc).__name__, exc))
+    _ensure_source_option_form(config, force=True)
     return config.decoder_id
 
 
@@ -756,6 +750,36 @@ def _missing_required_options(config):
         if not (value or "").strip():
             missing.append(row)
     return missing
+
+
+def _ensure_source_option_form(config, force=False):
+    """Load the tab's options form from its decoder's published schema when a schema is
+    declared and the form is not already up (or force), so a required option's warning --
+    and the block on importing without it -- are live the moment the decoder is known, not
+    only after the user opens the form by hand. Best-effort: a form that cannot be read
+    (the install needs a key first) leaves the tab as it was."""
+    module = _module_of(config)
+    if module is None or not module.settings_schema or not bootstrap.is_ready():
+        return
+    if not force and config.source_option_schema == module.settings_schema and len(config.source_option_rows):
+        return
+    try:
+        _load_source_option_rows(config, module.settings_schema)
+    except Exception as exc:
+        print("[RuriRipper] options form for {0} not loaded: {1}: {2}".format(
+            config.key, type(exc).__name__, exc))
+
+
+def _blocking_required_options(config):
+    """The message to refuse an import with when a required option is unset, else "". The
+    form is loaded first so a tab whose form was never opened by hand is still gated."""
+    _ensure_source_option_form(config)
+    missing = _missing_required_options(config)
+    if not missing:
+        return ""
+    names = ", ".join(row.name for row in missing)
+    return ("This build cannot be read without {0}. Set it in this tab's Load Options Form "
+            "and click Apply, then import again.").format(names)
 
 
 class RURI_OT_load_source_option_schema(bpy.types.Operator):
@@ -2553,6 +2577,10 @@ class RURI_OT_import_selected(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
+        blocked = _blocking_required_options(_ensure_active_config(state))
+        if blocked:
+            self.report({"ERROR"}, blocked)
+            return {"CANCELLED"}
         target_rows = _selected_target_rows(state)
         if not target_rows:
             self.report({"WARNING"}, "No rows selected.")
