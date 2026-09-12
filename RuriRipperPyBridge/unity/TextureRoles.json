@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "proven_keyword": "RURI_TEXTURE_ROLES_FROM_SHADER",
+  "textures": {
+    "_MainTex": {"role": "base_color"},
+    "_BumpMap": {"role": "normal"},
+    "_EmissionMap": {"role": "emission"},
+    "_MetallicGlossMap": {"channels": {"metallic": 0, "smoothness": 3}},
+    "_SpecGlossMap": {"channels": {"smoothness": 3}},
+    "_OcclusionMap": {"channels": {"occlusion": 1}},
+    "_ParallaxMap": {"channels": {"height": 1}},
+    "_DetailMask": {"role": "none"},
+    "_DetailAlbedoMap": {"role": "none"},
+    "_DetailNormalMap": {"role": "none"},
+    "_PackedMap": {"channels_from": {"metallic": "_PackedMapMetallic", "roughness": "_PackedMapRoughness", "occlusion": "_PackedMapOcclusion", "specular": "_PackedMapSpecular"}}
+  },
+  "colors": {
+    "_Color": "base_color",
+    "_EmissionColor": "emission"
+  },
+  "floats": {
+    "_Metallic": "metallic",
+    "_Glossiness": "smoothness",
+    "_BumpScale": "normal_strength",
+    "_Cutoff": "alpha_cutoff",
+    "_Mode": "blend_mode"
+  }
+}

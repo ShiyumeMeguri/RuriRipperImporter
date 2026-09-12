@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "_comment": "Unreal's OWN material-input vocabulary: the names the engine gives the inputs of a material (MP_BaseColor, MP_Normal, MP_EmissiveColor, ...), which is what a studio's texture parameters are named after when they feed them directly. Engine-wide, so it is filed with the engine module and not with any title. A title that names its parameters otherwise states those in its own user layer -- the panel's Unmapped Textures list is where that is said, and it is filed under the PRODUCT.",
+  "textures": {
+    "BaseColor": {"role": "base_color"},
+    "BaseColorTexture": {"role": "base_color"},
+    "Diffuse": {"role": "base_color"},
+    "DiffuseMap": {"role": "base_color"},
+    "Albedo": {"role": "base_color"},
+    "Normal": {"role": "normal"},
+    "NormalMap": {"role": "normal"},
+    "NormalTexture": {"role": "normal"},
+    "Emissive": {"role": "emission"},
+    "EmissiveColor": {"role": "emission"},
+    "EmissiveMap": {"role": "emission"},
+    "Roughness": {"channels": {"roughness": 0}},
+    "RoughnessMap": {"channels": {"roughness": 0}},
+    "Metallic": {"channels": {"metallic": 0}},
+    "MetallicMap": {"channels": {"metallic": 0}},
+    "Specular": {"channels": {"specular": 0}},
+    "SpecularMap": {"channels": {"specular": 0}},
+    "AmbientOcclusion": {"channels": {"occlusion": 0}},
+    "AO": {"channels": {"occlusion": 0}},
+    "Opacity": {"channels": {"opacity": 0}},
+    "OpacityMask": {"channels": {"opacity": 0}},
+    "Mask": {"role": "none"},
+    "ORM": {"channels": {"occlusion": 0, "roughness": 1, "metallic": 2}},
+    "MRA": {"channels": {"metallic": 0, "roughness": 1, "occlusion": 2}}
+  },
+  "colors": {
+    "BaseColor": "base_color",
+    "Color": "base_color",
+    "EmissiveColor": "emission"
+  },
+  "floats": {
+    "Metallic": "metallic",
+    "Roughness": "roughness"
+  }
+}

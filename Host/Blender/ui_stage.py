@@ -1,0 +1,353 @@
+"""Put one of the game's UI display stages into the Blender scene.
+
+Three things arrive, each straight out of the stage's own assets and none of them
+invented here:
+
+``HGEnvironmentPhase``   the sun -- direction, colour temperature, and the
+                         PRE-DIVIDED intensity its own shaders are handed
+                         (``directIntensityDividePi``; see ``_write_light``),
+                         plus the sky's own ambient SH as the world colour.
+``HGCharacterVolume``    the character-lighting overrides, pushed onto every
+                         Endfield uber material in the scene as its
+                         ``_CharacterParams*`` inputs (see BINDINGS -- which
+                         volume field lands in which slot is read off how the
+                         game's own shader uses that component).
+``stage prefab``         the stage itself, imported by the shared prefab
+                         importer: floor, sky sphere, cameras, hierarchy 1:1.
+
+Only parameters the volume actually OVERRIDES are pushed: an unticked row in the
+game's inspector contributes nothing, and writing its m_Value anyway would dress
+a stale default up as a setting.
+"""
+
+from __future__ import annotations
+
+import bpy
+import numpy
+from mathutils import Vector
+
+from . import coordinate, material_panel, prefab_importer
+from ...Kernel.app import loading, staging
+from ...RuriRipperPyBridge.session import cabmap_state
+from ...RuriRipperPyBridge.unity import bridge_asset_db
+
+STAGE_COLLECTION = "Endfield UI Stage"
+
+MAIN_CAMERA_TAG = "MainCamera"
+
+#: Where each target the game resolved gets written. The names are the shared
+#: ones (``Kernel.app.staging``); which FIELD of which asset produced a value is
+#: the game's answer and never reaches here.
+LIGHT_DIRECTION = staging.LIGHT_DIRECTION
+LIGHT_ENERGY = staging.LIGHT_ENERGY
+LIGHT_ANGLE = staging.LIGHT_ANGLE
+LIGHT_COLOR = staging.LIGHT_COLOR
+LIGHT_TEMPERATURE = staging.LIGHT_TEMPERATURE
+LIGHT_USE_TEMPERATURE = staging.LIGHT_USE_TEMPERATURE
+WORLD_COLOR = staging.WORLD_COLOR
+
+_XYZ = {"x": 0, "y": 1, "z": 2}
+
+
+def _vector(value, keys="xyz"):
+    """A {x,y,z}/{r,g,b} dict or a scalar as a list of floats."""
+    if isinstance(value, dict):
+        pick = keys if keys[0] in value else ("rgba" if "r" in value else keys)
+        return [float(value.get(k, 0.0)) for k in pick]
+    return [float(value)]
+
+
+def _scalar(value):
+    if isinstance(value, dict):
+        return float(value.get("x", value.get("r", 0.0)))
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    return float(value)
+
+
+def apply_environment(context, pairs, name="Endfield Sun", exposure_ev=0.0):
+    """Build/replace the stage's sun and world from the pairs the game resolved,
+    one target at a time. Nothing here knows which field of which asset meant
+    what -- only how to write a Blender light and a world.
+
+    ``exposure_ev`` is stops, applied as ONE factor to every radiance the stage
+    states -- the sun's energy and the sky's ambient alike -- so the balance
+    between them stays exactly as authored. 0 writes the asset's own numbers.
+    It is a control rather than a read value because the game's absolute level
+    is produced at runtime by metering the rendered frame (HGAutoExposure); the
+    asset fixes the RATIOS and nothing else, and inventing a factor to stand in
+    for the missing level would be a number this add-on made up."""
+    scale = 2.0 ** float(exposure_ev)
+    sun = None
+    for target, value in pairs:
+        if target == WORLD_COLOR:
+            _world(context, value, scale)
+            continue
+        sun = sun or _sun(context, name)
+        _write_light(sun, target, value, scale)
+    return sun
+
+
+def _sun(context, name):
+    """The stage's directional light, built once and reused."""
+    data = bpy.data.lights.get(name)
+    if data is None or data.type != "SUN":
+        data = bpy.data.lights.new(name, type="SUN")
+        data.name = name
+    obj = bpy.data.objects.get(name)
+    if obj is None or obj.data is not data:
+        obj = bpy.data.objects.new(name, data)
+        context.collection.objects.link(obj)
+    elif obj.name not in context.scene.objects:
+        context.collection.objects.link(obj)
+    return obj
+
+
+def _write_light(obj, target, value, scale):
+    """One binding onto the sun.
+
+    A direction is the direction the light TRAVELS, already resolved by the game
+    from its pitch/yaw; Blender's sun shines down its own -Z, so the object
+    simply tracks that vector.
+
+    Energy goes in unchanged, and what arrives is the game's own
+    ``directIntensityDividePi`` rather than its ``directIntensity`` -- because
+    what READS this light is not Blender's own shading but the ported game
+    shader (its ``mainLight.color`` capability is fulfilled with
+    ``data.color * data.energy``), and the quantity that shader is handed in
+    game is ``directColor * directIntensityDividePi``. Feeding it the undivided
+    intensity is pi times too much light, which on a tone-mapped stage reads as
+    a blown-white frame. The Lambert 1/pi is therefore accounted for exactly
+    once, on the side that authored it.
+
+    A colour temperature travels as Kelvin, which Blender carries on the light
+    itself."""
+    data = obj.data
+    if target == LIGHT_DIRECTION:
+        if not isinstance(value, dict):
+            return
+        unity = numpy.array([[float(value.get("x", 0.0)), float(value.get("y", 0.0)),
+                              float(value.get("z", 0.0))]], dtype=numpy.float32)
+        converted = coordinate.convert_points(unity)[0]
+        direction = coordinate.root_matrix().to_3x3() @ Vector(
+            (float(converted[0]), float(converted[1]), float(converted[2])))
+        if direction.length > 1e-6:
+            obj.rotation_mode = "QUATERNION"
+            obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+    elif target == LIGHT_ENERGY:
+        data.energy = _scalar(value) * scale
+    elif target == LIGHT_ANGLE:
+        data.angle = 2.0 * _scalar(value)
+    elif target == LIGHT_COLOR:
+        components = _vector(value, "rgb")
+        if len(components) >= 3:
+            data.color = (components[0], components[1], components[2])
+    elif target == LIGHT_USE_TEMPERATURE:
+        if hasattr(data, "use_temperature"):
+            data.use_temperature = bool(_scalar(value))
+    elif target == LIGHT_TEMPERATURE:
+        if _scalar(value) and hasattr(data, "temperature"):
+            data.temperature = _scalar(value)
+
+
+def _world(context, ambient, scale):
+    """The stage's ambient, as the DC term of its own baked sky SH.
+
+    Only the constant term is used: the character shader takes its ambient from
+    the character volume rather than the world, so what the world owes the scene
+    is the backdrop level, and that is sh[0] per channel. Scaled by the same
+    stops as the sun -- an exposure that moved one and not the other would
+    change the balance the asset authored."""
+    if not isinstance(ambient, dict):
+        return None
+    channels = [float(ambient.get("sh[{0:2d}]".format(base), 0.0)) * scale
+                for base in (0, 9, 18)]
+    world = context.scene.world
+    if world is None:
+        world = bpy.data.worlds.new("Endfield UI Stage")
+        context.scene.world = world
+    world.use_nodes = True
+    background = world.node_tree.nodes.get("Background")
+    if background is not None:
+        background.inputs[0].default_value = (channels[0], channels[1], channels[2], 1.0)
+    return world
+
+
+def apply_character_params(pushed, materials=None):
+    """Push the (slot, components, value) triples the game resolved onto every
+    material of its own shading stack that is loaded.
+
+    Returns (materials touched, parameters written)."""
+    if not pushed:
+        return 0, 0
+
+    touched = written = 0
+    for material in (materials if materials is not None else bpy.data.materials):
+        entry = material_panel.stack_of(material)
+        if entry is None:
+            continue
+        stack = entry["stack"]
+        # 布局表住生成栈的清单里，经它自己的 part() 取；曾经写成 getattr(stack, "PARAMS", {})，
+        # 而生成物从来没有过这个属性 —— 于是每张材质的 rows 恒为空，整个函数**静默一个 CP 都不写**
+        # （零报错、零日志、画面纹丝不动）。
+        try:
+            params = stack.part(material.get("ruri_uber_part", ""))["params"]
+        except (KeyError, TypeError):
+            continue
+        rows = {row[0]: row for row in params}
+        colors = {key: list(value) for key, value
+                  in dict(material.get("ruri_uber_colors") or {}).items()}
+        hits = 0
+        for slot, comps, value in pushed:
+            name = "_CharacterParams{0}".format(slot)
+            row = rows.get(name)
+            if row is None:
+                continue        # 这个 part 不吃这枚 CP —— 是常态,不是错
+            current = colors.get(name)
+            if current is None:
+                # 快照里没有 = 还停在声明缺省。必须从**声明缺省**起手补齐四分量,
+                # 否则只推 x 的绑定会把 yzw 一并清零。
+                current = [float(row[4][0]), float(row[4][1]), float(row[4][2]), float(row[5])]
+            current = [float(component) for component in current][:4]
+            current += [0.0] * (4 - len(current))
+            if _write_slot(current, comps, value):
+                colors[name] = current
+                hits += 1
+        if hits:
+            # 🔴 快照是参数唯一真源,不能再写 socket.default_value:CP 槽的 socket
+            # 现在**接在参数表上**,而被接住的 socket 求值时根本不看自己的缺省值 ——
+            # 直写 socket 会静默无效(编译干净、控制台干净、画面纹丝不动)。
+            material["ruri_uber_colors"] = colors
+            stack._param_write(material)
+            touched += 1
+            written += hits
+    return touched, written
+
+
+def _write_slot(current, comps, value):
+    """Write one volume value into one CP slot's four components, in place.
+    Returns whether anything was written."""
+    if comps in ("rgb", "xyzw"):
+        components = _vector(value)
+        if len(components) < 3:
+            return False
+        for index in range(3):
+            current[index] = components[index]
+        if comps == "xyzw" and len(components) >= 4:
+            current[3] = components[3]
+        return True
+    if comps == "w":
+        current[3] = _scalar(value)
+        return True
+    index = _XYZ.get(comps)
+    if index is None:
+        return False
+    current[index] = _scalar(value)
+    return True
+
+
+def import_stage(context, db, roots, options):
+    """Build the stage prefab exactly as any other prefab is built -- the shared
+    importer turns its hierarchy into objects, its renderers into meshes and its
+    cameras into cameras -- inside its own collection, so it can be hidden or
+    deleted without touching whatever character is being looked at.
+
+    Returns (report, ...) per root built."""
+    collection = bpy.data.collections.get(STAGE_COLLECTION)
+    if collection is None:
+        collection = bpy.data.collections.new(STAGE_COLLECTION)
+    if collection.name not in context.scene.collection.children:
+        context.scene.collection.children.link(collection)
+
+    previous = context.view_layer.active_layer_collection
+    layer = _layer_for(context.view_layer.layer_collection, collection)
+    if layer is not None:
+        context.view_layer.active_layer_collection = layer
+    reports = []
+    try:
+        for guid in roots:
+            prefab_file = db.load_guid(guid)
+            if prefab_file is None:
+                continue
+            reports.append(prefab_importer.import_prefab_from_db(context, db, prefab_file, options))
+    finally:
+        if previous is not None:
+            context.view_layer.active_layer_collection = previous
+    return reports
+
+
+def adopt_camera(context, cameras):
+    """Make the stage's own camera the scene camera, so numpad-0 looks through
+    what the game looks through. The render aspect follows: a vertical FOV only
+    frames the same picture at the same aspect ratio.
+
+    Which of a stage's cameras that is comes off Unity's own ``MainCamera`` tag,
+    which the prefab states on exactly the one the game renders through; the
+    rest are cinemachine rigs and per-body-type framing helpers. Falling back to
+    "the first visible one" would be a guess, so it only happens when the prefab
+    tags nothing."""
+    if not cameras:
+        return None
+    tagged = [obj for obj in cameras if obj.get(prefab_importer.UNITY_TAG) == MAIN_CAMERA_TAG]
+    visible = [obj for obj in cameras if not obj.hide_viewport] or list(cameras)
+    chosen = tagged[0] if tagged else visible[0]
+    context.scene.camera = chosen
+    render = context.scene.render
+    if render.resolution_x * 9 != render.resolution_y * 16:
+        render.resolution_x, render.resolution_y = 1920, 1080
+    return chosen
+
+
+def _layer_for(layer_collection, collection):
+    if layer_collection.collection is collection:
+        return layer_collection
+    for child in layer_collection.children:
+        found = _layer_for(child, collection)
+        if found is not None:
+            return found
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The one entry the port names
+# ---------------------------------------------------------------------------
+def load(context, stage, options):
+    """Write one stated display stage into this scene, and say what was written.
+
+    The four halves are independent on purpose: a stage whose art is not wanted
+    still lights the character, and a stage the install ships no prefab for still
+    has a sun. What each of them IS came off the statement; none of it is read
+    here."""
+    done = []
+    if stage["environment"]:
+        sun = apply_environment(context, stage["environment"], stage["label"] + " Sun",
+                                stage["exposure"])
+        done.append("sun " + (sun.name if sun else "(no direction in the asset)"))
+    if stage["character_params"]:
+        touched, written = apply_character_params(stage["character_params"])
+        done.append("{0} param(s) onto {1} material(s)".format(written, touched))
+    if stage["prefabs"]:
+        done.extend(_load_art(context, stage["prefabs"], options))
+    return done
+
+
+def _load_art(context, prefabs, options):
+    """The stage's own prefab, built the ordinary way -- one closure, the shared
+    prefab importer, whatever hierarchy the game authored."""
+    bridge = cabmap_state.BRIDGE
+    cabs = list(bridge.resolve_cabs_for_paths(list(prefabs)))
+    if not cabs:
+        return ["the install carries no CAB for this stage's art"]
+    assets, roots, _seed_roots, _clips, _scene_roots = bridge.import_cabs(cabs)
+    database = bridge_asset_db.BridgeAssetDatabase(
+        assets, clip_curve_blobs=bridge.clip_curves_by_guid,
+        mesh_blobs=bridge.mesh_blobs_by_guid, asset_paths=bridge.asset_paths_by_guid,
+        texture_srgb=bridge.texture_srgb_by_guid)
+    reports = import_stage(context, database, roots, options)
+    meshes = sum(len(report.mesh_objects) for report in reports)
+    cameras = [obj for report in reports for obj in report.cameras]
+    done = ["{0} mesh(es), {1} camera(s)".format(meshes, len(cameras))]
+    chosen = adopt_camera(context, cameras)
+    if chosen is not None:
+        done.append("looking through " + chosen.name)
+    return done

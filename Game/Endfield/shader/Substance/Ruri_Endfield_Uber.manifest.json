@@ -1,0 +1,3246 @@
+{
+  "host": "Substance",
+  "family": "Endfield",
+  "stack": "ruri_character_uber_endfield",
+  "shader": "Ruri_Endfield_Uber.glsl",
+  "generated": "Ruri.RenderPipelines.Generator — 勿手改;改真源后重跑 codegen",
+  "operations": [
+    "invert",
+    "repack_normal",
+    "unpack_normal_alpha_green",
+    "unpack_normal_pair"
+  ],
+  "panel": {
+    "variantUniform": "_CharaPartID",
+    "parts": [
+      {
+        "value": 0,
+        "name": "Standard",
+        "shader": "HGRP/CharacterNPR",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 1,
+        "name": "Face",
+        "shader": "HGRP/CharacterNPR_Skin",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 2,
+        "name": "Eyes",
+        "shader": "HGRP/CharacterNPR_Eye",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 3,
+        "name": "Hair",
+        "shader": "HGRP/CharacterNPR_Hair",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 4,
+        "name": "Fur",
+        "shader": "HGRP/CharacterNPR",
+        "aliases": [],
+        "discriminator": "_UseCharacterFur"
+      },
+      {
+        "value": 5,
+        "name": "Eyebrow",
+        "shader": "",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 6,
+        "name": "VFX",
+        "shader": "HGRP/CharacterNPR_VFX",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 7,
+        "name": "OverlayShadow",
+        "shader": "HGRP/CharacterNPR_OverlayShadow",
+        "aliases": [],
+        "discriminator": ""
+      },
+      {
+        "value": 8,
+        "name": "LiquidAg",
+        "shader": "HGRP/CharacterNPR_LiquidAg",
+        "aliases": [],
+        "discriminator": ""
+      }
+    ],
+    "keywords": [
+      "_NORMALMAP"
+    ],
+    "uniforms": [
+      {
+        "name": "_AlphaClip",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_AlphaClipThreshold",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AlphaPremultiply",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyColor2",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_AnisotropyDirX",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyEdgeFade",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyRange2",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyValue",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AnisotropyValue2",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_AvatarCustomizeEnable",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_BackFaceNormalFlip",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_BaseColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_BaseMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_Bi_Disturb",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_BlendMode",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTexUVRotateMat",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTexUVSpeed",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTexUVWeights",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTexUseDisturb",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_BlendTint",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": true
+      },
+      {
+        "name": "_BumpScale",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams0",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams1",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams10",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams11",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams12",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams13",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams14",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams15",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams2",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams3",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams4",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams5",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams6",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams7",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams8",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_CharacterParams9",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_ClearCoat",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_ClearCoatColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_ClearCoatMetallic",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ClearCoatNormalMode",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_ClearCoatSmoothness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ColorAdjustmentBrightness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ColorAdjustmentColorBlend",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_ColorAdjustmentContrast",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ColorAdjustmentRimColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_ColorAdjustmentRimIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ColorAdjustmentRimWidth",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ColorAdjustmentSaturation",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_DirectionalShadowParams",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_DisableVertColor",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbTex1Normal",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbTex1_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbUIntensity1",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbUVRotateMat1",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbUVSpeed1",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbUVWeights1",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_DisturbVIntensity1",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_EmissionBrightness",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_EmissionColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_EmotionBlend",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_EmotionIndex",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_EnableCharacterVFX",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_EnableNormalMap",
+        "type": "float",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_EnableVFXColorAdjustment",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_EnvironmentGlobalParams0",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_ExposureWithMiscParams",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_EyeHighLight",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_EyeHighLightColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": false
+      },
+      {
+        "name": "_EyeScatteringColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": false
+      },
+      {
+        "name": "_EyeTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_FBXRotationFix",
+        "type": "float",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_FaceHighlightMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_FaceRimOffScale",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FresnelAffectOpacity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FresnelBias",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FresnelColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_FresnelFlip",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FresnelPower",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurAO",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurCutoffEnd",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurCutoffStart",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurDirMapEnable",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FurDyeEnable",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_FurDyeIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurDyeMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_FurEdgeFade",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FurMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_FurNoise",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FurSharpen",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FurTTIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_HighlightMapVector",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_IgnorePostExposure",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_InParticle",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_LineAmount",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_LineIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_LineMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_LineRange",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_LineSaturation",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_LineValue",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_MainTexUVRotateMat",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MainTexUVSpeed",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MainTexUVWeights",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MainTexUseDisturb",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_MainTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MaskTexUVRotateMat",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MaskTexUVSpeed",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MaskTexUVWeights",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MaskTexUseDisturb",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_MaskTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_MatcapColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": false
+      },
+      {
+        "name": "_MatcapNormalScale",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_Metallic",
+        "type": "float",
+        "widget": "Range",
+        "srgb": true
+      },
+      {
+        "name": "_MetallicIntensity",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_NearCameraFadeDistanceEnd",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_NearCameraFadeDistanceEnd2",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_NearCameraFadeDistanceStart",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_NearCameraFadeDistanceStart2",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_NormalMapUVRotateMat",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_NormalMapUVSpeed",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_NormalMapUVWeights",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_NormalMapUseDisturb",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_NormalMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_NormalScale",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_OutlineColorBrightness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_OutlineColorSaturation",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_OutlineTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_OutlineTintEnable",
+        "type": "bool",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_ParallaxColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": true
+      },
+      {
+        "name": "_ParallaxMarchNum",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ParallaxScale",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ParallaxTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_RoughnessIntensity",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_RuriCharacterEnvironmentEffect",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_RuriCharacterEnvironmentWater",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_RuriOutlineShellGate",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_SDFRimColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_ShadowColorBrightness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_ShadowColorSaturation",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockings",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsAdvance",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsAnisoDirection",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_SilkStockingsDryColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_SilkStockingsMaxAffect",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsMinAffect",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsSpecularFalloff",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsSpecularInt",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsSpecularMinAtMinWetness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsSpecularValue",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SilkStockingsWetColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_SkinRimOffScale",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_Smoothness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SpecBumpScale",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_SpecRampIridescentMode",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_SpecialDissolveScheduleOffset",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_Specular",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_SpecularIntensity",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_SpecularLine",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_StrokeMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_StrokeOn",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_StrokeScale",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_SurfaceType",
+        "type": "int",
+        "widget": "Int",
+        "srgb": false
+      },
+      {
+        "name": "_TintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_TintColorAlpha",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_TintColorIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_UseBlend",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseBumpMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseDiffRampMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseDisturb",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseEmission",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseEmotionMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseFresnel",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseGrayAsAlpha",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_UseLineMap",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_UseMainTexAsAlpha",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_UseMask",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseMaskTexAsAlpha",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_UseMatcap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseMetallicGlossMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseNearCameraFade",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_UseParallax",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseRMOSMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseSDFLightmap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseShadowLutTex",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseSpecBumpMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseSpecRampMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_UseVFXMainTexAsAlpha",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_VFXBlendTint",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": true
+      },
+      {
+        "name": "_VFXColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": true
+      },
+      {
+        "name": "_VFXColorAlpha",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXColorIntensity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXFresnelAffectOpacity",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXFresnelBias",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXFresnelColor",
+        "type": "vec4",
+        "widget": "HDRColor",
+        "srgb": true
+      },
+      {
+        "name": "_VFXFresnelFlip",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_VFXFresnelPower",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXSpecialBlendTexRForDisturb",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXSpecialBlendTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_VFXSpecialMainTex_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_VFXSpecialParam",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "unity_SpecCube0_HDR",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "Kind": "NativeChannel",
+      "Id": "basecolor",
+      "Semantic": "BaseColor",
+      "Components": 3,
+      "Encoding": "Color",
+      "Format": "sRGB8",
+      "Absent": [
+        1,
+        1,
+        1
+      ],
+      "Label": "反照率(线性化后的漫反射基色)",
+      "Declaration": "//: param auto channel_basecolor\nuniform SamplerSparse basecolor_tex;",
+      "Getter": "getBaseColor(basecolor_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_BaseMap",
+          "Channels": "rgb",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "opacity",
+      "Semantic": "Opacity",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        1
+      ],
+      "Label": "不透明度 [0,1]",
+      "Declaration": "//: param auto channel_opacity\nuniform SamplerSparse opacity_tex;",
+      "Getter": "getOpacity(opacity_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_BaseMap",
+          "Channels": "a",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_BlendTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "Blend Tex",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_BlendTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "normal",
+      "Semantic": "TangentNormal",
+      "Components": 3,
+      "Encoding": "Normal",
+      "Format": "RGB16F",
+      "Absent": [
+        0,
+        0,
+        1
+      ],
+      "Label": "切空间法线(已解包的三分量单位向量)",
+      "Declaration": "",
+      "Getter": "getTSNormal({coord})",
+      "Sources": [
+        {
+          "Source": "_BumpMap",
+          "Channels": "rg",
+          "Operation": "unpack_normal_alpha_green"
+        },
+        {
+          "Source": "_SplitNormalMap",
+          "Channels": "rg",
+          "Operation": "unpack_normal_pair"
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_CharMaxCubemap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Cubemap",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_CharMaxCubemap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "OverflowChannel",
+      "Id": "user1",
+      "Semantic": "ClearCoatMask",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        1
+      ],
+      "Label": "清漆层遮罩 [0,1]",
+      "Declaration": "//: param auto channel_user1\nuniform SamplerSparse slot_user1_tex;",
+      "Getter": "textureSparse(slot_user1_tex, {coord}).r",
+      "Sources": [
+        {
+          "Source": "_ClearCoatMask",
+          "Channels": "r",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_DiffRampMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Diffuse Ramp",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_DiffRampMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_DisturbTex1",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Disturb Tex 1",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_DisturbTex1",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "emissive",
+      "Semantic": "Emission",
+      "Components": 3,
+      "Encoding": "Color",
+      "Format": "sRGB8",
+      "Absent": [
+        0,
+        0,
+        0
+      ],
+      "Label": "自发光辐射色",
+      "Declaration": "",
+      "Getter": "pbrComputeEmissive(emissive_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_EmissionMap",
+          "Channels": "rgb",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "OverflowChannel",
+      "Id": "user2",
+      "Semantic": "EmissionMask",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        1
+      ],
+      "Label": "自发光强度遮罩 [0,1](逐像素选哪里发光/呼吸)",
+      "Declaration": "//: param auto channel_user2\nuniform SamplerSparse slot_user2_tex;",
+      "Getter": "textureSparse(slot_user2_tex, {coord}).r",
+      "Sources": [
+        {
+          "Source": "_EmissionMap",
+          "Channels": "a",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_EmotionMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "Emotion Map",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_EmotionMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_FurDirMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "bump",
+      "Absent": [],
+      "Label": "毛发方向(RG)疏密(B)长短(A)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_FurDirMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_FurDyeMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "皮毛染色",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_FurDyeMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_FurMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Fur Noise",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_FurMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_HairBrowMask",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Hair Brow Mask",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_HairBrowMask",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_HighlightMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "HighlightMap",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_HighlightMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_LineMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "Line Map",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_LineMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_MainTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Main Tex",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_MainTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_MaskTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Mask Tex",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_MaskTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_MatcapTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Matcap",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_MatcapTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "metallic",
+      "Semantic": "Metallic",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        0
+      ],
+      "Label": "金属度 [0,1]",
+      "Declaration": "//: param auto channel_metallic\nuniform SamplerSparse metallic_tex;",
+      "Getter": "getMetallic(metallic_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_MetallicGlossMap",
+          "Channels": "r",
+          "Operation": ""
+        },
+        {
+          "Source": "_RMOSMap",
+          "Channels": "g",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "specularlevel",
+      "Semantic": "SpecularLevel",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        1
+      ],
+      "Label": "高光强度系数 [0,1](非金属 F0 的缩放)",
+      "Declaration": "//: param auto channel_specularlevel\nuniform SamplerSparse specularlevel_tex;",
+      "Getter": "getSpecularLevel(specularlevel_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_MetallicGlossMap",
+          "Channels": "g",
+          "Operation": ""
+        },
+        {
+          "Source": "_RMOSMap",
+          "Channels": "a",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "ambientOcclusion",
+      "Semantic": "Occlusion",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        1
+      ],
+      "Label": "环境光遮蔽 [0,1](1 = 无遮蔽)",
+      "Declaration": "",
+      "Getter": "getAO({coord}, true, use_bent_normal)",
+      "Sources": [
+        {
+          "Source": "_MetallicGlossMap",
+          "Channels": "b",
+          "Operation": ""
+        },
+        {
+          "Source": "_RMOSMap",
+          "Channels": "b",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "roughness",
+      "Semantic": "Roughness",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        0.5
+      ],
+      "Label": "粗糙度 [0,1] = 1 - 光滑度",
+      "Declaration": "//: param auto channel_roughness\nuniform SamplerSparse roughness_tex;",
+      "Getter": "getRoughness(roughness_tex, {coord})",
+      "Sources": [
+        {
+          "Source": "_MetallicGlossMap",
+          "Channels": "a",
+          "Operation": "invert"
+        },
+        {
+          "Source": "_RMOSMap",
+          "Channels": "r",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_NormalMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "bump",
+      "Absent": [],
+      "Label": "法线图",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_NormalMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_OutlineMask",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Outline Mask",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_OutlineMask",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "height",
+      "Semantic": "Height",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [
+        0
+      ],
+      "Label": "视差/位移高度 [0,1]",
+      "Declaration": "//: param auto channel_height\nuniform SamplerSparse height_tex;",
+      "Getter": "textureSparse(height_tex, {coord}).r",
+      "Sources": [
+        {
+          "Source": "_ParallaxTex",
+          "Channels": "r",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_PerObjectScreenSpaceShadowmapTexture",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "_PerObjectScreenSpaceShadowmapTexture",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_PerObjectScreenSpaceShadowmapTexture",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_RampMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Diffuse Ramp Map",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_RampMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_SDFLightmap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "SDF Lightmap",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_SDFLightmap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_SDFMask",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "RimMask/SDFMask/FlatSHMask",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_SDFMask",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_ScreenSpaceShadowMask",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "_ScreenSpaceShadowMask",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_ScreenSpaceShadowMask",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_ShadowLutTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Shadow Color Lut",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_ShadowLutTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_SilkStockingsMask",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "丝袜遮罩",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_SilkStockingsMask",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_SpecRampMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "Specular Ramp",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_SpecRampMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_StrokeMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "linearGrey",
+      "Absent": [],
+      "Label": "Stroke Map(R:anisotropy G:specular offset)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_StrokeMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_VFXSpecialBlendTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "black",
+      "Absent": [],
+      "Label": "VFX Special Blend Tex",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_VFXSpecialBlendTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_VFXSpecialMainTex",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "white",
+      "Absent": [],
+      "Label": "VFX Special Main Tex",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_VFXSpecialMainTex",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_BumpMap_ba",
+      "Semantic": "",
+      "Components": 2,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [],
+      "Label": "_BumpMap 余量(ba)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_BumpMap",
+          "Channels": "ba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_ClearCoatMask_gba",
+      "Semantic": "",
+      "Components": 3,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [],
+      "Label": "_ClearCoatMask 余量(gba)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_ClearCoatMask",
+          "Channels": "gba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_ParallaxTex_gba",
+      "Semantic": "",
+      "Components": 3,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [],
+      "Label": "_ParallaxTex 余量(gba)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_ParallaxTex",
+          "Channels": "gba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_SplitNormalMap_ba",
+      "Semantic": "",
+      "Components": 2,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [],
+      "Label": "_SplitNormalMap 余量(ba)",
+      "Declaration": "",
+      "Getter": "",
+      "Sources": [
+        {
+          "Source": "_SplitNormalMap",
+          "Channels": "ba",
+          "Operation": ""
+        }
+      ]
+    }
+  ],
+  "reads": [
+    {
+      "Source": "_BaseMap",
+      "Lanes": [
+        {
+          "Input": "basecolor",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "basecolor",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "basecolor",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "opacity",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_BlendTex",
+      "Lanes": [
+        {
+          "Input": "_BlendTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_BlendTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_BlendTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_BlendTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_BumpMap",
+      "Lanes": [
+        {
+          "Input": "normal",
+          "Component": 0,
+          "Operation": "repack_normal",
+          "Constant": 0
+        },
+        {
+          "Input": "normal",
+          "Component": 1,
+          "Operation": "repack_normal",
+          "Constant": 0
+        },
+        {
+          "Input": "_BumpMap_ba",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_BumpMap_ba",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_CharMaxCubemap",
+      "Lanes": [
+        {
+          "Input": "_CharMaxCubemap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_CharMaxCubemap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_CharMaxCubemap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_CharMaxCubemap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_ClearCoatMask",
+      "Lanes": [
+        {
+          "Input": "user1",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ClearCoatMask_gba",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ClearCoatMask_gba",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ClearCoatMask_gba",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_DiffRampMap",
+      "Lanes": [
+        {
+          "Input": "_DiffRampMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DiffRampMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DiffRampMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DiffRampMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_DisturbTex1",
+      "Lanes": [
+        {
+          "Input": "_DisturbTex1",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DisturbTex1",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DisturbTex1",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_DisturbTex1",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_EmissionMap",
+      "Lanes": [
+        {
+          "Input": "emissive",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "emissive",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "emissive",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "user2",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_EmotionMap",
+      "Lanes": [
+        {
+          "Input": "_EmotionMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_EmotionMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_EmotionMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_EmotionMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_FurDirMap",
+      "Lanes": [
+        {
+          "Input": "_FurDirMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDirMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDirMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDirMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_FurDyeMap",
+      "Lanes": [
+        {
+          "Input": "_FurDyeMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDyeMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDyeMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurDyeMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_FurMap",
+      "Lanes": [
+        {
+          "Input": "_FurMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_FurMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_HairBrowMask",
+      "Lanes": [
+        {
+          "Input": "_HairBrowMask",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HairBrowMask",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HairBrowMask",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HairBrowMask",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_HighlightMap",
+      "Lanes": [
+        {
+          "Input": "_HighlightMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HighlightMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HighlightMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_HighlightMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_LineMap",
+      "Lanes": [
+        {
+          "Input": "_LineMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_LineMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_LineMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_LineMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_MainTex",
+      "Lanes": [
+        {
+          "Input": "_MainTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MainTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MainTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MainTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_MaskTex",
+      "Lanes": [
+        {
+          "Input": "_MaskTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MaskTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MaskTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MaskTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_MatcapTex",
+      "Lanes": [
+        {
+          "Input": "_MatcapTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MatcapTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MatcapTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_MatcapTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_MetallicGlossMap",
+      "Lanes": [
+        {
+          "Input": "metallic",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "specularlevel",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "ambientOcclusion",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "roughness",
+          "Component": 0,
+          "Operation": "invert",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_NormalMap",
+      "Lanes": [
+        {
+          "Input": "_NormalMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_NormalMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_NormalMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_NormalMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_OutlineMask",
+      "Lanes": [
+        {
+          "Input": "_OutlineMask",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_OutlineMask",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_OutlineMask",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_OutlineMask",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_ParallaxTex",
+      "Lanes": [
+        {
+          "Input": "height",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ParallaxTex_gba",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ParallaxTex_gba",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ParallaxTex_gba",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_PerObjectScreenSpaceShadowmapTexture",
+      "Lanes": [
+        {
+          "Input": "_PerObjectScreenSpaceShadowmapTexture",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_PerObjectScreenSpaceShadowmapTexture",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_PerObjectScreenSpaceShadowmapTexture",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_PerObjectScreenSpaceShadowmapTexture",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_RMOSMap",
+      "Lanes": [
+        {
+          "Input": "roughness",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "metallic",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "ambientOcclusion",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "specularlevel",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_RampMap",
+      "Lanes": [
+        {
+          "Input": "_RampMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_RampMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_RampMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_RampMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_SDFLightmap",
+      "Lanes": [
+        {
+          "Input": "_SDFLightmap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFLightmap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFLightmap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFLightmap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_SDFMask",
+      "Lanes": [
+        {
+          "Input": "_SDFMask",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFMask",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFMask",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SDFMask",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_ScreenSpaceShadowMask",
+      "Lanes": [
+        {
+          "Input": "_ScreenSpaceShadowMask",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ScreenSpaceShadowMask",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ScreenSpaceShadowMask",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ScreenSpaceShadowMask",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_ShadowLutTex",
+      "Lanes": [
+        {
+          "Input": "_ShadowLutTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ShadowLutTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ShadowLutTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_ShadowLutTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_SilkStockingsMask",
+      "Lanes": [
+        {
+          "Input": "_SilkStockingsMask",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SilkStockingsMask",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SilkStockingsMask",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SilkStockingsMask",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_SpecRampMap",
+      "Lanes": [
+        {
+          "Input": "_SpecRampMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SpecRampMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SpecRampMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SpecRampMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_SplitNormalMap",
+      "Lanes": [
+        {
+          "Input": "normal",
+          "Component": 0,
+          "Operation": "repack_normal",
+          "Constant": 0
+        },
+        {
+          "Input": "normal",
+          "Component": 1,
+          "Operation": "repack_normal",
+          "Constant": 0
+        },
+        {
+          "Input": "_SplitNormalMap_ba",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_SplitNormalMap_ba",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": true
+    },
+    {
+      "Source": "_StrokeMap",
+      "Lanes": [
+        {
+          "Input": "_StrokeMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_StrokeMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_StrokeMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_StrokeMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_VFXSpecialBlendTex",
+      "Lanes": [
+        {
+          "Input": "_VFXSpecialBlendTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialBlendTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialBlendTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialBlendTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_VFXSpecialMainTex",
+      "Lanes": [
+        {
+          "Input": "_VFXSpecialMainTex",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialMainTex",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialMainTex",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0
+        },
+        {
+          "Input": "_VFXSpecialMainTex",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0
+        }
+      ],
+      "Reshaped": false
+    }
+  ],
+  "notes": [
+    "外溢分配:ClearCoatMask → user1(按语义名字典序,两侧独立算出同一结果)",
+    "外溢分配:EmissionMask → user2(按语义名字典序,两侧独立算出同一结果)",
+    "_BumpMap:打包覆盖之外的 ba 位 → 余量原样槽位 _BumpMap_ba",
+    "_ClearCoatMask:打包覆盖之外的 gba 位 → 余量原样槽位 _ClearCoatMask_gba",
+    "_ParallaxTex:打包覆盖之外的 gba 位 → 余量原样槽位 _ParallaxTex_gba",
+    "_SplitNormalMap:打包覆盖之外的 ba 位 → 余量原样槽位 _SplitNormalMap_ba",
+    "纹理形参特化:SampleNormal(_BumpMap) → SampleNormal_BumpMap(源纹理已拆进宿主通道,GLSL 无法把它当采样器传参)",
+    "能力 MainLight(GetMainLight/0):@body 兑现(镜像体 + 引擎态)",
+    "能力 ShadowAttenuation(MainLightRealtimeShadow/1):宿主无兑现 → 缺席值 1.0(Identity)",
+    "能力 ScreenSpaceShadowMask(LoadScreenSpaceShadowMask/1):宿主无兑现 → 缺席值 float2(1.0, 1.0)(Identity)",
+    "能力 ScreenDepth(SampleSceneDepth/1):宿主无兑现 → 缺席值 0.0(Declared)",
+    "uniform _BaseMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _BlendTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _DirectionalShadowParams:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _DisturbTex1_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _FurDyeMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _FurMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _LineMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _MainLightLayerMask:uint 引擎位(SP 面板不认 uint、.mat 无 uint 覆写链)→ const 初始化器真值",
+    "uniform _MainTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _MaskTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _NormalMapUseDisturb:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _NormalMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _ParallaxTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _RuriOutlineShellGate:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _StrokeMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _VFXSpecialBlendTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _VFXSpecialMainTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform unity_SpecCube0_HDR:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)"
+  ]
+}

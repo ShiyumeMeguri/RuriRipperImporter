@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "textures": {
+    "_BaseMap": {"role": "base_color"},
+    "_BaseColorMap": {"role": "base_color"},
+    "_BaseColorTex": {"role": "base_color"},
+    "_Albedo": {"role": "base_color"},
+    "_AlbedoMap": {"role": "base_color"},
+    "_DiffuseMap": {"role": "base_color"},
+    "_Diffuse": {"role": "base_color"},
+    "_DiffuseTex": {"role": "base_color"},
+    "_ColorTex": {"role": "base_color"},
+    "_NormalMap": {"role": "normal"},
+    "_NormalTex": {"role": "normal"},
+    "_Normal": {"role": "normal"},
+    "_NormalMap1": {"role": "normal"},
+    "_BumpMap1": {"role": "normal"},
+    "_SplitNormalMap": {"role": "normal", "encoding": "hair_split"},
+    "_EmissiveMap": {"role": "emission"},
+    "_EmissionTex": {"role": "emission"},
+    "_GlowMap": {"role": "emission"},
+    "_MROMap": {"channels": {"metallic": 0, "roughness": 1, "occlusion": 2}}
+  },
+  "colors": {
+    "_BaseColor": "base_color",
+    "_MainColor": "base_color",
+    "_TintColor": "base_color",
+    "_EmissiveColor": "emission"
+  },
+  "floats": {
+    "_Smoothness": "smoothness"
+  }
+}
