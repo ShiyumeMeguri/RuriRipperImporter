@@ -22,6 +22,7 @@ import json
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
@@ -39,11 +40,16 @@ NPCS = datasets.NPCS
 CAST_PANE = "cast"
 STORY_PANE = "story"
 
-# Column labels worth spelling out; anything else reads as its own column name,
-# so a column the hook adds to a cast shows up here with no edit.
-_FIELD_LABELS = {"key": "Id", "display": "Name", "english": "English", "group": "Profession",
-                 "npc": "Npc Id", "template": "Template", "label": "Name", "detail": "Detail",
-                 "also": "Also Worn By", "shipped": "Has A Model"}
+#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with.
+#: The kind is not a column here: this game keeps its two casts in two tables, so
+#: the switch picks the TABLE and the browser narrows nothing.
+CAST = app_cast.Cast(SPEC_KEY, label="label", identifier="key", detail="detail",
+                     group="group", named="display", shipped="shipped",
+                     cap=cabmap_state.LIST_CAP,
+                     labels={"key": "Id", "display": "Name", "english": "English",
+                             "group": "Profession", "npc": "Npc Id", "template": "Template",
+                             "label": "Name", "detail": "Detail", "also": "Also Worn By",
+                             "shipped": "Has A Model"})
 
 #: Loaded row lists, by (kind, language). Module scope, not panel state:
 #: rebuilding the drawn list must not cost a re-read, and a column table is not
@@ -79,7 +85,7 @@ def rows(state):
 
 
 def rebuild(state):
-    """Rebuild the drawn line list.
+    """Rebuild the drawn line list, through the one fill every cast browser uses.
 
     The filter is NOT evaluated here: the search text and the Include/Exclude
     rules go to the same C# engine the bundle browser searches with, over the very
@@ -87,87 +93,17 @@ def rebuild(state):
     vectorized sweep, then the shared rule evaluator). This side receives row ids
     and reads cells."""
     with filtering.rebuilding():
-        _fill(state)
-
-
-def _fill(state):
-    # The selection is the cast member, not the row number: refilling this list
-    # (a keystroke, a rule edit) must not hand the Load button a different one.
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    table = rows(state)
-    if table is None:
-        return
-    matched = cabmap_state.BRIDGE.search_data_table(table, state.search.strip(),
-                                                    state.filter_rules)
-    # A row the game ships no model for gets no Load button, so it is not drawn --
-    # offering one would be a lie. Which rows those are is the cast's own column
-    # (a cast whose every row is loadable has no such column), and the drop happens
-    # here rather than by subsetting the table out from under the search: the row
-    # ids come back against the WHOLE table.
-    labels = table.values("label")
-    groups = table.values("group")
-    shipped = table.values("shipped") if "shipped" in table.names else None
-    # The ones the game actually names come FIRST. A label falls back to the row's
-    # own id when the game names it nothing, and ids are ASCII while the names are
-    # not -- so plain alphabetical order pushed every named npc past 1600 ids, and
-    # the list read as "this game has no localized names at all".
-    named = table.values("display") if "display" in table.names else None
-    order = sorted((int(index) for index in matched if shipped is None or shipped[int(index)]),
-                   key=lambda index: (0 if named is not None and named[index] else 1,
-                                      groups[index], labels[index]))
-    matched_count = len(order)
-    # The whole match set, not a first-N slice: this cast tops out in the low
-    # thousands, so it materializes in one go and the list simply SCROLLS. Cutting
-    # it at a boundary reads as "the game ships no more of these".
-    drawn = [{name: table.cell(index, name) for name in ("key", "label", "detail", "group")}
-             for index in order[:cabmap_state.LIST_CAP]]
-
-    counts = {}
-    for row in drawn:
-        counts[row["group"]] = counts.get(row["group"], 0) + 1
-
-    current_group = None
-    for index, row in enumerate(drawn):
-        if row["group"] and row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.group = current_group
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["label"]
-        entry.key = row["key"]
-        entry.group = row["group"]
-        entry.detail = row["detail"]
-        entry.row_index = index
-    state.status = "{0} of {1} {2} · {3}{4}".format(
-        matched_count, table.row_count, state.kind, language(state),
-        "" if matched_count == len(drawn) else
-        " · showing {0}, narrow your search to see the rest".format(len(drawn)))
-    filtering.restore_selection(state, chosen)
+        app_cast.fill(state, CAST, rows(state),
+                      note="{0} · {1}".format(state.kind, language(state)))
 
 
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return app_cast.selected(state)
 
 
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-ROSTER_ENTRY = Schema("RosterEntry", """One drawn line: either a group header or a
-cast member.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("group", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-    Field("row_index", app_state.INT, -1),
-))
 
 _PANE_ITEMS = (
     (CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
@@ -183,7 +119,7 @@ ROSTER = Schema("Roster", """The cast browser's state.""", (
           update="on_kind_change"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=ROSTER_ENTRY),
+    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
     Field("language", app_state.STRING, ""),
@@ -239,13 +175,9 @@ HANDLERS = app_state.Handlers(
 def _filter_fields():
     """The rule vocabulary = the columns the CURRENTLY loaded roster table has.
     Characters and NPCs are different projections, so their filterable fields
-    genuinely differ -- read off the table, never tabulated.
-
-    The displayed NAME leads, because the first field is the one a new rule starts
-    on. Table order would put the row key first -- column 0 of any projection is
-    its key -- which defaults the filter to an id nobody has memorised."""
+    genuinely differ -- read off the table, never tabulated."""
     if not host_port.bound():
-        return (("label", "Name"),)
+        return CAST.fields(None)
     try:
         table = rows(host_port.current().panel_state(None, STATE))
     except Exception:
@@ -253,11 +185,7 @@ def _filter_fields():
         # is a question its data layer answers by raising; the rule editor is not
         # the place that breaks over it.
         table = None
-    if table is None:
-        return (("label", "Name"),)
-    names = sorted(table.names, key=lambda name: 0 if name == "label" else 1)
-    return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
-                 for name in names)
+    return CAST.fields(table)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -430,18 +358,14 @@ def draw(layout, context):
 
     if state.loading:
         layout.progress(state.progress, state.load_line)
-    head = layout.row(align=True)
-    head.prop(state, "pane", expand=True)
-    head.operator(REFRESH.id, text="", icon="FILE_REFRESH")
-
+    # 页签内的分面是下拉菜单,不是一排按钮:面数随游戏自己的分类走,铺开就把列表挤没了。
+    layout.prop(state, "pane", text="")
     if state.pane == STORY_PANE:
+        layout.operator(REFRESH.id, text="Refresh", icon="FILE_REFRESH")
         return STORY_PANE
 
-    filtering.draw_search_row(layout, state)
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="roster", group_key="is_group",
-                group_column=app_layout.ListColumn("label"))
-    layout.label(text=state.status, icon="INFO")
+    filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
+    app_cast.draw_list(layout, state, _COLUMNS, "roster")
 
     entry = selected(state)
     options = layout.column(align=True)

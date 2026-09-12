@@ -47,6 +47,14 @@ DISPLAY_CAP = 500  # max cabmap rows ever materialized into the browser at once
 # 963 story actors, 509 story units) lands whole and scrolls natively; a list that
 # would exceed it is truncated AND says so, never silently.
 LIST_CAP = 20000
+# What a CAST list may materialize. A build that files every entity a level spawns
+# as cast rows hands over eighteen thousand of them, and materializing that many
+# host list items costs a minute per switch -- the list is not the thing the user
+# reads, the first screenful is, and the kind switch and the search are what get
+# them there. So the cap is the browser's own DISPLAY_CAP reasoning applied one
+# list over: hand back a screenful's worth with room to scroll, and SAY how many
+# matched.
+CAST_CAP = 2000
 SEARCH_DEBOUNCE_SECONDS = 0.25  # the host's own timer applies this
 
 # The CLR session, process-wide and shared by every game's cabmap (its _map is

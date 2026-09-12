@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
@@ -34,13 +35,6 @@ SPEC_KEY = "EXILIUM:character"
 CHARACTERS = datasets.CHARACTERS
 MODELS = datasets.MODELS
 
-# Column labels worth spelling out; anything else reads as its own column name, so
-# a column the hook adds to a cast shows up here with no edit.
-_FIELD_LABELS = {"key": "Id", "label": "Name", "display": "English", "group": "Role",
-                 "detail": "Detail", "character": "Character", "address": "Address",
-                 "container": "Asset", "archives": "Archives", "models": "Outfits",
-                 "shipped": "Downloaded"}
-
 #: Loaded row tables, by (kind, language). Module scope, not panel state:
 #: rebuilding the drawn list must not cost a re-read, and a column table is not
 #: something a host's property system can hold anyway.
@@ -54,16 +48,17 @@ def state_of(context):
 # ---------------------------------------------------------------------------
 # What the panel remembers
 # ---------------------------------------------------------------------------
-ROSTER_ENTRY = Schema("ExiliumRosterEntry", """One drawn line: either a group header
-or a cast member.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("group", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("address", app_state.STRING, ""),
-    Field("shipped", app_state.BOOL, False),
-    Field("is_group", app_state.BOOL, False),
-))
+#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with. The
+#: kind is not a column: this game keeps its two casts in two tables, so the switch
+#: picks the TABLE and the browser narrows nothing.
+CAST = app_cast.Cast(SPEC_KEY, label="label", identifier="key", detail="detail",
+                     group="group", shipped="shipped", payload="address",
+                     cap=cabmap_state.LIST_CAP,
+                     labels={"key": "Id", "label": "Name", "display": "English",
+                             "group": "Role", "detail": "Detail", "character": "Character",
+                             "address": "Address", "container": "Asset",
+                             "archives": "Archives", "models": "Outfits",
+                             "shipped": "Downloaded"})
 
 ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("kind", app_state.ENUM, CHARACTERS, "Cast", update="on_kind_change",
@@ -72,7 +67,7 @@ ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group",
           update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=ROSTER_ENTRY),
+    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
     Field("language", app_state.STRING, ""),
@@ -108,7 +103,7 @@ def _filter_fields():
     casts are different projections, so their filterable fields genuinely differ --
     read off the table, never tabulated."""
     if not host_port.bound():
-        return (("label", "Name"),)
+        return CAST.fields(None)
     try:
         table = rows(state_of(None))
     except Exception:
@@ -116,11 +111,7 @@ def _filter_fields():
         # is a question its data layer answers by raising; the rule editor is not
         # the place that breaks over it.
         table = None
-    if table is None:
-        return (("label", "Name"),)
-    names = sorted(table.names, key=lambda name: 0 if name == "label" else 1)
-    return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
-                 for name in names)
+    return CAST.fields(table)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -147,62 +138,12 @@ def rebuild(state):
     go to the same C# engine the bundle browser searches with, over the very buffers
     this table was built from. This side receives row ids and reads cells."""
     with filtering.rebuilding():
-        _fill(state)
-
-
-def _fill(state):
-    # The selection is the cast member, not the row number: refilling this list
-    # (a keystroke, a rule edit) must not hand the Load button a different one.
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    table = rows(state)
-    if table is None:
-        return
-    matched = cabmap_state.BRIDGE.search_data_table(
-        table, state.search.strip(), state.filter_rules)
-    labels = table.values("label")
-    groups = table.values("group")
-    shipped = table.values("shipped")
-    order = sorted((int(index) for index in matched
-                    if not state.downloaded_only or shipped[int(index)]),
-                   key=lambda index: (groups[index], labels[index]))
-    matched_count = len(order)
-    found = [{name: table.cell(index, name)
-              for name in ("key", "label", "detail", "group", "address", "shipped")}
-             for index in order[:cabmap_state.LIST_CAP]]
-
-    counts = {}
-    for row in found:
-        counts[row["group"]] = counts.get(row["group"], 0) + 1
-
-    current_group = None
-    for row in found:
-        if row["group"] and row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.group = current_group
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["label"]
-        entry.key = row["key"]
-        entry.group = row["group"]
-        entry.detail = row["detail"]
-        entry.address = row["address"]
-        entry.shipped = bool(float(row["shipped"] or 0))
-    state.status = "{0} of {1} {2} · {3}{4}".format(
-        matched_count, table.row_count, state.kind, language(state),
-        "" if matched_count == len(found) else
-        " · showing {0}, narrow your search to see the rest".format(len(found)))
-    filtering.restore_selection(state, chosen)
+        app_cast.fill(state, CAST, rows(state), note=state.kind,
+                      shipped_only=state.downloaded_only)
 
 
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return app_cast.selected(state)
 
 
 # ---------------------------------------------------------------------------
@@ -374,15 +315,11 @@ def draw(layout, context):
     state = state_of(context)
 
     command.draw_progress(layout, state)
-    head = layout.row(align=True)
-    head.prop(state, "kind", expand=True)
-    head.operator(REFRESH.id, text="", icon="FILE_REFRESH")
-
-    filtering.draw_search_row(layout, state)
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="exilium_roster", group_key="is_group",
-                group_column=_GROUP_COLUMN)
-    layout.label(text=state.status, icon="INFO")
+    # 分面是下拉菜单,不是一排按钮 —— 每个游戏的分面数不同,铺开就把列表挤没了。
+    layout.prop(state, "kind", text="")
+    filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
+    app_cast.draw_list(layout, state, _COLUMNS, "exilium_roster",
+                       group_column=_GROUP_COLUMN)
 
     entry = selected(state)
     options = layout.column(align=True)

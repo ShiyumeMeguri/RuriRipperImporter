@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
@@ -68,18 +69,17 @@ def state_of(context):
 # ---------------------------------------------------------------------------
 # What the panel remembers
 # ---------------------------------------------------------------------------
-CAST_ENTRY = Schema("IllusionCastEntry", """One drawn line of the cast list.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
+#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with. A
+#: card is CALLED by whichever of three columns the game filled in, so the label is
+#: stated as that chain rather than as one column that is often empty.
+CAST = app_cast.Cast(SPEC_KEY, label=("name", "file", "path"), identifier="path",
+                     detail="file", group="folder")
 
 CHARA = Schema("IllusionChara", """The character tab's own state.""", (
     Field("section", app_state.ENUM, MODEL_SECTION, "Section", items="section_items"),
     Field("search", app_state.STRING, "", "Filter", "Filter by name, file or folder",
           update="on_cast_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=CAST_ENTRY),
+    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Refresh to read the game's characters."),
     Field("coordinate", app_state.ENUM, "0", "Outfit",
@@ -131,11 +131,7 @@ FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
 # The rows
 # ---------------------------------------------------------------------------
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return app_cast.selected(state)
 
 
 def selected_card(state):
@@ -168,37 +164,13 @@ def wanted_plan(state):
 
 def rebuild(state):
     with filtering.rebuilding():
-        _fill(state)
-
-
-def _fill(state):
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    matched, table = datasets.search(datasets.CAST, {}, state.search.strip(),
-                                     state.filter_rules)
-    if table is None:
-        state.status = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
-        return
-    rows = [{name: table.cell(index, name) for name in table.names} for index in matched]
-    rows.sort(key=lambda row: (row.get("folder", ""), row.get("name", "")))
-
-    counts = {}
-    for row in rows:
-        counts[row.get("folder", "")] = counts.get(row.get("folder", ""), 0) + 1
-    current = None
-    for row in rows:
-        folder = row.get("folder", "")
-        if folder and folder != current:
-            current = folder
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(folder, counts[folder])
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row.get("name") or row.get("file") or row.get("path", "")
-        entry.key = row.get("path", "")
-        entry.detail = row.get("file", "")
-    state.status = "{0} of {1} character(s).".format(len(rows), len(table))
-    filtering.restore_selection(state, chosen)
+        matched, table = datasets.search(datasets.CAST, {}, state.search.strip(),
+                                         state.filter_rules)
+        if table is None:
+            state.entries.clear()
+            state.status = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
+            return
+        app_cast.fill(state, CAST, table, matched=matched)
 
 
 def personality_of(state):
@@ -342,10 +314,8 @@ def draw_model(layout, context):
     state = state_of(context)
     command.draw_progress(layout, state)
     filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="illusion_cast", group_key="is_group",
-                group_column=_GROUP_COLUMN)
-    layout.label(text=state.status, icon="INFO")
+    app_cast.draw_list(layout, state, _COLUMNS, "illusion_cast",
+                       group_column=_GROUP_COLUMN)
 
     card = selected_card(state)
     options = layout.column(align=True)
@@ -373,7 +343,8 @@ def draw_model(layout, context):
 def draw_tab(layout, context):
     """The Character tab: pick a section this host can offer, then draw it."""
     state = state_of(context)
-    layout.row(align=True).prop(state, "section", expand=True)
+    # 分面是下拉菜单 —— 与其他游戏的同一条 UX。
+    layout.prop(state, "section", text="")
     if state.section == MODEL_SECTION:
         draw_model(layout, context)
         return

@@ -40,13 +40,15 @@ def archives():
     return _rows(ARCHIVES)
 
 
-def characters():
-    """Every character model the install ships: the package's own name, the package, and the
-    folder it sits in. Read off the cabmap, so it answers for a build that publishes no
-    reflection schema."""
+def cast():
+    """The cast this install ships, as the COLUMN TABLE the decoder built.
+
+    Not rows of dicts: the shared cast browser searches and filters it through the
+    same C# engine every other list here uses, over the very buffers the table was
+    built from, so a cast of eighteen thousand narrows as fast as one of fifty."""
     if cabmap_state.BRIDGE is None:
-        return []
-    return _rows(CHARACTERS)
+        return None
+    return cabmap_state.BRIDGE.game_data(CHARACTERS)
 
 
 def shaders(package, output):
