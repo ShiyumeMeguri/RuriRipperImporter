@@ -70,14 +70,8 @@ def state_of(context):
 #: itself, where the hook builds the cast.
 BOUND = app_view.Bound(SPEC_KEY)
 
-CHARA = Schema("IllusionChara", """The character tab's own state.""", (
-    Field("facet", app_state.ENUM, None, "Kind", "Which of the game's own kinds to list",
-          items="facet_items", update="on_filter_edit"),
-    Field("search", app_state.STRING, "", "Filter", "Filter by name, file or folder",
-          update="on_filter_edit", live=True),
-    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
-    Field("active_index", app_state.INT, 0),
-    Field("status", app_state.STRING, ""),
+CHARA = Schema("IllusionChara", """What this family's cast tab remembers beyond
+the shared record: which outfit to build her in, and which families of pieces.""", (
     Field("coordinate", app_state.ENUM, "0", "Outfit",
           "Which of the character's seven outfits to build",
           items=tuple((str(index), name, "The character's {0} outfit".format(name))
@@ -157,6 +151,7 @@ def _refresh(context, arguments):
         state.status = "{0}: {1}".format(type(exc).__name__, exc)
         return {"CANCELLED"}
     rebuild(state)
+    cast_panel.opened(BOUND, state)
     return None
 
 
@@ -302,11 +297,10 @@ def _draw_catalog(layout, context):
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "illusion_cast", REFRESH.id, state_of, STATE, seeds=_seeds,
     group_column=_GROUP_COLUMN, options=_options, actions=(BUILD.id,),
-    animations=(cast_panel.ENGINE_CLIPS,
-                cast_panel.Source("catalog", "Catalog",
+    animations=(cast_panel.Source("catalog", "Catalog",
                                   "Every animation the studio catalogs, under its own "
                                   "names -- an H act as two partners side by side",
-                                  _draw_catalog)))
+                                  _draw_catalog),))
 
 
 def draw_tab(layout, context):

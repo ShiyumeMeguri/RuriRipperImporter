@@ -23,9 +23,8 @@ from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
-from ...Kernel.app import state as app_state
 from ...Kernel.app import view as app_view
-from ...Kernel.app.state import Field, Schema
+from ...Kernel.app.state import Schema
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unreal import direct
 from . import datasets, read
@@ -51,17 +50,10 @@ def table():
     return _TABLE[0]
 
 
-CHARACTERS = Schema("UnrealCharacters", """The Characters tab's own state: the cut the
-list is asked for, and the seats it is drawn in.""", (
-    Field("facet", app_state.ENUM, None, "Kind",
-          "Which of the kinds this install files its cast under to list",
-          items="facet_items", update="on_filter_edit"),
-    Field("search", app_state.STRING, "", "Filter",
-          "Filter by name, id, kind or type", update="on_filter_edit", live=True),
-    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
-    Field("active_index", app_state.INT, 0),
-    Field("status", app_state.STRING, ""),
-), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
+CHARACTERS = Schema("UnrealCharacters", """This engine's cast tab states nothing
+of its own: what a row is, and everything drawn around it, is the shared record.""",
+                    (), include=(schemas.FILTER_STATE, schemas.LOADING_STATE,
+                                 cast_panel.CAST_STATE))
 
 
 def rebuild(state):
@@ -111,6 +103,7 @@ def _refresh(context, arguments):
         return {"CANCELLED"}
     state.status = ""
     rebuild(state)
+    cast_panel.opened(BOUND, state)
     return None
 
 
@@ -195,9 +188,7 @@ PANEL = cast_panel.Panel(
     # 这套引擎把表情记在网格自己的 morph 列表里,不是 Unity 的混合形状 —— 问的是同一个
     # 问题,所以画在同一格里,只是换成这个解码器说它的那份数据集。
     face_dataset=("unreal.morphtargets", "packages"),
-    # 动画序列住在独立的包里,而角色的包并不引用它们:这套引擎里「这一位的动画」
-    # 还没有真源可问,所以这格不开,而不是开一格空的。
-    animations=())
+)
 
 
 def draw(layout, context):

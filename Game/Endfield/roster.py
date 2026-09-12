@@ -96,15 +96,9 @@ def rebuild(state):
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-ROSTER = Schema("Roster", """The cast browser's state.""", (
-    Field("facet", app_state.ENUM, None, "Kind",
-          "Which of the game's own kinds to list", items="facet_items",
-          update="on_filter_edit"),
-    Field("search", app_state.STRING, "", "Filter",
-          "Filter by displayed name, id or group", update="on_filter_edit", live=True),
-    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
-    Field("active_index", app_state.INT, 0),
-    Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
+ROSTER = Schema("Roster", """What this game's cast tab remembers beyond the
+shared record: which language it read the names in, and whether Load brings the
+expression library with the model.""", (
     Field("language", app_state.STRING, ""),
     Field("load_expressions", app_state.BOOL, False, "Expressions",
           "Also load this character's SkeletalMorph expression library. Off by "
@@ -153,20 +147,36 @@ def _seeds(context, state):
     return list(packages.cabs) if packages is not None else []
 
 
-def _anim_seeds(context, state):
-    """Where this one's animations ALSO live.
+def _animation_rules(context, state):
+    """Where this one's animations live, as a query for the bundle browser.
 
-    A character prefab names its animator, but the body animation library is a
-    folder of its own the prefab never references -- and for a character that
-    ships none, the shared library of its body type is what it actually plays.
-    Both are facts this game states (``animation_anchor``), handed over as seeds
-    so the one engine reader files those clips under whatever names them."""
+    Anchored on the container path, not the name: the id also keys thousands of
+    per-line dialogue morph clips, and a name search buries the body animation
+    library under them. Falls back to the body-type group's shared library when
+    this one ships no animation folder of its own -- said out loud rather than
+    substituted silently, because "these are not hers" matters.
+
+    The rules are an Include SET (all must hold -- the rule editor's AND); the
+    search box is left empty on purpose, for the user to narrow on top."""
     entry = BOUND.picked(state)
     if entry is None:
-        return []
+        return None
     kind = entry.cell("kind")
-    return datasets.animation_cabs(
-        entry.key, NPCS if kind == NPCS else CHARACTERS)
+    found = datasets.animation_anchor(entry.key, NPCS if kind == NPCS else CHARACTERS)
+    if found is None:
+        return None
+    rules = [
+        {"field": "container", "relation": "contains", "value": found["anchor"],
+         "action": "include"},
+        {"field": "type_names", "relation": "contains", "value": "AnimationClip",
+         "action": "include"},
+    ]
+    said = (
+        "'{0}' ships no animations of its own; showing the {1} body-type library it "
+        "actually plays ({2} rows).".format(entry.label, found["group"], found["hits"])
+        if found["group"] else
+        "{0}: {1} animation rows.".format(entry.label, found["hits"]))
+    return rules, said
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +202,7 @@ def _refresh(context, arguments):
         return {"CANCELLED"}
     _ROWS[tongue] = table
     rebuild(state)
+    cast_panel.opened(BOUND, state)
     return None
 
 
@@ -312,14 +323,14 @@ def _draw_library(layout, context):
 
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "roster", REFRESH.id, state_of, STATE, seeds=_seeds,
-    anim_seeds=_anim_seeds, options=_options, actions=(LOAD.id, REVEAL.id),
+    animation_rules=_animation_rules, options=_options, actions=(LOAD.id, REVEAL.id),
+    facet=CHARACTERS,
     # 这个游戏自己写下来的两份目录,与引擎自己答得出的那两份并列在同一格里 ——
     # 「统一」不是把它们摊平成一份,是它们在同一个地方,并说清各自出自哪儿。
-    animations=(cast_panel.ENGINE_CLIPS,
-                cast_panel.Source("story", "Story",
+    animations=(cast_panel.Source("story", "Story",
                                   "The animations story playback uses, under the game's "
                                   "own filing -- a cutscene by shot, a dialogue by line",
-                                  _draw_story)),
+                                  _draw_story),),
     expressions=(cast_panel.ENGINE_SHAPES,
                  cast_panel.Source("library", "Library",
                                    "The game's own SkeletalMorph emotion/pose/lipsync "

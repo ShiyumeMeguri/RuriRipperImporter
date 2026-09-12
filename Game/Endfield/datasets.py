@@ -41,11 +41,6 @@ NAMED = "endfield.asset.named"
 RANK = "endfield.asset.rank"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
-
-#: The core reader every decoder publishes: addressable paths of the loaded map
-#: matching a query and a set of rules. Named here because this game asks it one
-#: question of its own -- which archives an animation folder turned out to be.
-SELECTION = "core.select"
 MORPH_LIBRARY = "endfield.morph.library"
 MORPH_ASSETS = "endfield.morph.assets"
 MORPH_DRIVERS = "endfield.morph.drivers"
@@ -373,24 +368,6 @@ def animation_anchor(name, cast):
         return None
     row = rows[0]
     return {"anchor": row["anchor"], "hits": _int(row["hits"]), "group": row["group"]}
-
-
-def animation_cabs(name, cast):
-    """The archives this one's body animations live in.
-
-    A character prefab names its animator, but this game files the body animation
-    library in a folder of its own that the prefab never references -- so asking
-    the prefab's closure alone answers with the handful of clips wired into the
-    controller and none of the library. This is what the game itself states about
-    where that library is, as ARCHIVE NAMES: seeds for the one engine reader, not
-    a second list with a second loader."""
-    found = animation_anchor(name, cast)
-    if found is None:
-        return []
-    return list(dict.fromkeys(
-        row["cab"] for row in _rows(SELECTION, query=found["anchor"],
-                                    rule=["type_names|contains|AnimationClip"])
-        if row["cab"]))
 
 
 # ── the facial morph library ────────────────────────────────────────────────

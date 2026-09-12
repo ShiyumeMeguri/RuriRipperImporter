@@ -1,37 +1,40 @@
-"""ONE cast panel, for every game that lets you pick somebody and bring them in.
+"""ONE actor panel, for every game that lets you pick somebody and bring them in.
 
 Every game's cast tab is the same shape and used to be drawn four times: a
-progress line, the facet switch and the search row, the list, what it came to,
+progress line, the kind switch and the search row, the list, what it came to,
 the game's own options, the shared import options, then the buttons. What differs
 is never the SHAPE -- it is what a button DOES, and that is the game's own answer
 because only it knows what a row is made of.
 
 So the shape is here and stated once, and a game fills the slots:
 
-``options``   its own toggles under the list (an outfit, a model family, a part)
-``actions``   its own buttons (Import, Load, Build -- whatever it calls it)
-``seeds``     what the picked row IS, as archive names, for the buttons BELOW that
-              every game shares
+``options``          its own toggles under the list (an outfit, a model family)
+``actions``          its own buttons (Import, Load, Build -- whatever it calls it)
+``seeds``            what the picked row IS, as archive names
+``animation_rules``  where the picked row's animations live, as a browser query
+``animations`` /
+``expressions``      what the Anim and Face panes list from
 
-That last one is the whole trick. A shared button cannot know how a row resolves
--- one game's row is a package path, another's is a template id joined through
-three tables -- but every game can answer "what archives is this one made of",
-and every shared button is a question asked of exactly that. Three are asked of
-it here: the shaders the row shades with, the animations it plays, and the
-expression vocabulary its meshes were built with -- all three read out of the
-SAME dependency closure an import of that row would load, and all three answered
-by the engine rather than by a title's own filing, so a title that never wrote a
-catalog still answers.
+``seeds`` is the trick. A shared button cannot know how a row resolves -- one
+game's row is a package path, another's is a template id joined through three
+tables -- but every game can answer "what archives is this one made of", and two
+shared buttons are questions asked of exactly that: the shaders the row shades
+with, and the expression vocabulary its meshes were built with. Both read the
+SAME dependency closure an import of that row would load.
 
-A title that DID write one adds it as another SOURCE beside the engine's, inside
-the same pane (``animations`` / ``expressions``). That is the difference between
-"unified" and "flattened": one Anim pane, one Face pane, and inside each, a
-switch naming where the rows came from.
+ANIMATIONS are not one of them, deliberately. Asking the build what a row plays
+means loading the closure of every archive those clips live in -- hundreds, for
+one character -- to produce names the loaded map already carries. So the third
+button hands the bundle browser the game's own query and goes there: a search,
+not a load. What a game DID write down itself (a story filing, a studio catalog)
+stays a SOURCE in the Anim pane, because that costs a config read.
 
 Nothing here imports a host.
 """
 
 from __future__ import annotations
+
+import json
 
 from . import command as app_command
 from . import filtering
@@ -45,7 +48,11 @@ from ...RuriRipperPyBridge.session import cabmap_state
 #: The panes every cast tab has. A game's own pane is not one of these -- it is a
 #: SOURCE inside one of them, because "where do these animations come from" is a
 #: question about rows and not a second place to look for animations.
-CAST = "cast"
+#:
+#: The first one is called Actor because that is what a row IS: somebody the game
+#: puts on screen. "Cast" named the LIST, which is the one thing the pane switch
+#: does not need to say.
+ACTOR = "actor"
 ANIM = "anim"
 FACE = "face"
 
@@ -54,20 +61,34 @@ FACE = "face"
 #: beside its own.
 ENGINE = "engine"
 
-#: The datasets that answer it, and the argument each takes the selection in.
+#: The dataset that answers it, and the argument it takes the selection in.
 #: Published by the decoder for every Unity build, which is why no Unity game
-#: module states either. An engine whose decoder words it differently says so on
-#: its own panel (``anim_dataset`` / ``face_dataset``) -- the QUESTION is the same
-#: one and so is everything drawn around the answer.
-ANIMATIONS_DATASET = ("unity.animations", "cab")
+#: module states it. An engine whose decoder words it differently says so on its
+#: own panel (``face_dataset``) -- the QUESTION is the same one and so is
+#: everything drawn around the answer.
 BLEND_SHAPES_DATASET = ("unity.blendshapes", "cab")
 
-#: What a cast panel remembers beyond its cast list. Included by each game's own
-#: schema, so the shared panes below have somewhere to put their answer without
-#: every game restating the fields.
+#: What a cast panel remembers -- ALL of it, the Actor list included. Every game's
+#: schema includes this and adds only what is its own (an outfit, a model family,
+#: a language), because five fields called facet/search/rows/active_index/status
+#: written four times is four chances for them to drift.
 CAST_STATE = Schema("CastState", """The cast panel's shared state.""", (
-    Field("pane", app_state.ENUM, CAST, "Pane", "Which part of this tab to show",
+    Field("pane", app_state.ENUM, ACTOR, "Pane", "Which part of this tab to show",
           items="cast_panes", update="on_cast_pane"),
+
+    Field("facet", app_state.ENUM, None, "Kind",
+          "Which of the game's own kinds to list", items="facet_items",
+          update="on_cast_facet"),
+    Field("search", app_state.STRING, "", "Filter",
+          "Filter by displayed name, id or group", update="on_filter_edit", live=True),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
+    Field("active_index", app_state.INT, 0),
+    Field("status", app_state.STRING, ""),
+    #: Whether the KIND switch is the user's choice yet. Until it is, a re-read
+    #: opens on the kind the panel says to open on -- after it is, a re-read must
+    #: not move the user off what they picked.
+    Field("facet_picked", app_state.BOOL, False),
+
     Field("shader_output", app_state.STRING, "", "Shader Folder",
           "Where Decompile Shaders writes the source it reads out of this row",
           subtype=app_state.DIRECTORY),
@@ -75,13 +96,6 @@ CAST_STATE = Schema("CastState", """The cast panel's shared state.""", (
     Field("anim_source", app_state.ENUM, None, "From",
           "Where these animations are listed from", items="cast_anim_sources",
           update="on_cast_anim_source"),
-    Field("anim_facet", app_state.ENUM, None, "Played By",
-          "Narrow to the animations one player names", items="cast_anim_facets",
-          update="on_cast_anim_edit"),
-    Field("anim_search", app_state.STRING, "", "Filter",
-          "Filter by clip name or what plays it", update="on_cast_anim_edit", live=True),
-    Field("anim_rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
-    Field("anim_index", app_state.INT, 0),
 
     Field("face_source", app_state.ENUM, None, "From",
           "Where these expressions are listed from", items="cast_face_sources",
@@ -102,12 +116,10 @@ CAST_STATE = Schema("CastState", """The cast panel's shared state.""", (
 #: WHICH panel pressed it rather than guessing from whatever tab is on screen.
 PANELS = {}
 
-#: Panel key -> the two lists the shared panes draw, and the archive names they
-#: were last read for. Not panel state: a column table is not something a host's
-#: property system can hold, and re-reading one to redraw it would cost a closure
-#: load per keystroke.
+#: Panel key -> the list the Face pane draws. Not panel state: a column table is
+#: not something a host's property system can hold, and re-reading one to redraw
+#: it would cost a closure load per keystroke.
 _LISTS = {}
-_SEEDS = {}
 
 
 class Source:
@@ -130,10 +142,14 @@ class Source:
         return (self.id, self.label, self.description)
 
 
-#: The engine's own sources, named once. A game states them in its own list when
-#: it also has sources of its own; a game that says nothing gets exactly these.
-ENGINE_CLIPS = Source(ENGINE, "This One",
-                      "Every animation this one's own animator plays, read out of the build")
+#: The engine's own source, named once. A game states it in its own list when it
+#: also has sources of its own; a game that says nothing gets exactly this.
+#:
+#: There is no such source for ANIMATIONS on purpose. Asking the build "what does
+#: this one play" means loading the closure of every archive its clips live in --
+#: two hundred archives for one character -- to list names the cabmap already
+#: holds. So animations are FOUND, not listed: the button hands the bundle browser
+#: this one's own query and goes there (``animation_rules``).
 ENGINE_SHAPES = Source(ENGINE, "This One",
                        "Every named blend shape this one's meshes carry, read out of the build")
 
@@ -143,13 +159,12 @@ class Panel:
 
     __slots__ = ("bound", "columns", "identifier", "refresh", "group_column", "rows",
                  "options", "actions", "seeds", "shaders", "state_for", "state_name",
-                 "animations", "expressions", "anim_seeds", "anim_dataset", "face_dataset")
+                 "animations", "expressions", "animation_rules", "face_dataset", "facet")
 
     def __init__(self, bound, columns, identifier, refresh, state_for, state_name,
                  seeds=None, group_column=None, rows=10, options=None, actions=(),
-                 shaders=None, animations=(ENGINE_CLIPS,), expressions=(ENGINE_SHAPES,),
-                 anim_seeds=None, anim_dataset=ANIMATIONS_DATASET,
-                 face_dataset=BLEND_SHAPES_DATASET):
+                 shaders=None, animations=(), expressions=(ENGINE_SHAPES,),
+                 animation_rules=None, face_dataset=BLEND_SHAPES_DATASET, facet=""):
         self.bound = bound
         #: The panel state a shared button writes its progress and status into.
         self.state_name = state_name
@@ -172,20 +187,21 @@ class Panel:
         #: shared with everything else the build cooked, so that title answers this
         #: itself. Every Unity title leaves it alone and gets the shared reader.
         self.shaders = shaders
-        #: Where the Anim and Face panes list from. The engine's own answer unless
-        #: the game says otherwise, and a game with a catalog of its own states
-        #: both rather than choosing.
+        #: Where the Anim and Face panes list from. Animations: only what this game
+        #: states itself (a story filing, a studio catalog) -- there is no engine
+        #: answer, see ENGINE_SHAPES. Expressions: the engine's, unless the game
+        #: says otherwise, and a game with a catalog of its own states both.
         self.animations = tuple(animations)
         self.expressions = tuple(expressions)
-        #: (context, state) -> the archives this row's animations ALSO live in.
-        #: A build that files a character's clips in a folder its prefab never
-        #: references answers here -- with SEEDS, not with a second list: the one
-        #: engine reader then files those clips under whatever names them, and the
-        #: one loader still loads them by asset key.
-        self.anim_seeds = anim_seeds
+        #: (context, state) -> (rules, said) for the bundle browser, or None when
+        #: this game cannot say where a row's animations live. The ONE animation
+        #: button: it hands the browser this one's own query and goes there, which
+        #: costs a cabmap search rather than a closure load.
+        self.animation_rules = animation_rules
         #: WHICH dataset the engine source asks, and what it calls the selection.
-        self.anim_dataset = anim_dataset
         self.face_dataset = face_dataset
+        #: The kind this list opens on before the user has picked one.
+        self.facet = facet
         PANELS[bound.key] = self
 
     def picked(self, context):
@@ -193,14 +209,6 @@ class Panel:
 
     def seeds_of(self, context, state):
         return list(self.seeds(context, state)) if self.seeds is not None else []
-
-    def anim_seeds_of(self, context, state):
-        found = list(self.seeds_of(context, state))
-        if self.anim_seeds is not None:
-            for cab in self.anim_seeds(context, state):
-                if cab not in found:
-                    found.append(cab)
-        return found
 
     def sources(self, pane):
         return self.animations if pane == ANIM else self.expressions
@@ -213,31 +221,19 @@ class Panel:
 
 
 # ---------------------------------------------------------------------------
-# The two lists the shared panes draw
+# The list the Face pane draws
 # ---------------------------------------------------------------------------
-def anim_bound(bound):
-    """This panel's animation list. Its own seats, its own search, its own facet:
-    a second list in a tab is a second list, not the first one reused."""
-    return _list_of(bound, ANIM, "anim_rows", "anim_index", "anim_search", "anim_facet")
-
-
 def face_bound(bound):
-    return _list_of(bound, FACE, "face_rows", "face_index", "face_search", "face_facet")
-
-
-def _list_of(bound, pane, seats, index, search, facet):
-    made = _LISTS.get((bound.key, pane))
+    """This panel's expression list. Its own seats, its own search, its own facet:
+    a second list in a tab is a second list, not the first one reused."""
+    made = _LISTS.get((bound.key, FACE))
     if made is None:
-        # The rule editor is the TAB's, spent on the cast list; a second list says
+        # The rule editor is the TAB's, spent on the actor list; a second list says
         # so rather than silently inheriting rules naming columns it does not have.
-        made = _LISTS[(bound.key, pane)] = app_view.Bound(
-            bound.key + ":" + pane, seats=seats, index=index, search=search,
-            facet=facet, rules="")
+        made = _LISTS[(bound.key, FACE)] = app_view.Bound(
+            bound.key + ":" + FACE, seats="face_rows", index="face_index",
+            search="face_search", facet="face_facet", rules="")
     return made
-
-
-def _bound_for(panel, pane):
-    return anim_bound(panel.bound) if pane == ANIM else face_bound(panel.bound)
 
 
 # ---------------------------------------------------------------------------
@@ -294,86 +290,51 @@ def _read_shaders(context, arguments):
         entry.label, 0 if found is None else found.row_count, output)
 
 
-def _read_engine(context, panel, pane):
-    """Read one of the engine's own answers about the picked row, then seat it.
+def _find_animations(context, arguments):
+    """Show this one's animations in the bundle browser.
 
-    The two are the same act asked of the same seeds -- which archives this row IS
-    -- so they are one body with the dataset as its argument rather than two that
-    drift."""
+    Not a list of its own: which archives a row's clips live in is a QUERY over the
+    loaded map, which the browser already runs, already draws and already lets the
+    user narrow further. The game says what to ask; the browser answers."""
+    panel = _panel(arguments)
+    if panel is None or panel.animation_rules is None:
+        return {"CANCELLED"}
     state = panel.state_for(context)
     entry = panel.bound.picked(state)
     if entry is None:
         return {"CANCELLED"}
-    seeds = (panel.anim_seeds_of(context, state) if pane == ANIM
-             else panel.seeds_of(context, state))
-    if not seeds:
-        state.status = "{0}: this install ships nothing for that row.".format(entry.label)
+    asked = panel.animation_rules(context, state)
+    if asked is None:
+        state.status = "No animation folder for '{0}' in the loaded map.".format(entry.label)
         return {"CANCELLED"}
-    dataset, argument = panel.anim_dataset if pane == ANIM else panel.face_dataset
-    table = yield app_command.Read(
-        lambda: cabmap_state.BRIDGE.game_data(dataset, **{argument: seeds}), 0.8)
-    _SEEDS[(panel.bound.key, pane)] = seeds
-    bound = _bound_for(panel, pane)
-    with filtering.rebuilding():
-        bound.open(table, state, note=entry.label)
-    state.pane = pane
-    setattr(state, "anim_source" if pane == ANIM else "face_source", ENGINE)
-    state.status = "{0}: {1}".format(entry.label, bound.summary)
-
-
-def _read_animations(context, arguments):
-    panel = _panel(arguments)
-    if panel is None:
-        return {"CANCELLED"}
-    return (yield from _read_engine(context, panel, ANIM))
+    rules, said = asked
+    state.status = said
+    return app_command.COMMANDS.get("ruri.cabmap_show_rules").run(
+        context, {"rules": json.dumps(list(rules))})
 
 
 def _read_expressions(context, arguments):
-    panel = _panel(arguments)
-    if panel is None:
-        return {"CANCELLED"}
-    return (yield from _read_engine(context, panel, FACE))
-
-
-def _load_clip(context, arguments):
-    """Build the picked clip onto the rig in front of the user.
-
-    Exported by its own asset key out of the very closure the list was read from,
-    so loading ONE clip out of a two-thousand-clip library costs one clip's
-    serialization rather than the library's."""
+    """Read what the build says this row's meshes were shaped with, then seat it."""
     panel = _panel(arguments)
     if panel is None:
         return {"CANCELLED"}
     state = panel.state_for(context)
-    host = host_port.current()
-    if host.selected_rig(context) is None:
-        state.status = "Select the rig to put it on first."
-        return {"CANCELLED"}
-    bound = anim_bound(panel.bound)
-    entry = bound.picked(state)
+    entry = panel.bound.picked(state)
     if entry is None:
         return {"CANCELLED"}
-    seeds = _SEEDS.get((panel.bound.key, ANIM)) or panel.anim_seeds_of(context, state)
-    bridge = cabmap_state.BRIDGE
-    key = entry.payload
-    assets = yield app_command.Read(
-        lambda: bridge.import_cabs(seeds, export_asset_keys=[key])[0], 0.7)
-    guids = sorted(bridge.clip_guid_by_key.values())
-    if not guids:
-        state.status = "'{0}' exported no animation.".format(entry.label)
+    seeds = panel.seeds_of(context, state)
+    if not seeds:
+        state.status = "{0}: this install ships nothing for that row.".format(entry.label)
         return {"CANCELLED"}
-    from ...RuriRipperPyBridge.unity import bridge_asset_db
-    database = bridge_asset_db.BridgeAssetDatabase(
-        assets, clip_curve_blobs=bridge.clip_curves_by_guid,
-        asset_paths=bridge.asset_paths_by_guid,
-        texture_srgb=bridge.texture_srgb_by_guid)
-    yield app_command.Mark(0.85)
-    from . import browser as app_browser
-    built, lines = host.import_clips(
-        context, entry.cell("cab"), guids, database,
-        app_browser.as_options(app_browser.state_of(context)),
-        display_names={guid: entry.label for guid in guids}, activate=True)
-    state.status = "  ".join(["{0}: {1} action(s).".format(entry.label, built)] + lines[:2])
+    dataset, argument = panel.face_dataset
+    table = yield app_command.Read(
+        lambda: cabmap_state.BRIDGE.game_data(dataset, **{argument: seeds}), 0.8)
+    bound = face_bound(panel.bound)
+    with filtering.rebuilding():
+        bound.open(table, state, note=entry.label)
+    state.pane = FACE
+    state.face_source = ENGINE
+    state.status = "{0}: {1}".format(entry.label, bound.summary)
 
 
 def _drive_face(context, arguments):
@@ -436,11 +397,9 @@ SHADERS = app_command.COMMANDS.define(
     status_state=_status_state, arguments=PANEL_ARGUMENT)
 
 ANIMATIONS = app_command.COMMANDS.define(
-    "ruri.cast_animations", "Find Animations", _read_animations,
-    description="List every animation the selected row's own animator plays, in the Anim pane",
-    icon="ANIM_DATA", poll=_picked_anything, steps=True,
-    failure="Reading this one's animations failed",
-    status_state=_status_state, arguments=PANEL_ARGUMENT)
+    "ruri.cast_animations", "Find Animations", _find_animations,
+    description="Show the selected one's animations in the bundle browser",
+    icon="ANIM_DATA", poll=_picked_anything, arguments=PANEL_ARGUMENT)
 
 EXPRESSIONS = app_command.COMMANDS.define(
     "ruri.cast_expressions", "Find Expressions", _read_expressions,
@@ -448,13 +407,6 @@ EXPRESSIONS = app_command.COMMANDS.define(
     icon="SHAPEKEY_DATA", poll=_picked_anything, steps=True,
     requires=host_port.MORPH_TARGETS,
     failure="Reading this one's expressions failed",
-    status_state=_status_state, arguments=PANEL_ARGUMENT)
-
-LOAD_CLIP = app_command.COMMANDS.define(
-    "ruri.cast_load_clip", "Load Clip", _load_clip,
-    description="Build the selected animation onto the rig in front of you",
-    icon="ANIM_DATA", poll=_picked_anything, steps=True,
-    requires=host_port.ANIMATION, failure="Loading this animation failed",
     status_state=_status_state, arguments=PANEL_ARGUMENT)
 
 DRIVE_FACE = app_command.COMMANDS.define(
@@ -483,7 +435,7 @@ def handlers(bound, owner, rebuild, **extra):
 
     def cast_panes(state, context):
         panel = PANELS.get(bound.key)
-        made = [(CAST, "Cast", "Everyone this game ships a model for")]
+        made = [(ACTOR, "Actor", "Everyone this game ships a model for")]
         if panel is not None and panel.animations and host_port.supports(host_port.ANIMATION):
             made.append((ANIM, "Anim", "The animations the selected one plays"))
         if panel is not None and panel.expressions and host_port.supports(host_port.MORPH_TARGETS):
@@ -505,14 +457,8 @@ def handlers(bound, owner, rebuild, **extra):
     def cast_face_sources(state, context):
         return sources_of(FACE) or [(ENGINE, "This One", "")]
 
-    def cast_anim_facets(state, context):
-        return anim_bound(bound).facet_choices(state, context)
-
     def cast_face_facets(state, context):
         return face_bound(bound).facet_choices(state, context)
-
-    def cast_anim_edit(state, context):
-        _reopen(anim_bound(bound), state)
 
     def cast_face_edit(state, context):
         _reopen(face_bound(bound), state)
@@ -521,21 +467,54 @@ def handlers(bound, owner, rebuild, **extra):
         """Switching source switches which rows are on screen; the source draws
         its own body, so nothing is re-read here."""
 
+    def on_cast_facet(state, context):
+        """Picking a kind is the user's statement about which kind they want, and
+        it outlives the next re-read. It has its own handler for exactly that: the
+        search box shares the rebuild but says nothing about kinds."""
+        if not _OPENING[0]:
+            state.facet_picked = True
+        rebuild(state)
+
     return app_state.Handlers(
         owner, base=filtering.HANDLERS,
+        on_cast_facet=on_cast_facet,
         facet_items=lambda state, context: bound.facet_choices(state, context),
         on_filter_edit=lambda state, context: rebuild(state),
         cast_panes=cast_panes,
         on_cast_pane=on_cast_pane,
         cast_anim_sources=cast_anim_sources,
         cast_face_sources=cast_face_sources,
-        cast_anim_facets=cast_anim_facets,
         cast_face_facets=cast_face_facets,
-        on_cast_anim_edit=cast_anim_edit,
         on_cast_face_edit=cast_face_edit,
         on_cast_anim_source=cast_source_change,
         on_cast_face_source=cast_source_change,
         **extra)
+
+
+#: True only while :func:`opened` is putting a fresh list on its opening kind --
+#: which is a statement by the PANEL, not by the user, and must not be recorded as
+#: one. The write still rebuilds the list, which is the point of making it.
+_OPENING = [False]
+
+
+def opened(bound, state):
+    """Put a freshly read list on the kind its panel opens on.
+
+    A tab called Actor that opens on two thousand walk-ons is showing the user the
+    part of its list they did not ask for. So a panel may name the kind it opens
+    on -- and only until the user picks one themselves, because a re-read must
+    never move somebody off what they chose."""
+    panel = PANELS.get(bound.key)
+    wanted = getattr(panel, "facet", "") if panel is not None else ""
+    if not wanted or state.facet_picked or state.facet == wanted:
+        return
+    if not any(item[0] == wanted for item in bound.facet_items()):
+        return
+    _OPENING[0] = True
+    try:
+        state.facet = wanted
+    finally:
+        _OPENING[0] = False
 
 
 def _reopen(bound, state):
@@ -551,11 +530,9 @@ def _reopen(bound, state):
 def forget(bound):
     """Release what a panel's shared panes are holding. Called from its
     unregister, because a pinned table outlives a reloaded add-on otherwise."""
-    for pane in (ANIM, FACE):
-        made = _LISTS.pop((bound.key, pane), None)
-        if made is not None:
-            made.close()
-        _SEEDS.pop((bound.key, pane), None)
+    made = _LISTS.pop((bound.key, FACE), None)
+    if made is not None:
+        made.close()
     PANELS.pop(bound.key, None)
 
 
@@ -588,12 +565,12 @@ def draw(panel, layout, context, state):
     # no longer offers draws the one every host has rather than an empty panel.
     pane = state.pane if state.pane in panes else CAST
     if pane == ANIM:
-        _draw_pane(panel, layout, context, state, ANIM, _draw_animations)
+        _draw_pane(panel, layout, context, state, ANIM, None)
         return
     if pane == FACE:
         _draw_pane(panel, layout, context, state, FACE, _draw_expressions)
         return
-    draw_cast(panel, layout, context, state)
+    draw_actor(panel, layout, context, state)
 
 
 def _pane_items(panel):
@@ -611,11 +588,14 @@ def _draw_pane(panel, layout, context, state, pane, body):
     if source is not None and source.draw is not None:
         source.draw(layout, context)
         return
+    if body is None:
+        layout.label(text="This game states no animation list of its own.", icon="INFO")
+        return
     body(panel, layout, context, state)
 
 
-def draw_cast(panel, layout, context, state):
-    """The cast list and everything asked of the row it has selected."""
+def draw_actor(panel, layout, context, state):
+    """The actor list and everything asked of the row it has selected."""
     app_view.draw_head(panel.bound, layout, state, panel.refresh)
     app_view.draw_list(panel.bound, layout, state, panel.columns, panel.identifier,
                        rows=panel.rows, group_column=panel.group_column)
@@ -639,7 +619,7 @@ def draw_cast(panel, layout, context, state):
     asked.enabled = picked is not None
     asked.prop(state, "shader_output")
     asked.operator(SHADERS.id, icon="NODE_MATERIAL").panel = panel.bound.key
-    if panel.asks_the_engine(ANIM) and host_port.supports(host_port.ANIMATION):
+    if panel.animation_rules is not None:
         asked.operator(ANIMATIONS.id, icon="ANIM_DATA").panel = panel.bound.key
     if panel.asks_the_engine(FACE) and host_port.supports(host_port.MORPH_TARGETS):
         asked.operator(EXPRESSIONS.id, icon="SHAPEKEY_DATA").panel = panel.bound.key
@@ -652,21 +632,10 @@ def _shared_columns(bound):
             bound.column("detail", align=app_layout.RIGHT, enabled=False))
 
 
-def _draw_animations(panel, layout, context, state):
-    bound = anim_bound(panel.bound)
-    app_view.draw_head(bound, layout, state, ANIMATIONS.id,
-                       arguments={"panel": panel.bound.key})
-    app_view.draw_list(bound, layout, state, _shared_columns(bound),
-                       panel.identifier + "_anim", rows=panel.rows)
-    if state.status:
-        layout.label(text=state.status, icon="INFO")
-    actions = layout.column(align=True)
-    actions.enabled = bound.picked(state) is not None
-    actions.operator(LOAD_CLIP.id, icon="ANIM_DATA").panel = panel.bound.key
-
-
 def _draw_expressions(panel, layout, context, state):
     bound = face_bound(panel.bound)
+    if panel.bound.picked(state) is None:
+        layout.label(text="Pick somebody in Actor first, then re-read.", icon="INFO")
     app_view.draw_head(bound, layout, state, EXPRESSIONS.id,
                        arguments={"panel": panel.bound.key})
     app_view.draw_list(bound, layout, state, _shared_columns(bound),

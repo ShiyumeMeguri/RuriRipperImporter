@@ -55,16 +55,8 @@ def state_of(context):
 #: the "downloaded" test is each column's own statement, made in the hook.
 BOUND = app_view.Bound(SPEC_KEY)
 
-ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
-    Field("facet", app_state.ENUM, None, "Kind",
-          "Which of the game's own kinds to list", items="facet_items",
-          update="on_filter_edit"),
-    Field("search", app_state.STRING, "", "Filter",
-          "Filter by displayed name, id or group",
-          update="on_filter_edit", live=True),
-    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
-    Field("active_index", app_state.INT, 0),
-    Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
+ROSTER = Schema("ExiliumRoster", """What this game's cast tab remembers beyond
+the shared record: which text package it read the names through.""", (
     Field("language", app_state.STRING, ""),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
@@ -124,6 +116,7 @@ def _refresh(context, arguments):
         return {"CANCELLED"}
     _ROWS[tongue] = table
     rebuild(state)
+    cast_panel.opened(BOUND, state)
     return None
 
 
@@ -297,7 +290,8 @@ def _seeds(_context, state):
 
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "exilium_roster", REFRESH.id, state_of, STATE, seeds=_seeds,
-    group_column=_GROUP_COLUMN, actions=(LOAD.id, REVEAL.id, OUTFITS.id))
+    group_column=_GROUP_COLUMN, actions=(LOAD.id, REVEAL.id, OUTFITS.id),
+    facet=CHARACTERS)
 
 
 def draw(layout, context):
