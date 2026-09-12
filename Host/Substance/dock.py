@@ -26,10 +26,11 @@ import traceback
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
+from ...Kernel import bootstrap as kernel_bootstrap
 from ...Kernel.app import browser, command as app_command
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import filtering
-from . import render
+from . import render, settings
 
 
 class _Read(QtCore.QRunnable):
@@ -157,6 +158,12 @@ class RuriRipperDock(QtWidgets.QWidget):
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        # WHERE the reader is, which is this application's own question: Blender
+        # keeps it in its add-on preferences and this host has no such place, so
+        # the dock is it. Above the scroll area and outside the description, so a
+        # repaint never rebuilds the field being typed into -- and so it is still
+        # reachable when the description below is nothing but "no install".
+        outer.addWidget(self._reader_row())
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
@@ -209,6 +216,65 @@ class RuriRipperDock(QtWidgets.QWidget):
         column.addStretch(1)
         column.addWidget(self._status)
         self._scroll.setWidget(body)
+
+    # -- where the reader is -----------------------------------------------
+    def _reader_row(self):
+        """One line: the folder the reader is loaded from, and what is wrong with
+        it when something is."""
+        row = QtWidgets.QWidget()
+        column = QtWidgets.QVBoxLayout(row)
+        column.setContentsMargins(6, 6, 6, 0)
+        column.setSpacing(2)
+        line = QtWidgets.QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(4)
+        line.addWidget(QtWidgets.QLabel("Reader"))
+        self._reader_edit = QtWidgets.QLineEdit(settings.get("ripperhook_bin", ""))
+        self._reader_edit.setPlaceholderText("...\\Source\\0Bins\\Release")
+        self._reader_edit.editingFinished.connect(
+            lambda: self._reader_stated(self._reader_edit.text()))
+        line.addWidget(self._reader_edit, 1)
+        browse = QtWidgets.QToolButton()
+        browse.setText("...")
+        browse.clicked.connect(self._reader_browse)
+        line.addWidget(browse)
+        column.addLayout(line)
+        self._reader_note = QtWidgets.QLabel("")
+        self._reader_note.setWordWrap(True)
+        column.addWidget(self._reader_note)
+        self._reader_check()
+        return row
+
+    def _reader_check(self):
+        """Say what stands between this dock and the reader, or nothing at all."""
+        from ...RuriRipperPyBridge.runtime import pythonnet_bridge
+        try:
+            pythonnet_bridge.reader_folder()
+        except Exception as exc:
+            self._reader_note.setText(str(exc))
+            self._reader_note.setVisible(True)
+            return
+        self._reader_note.setVisible(False)
+
+    def _reader_browse(self):
+        picked = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Folder holding Ruri.RipperHook.dll",
+            settings.get("ripperhook_bin", ""))
+        if picked:
+            self._reader_edit.setText(picked)
+            self._reader_stated(picked)
+
+    def _reader_stated(self, folder):
+        """Remember it and re-push it. The kernel re-reads every path off the bound
+        host, so this host only has to say where its user typed them."""
+        folder = (folder or "").strip()
+        if folder == settings.get("ripperhook_bin", ""):
+            self._reader_check()
+            return
+        settings.set_many(ripperhook_bin=folder)
+        kernel_bootstrap.republish_paths()
+        self._reader_check()
+        self.rebuild()
 
     def set_status(self, message):
         self._status.setText(message or "")

@@ -103,6 +103,17 @@ def _dll_dir():
     return d
 
 
+def reader_folder():
+    """The folder the reader is loaded from, checked -- or a raise saying exactly
+    what is wrong with it.
+
+    Public because a host whose only place to keep that path is its own settings
+    file has to be able to ASK whether the value it stored still works, and put
+    the answer on screen. Without it, a path that went stale looks to the user
+    like "this folder is no install"."""
+    return _dll_dir()
+
+
 def _runtime_config_path():
     dll_dir = _dll_dir()
     # Reuse the CLI's own runtimeconfig.json (Microsoft.NETCore.App +
