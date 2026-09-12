@@ -46,16 +46,11 @@ def language_for_locale(locale):
     return rows[0]["language"] if rows else ""
 
 
-def cast(kind, language):
-    """One cast as the table itself, so the list searches through the same C#
-    engine every other list here does.
-
-    ``characters`` are the units the game lets you field, under the name its own
-    text package gives them; ``models`` is every model the config declares, each
-    carrying the address the catalog knows it by and whether the loaded map holds
-    it."""
-    return _table(CAST, cast=kind, language=language)
-
+def cast(language):
+    """The WHOLE cast as one table: kind/key/label/group/detail plus the game's own
+    columns to filter on. One table because it is one list -- which half a row is,
+    is its ``kind``, and narrowing by that is the facet switch every list has."""
+    return _table(CAST, language=language)
 
 def scenes():
     """Every scene the game ships, under the path its own catalog states."""

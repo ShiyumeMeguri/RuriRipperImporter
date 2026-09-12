@@ -56,9 +56,9 @@ def state_of(context):
 BOUND = app_view.Bound(SPEC_KEY)
 
 ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
-    Field("kind", app_state.ENUM, CHARACTERS, "Cast", update="on_kind_change",
-          items=((CHARACTERS, "Characters", "The units the game lets you field"),
-                 (MODELS, "Models", "Every model the game's own config declares"))),
+    Field("facet", app_state.ENUM, None, "Kind",
+          "Which of the game's own kinds to list", items="facet_items",
+          update="on_filter_edit"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group",
           update="on_filter_edit", live=True),
@@ -73,20 +73,14 @@ def _on_filter_edit(state, context):
     rebuild(state)
 
 
-def _on_kind_change(state, context):
-    """Switching cast only redraws; it never fires the refresh command. A command
-    invoked from a property update runs with the UI mid-update, and its poll
-    failing there raises rather than reporting."""
-    if rows(state) is None:
-        state.status = "Refresh to read the {0} out of the game's tables.".format(state.kind)
-        return
-    rebuild(state)
+def _facet_items(state, context):
+    return BOUND.facet_choices(state, context)
 
 
 HANDLERS = app_state.Handlers(
     "EXILIUM.roster", base=filtering.HANDLERS,
-    on_filter_edit=_on_filter_edit,
-    on_kind_change=_on_kind_change)
+    facet_items=_facet_items,
+    on_filter_edit=_on_filter_edit)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -103,7 +97,7 @@ def language(state):
 
 
 def rows(state):
-    return _ROWS.get((state.kind, language(state)))
+    return _ROWS.get(language(state))
 
 
 def rebuild(state):
@@ -113,7 +107,7 @@ def rebuild(state):
     go to the same C# engine the bundle browser searches with, over the very buffers
     this table was built from. This side receives row ids and reads cells."""
     with filtering.rebuilding():
-        BOUND.open(rows(state), state, note=state.kind)
+        BOUND.open(rows(state), state, note=language(state))
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +127,11 @@ def _refresh(context, arguments):
     tongue = language(state)
     state.language = tongue
     try:
-        table = datasets.cast(state.kind, tongue)
+        table = datasets.cast(tongue)
     except Exception as exc:
         state.status = "{0}: {1}".format(type(exc).__name__, exc)
         return {"CANCELLED"}
-    _ROWS[(state.kind, tongue)] = table
+    _ROWS[tongue] = table
     rebuild(state)
     return None
 
@@ -221,7 +215,7 @@ def _outfits(context, arguments):
     if entry is None:
         return {"CANCELLED"}
     wanted = entry.key
-    state.kind = MODELS
+    state.facet = MODELS
     if rows(state) is None:
         _refresh(context, {})
     state.filter_rules.clear()
@@ -301,9 +295,7 @@ def draw(layout, context):
     state = state_of(context)
 
     command.draw_progress(layout, state)
-    # 分面是下拉菜单,不是一排按钮 —— 每个游戏的分面数不同,铺开就把列表挤没了。
-    layout.prop(state, "kind", text="")
-    filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
+    app_view.draw_head(BOUND, layout, state, REFRESH.id)
     app_view.draw_list(BOUND, layout, state, _COLUMNS, "exilium_roster",
                        group_column=_GROUP_COLUMN)
 
@@ -319,7 +311,7 @@ def draw(layout, context):
     shaders.prop(state, "shader_output")
     shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
     actions.operator(REVEAL.id)
-    if state.kind == CHARACTERS:
+    if entry is not None and entry.cell("kind") == CHARACTERS:
         actions.operator(OUTFITS.id)
 
 
