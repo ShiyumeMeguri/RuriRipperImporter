@@ -1,5 +1,4 @@
-"""The Face section: the head's own blend-shape patterns, and the expressions the
-game names out of them per personality.
+"""What this family's heads state about a face, as data.
 
 A head states its face as PATTERNS: per channel (eyebrow / eyes / mouth), a list
 of (closed key, open key) pairs, and an expression picks one pattern per channel
@@ -7,6 +6,11 @@ plus how open it is. Resolving that into "which blend shape of which mesh is at
 what value" is this game's arithmetic; setting them is the host's
 (:meth:`Kernel.host.Host.drive_blend_shapes`), because which object carries a mesh
 and which of its keys is index N is a fact about the application.
+
+There is no panel here. Browsing a model's expression vocabulary is the ONE cast
+panel's Face pane, which asks the engine what the meshes themselves are named with
+(``Kernel.app.cast_panel``); what is left here is this family's own arithmetic,
+which that pane does not need and the cross-game expression IR does.
 
 Nothing here imports a host.
 """
@@ -16,36 +20,13 @@ from __future__ import annotations
 import json
 
 from ...Kernel import host as host_port
-from ...Kernel.app import command
-from ...Kernel.app.state import Field, Schema
-from ...Kernel.app import state as app_state
-from . import chara, datasets
-
-STATE = "ruri_illusion_face"
+from . import datasets
 
 #: Where a built character remembers which prefab carried its head. Kept on the
 #: rig itself so the face can still be driven in a later session.
 HEAD_KEY = "ruri_illusion_head"
 
 CHANNELS = ("eyebrow", "eyes", "mouth")
-
-
-def state_of(context):
-    return host_port.current().panel_state(context, STATE)
-
-
-FACE = Schema("IllusionFace", """What driving the head's blend-shape patterns
-remembers. Its own record, because a host with no blend shapes has nothing to
-remember here.""", (
-    Field("expression", app_state.ENUM, None, "Expression", items="expression_items"),
-    Field("eyebrow_pattern", app_state.INT, 0, "Eyebrow", minimum=0),
-    Field("eyes_pattern", app_state.INT, 0, "Eyes", minimum=0),
-    Field("mouth_pattern", app_state.INT, 0, "Mouth", minimum=0),
-    Field("eyebrow_open", app_state.FLOAT, 1.0, "Eyebrow Open", minimum=0.0, maximum=1.0),
-    Field("eyes_open", app_state.FLOAT, 1.0, "Eyes Open", minimum=0.0, maximum=1.0),
-    Field("mouth_open", app_state.FLOAT, 0.0, "Mouth Open", minimum=0.0, maximum=1.0),
-    Field("status", app_state.STRING, ""),
-))
 
 
 # ---------------------------------------------------------------------------
@@ -231,120 +212,3 @@ def cleared(face_table):
                         values[index] = 0.0
     return found
 
-
-# ---------------------------------------------------------------------------
-# The handlers the schema names
-# ---------------------------------------------------------------------------
-def _personality(context):
-    """Whose named expressions to list. It is the CARD's number, so it lives with
-    the character the tab built rather than being a second copy here."""
-    return chara.state_of(context).personality
-
-
-def _expression_items(state, context):
-    listed = [("", "(none)", "Drive the patterns by hand")]
-    for index, row in enumerate(expressions(_personality(context))):
-        listed.append((str(index), str(row["name"]), str(row["name"])))
-    return listed
-
-
-HANDLERS = app_state.Handlers("Illusion.face", expression_items=_expression_items)
-
-
-def _named(state, context):
-    if not state.expression:
-        return None
-    listed = expressions(_personality(context))
-    try:
-        return listed[int(state.expression)]
-    except (ValueError, IndexError):
-        return None
-
-
-def _rig(context):
-    return host_port.current().selected_rig(context)
-
-
-def _has_head(context):
-    return bool(head_of(_rig(context))[0])
-
-
-def _apply(context, arguments):
-    """Set the head's blend-shape patterns to this expression."""
-    state = state_of(context)
-    rig = _rig(context)
-    face_table = table(rig)
-    if not face_table:
-        state.status = "No character with a face table is selected."
-        return {"CANCELLED"}
-    named = _named(state, context)
-    if named is not None:
-        patterns, openness = expression_patterns(named)
-    else:
-        patterns = {"eyebrow": state.eyebrow_pattern, "eyes": state.eyes_pattern,
-                    "mouth": state.mouth_pattern}
-        openness = {"eyebrow": state.eyebrow_open, "eyes": state.eyes_open,
-                    "mouth": state.mouth_open}
-    touched, warnings = host_port.current().drive_blend_shapes(
-        context, rig, weights(face_table, patterns, openness))
-    state.status = "{0} mesh(es) updated.{1}".format(
-        touched, "  " + "  ".join(warnings[:3]) if warnings else "")
-    return None
-
-
-def _clear(context, arguments):
-    """Put every pattern key back to zero."""
-    state = state_of(context)
-    rig = _rig(context)
-    touched, _warnings = host_port.current().drive_blend_shapes(
-        context, rig, cleared(table(rig)))
-    state.status = "{0} mesh(es) cleared.".format(touched)
-    return None
-
-
-APPLY = command.COMMANDS.define(
-    "ruri.kk_face_apply", "Apply", _apply,
-    description="Set the head's blend-shape patterns to this expression",
-    icon="PLAY", requires=host_port.MORPH_TARGETS, poll=_has_head)
-CLEAR = command.COMMANDS.define(
-    "ruri.kk_face_clear", "Clear", _clear,
-    description="Zero every blend shape the head's expression system drives",
-    icon="LOOP_BACK", requires=host_port.MORPH_TARGETS, poll=_has_head)
-
-
-def draw(layout, context):
-    state = state_of(context)
-    face_table = table(_rig(context))
-    if not face_table:
-        layout.label(text="Build a character first -- its head carries the pattern table.",
-                     icon="INFO")
-        return
-
-    named = layout.column(align=True)
-    named.prop(chara.state_of(context), "personality")
-    named.prop(state, "expression")
-
-    manual = layout.column(align=True)
-    manual.enabled = not state.expression
-    for channel, pattern_field, open_field in (
-            ("eyebrow", "eyebrow_pattern", "eyebrow_open"),
-            ("eyes", "eyes_pattern", "eyes_open"),
-            ("mouth", "mouth_pattern", "mouth_open")):
-        row = manual.row(align=True)
-        row.prop(state, pattern_field)
-        row.label(text="/ {0}".format(pattern_count(face_table, channel)))
-        row.prop(state, open_field, slider=True, text="")
-
-    actions = layout.row(align=True)
-    actions.operator(APPLY.id, icon="PLAY")
-    actions.operator(CLEAR.id, icon="LOOP_BACK")
-    if state.status:
-        layout.label(text=state.status, icon="INFO")
-
-
-def register():
-    host_port.current().register_state(STATE, FACE, HANDLERS)
-
-
-def unregister():
-    host_port.current().unregister_state(STATE)

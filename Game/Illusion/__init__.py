@@ -21,8 +21,9 @@ Two tabs:
                studio's catalog). Listed only for the titles that ship a studio.
 ``Character``  a character is assembled, not shipped -- one skeleton plus a prefab
                per slot, joined by bone name. Build one from a character card,
-               drive her face through the head's own blend-shape pattern system,
-               and put the catalogued animations on her.
+               then browse what she plays and what she was built with: the ONE
+               cast panel's Anim and Face panes, with the studio's own animation
+               catalog beside the engine's answer in the first of them.
 
 Each title is recognised by the identity its own build carries: a module's name IS
 the productName its player reports, so pointing the panel at the install already
@@ -46,12 +47,15 @@ _SCENE_TAB = ("scene", "Scene",
               ("scene", "draw"), None)
 _CHARACTER_TAB = ("character", "Character",
                   "Assemble a character from her card or from the game's own "
-                  "customization catalog, then drive her face and her animations",
+                  "customization catalog, then browse her animations and the "
+                  "expressions she was built with",
                   ("chara", "draw_tab"), None)
 
+#: A face is no longer a section of its own: browsing a model's expression
+#: vocabulary is the ONE cast panel's Face pane, and what this family states about
+#: a head beyond that is arithmetic the character build reads directly (``face``).
 SECTIONS = (GameSection("scene"),
             GameSection("chara"),
-            GameSection("face", host_port.MORPH_TARGETS),
             GameSection("anime", host_port.ANIMATION))
 
 # The bpy classes are the PACKAGE's, shared by every title in it, and a class
