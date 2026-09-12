@@ -71,21 +71,6 @@ clip 或 controller 会直接套到这副骨架上。
 
 ---
 
-## 支持哪些游戏
-
-| 页签来自 | 游戏 |
-|---|---|
-| `Game/Endfield/` | 明日方舟:终末地 |
-| `Game/EXILIUM/` | 少女前线2:追放 |
-| `Game/Illusion/` | Koikatu / KoikatsuSunshine / HoneyCome / SamabakeScramble |
-| `Game/SBUE/` | **任何**虚幻引擎安装(按引擎家族认领,不是一个一个游戏加的) |
-
-**认哪个游戏不用你选**:插件读安装自己写下的产品名(`app.info`),页签跟着改名。
-没做过专属页签的游戏,照样能用 VirtualAssetBundle 浏览器翻它的资源。
-
-加一个游戏 = 新建一个 `Game/<游戏>/` 文件夹,核心一行不用改。
-
----
 
 ## 有些东西 Painter 那边不出现,这是故意的
 
