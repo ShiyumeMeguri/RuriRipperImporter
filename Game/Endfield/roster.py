@@ -331,11 +331,14 @@ PANEL = cast_panel.Panel(
                                   "The animations story playback uses, under the game's "
                                   "own filing -- a cutscene by shot, a dialogue by line",
                                   _draw_story),),
-    expressions=(cast_panel.ENGINE_SHAPES,
-                 cast_panel.Source("library", "Library",
+    # 这个游戏的脸**不是**混合形状:表情是 SkeletalMorph 把 ctrl 解算成骨骼的 ΔTRS。
+    # 所以自家这份库排在第一位 —— 一格默认开在这个游戏真正的答案上,引擎那份
+    # (只剩几个眉毛网格还带命名形状)留在后面给要的人。
+    expressions=(cast_panel.Source("library", "Library",
                                    "The game's own SkeletalMorph emotion/pose/lipsync "
                                    "library, bindable to a rig and bakeable",
-                                   _draw_library)))
+                                   _draw_library),
+                 cast_panel.ENGINE_SHAPES))
 
 
 def draw(layout, context):

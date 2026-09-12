@@ -632,8 +632,24 @@ def _shared_columns(bound):
             bound.column("detail", align=app_layout.RIGHT, enabled=False))
 
 
+def _elsewhere(panel, pane, layout):
+    """Name the other places this pane could be listing from.
+
+    A source that answers nothing for this build is not a dead end -- it is one of
+    several, and the switch above is where the others are. Said in the pane rather
+    than left for the user to guess, because an empty list with a working button
+    reads as broken."""
+    others = [source.label for source in panel.sources(pane) if source.id != ENGINE]
+    if others:
+        layout.label(text="This build may state them elsewhere -- try: "
+                          + ", ".join(others), icon="FORWARD")
+
+
 def _draw_expressions(panel, layout, context, state):
     bound = face_bound(panel.bound)
+    # This pane is about the row picked in ACTOR, never about whatever object is
+    # selected in the scene -- which is the first thing anyone assumes about a
+    # thing called Face, so it says so rather than showing an empty list.
     if panel.bound.picked(state) is None:
         layout.label(text="Pick somebody in Actor first, then re-read.", icon="INFO")
     app_view.draw_head(bound, layout, state, EXPRESSIONS.id,
@@ -642,6 +658,10 @@ def _draw_expressions(panel, layout, context, state):
                        panel.identifier + "_face", rows=panel.rows)
     if state.status:
         layout.label(text=state.status, icon="INFO")
+    if bound.view is not None and bound.count == 0:
+        layout.label(text="This one's meshes carry no NAMED blend shape.",
+                     icon="SHAPEKEY_DATA")
+        _elsewhere(panel, FACE, layout)
     actions = layout.column(align=True)
     actions.enabled = bound.picked(state) is not None
     actions.prop(state, "face_value")
