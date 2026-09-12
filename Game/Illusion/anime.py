@@ -24,6 +24,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unity import bridge_asset_db, class_registry
 from . import datasets
@@ -43,13 +44,14 @@ def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
 
-ANIME_ENTRY = Schema("IllusionAnimeEntry", """One drawn line of any of this
-section's lists.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
+#: The three lists this section draws. The flat one is the ordinary animations; the
+#: other two are the SAME act rows drawn twice, one partner's columns each, so row N
+#: on the left is row N's partner on the right by construction rather than by a
+#: placeholder pass that two different filters would drift apart.
+FLAT = app_view.Bound("Illusion:anime")
+MALE = app_view.Bound("Illusion:animeacts", seats="male_entries", index="pair_index")
+FEMALE = app_view.Bound("Illusion:animeacts", seats="female_entries", index="pair_index")
+
 
 ANIME = Schema("IllusionAnime", """The animation catalog's own state.""", (
     Field("section", app_state.ENUM, NORMAL, "Kind",
@@ -57,10 +59,10 @@ ANIME = Schema("IllusionAnime", """The animation catalog's own state.""", (
                  (SEX, "Sex", "H acts -- one animation per partner, side by side"))),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by name, group or bundle", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=ANIME_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
-    Field("male_entries", app_state.COLLECTION, element=ANIME_ENTRY),
-    Field("female_entries", app_state.COLLECTION, element=ANIME_ENTRY),
+    Field("male_entries", app_state.COLLECTION, element=app_view.VIEW_ROW),
+    Field("female_entries", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("pair_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Refresh to read the studio's animation catalog."),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
@@ -85,175 +87,44 @@ FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
 # ---------------------------------------------------------------------------
 # The lists
 # ---------------------------------------------------------------------------
-def _side_of(row_sex):
-    """Which partner a row is for -- the catalog's own ``sex`` column (0 male,
-    1 female, -1 unstated), which the hook derives from whatever the game states it
-    with. Not re-derived here from a path: a title that files both partners on one
-    sheet row has no per-partner path to read."""
-    try:
-        return _SIDES.get(int(float(row_sex)))
-    except (TypeError, ValueError):
-        return None
-
-
-def _grouped(entries, rows, label_key, group_key, key_key, detail_key):
-    """Fill one collection as a grouped list -- the shape every list here uses."""
-    entries.clear()
-    rows.sort(key=lambda row: (str(row[group_key]), str(row[label_key])))
-    counts = {}
-    for row in rows:
-        counts[str(row[group_key])] = counts.get(str(row[group_key]), 0) + 1
-
-    current = None
-    for row in rows:
-        group = str(row[group_key])
-        if group != current:
-            current = group
-            header = entries.add()
-            header.label = "{0}  ({1})".format(group, counts[group])
-            header.is_group = True
-        entry = entries.add()
-        entry.label = str(row[label_key])
-        entry.key = str(row[key_key])
-        entry.detail = str(row[detail_key])
-
-
 def rebuild(state):
-    matched, table = datasets.search(datasets.ANIMATIONS, {},
-                                     state.search.strip(), state.filter_rules)
-    if table is None:
-        state.entries.clear()
-        state.male_entries.clear()
-        state.female_entries.clear()
-        return
-    normal = []
-    sides = {"male": {}, "female": {}}
-    group_of = {"male": {}, "female": {}}
-    order = []
-    seen = set()
-    for index in matched:
-        family = str(table.cell(index, "family"))
-        row = {"name": table.cell(index, "name"),
-               "group": "{0} / {1}".format(table.cell(index, "groupName"),
-                                           table.cell(index, "categoryName")),
-               "row": str(index),
-               "clip": table.cell(index, "clip")}
-        side = _side_of(table.cell(index, "sex"))
-        pair = str(table.cell(index, "pair"))
-        if family != "h" or side is None or not pair:
-            normal.append(row)
-            continue
-        # WHICH act a row is one partner's half of is the catalog's own ``pair``
-        # column, so the two lists are built from ONE key set and stay index-aligned
-        # -- row N on the left is row N's partner on the right. Never re-derived from
-        # name+clip: a title that spells the clip per sex (hou_m_00 / hou_f_00) then
-        # matches nothing, every act becomes two half-empty rows, and the two columns
-        # drift a row apart.
-        bucket = pair.rpartition("/")[0] or pair
-        key = (bucket, pair)
-        if key not in sides[side]:
-            sides[side][key] = row
-            group_of[side].setdefault(bucket, row["group"])
-            if key not in seen:
-                seen.add(key)
-                order.append(key)
-    _grouped(state.entries, normal, "name", "group", "row", "clip")
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
-    _grouped_pairs(state, order, sides, group_of)
-    state.status = "{0} animation(s).".format(len(normal) + len(order))
+    """Ask the kernel for whichever shape this kind needs. The pairing itself is
+    the hook's join (``anime.acts``): which two animations are one act is a fact
+    about the game's catalog, not something to rebuild here on every keystroke."""
+    with filtering.rebuilding():
+        FLAT.open(datasets.table(datasets.ANIMATIONS), state,
+                  standing=[cabmap_state.Rule("family", "is_not", "h", "include")])
+        acts = datasets.table(datasets.ACTS)
+        MALE.open(acts, state, ordered=True, label_column="maleName")
+        FEMALE.open(acts, state, ordered=True, label_column="femaleName")
+        state.status = FLAT.summary
 
 
-def _grouped_pairs(state, order, sides, group_of):
-    """Fill the male and female lists so their indices correspond.
-
-    Both collections get headers and rows at the same indices and in the same
-    order; a position only one partner has gets a blank placeholder on the other
-    side rather than shifting every later row out of alignment.
-
-    A header names the group the way that column's own rows are filed -- the two
-    partners of one act sit in DIFFERENT groups (男H挿入 vs 女H挿入), and the
-    position alone is often just a number, so a shared header would have to drop
-    the half that actually reads as a name. Where a column has nothing at all for
-    a position it borrows the other one's, since the band is the same act either
-    way and a bare position number names nothing."""
-    state.male_entries.clear()
-    state.female_entries.clear()
-
-    # Within a band, by the act's own id as a NUMBER: it is the order the game lists
-    # them in, and sorting the pair string instead puts 10 before 2.
-    def _rank(key):
-        tail = key[1].rpartition("/")[2]
-        return (key[0], 0, int(tail), "") if tail.lstrip("-").isdigit() else (key[0], 1, 0, key[1])
-
-    order.sort(key=_rank)
-    counts = {}
-    for key in order:
-        counts[key[0]] = counts.get(key[0], 0) + 1
-
-    current = None
-    for key in order:
-        if key[0] != current:
-            current = key[0]
-            for side, other, entries in (("male", "female", state.male_entries),
-                                         ("female", "male", state.female_entries)):
-                header = entries.add()
-                header.label = "{0}  ({1})".format(
-                    group_of[side].get(current) or group_of[other].get(current) or current,
-                    counts[current])
-                header.is_group = True
-        for side, entries in (("male", state.male_entries),
-                              ("female", state.female_entries)):
-            row = sides[side].get(key)
-            entry = entries.add()
-            if row is None:
-                entry.label = "--"
-                entry.key = ""
-                entry.detail = ""
-            else:
-                entry.label = str(row["name"])
-                entry.key = str(row["row"])
-                entry.detail = str(row["clip"])
-    if state.pair_index >= len(state.male_entries):
-        state.pair_index = 0
-
-
-def _row_of_entry(entry):
+def _catalog_row(index):
+    """One row of the animation catalog, by its own row number -- what an act row
+    points at for each partner."""
     table = datasets.table(datasets.ANIMATIONS)
-    if entry is None or table is None or not entry.key:
+    if table is None or not 0 <= index < len(table):
         return None
-    try:
-        index = int(entry.key)
-    except ValueError:
-        return None
-    if not 0 <= index < len(table):
-        return None
-    return {name: table.cell(index, name) for name in table.names}
+    return table.row(index)
 
 
 def selected_animation(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return _row_of_entry(entry)
-    return None
+    picked = FLAT.picked(state)
+    return None if picked is None else picked.values()
 
 
 def selected_side(state, side):
-    """The catalog row selected in one of the paired lists, or None -- a header
-    or a placeholder (the partner this position lacks) selects nothing.
+    """The catalog row selected in one of the paired lists, or None -- a header,
+    or the partner this act does not have, selects nothing.
 
-    Both lists share ONE index: an H act is one animation per partner and the
-    two collections are index-aligned, so the row chosen on either side IS the
-    partner of the row shown on the other."""
-    entries = state.male_entries if side == "male" else state.female_entries
-    index = state.pair_index
-    if not 0 <= index < len(entries):
+    Both lists ARE one list: an act is one row carrying both partners, so the row
+    chosen on either side is by construction the partner of the other."""
+    picked = (MALE if side == "male" else FEMALE).picked(state)
+    if picked is None:
         return None
-    entry = entries[index]
-    if entry.is_group:
-        return None
-    return _row_of_entry(entry)
+    at = int(float(picked.cell(side + "Row") or -1))
+    return None if at < 0 else _catalog_row(at)
 
 
 def current_row(state):
@@ -436,10 +307,22 @@ IMPORT_SIDE = command.COMMANDS.define(
 # What it looks like
 # ---------------------------------------------------------------------------
 _COLUMNS = (
-    app_layout.ListColumn("label", width=0.62, icon="OUTLINER_OB_ARMATURE"),
-    app_layout.ListColumn("detail", align=app_layout.RIGHT, enabled=False),
+    FLAT.column("", width=0.62, icon="OUTLINER_OB_ARMATURE"),
+    FLAT.column("clip", align=app_layout.RIGHT, enabled=False),
 )
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_GROUP_COLUMN = FLAT.column("", icon="OUTLINER_COLLECTION")
+
+
+def _side_columns(bound, side):
+    """One partner's half of the act list. Both halves are the SAME rows -- one
+    per act -- so they cannot drift apart however either is drawn."""
+    return (bound.column(side + "Name", width=0.62, icon="OUTLINER_OB_ARMATURE"),
+            bound.column(side + "Clip", align=app_layout.RIGHT, enabled=False))
+
+
+_MALE_COLUMNS = _side_columns(MALE, "male")
+_FEMALE_COLUMNS = _side_columns(FEMALE, "female")
+_ACT_GROUP = MALE.column("", icon="OUTLINER_COLLECTION")
 
 
 def draw(layout, context):
@@ -462,9 +345,8 @@ def draw(layout, context):
 
 
 def _draw_normal(layout, state):
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=12,
-                identifier="illusion_anime", group_key="is_group",
-                group_column=_GROUP_COLUMN)
+    app_view.draw_list(FLAT, layout, state, _COLUMNS, "illusion_anime",
+                       rows=12, group_column=_GROUP_COLUMN, summary=False)
     row = selected_animation(state)
     actions = layout.column(align=True)
     actions.enabled = row is not None
@@ -477,15 +359,14 @@ def _draw_normal(layout, state):
 
 def _draw_sex(layout, state):
     split = layout.split(factor=0.5)
-    for side, title, collection, identifier in (
-            ("male", "Male", "male_entries", "illusion_anime_male"),
-            ("female", "Female", "female_entries", "illusion_anime_female")):
+    for side, title, bound, columns, identifier in (
+            ("male", "Male", MALE, _MALE_COLUMNS, "illusion_anime_male"),
+            ("female", "Female", FEMALE, _FEMALE_COLUMNS, "illusion_anime_female")):
         row = selected_side(state, side)
         column = split.column(align=True)
         column.label(text=title, icon="OUTLINER_OB_ARMATURE")
-        column.list(state, collection, "pair_index", _COLUMNS, rows=12,
-                    identifier=identifier, group_key="is_group",
-                    group_column=_GROUP_COLUMN)
+        app_view.draw_list(bound, column, state, columns, identifier, rows=12,
+                           group_column=_ACT_GROUP, summary=False)
         caption = column.box()
         caption.enabled = row is not None
         caption.label(text=(str(row["name"]) if row is not None else "(nothing selected)"))
