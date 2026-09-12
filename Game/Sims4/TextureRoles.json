@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "_comment": "The Sims 4's OWN shader-parameter vocabulary: the names its materials state, which the decoder reverses from their hashes. Only names whose meaning the game itself makes unambiguous are stated here. A parameter left out is reported as unmapped rather than guessed at -- this game's Phong-era vocabulary has several names (Shininess, Transparency, Specular as a colour) whose meaning is NOT a physical role, and wiring them into one would look right and read wrong.",
+  "textures": {
+    "DiffuseMap": {"role": "base_color"},
+    "MaskedUVModeDiffuseMap": {"role": "base_color"},
+    "DetailDiffuseMap": {"role": "base_color"},
+    "NormalMap": {"role": "normal"},
+    "OverlayNormalMap": {"role": "normal"},
+    "DetailNormalMap": {"role": "normal"},
+    "EmissionMap": {"role": "emission"},
+    "SelfIlluminationMap": {"role": "emission"},
+    "SpecMap": {"channels": {"specular": 0}},
+    "SpecularMap": {"channels": {"specular": 0}},
+    "AmbientOcclusionMap": {"channels": {"occlusion": 0}},
+    "AlphaMap": {"channels": {"opacity": 3}},
+    "CubeEnvMap": {"role": "none"},
+    "BakedLightMap": {"role": "none"},
+    "AdditiveLightMap": {"role": "none"},
+    "DropShadowAtlas": {"role": "none"},
+    "DirtOverlay": {"role": "none"},
+    "SnowNormalMap": {"role": "none"},
+    "RainMask": {"role": "none"}
+  },
+  "colors": {
+    "DiffuseColor": "base_color",
+    "EmissionColor": "emission",
+    "EmissionMapColor": "emission"
+  },
+  "floats": {
+    "AlphaMaskThreshold": "alpha_cutoff"
+  }
+}
