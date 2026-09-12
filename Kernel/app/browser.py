@@ -252,11 +252,35 @@ def _install_identity(root, source_options=None):
     if root not in _INSTALL_IDENTITY:
         try:
             players = pythonnet_bridge.read_install(root, source_options)
-        except Exception:
-            return None  # DLL not up yet -- do NOT cache, or one early miss would stick
+        except Exception as exc:
+            # The READER did not answer -- which is not the same thing as the folder
+            # having nothing to say, and must not be drawn as though it were. Kept so
+            # the panel can state the reason instead of "no identity"; not cached, or
+            # one early miss would stick.
+            _IDENTITY_BLOCKED[0] = str(exc)
+            return None
+        _IDENTITY_BLOCKED[0] = ""
         project = next((player for player in players if player["is_project"]), None)
         _INSTALL_IDENTITY[root] = project
     return _INSTALL_IDENTITY[root]
+
+
+#: Why the last identity read answered nothing, when the reason was the reader
+#: rather than the folder. An unconfigured decoder and a folder that is no install
+#: look identical in the panel otherwise -- and the first one is not a fact about
+#: the install at all (see evidence-check-the-instrument-first).
+_IDENTITY_BLOCKED = [""]
+
+
+def _identity_line(config):
+    """What the identity row says: what the build called itself, or -- when nothing
+    could be read because the reader is not up -- that, in its own words."""
+    if config is not None and config.game_name:
+        return "{0} {1}  -  {2} {3}".format(
+            config.game_name, config.game_version or "(no version)",
+            config.engine_family or "Unity", config.engine_version or "unknown")
+    blocked = _IDENTITY_BLOCKED[0]
+    return blocked.split(" (")[0].split(". ")[0] if blocked else "No install identity"
 
 
 def _module_of(config):
@@ -2006,16 +2030,18 @@ def draw(layout, context):
     # the build itself when the folder is typed; the menu is the override, and it
     # moves this tab alone.
     config = _active_config(state)
+    named = config is not None and bool(config.game_name)
+    blocked = not named and bool(_IDENTITY_BLOCKED[0])
     identity = top.row(align=True)
-    identity.label(text=("{0} {1}  -  {2} {3}".format(
-        config.game_name, config.game_version or "(no version)",
-        config.engine_family or "Unity", config.engine_version or "unknown")
-        if config is not None and config.game_name else "No install identity"),
-        icon="FILE_3D")
+    identity.label(text=_identity_line(config),
+                   icon="FILE_3D" if not blocked else "ERROR")
     identity.operator(REPROBE_INSTALL.id, text="", icon="FILE_REFRESH")
     decoder = top.row(align=True)
+    # A decoder nobody could ask for is not "none" -- saying "plain Unity build"
+    # while the reader is down is the panel stating a fact it does not have.
     decoder.menu(DECODER_MENU,
                  text=(config.decoder_id if config is not None and config.decoder_id
+                       else "Decoder unknown" if blocked
                        else "No decoder (plain Unity build)"),
                  icon="MODIFIER")
 
