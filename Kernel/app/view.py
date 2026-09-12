@@ -57,7 +57,7 @@ class View:
     """The composed answer for one list. Cells only; no columns, no computation."""
 
     __slots__ = ("_native", "_rows", "_facets", "_label", "_key", "_detail", "_group",
-                 "payload_column")
+                 "payload_column", "shipped_column")
 
     def __init__(self, native):
         self._native = native
@@ -139,6 +139,12 @@ class View:
     def matched(self):
         return int(self._native.Matched)
 
+    @property
+    def first_line(self):
+        """Where a cursor lands on a list nobody has picked anything in yet -- the
+        first line that is not a section header, or -1 for an empty view."""
+        return int(self._native.FirstLine)
+
     def index_of_key(self, key):
         """Where the row carrying ``key`` is drawn now, or -1 when this view does
         not show it. A selection's identity is its key, never its position: the
@@ -180,7 +186,7 @@ class Bound:
     replaces the old one (and releases its pinned buffers); the seats stay.
     """
 
-    __slots__ = ("key", "view", "table", "seats", "index", "search_field")
+    __slots__ = ("key", "view", "table", "seats", "index", "search_field", "_facets")
 
     def __init__(self, key, seats="rows", index="active_index", search="search"):
         self.key = key
@@ -192,6 +198,11 @@ class Bound:
         self.seats = seats
         self.index = index
         self.search_field = search
+        #: The facet switch's entries, kept HERE rather than read off the live view.
+        #: A host's dynamic switch stores a position, and asking a view that is
+        #: mid-replacement would hand back a shorter list for one instant -- which
+        #: invalidates that position and silently moves the user to another kind.
+        self._facets = []
 
     def close(self):
         view, self.view = self.view, None
@@ -218,6 +229,7 @@ class Bound:
                               search=getattr(state, self.search_field, ""),
                               rules=list(getattr(state, "filter_rules", ())) + list(standing),
                               **query)
+        self._facets = self.view.facet_items()
         self.seat(state, chosen)
         return self.view
 
@@ -244,7 +256,17 @@ class Bound:
         while len(seats) < len(self.view):
             made = seats.add()
             made.row = len(seats) - 1
-        setattr(state, self.index, self.view.index_of_key(chosen))
+        setattr(state, self.index, self.at(chosen))
+
+    def at(self, chosen):
+        """Where the cursor goes after a refill.
+
+        A key the view still shows keeps the cursor on it. A key it no longer
+        shows leaves the cursor NOWHERE -- drawing it on whatever row inherited
+        that position would be the UI stating something false. Nothing was
+        selected to begin with lands on the first line, which is what a list the
+        user has not touched yet should offer."""
+        return self.view.index_of_key(chosen) if chosen else self.view.first_line
 
     def selected_key(self, state):
         row = getattr(state, self.index)
@@ -317,8 +339,10 @@ class Bound:
         return "Refresh to read this list." if self.view is None else self.view.summary
 
     def facet_items(self):
-        """The facet switch's entries, or none when there is nothing to narrow by."""
-        return [] if self.view is None else self.view.facet_items()
+        """The facet switch's entries, or none when there is nothing to narrow by.
+        They are the TABLE's own kinds, so typing in the search box does not change
+        which entries exist -- only how many rows each one would show."""
+        return self._facets
 
     def facet_choices(self, _state=None, _context=None):
         """What the host's enum field is allowed to hold. An enum with no entries
