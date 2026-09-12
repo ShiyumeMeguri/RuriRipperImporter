@@ -18,40 +18,29 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, roster
 
 STATE = "ruri_exilium_scene"
 SPEC_KEY = "EXILIUM:scene"
 
-#: The loaded scene table. Module scope, not panel state: rebuilding the drawn list
-#: must not cost a re-read, and a column table is not something a host's property
-#: system can hold anyway.
+#: This tab's live view and the seats that draw it, plus the loaded scene table.
+#: Module scope, not panel state: rebuilding the drawn list must not cost a re-read,
+#: and a column table is not something a host's property system can hold anyway.
+BOUND = app_view.Bound(SPEC_KEY)
 _TABLE = {}
-
-_FIELD_LABELS = {"key": "Path", "label": "Scene", "group": "Family", "detail": "Folder",
-                 "archives": "Archives", "shipped": "Downloaded"}
 
 
 def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
 
-SCENE_ENTRY = Schema("ExiliumSceneEntry", """One drawn line: a folder header or a
-scene the catalog names.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("group", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("shipped", app_state.BOOL, False),
-    Field("is_group", app_state.BOOL, False),
-))
-
 SCENE = Schema("ExiliumScene", """The scene browser's whole state.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter by scene name, folder or family",
           update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=SCENE_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the scene list."),
     Field("downloaded_only", app_state.BOOL, True, "Downloaded",
@@ -67,76 +56,18 @@ HANDLERS = app_state.Handlers(
     "EXILIUM.scene", base=filtering.HANDLERS, on_filter_edit=_on_filter_edit)
 
 
-def _filter_fields():
-    table = _TABLE.get("scenes")
-    if table is None:
-        return (("label", "Scene"),)
-    names = sorted(table.names, key=lambda name: 0 if name == "label" else 1)
-    return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
-                 for name in names)
-
-
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=SPEC_KEY, fields=_filter_fields,
+    key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
 
 def rebuild(state):
+    """Ask the kernel for the drawn list as it is now stated. The search text, the
+    rules, the sections and the truncation are all answered on the other side."""
     with filtering.rebuilding():
-        _fill(state)
-
-
-def _fill(state):
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    table = _TABLE.get("scenes")
-    if table is None:
-        return
-    matched = cabmap_state.BRIDGE.search_data_table(
-        table, state.search.strip(), state.filter_rules)
-    labels = table.values("label")
-    groups = table.values("group")
-    shipped = table.values("shipped")
-    order = sorted((int(index) for index in matched
-                    if not state.downloaded_only or shipped[int(index)]),
-                   key=lambda index: (groups[index], labels[index]))
-    matched_count = len(order)
-    found = [{name: table.cell(index, name)
-              for name in ("key", "label", "group", "detail", "shipped")}
-             for index in order[:cabmap_state.LIST_CAP]]
-
-    counts = {}
-    for row in found:
-        counts[row["group"]] = counts.get(row["group"], 0) + 1
-
-    current_group = None
-    for row in found:
-        if row["group"] and row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.group = current_group
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["label"]
-        entry.key = row["key"]
-        entry.group = row["group"]
-        entry.detail = row["detail"]
-        entry.shipped = bool(float(row["shipped"] or 0))
-    state.status = "{0} of {1} scene(s){2}".format(
-        matched_count, table.row_count,
-        "" if matched_count == len(found) else
-        " · showing {0}, narrow your search to see the rest".format(len(found)))
-    filtering.restore_selection(state, chosen)
-
-
-def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+        BOUND.open(_TABLE.get("scenes"), state,
+                   shipped_only=state.downloaded_only)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +78,7 @@ def _loaded(context):
 
 
 def _has_selection(context):
-    return _loaded(context) and selected(state_of(context)) is not None
+    return _loaded(context) and BOUND.picked(state_of(context)) is not None
 
 
 def _refresh(context, arguments):
@@ -165,7 +96,7 @@ def _refresh(context, arguments):
 def _load(context, arguments):
     """Import the selected scene through the browser's own import -- one import
     path, so a fix there is a fix here."""
-    entry = selected(state_of(context))
+    entry = BOUND.picked(state_of(context))
     if entry is None:
         return
     for step in roster.load_address(context, entry.key, entry.label):
@@ -173,7 +104,7 @@ def _load(context, arguments):
 
 
 def _reveal(context, arguments):
-    entry = selected(state_of(context))
+    entry = BOUND.picked(state_of(context))
     if entry is None:
         return {"CANCELLED"}
     return roster.reveal_address(context, entry.key, entry.label)
@@ -198,13 +129,13 @@ REVEAL = command.COMMANDS.define(
 #: it is real catalog data with nothing behind it here. Filtering already happened
 #: against the game's own fields, so no row is hidden at draw time.
 _COLUMNS = (
-    app_layout.ListColumn("label", width=0.7,
-                          icon=lambda row: ("SCENE_DATA" if row.shipped
-                                            else "LIBRARY_DATA_BROKEN"),
-                          active=lambda row: row.shipped),
-    app_layout.ListColumn("detail", align=app_layout.RIGHT, enabled=False),
+    BOUND.column("", width=0.7,
+                 icon=lambda seat: ("SCENE_DATA" if BOUND.shipped(seat)
+                                    else "LIBRARY_DATA_BROKEN"),
+                 active=BOUND.shipped),
+    BOUND.column("detail", align=app_layout.RIGHT, enabled=False),
 )
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def draw(layout, context):
@@ -216,17 +147,15 @@ def draw(layout, context):
     head.operator(REFRESH.id, text="", icon="FILE_REFRESH")
 
     filtering.draw_search_row(layout, state)
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="exilium_scenes", group_key="is_group",
-                group_column=_GROUP_COLUMN)
-    layout.label(text=state.status, icon="INFO")
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "exilium_scenes",
+                       group_column=_GROUP_COLUMN)
 
     options = layout.column(align=True)
     options.prop(state, "downloaded_only", toggle=True, icon="IMPORT")
     # 与浏览器同一份导入选项 —— Load 走的本来就是浏览器自己的导入。
     app_browser.draw_import_options(options, context)
     actions = options.column(align=True)
-    actions.enabled = selected(state) is not None
+    actions.enabled = BOUND.picked(state) is not None
     actions.operator(LOAD.id)
     actions.operator(REVEAL.id)
 
@@ -238,4 +167,5 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    BOUND.close()
     _TABLE.clear()

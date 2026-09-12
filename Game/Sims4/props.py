@@ -15,75 +15,59 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
-from ...Kernel.app import command
+from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...Kernel.app.state import Field, Schema
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.sims4 import direct
 from . import read
 
 STATE = "ruri_sims4_props"
+SPEC_KEY = "Sims4:props"
 
-#: The dataset rows as last read. Module state like the browser's own caches: a draw never
-#: crosses the CLR boundary, a command fills this and the rows redraw.
-_ROWS = []
+#: This tab's live view and the seats that draw it, plus the table it reads. Module
+#: state like the browser's own caches: a draw never crosses the CLR boundary, a
+#: command asks for a new view and the seats redraw.
+BOUND = app_view.Bound(SPEC_KEY)
+_TABLE = [None]
 
 
 def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
 
-PROP = Schema("Sims4Prop", """One listed object, as the decoder states it.""", (
-    Field("name", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("source", app_state.STRING, ""),
-))
-
 PROPS = Schema("Sims4Props", """The Prop tab's own state: the cut the list is drawn with,
 and the rows it drew.""", (
-    Field("filter", app_state.STRING, "", "Filter",
+    Field("search", app_state.STRING, "", "Filter",
           "Keep the objects whose name, key or package contains this",
           update="on_filter", live=True),
-    Field("entries", app_state.COLLECTION, element=PROP),
-    Field("active", app_state.INT, 0),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
+    Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, ""),
-), include=(schemas.LOADING_STATE,))
+), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
 
 
 def _on_filter(state, context):
     rebuild(state)
 
 
-HANDLERS = app_state.Handlers("Sims4.props", on_filter=_on_filter)
+HANDLERS = app_state.Handlers("Sims4.props", base=filtering.HANDLERS,
+                              on_filter=_on_filter)
 
-
-def _matches(row, state):
-    needle = state.filter.strip().lower()
-    if not needle:
-        return True
-    return any(needle in str(row.get(field, "")).lower()
-               for field in ("name", "key", "source"))
+FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
+    key=SPEC_KEY, fields=BOUND.fields,
+    state_for=state_of,
+    apply=lambda context: rebuild(state_of(context))))
 
 
 def rebuild(state):
-    state.entries.clear()
-    for row in _ROWS:
-        if not _matches(row, state):
-            continue
-        entry = state.entries.add()
-        entry.name = row.get("name", "")
-        entry.key = row.get("key", "")
-        entry.source = row.get("source", "")
-    state.active = min(state.active, max(len(state.entries) - 1, 0))
-    state.status = "{0} of {1} object(s)".format(len(state.entries), len(_ROWS))
-
-
-def selected(state):
-    if 0 <= state.active < len(state.entries):
-        return state.entries[state.active]
-    return None
+    """Ask the kernel for the list as it is now stated. Matching is NOT done here:
+    the search text goes to the same vectorized engine every other list uses, so
+    "contains" means one thing in this application rather than one thing per tab."""
+    BOUND.open(_TABLE[0], state)
 
 
 def _loaded(context):
@@ -91,14 +75,14 @@ def _loaded(context):
 
 
 def _has_selection(context):
-    return _loaded(context) and selected(state_of(context)) is not None
+    return _loaded(context) and BOUND.picked(state_of(context)) is not None
 
 
 def _refresh(context, arguments):
     """Read every object the setup can place off the decoder."""
     state = state_of(context)
     try:
-        _ROWS[:] = direct.props(cabmap_state.BRIDGE)
+        _TABLE[0] = cabmap_state.BRIDGE.game_data(direct.PROPS)
     except Exception as exc:
         state.status = "{0}: {1}".format(type(exc).__name__, exc)
         return {"CANCELLED"}
@@ -109,13 +93,13 @@ def _refresh(context, arguments):
 def _import(context, arguments):
     """Read the selected object and hand it to the host."""
     state = state_of(context)
-    entry = selected(state)
+    entry = BOUND.picked(state)
     if entry is None:
         return
     browser = app_browser.state_of(context)
     options = app_browser.as_options(browser)
     key = entry.key
-    label = entry.name
+    label = entry.label
     stated = yield command.Read(lambda: read.package(key, label, options), 0.7)
     if stated is None:
         state.status = "'{0}' places nothing this setup carries.".format(label)
@@ -138,30 +122,32 @@ IMPORT = command.COMMANDS.define(
 
 
 _COLUMNS = (
-    app_layout.ListColumn("name", width=0.5, icon="OBJECT_DATA"),
-    app_layout.ListColumn("source", width=0.5, enabled=False),
+    BOUND.column("", width=0.5, icon="OBJECT_DATA"),
+    BOUND.column("source", width=0.5, enabled=False),
 )
 
 
 def draw(layout, context):
     state = state_of(context)
     command.draw_progress(layout, state)
-    head = layout.row(align=True)
-    head.operator(REFRESH.id, icon="FILE_REFRESH")
-    head.label(text=state.status)
-    if not _ROWS:
+    if state.status:
+        layout.label(text=state.status, icon="ERROR")
+    if _TABLE[0] is None:
+        layout.operator(REFRESH.id, icon="FILE_REFRESH")
         layout.label(text="List the objects to pick one.", icon="INFO")
         return
-    layout.prop(state, "filter", text="", icon="VIEWZOOM")
-    layout.list(state, "entries", "active", _COLUMNS, rows=12, identifier="sims4_props")
+    app_view.draw_head(BOUND, layout, state, REFRESH.id)
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "sims4_props", rows=12)
     app_browser.draw_import_options(layout, context)
     layout.operator(IMPORT.id)
 
 
 def register():
-    host_port.current().register_state(STATE, PROPS, HANDLERS)
+    host_port.current().register_state(STATE, PROPS, HANDLERS,
+                                       extra={"FILTER_SPEC_KEY": SPEC_KEY})
 
 
 def unregister():
     host_port.current().unregister_state(STATE)
-    _ROWS[:] = []
+    BOUND.close()
+    _TABLE[0] = None
