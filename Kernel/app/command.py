@@ -107,6 +107,10 @@ class Command:
         #: The host drives it -- modally in Blender, on a worker in Painter.
         self.steps = steps
         #: Panel state carrying loading/load_line/progress while that runs.
+        #: WHICH panel's progress and status a stepped run writes into: a name, or
+        #: a callable of the arguments for a command SEVERAL panels share -- the
+        #: button says which one pressed it, so one command can serve them all
+        #: rather than being defined once per panel.
         self.status_state = status_state
         self._settle = settle
         #: How to word a failure, in this command's own terms.
@@ -149,6 +153,11 @@ class Command:
                 ", ".join(repr(field.key) for field in self.arguments) or "none"))
         values.update(arguments)
         return values
+
+    def status_state_for(self, arguments):
+        """The panel whose progress and status this run writes into."""
+        return (self.status_state(arguments) if callable(self.status_state)
+                else self.status_state)
 
     def settle(self, context, result):
         """What to do with what the steps returned. Nothing, unless declared."""

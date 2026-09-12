@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
@@ -68,7 +69,7 @@ ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("downloaded_only", app_state.BOOL, True, "Downloaded",
           "Hide what the catalog names but this install never downloaded. Those rows "
           "have nothing to import; showing them offers a Load button that lies"),
-), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
+), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
 def _on_filter_edit(state, context):
@@ -289,6 +290,17 @@ _COLUMNS = (
 _GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
+
+def _seeds(_context, state):
+    """What the picked one IS, as archive names. This title addresses everything by
+    a catalog ADDRESS, and which archives one address lives in is the hook's own
+    join -- the same one Load walks."""
+    entry = BOUND.picked(state)
+    if entry is None or not entry.payload:
+        return []
+    return [row["cab"] for row in datasets.cabs_for([entry.payload]) if row["cab"]]
+
+
 def draw(layout, context):
     state = state_of(context)
 
@@ -307,6 +319,10 @@ def draw(layout, context):
     actions = options.column(align=True)
     actions.enabled = entry is not None
     actions.operator(LOAD.id)
+    shaders = layout.column(align=True)
+    shaders.enabled = entry is not None
+    shaders.prop(state, "shader_output")
+    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
     actions.operator(REVEAL.id)
     if state.kind == CHARACTERS:
         actions.operator(OUTFITS.id)

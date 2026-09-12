@@ -790,6 +790,21 @@ class RipperBridge:
         payload = self._bridge.SearchDataTable(str(handle), query or "", _flat_rules(rules))
         return np.frombuffer(bytes(payload), dtype=np.int32)
 
+    def export_shaders(self, seed_cabs, output_dir):
+        """Every shader the given seeds reach, written out as source.
+
+        NOT a switch on import: importing sets the shader mode to dummy on purpose
+        (no host here can use a compiled shader -- each rebuilds the game's shading
+        as its own node graphs), so decompiling during every import was pure cost.
+        Reading the shaders is its own question, and it loads the same dependency
+        closure an import of those seeds would.
+
+        Returns one row per shader: what the game calls it, where it landed, how
+        big it came out and which archive carried it."""
+        from . import column_table
+        return column_table.ColumnTable.from_pinned(self._bridge.ExportShaders(
+            self._loaded(), _string_array(list(seed_cabs)), str(output_dir)))
+
     def open_host_table(self, handle, columns, rows, roles=()):
         """Publish a list THIS side assembled as a searchable table, so it gets
         the same vectorized search and the same rules as every other list

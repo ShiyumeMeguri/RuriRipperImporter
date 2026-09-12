@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
@@ -57,13 +58,10 @@ list is asked for, and the seats it is drawn in.""", (
           items="facet_items", update="on_filter_edit"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by name, id, kind or type", update="on_filter_edit", live=True),
-    Field("shader_output", app_state.STRING, "", "Shader Folder",
-          "Where Decompile Shaders writes this character's shader source",
-          subtype=app_state.DIRECTORY),
     Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, ""),
-), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
+), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
 def _on_filter_edit(state, context):
@@ -155,30 +153,14 @@ def _import(context, arguments):
         name, built.imported, "  ".join(built.warnings[:2]))
 
 
-def _shaders(context, arguments):
-    """Decompile every shader variant this row's materials compiled to.
 
-    Unreal ships no shader asset: a material's program lives as blobs in an archive
-    shared with everything else the build cooked. What comes out is the vertex and
-    pixel stages as source, one file per variant, under the stated folder."""
-    state = state_of(context)
-    name = BOUND.value(state)
-    if BOUND.selected(state) < 0:
-        return
-    output = host_port.current().absolute_path(state.shader_output) if state.shader_output else ""
-    if not output:
-        state.status = "State a Shader Folder first."
-        return
+def _shaders(state, output):
+    """This engine ships no shader ASSET: a material's program lives as blobs in an
+    archive shared with everything else the build cooked. So it answers the shared
+    button itself -- what lands on disk is the vertex and pixel stages as source,
+    one file per variant."""
     packages = _packages(state)
-    if not packages:
-        state.status = "{0}: this install ships no model for that row.".format(name)
-        return
-    rows = yield command.Read(lambda: datasets.shaders(packages[0], output), 0.9)
-    if not rows:
-        state.status = "{0}: no archive carries a shader map for its materials.".format(name)
-        return
-    state.status = "{0}: {1} archive(s) -> {2}".format(
-        name, len(rows), rows[0].get("output", output))
+    return datasets.shaders(packages[0], output) if packages else []
 
 
 def _reveal(context, arguments):
@@ -200,11 +182,6 @@ IMPORT = command.COMMANDS.define(
     description="Import this row whole, exactly as the browser would",
     icon="IMPORT", poll=_has_selection, steps=True, status_state=STATE,
     failure="Unreal character import failed")
-SHADERS = command.COMMANDS.define(
-    "ruri.unreal_character_shaders", "Decompile Shaders", _shaders,
-    description="Decompile every shader variant this row's materials compiled to",
-    icon="NODE_MATERIAL", poll=_has_selection, steps=True, status_state=STATE,
-    failure="Unreal shader decompile failed")
 REVEAL = command.COMMANDS.define(
     "ruri.unreal_character_reveal", "Reveal", _reveal,
     description="Show the selected row's package in the file browser",
@@ -221,21 +198,15 @@ _COLUMNS = (
 )
 
 
+
+PANEL = cast_panel.Panel(
+    BOUND, _COLUMNS, "unreal_characters", REFRESH.id, state_of, STATE,
+    seeds=lambda _context, state: _packages(state),
+    actions=(IMPORT.id, REVEAL.id), shaders=_shaders)
+
+
 def draw(layout, context):
-    state = state_of(context)
-    command.draw_progress(layout, state)
-    app_view.draw_head(BOUND, layout, state, REFRESH.id)
-    app_view.draw_list(BOUND, layout, state, _COLUMNS, "unreal_characters")
-    if state.status:
-        layout.label(text=state.status, icon="ERROR")
-    options = layout.column(align=True)
-    options.enabled = BOUND.selected(state) >= 0
-    # 与浏览器同一份导入选项 —— 这里走的也是宿主那一个导入入口。
-    app_browser.draw_import_options(options, context)
-    options.operator(IMPORT.id, icon="IMPORT")
-    options.operator(REVEAL.id, icon="FILE_FOLDER")
-    layout.prop(state, "shader_output")
-    layout.operator(SHADERS.id, icon="NODE_MATERIAL")
+    cast_panel.draw(PANEL, layout, context, state_of(context))
 
 
 def register():

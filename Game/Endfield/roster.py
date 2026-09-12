@@ -22,6 +22,7 @@ import json
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
@@ -121,7 +122,7 @@ ROSTER = Schema("Roster", """The cast browser's state.""", (
           "Which of the game's own model families to import",
           items=(("postmodel", "Post", "The in-world actor model"),
                  ("uimodel", "UI", "The model menus and portraits pose"))),
-), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
+), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
 def _pane_items(state, context):
@@ -329,6 +330,27 @@ _COLUMNS = (
 )
 
 
+
+def _seeds(context, state):
+    """What the picked one IS, as archive names -- what every shared button below
+    the list is asked of. The kind is not a branch: a playable character and an npc
+    are two answers to one question (``cast.resolve``), and which one this row gets
+    is the game's own filing."""
+    entry = BOUND.picked(state)
+    if entry is None:
+        return []
+    member = {"key": entry.key, "label": entry.label,
+              "character": entry.key if state.kind == CHARACTERS else "",
+              "template": entry.key if state.kind == NPCS else ""}
+    packages = cast.resolve([member], detail_level(context)).get(member["key"] or "")
+    return list(packages.cabs) if packages is not None else []
+
+
+PANEL = cast_panel.Panel(
+    BOUND, _COLUMNS, "roster", REFRESH.id, state_of, STATE, seeds=_seeds,
+    actions=(LOAD.id, REVEAL.id, ANIMATIONS.id))
+
+
 def draw(layout, context):
     """The cast browser. Returns which pane is on screen, so the tab that owns it
     can hand the rest of its space to the story browser instead."""
@@ -359,6 +381,11 @@ def draw(layout, context):
     options.operator(LOAD.id, icon="IMPORT")
     options.operator(REVEAL.id, icon="FILE_FOLDER")
     options.operator(ANIMATIONS.id, icon="ANIM_DATA")
+
+    shaders = layout.column(align=True)
+    shaders.enabled = entry is not None
+    shaders.prop(state, "shader_output")
+    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
     return state.pane
 
 

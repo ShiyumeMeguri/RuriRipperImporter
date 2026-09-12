@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
+from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
@@ -92,7 +93,7 @@ CHARA = Schema("IllusionChara", """The character tab's own state.""", (
     # personality number, as her card states it. Read off the card by the build, so
     # it is right without anyone having to know it.
     Field("personality", app_state.INT, 0, "Personality", minimum=-100, soft_maximum=100),
-), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
+), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
 #: What each pane of this tab is called, and which declared section answers for
@@ -299,6 +300,22 @@ _COLUMNS = (
 _GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
+
+def _seeds(_context, state):
+    """What the picked card IS, as archive names: the bundles every piece she wears
+    in the chosen outfit resolves to -- the same set Build hands over."""
+    bundles = []
+    for part in wanted_plan(state):
+        if part["bundle"] not in bundles:
+            bundles.append(part["bundle"])
+    return datasets.cabs_for(bundles)
+
+
+PANEL = cast_panel.Panel(
+    BOUND, _COLUMNS, "illusion_cast", REFRESH.id, state_of, STATE, seeds=_seeds,
+    group_column=_GROUP_COLUMN, actions=(BUILD.id,))
+
+
 def draw_model(layout, context):
     state = state_of(context)
     command.draw_progress(layout, state)
@@ -329,6 +346,11 @@ def draw_model(layout, context):
     # 与浏览器同一份导入选项 —— 组装走的也是宿主那一个导入入口。
     app_browser.draw_import_options(options, context)
     options.operator(BUILD.id)
+
+    shaders = layout.column(align=True)
+    shaders.enabled = bool(card)
+    shaders.prop(state, "shader_output")
+    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
 
 
 def draw_tab(layout, context):

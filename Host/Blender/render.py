@@ -325,9 +325,10 @@ def operator_class(command):
         return command.run(context, arguments_of(self))
 
     def status(self, context):
-        if not command.status_state:
+        name = command.status_state_for(arguments_of(self))
+        if not name:
             return None
-        return host_port.current().panel_state(context, command.status_state)
+        return host_port.current().panel_state(context, name)
 
     def settle(self, context, result):
         outcome = command.settle(context, result)
