@@ -546,6 +546,14 @@ def _rebuild_clips(state):
             " · {0} checked".format(len(checked)) if checked else "")
 
 
+def _rebuild_lines(state):
+    """What this unit says, in the order it says it -- which is the order the hook
+    states the lines in, so the view keeps it rather than sorting a script."""
+    with filtering.rebuilding():
+        LINES.open(_lines_table(state), state, ordered=True)
+        state.line_status = "" if LINES.view is None else LINES.summary
+
+
 def _rebuild_quests(state):
     """The mission's own quest graph, in the order its main path walks it -- which
     is the order the hook states it in, so the view keeps it."""

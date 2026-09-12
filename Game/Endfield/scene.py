@@ -137,10 +137,16 @@ def _rect(state):
     entry = _selected(state)
     if entry is None:
         return None
-    for row in _rows(state):
-        if row["id"] == entry.key:
-            return scene_state.scaled(row["rect"], state.scale)
-    return None
+    # The line the user is on IS the row: the rect is four of its own cells, read
+    # off the view. Scanning a second copy of the list to find it again would be a
+    # second statement of which row is selected.
+    stated = entry.values()
+    try:
+        rect = (float(stated["minX"]), float(stated["minZ"]),
+                float(stated["maxX"]), float(stated["maxZ"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return scene_state.scaled(rect, state.scale)
 
 
 def _summary(state):
