@@ -8,6 +8,12 @@ cast REPLACES that dataset with its own, and then the rows carry the name the ga
 shows a player, in the language the host reads in. Either way this panel draws the
 same columns and never knows which it got.
 
+A build that files its cast under its own kinds says so on every row, and the switch
+above the list is built FROM those rows: one entry per kind the decoder actually
+returned, in the decoder's own words. Nothing here decides what a monster is, and a
+build that adds a kind shows it with no edit -- a build that states none has one
+switch entry and the list reads as it always did.
+
 Importing one is the host's own import of that package -- one import path, so a fix
 there is a fix here. That is also why this tab crosses: a character is an OBJECT,
 and what the decoder hands over for it are the normalised forms every host's
@@ -43,14 +49,25 @@ def state_of(context):
 CHARACTER = Schema("UnrealCharacter", """One listed character, as the decoder states it.""", (
     Field("name", app_state.STRING, ""),
     Field("identifier", app_state.STRING, ""),
+    Field("detail", app_state.STRING, ""),
     Field("package", app_state.STRING, ""),
     Field("folder", app_state.STRING, ""),
 ))
 
+#: The column the decoder states a row's kind in, and the one it states the finer
+#: grain in. Rows that carry neither are all one kind, which is what a build with no
+#: kinds of its own looks like.
+KIND = "kind"
+DETAIL = "type"
+EVERY = "*"
+
 CHARACTERS = Schema("UnrealCharacters", """The Characters tab's own state: the cut the
 list is drawn with, and the rows it drew.""", (
+    Field("kind", app_state.ENUM, None, "Kind",
+          "Which of the kinds the build files its cast under to list",
+          items="kind_choices", update="on_filter"),
     Field("filter", app_state.STRING, "", "Filter",
-          "Keep the characters whose name, id or folder contains this",
+          "Keep the characters whose name, id, type or folder contains this",
           update="on_filter", live=True),
     Field("shader_output", app_state.STRING, "", "Shader Folder",
           "Where Decompile Shaders writes this character's shader source",
@@ -65,15 +82,36 @@ def _on_filter(state, context):
     rebuild(state)
 
 
-HANDLERS = app_state.Handlers("SBUE.characters", on_filter=_on_filter)
+def _kinds():
+    """Every kind the rows carry, most populous first, with how many carry it."""
+    counted = {}
+    for row in _ROWS:
+        counted[row.get(KIND, "")] = counted.get(row.get(KIND, ""), 0) + 1
+    return sorted(counted.items(), key=lambda pair: (-pair[1], pair[0]))
+
+
+def _kind_choices(state, context):
+    counted = _kinds()
+    if len(counted) < 2:
+        return [(EVERY, "All", "Everything the build ships")]
+    return [(EVERY, "All", "{0} row(s)".format(len(_ROWS)))] + [
+        (kind or EVERY, kind or "Unfiled", "{0} row(s)".format(count))
+        for kind, count in counted]
+
+
+HANDLERS = app_state.Handlers("SBUE.characters", on_filter=_on_filter,
+                              kind_choices=_kind_choices)
 
 
 def _matches(row, state):
+    kind = state.kind or EVERY
+    if kind != EVERY and (row.get(KIND, "") or EVERY) != kind:
+        return False
     needle = state.filter.strip().lower()
     if not needle:
         return True
     return any(needle in str(row.get(field, "")).lower()
-               for field in ("name", "id", "package", "folder"))
+               for field in ("name", "id", KIND, DETAIL, "package", "folder"))
 
 
 def rebuild(state):
@@ -84,10 +122,13 @@ def rebuild(state):
         entry = state.entries.add()
         entry.name = row.get("name", "")
         entry.identifier = str(row.get("id", ""))
+        entry.detail = str(row.get(DETAIL, ""))
         entry.package = row.get("package", "")
         entry.folder = row.get("folder", "")
     state.active = min(state.active, max(len(state.entries) - 1, 0))
-    state.status = "{0} of {1} character(s)".format(len(state.entries), len(_ROWS))
+    shipped = sum(1 for row in _ROWS if row.get("package"))
+    state.status = "{0} of {1} row(s), {2} with a model".format(
+        len(state.entries), len(_ROWS), shipped)
 
 
 def selected(state):
@@ -213,8 +254,9 @@ REVEAL = command.COMMANDS.define(
 
 _COLUMNS = (
     app_layout.ListColumn("name", width=0.4, icon="OUTLINER_OB_ARMATURE"),
-    app_layout.ListColumn("identifier", width=0.15, align=app_layout.RIGHT, enabled=False),
-    app_layout.ListColumn("folder", width=0.8, enabled=False),
+    app_layout.ListColumn("identifier", width=0.22, align=app_layout.RIGHT, enabled=False),
+    app_layout.ListColumn("detail", width=0.22, enabled=False),
+    app_layout.ListColumn("folder", width=0.7, enabled=False),
 )
 
 
@@ -227,6 +269,8 @@ def draw(layout, context):
     if not _ROWS:
         layout.label(text="List the characters to pick one.", icon="INFO")
         return
+    if len(_kinds()) > 1:
+        layout.prop(state, "kind", expand=True)
     layout.prop(state, "filter", text="", icon="VIEWZOOM")
     layout.list(state, "entries", "active", _COLUMNS, rows=12, identifier="unreal_characters")
     # 与浏览器同一份导入选项 —— 这里走的也是宿主那一个导入入口。

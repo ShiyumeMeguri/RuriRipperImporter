@@ -61,7 +61,10 @@ _CELLS = {"world": "", "rows": [], "error": ""}
 #: already-open table instead of rebuilding one that has not changed.
 _published = {}
 
-_LEVEL_FIELDS = (("name", "Name"), ("world", "Package"))
+#: What the list is searched and ruled over. ``kind`` is the decoder's own word for
+#: which of the build's tables claimed a level -- empty for a build that names none of
+#: them, which is the family answer -- so a rule on it costs nothing where it is absent.
+_LEVEL_FIELDS = (("name", "Name"), ("kind", "Kind"), ("world", "Package"))
 _CELL_FIELDS = (("name", "Cell"), ("level", "Package"), ("grid", "Grid"))
 
 
@@ -86,6 +89,7 @@ def _active_state(context):
 LEVEL_ENTRY = Schema("UnrealLevelEntry", """One self-contained level.""", (
     Field("key", app_state.STRING, ""),
     Field("name", app_state.STRING, ""),
+    Field("kind", app_state.STRING, ""),
 ))
 
 CELL_ENTRY = Schema("UnrealCellEntry", """One streaming cell of a partitioned
@@ -139,7 +143,7 @@ def _cell_count(row):
 
 def _world_choices(state, context):
     return [(row.get("world", ""), row.get("name", "") or row.get("world", ""),
-             "{0} streaming cell(s)".format(_cell_count(row)))
+             "{0} streaming cell(s) -- {1}".format(_cell_count(row), row.get("world", "")))
             for row in _WORLDS["rows"] if str(row.get("partitioned", "0")) == "1"]
 
 
@@ -223,11 +227,13 @@ def _fill_levels(state):
     state.entries.clear()
     rows = _matching("ruri.unreal.level", _level_rows(),
                      tuple(key for key, _label in _LEVEL_FIELDS),
-                     lambda row: (row.get("name", ""), row.get("world", "")), state)
+                     lambda row: (row.get("name", ""), row.get("kind", ""),
+                                  row.get("world", "")), state)
     for row in rows:
         entry = state.entries.add()
         entry.key = row.get("world", "")
         entry.name = row.get("name", "") or row.get("world", "")
+        entry.kind = row.get("kind", "")
     state.status = "{0} of {1} self-contained level(s)".format(
         len(state.entries), len(_level_rows()))
     filtering.restore_selection(state, chosen)
@@ -434,6 +440,7 @@ IMPORT_WORLD = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 _LEVEL_COLUMNS = (
     app_layout.ListColumn("name", width=0.6, icon="FILE_3D"),
+    app_layout.ListColumn("kind", width=0.2, enabled=False),
     app_layout.ListColumn("key", align=app_layout.RIGHT, enabled=False),
 )
 #: A cell the cook folded into the world package is pinned; one the window names
