@@ -810,7 +810,8 @@ class RipperBridge:
             self._map, str(dataset_id), _named_args(args), token))
 
     def open_view(self, table_or_handle, facet="", query="", rules=None, note="",
-                  shipped_only=True, sort_column="", sort_direction=0, window=0):
+                  shipped_only=True, sort_column="", sort_direction=0, window=0,
+                  ordered=False, label_column="", group_column=""):
         """One drawn list, composed ENTIRELY on the C# side: quick search, the
         Include/Exclude rules, the facet, the shipped test, the sort, the group
         headers, the window and the status line all happen there, over the very
@@ -827,7 +828,8 @@ class RipperBridge:
         handle = getattr(table_or_handle, "handle", table_or_handle)
         return self._bridge.OpenView(str(handle), str(facet), query or "", _flat_rules(rules),
                                      str(note), bool(shipped_only), str(sort_column),
-                                     int(sort_direction), int(window))
+                                     int(sort_direction), int(window), bool(ordered),
+                                     str(label_column), str(group_column))
 
     def game_data_blob(self, dataset_id, cancellation=None, **args):
         """One published dataset whose payload is bytes rather than rows."""

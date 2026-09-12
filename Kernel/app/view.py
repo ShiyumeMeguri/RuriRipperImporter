@@ -77,11 +77,13 @@ class View:
 
     @classmethod
     def open(cls, table, facet="", search="", rules=None, note="", shipped_only=True,
-             sort_column="", sort_direction=0, window=WINDOW):
+             sort_column="", sort_direction=0, window=WINDOW, ordered=False,
+             label_column="", group_column=""):
         return cls(cabmap_state.BRIDGE.open_view(
             table, facet=facet, query=search, rules=rules, note=note,
             shipped_only=shipped_only, sort_column=sort_column,
-            sort_direction=sort_direction, window=window))
+            sort_direction=sort_direction, window=window, ordered=ordered,
+            label_column=label_column, group_column=group_column))
 
     def close(self):
         native, self._native = self._native, None
@@ -123,6 +125,10 @@ class View:
 
     def has(self, column):
         return column in self._rows.names
+
+    def values(self, row):
+        """One drawn line as every column the view carries."""
+        return self._rows.row(row)
 
     # -- what the list as a whole says -------------------------------------
     @property
@@ -174,12 +180,18 @@ class Bound:
     replaces the old one (and releases its pinned buffers); the seats stay.
     """
 
-    __slots__ = ("key", "view", "table")
+    __slots__ = ("key", "view", "table", "seats", "index", "search_field")
 
-    def __init__(self, key):
+    def __init__(self, key, seats="rows", index="active_index", search="search"):
         self.key = key
         self.view = None
         self.table = None
+        #: WHICH fields of the panel's state this list lives in. A tab with two
+        #: lists in it holds two of these, and neither has to be the one called
+        #: "rows".
+        self.seats = seats
+        self.index = index
+        self.search_field = search
 
     def close(self):
         view, self.view = self.view, None
@@ -202,7 +214,8 @@ class Bound:
         self.close()
         if table is None:
             return None
-        self.view = View.open(table, facet=_facet(state), search=getattr(state, "search", ""),
+        self.view = View.open(table, facet=_facet(state),
+                              search=getattr(state, self.search_field, ""),
                               rules=list(getattr(state, "filter_rules", ())) + list(standing),
                               **query)
         self.seat(state, chosen)
@@ -227,21 +240,21 @@ class Bound:
         """Grow the seat pool to cover the view and put the cursor back on the
         row carrying ``chosen``. The cursor is an IDENTITY: the row at position
         seven before a keystroke is a different thing after one."""
-        seats = state.rows
+        seats = getattr(state, self.seats)
         while len(seats) < len(self.view):
             made = seats.add()
             made.row = len(seats) - 1
-        state.active_index = self.view.index_of_key(chosen)
+        setattr(state, self.index, self.view.index_of_key(chosen))
 
     def selected_key(self, state):
-        row = state.active_index
+        row = getattr(state, self.index)
         if self.view is None or not 0 <= row < len(self.view):
             return ""
         return self.view.key(row)
 
     def selected(self, state):
         """The picked line's number, or -1 when the pick is a header or nothing."""
-        row = state.active_index
+        row = getattr(state, self.index)
         if self.view is None or not 0 <= row < len(self.view) or self.view.is_group(row):
             return -1
         return row
@@ -337,6 +350,12 @@ class Picked:
     def cell(self, column=""):
         return self._bound.view.text(self.row, column)
 
+    def values(self):
+        """Every column of this one line, for a caller that wants the whole row --
+        a loader handed what the game states about it. One row's cells, never a
+        lookup: the line the user is on IS the row."""
+        return self._bound.view.values(self.row)
+
 
 def _facet(state):
     return getattr(state, "facet", "") or EVERY
@@ -353,9 +372,11 @@ def draw_head(bound, layout, state, refresh_id):
     filtering.draw_search_row(layout, state, extra_operator=(refresh_id, "FILE_REFRESH"))
 
 
-def draw_list(bound, layout, state, columns, identifier, rows=10, group_column=None):
+def draw_list(bound, layout, state, columns, identifier, rows=10, group_column=None,
+              summary=True):
     """The list and what it came to, drawn the same way for every game."""
-    layout.list(state, "rows", "active_index", columns, rows=rows, identifier=identifier,
+    layout.list(state, bound.seats, bound.index, columns, rows=rows, identifier=identifier,
                 group_key=bound.is_group, group_column=group_column or bound.column(),
                 visible_count=bound.count)
-    layout.label(text=bound.summary, icon="INFO")
+    if summary:
+        layout.label(text=bound.summary, icon="INFO")

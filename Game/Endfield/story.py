@@ -47,6 +47,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets
 
@@ -70,17 +71,6 @@ def projection(name):
         __package__, host_port.current().name, name))
 
 STORY_SPEC_KEY = "Endfield:story"
-
-# Column labels worth spelling out; any other column the hook adds to the table
-# shows up under its own name with no edit here.
-_FIELD_LABELS = {"unit": "Story Unit", "group": "Group", "shots": "Shots", "clips": "Clips",
-                 "assets": "Assets", "actors": "Actors", "variants": "Variants",
-                 "anchor": "Folder", "channel": "Channel", "actor": "Actor",
-                 "character": "Character Id", "kinds": "Kinds", "units": "Units",
-                 "cutscenes": "Cutscene Clips", "dialogs": "Dialogue Clips",
-                 "mission": "Mission Id", "title": "Mission", "kind": "Mission Kind",
-                 "chapter": "Chapter", "level": "Level Id", "place": "Place",
-                 "lines": "Spoken Lines", "summary": "Recap", "relation": "Attributed By"}
 
 # The two ways to come at the same library: by the演出 the game plays, or by the
 # one it animates. Both are the game's own filing -- the second is the reason this
@@ -151,26 +141,11 @@ def _selection_key(state):
         else (BY_ACTOR, "", state.actor)
 
 
-def _key_column(state):
-    return "unit" if state.mode == BY_STORY else "actor"
-
-
 def _filter_fields():
     """The rule vocabulary = the columns the loaded list actually has, so a column
     the hook adds is filterable the day it appears, and the two modes offer their
-    own genuinely different fields. The list's own key leads: the first field is
-    what a new rule starts on."""
-    try:
-        state = state_of(None)
-    except (KeyError, RuntimeError):
-        return (("unit", "Story Unit"),)
-    table = _top_table(state)
-    if table is None:
-        return (("unit", "Story Unit"),)
-    leading = _key_column(state)
-    names = sorted(table.names, key=lambda name: 0 if name == leading else 1)
-    return tuple((name, _FIELD_LABELS.get(name, name.replace("_", " ").title()))
-                 for name in names)
+    own genuinely different fields."""
+    return TOP.fields()
 
 
 def _quick_relation(field):
@@ -208,10 +183,8 @@ def _on_view_change(state, context):
     state.clip_status = ""
     _forget_context(state)
     if _top_table(state) is None:
-        state.entries.clear()
         state.status = "Refresh to read the {0} out of the loaded cabmap.".format(
             "actor index" if state.mode == BY_ACTOR else state.channel + " units")
-        return
     _rebuild_top(state)
 
 
@@ -239,14 +212,11 @@ def _on_clip_check(row, context):
         checked.pop(row.container, None)
 
 
-STORY_ENTRY = Schema("EndfieldStoryEntry", """One drawn line of the unit list: a
-group header or a story unit.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("group", app_state.STRING, ""),
-    Field("detail", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
+#: The top list's live view and the seats that draw it. Both modes are views of
+#: one of the hook's own tables -- a unit tally or an actor tally -- and which
+#: column is the name, the id, the section or the summary is each column's own
+#: statement, made where that tally is built.
+TOP = app_view.Bound("Endfield:story")
 
 STORY_CLIP = Schema("EndfieldStoryClip", """One drawn line of the clip list: a
 shot/kind header, or one animation the unit plays. ``clip`` is false for a row the
@@ -323,7 +293,7 @@ STORY = Schema("EndfieldStory", """The story browser's whole state.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter the list by any column the table has",
           update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=STORY_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0, update="on_entry_pick"),
     Field("status", app_state.STRING, "Load a cabmap, then refresh."),
 
@@ -392,180 +362,47 @@ HANDLERS = app_state.Handlers(
 
 
 def _rebuild_top(state):
-    """Rebuild the drawn list on top -- units or actors, whichever mode is on. The
-    search text and the Include/Exclude rules go to the same C# engine the bundle
-    browser searches with, over the very buffers this table was built from; this
-    side receives row ids and reads cells.
+    """Ask the kernel for the drawn list on top -- units or actors, whichever mode
+    is on. Nothing is matched, ordered, grouped, counted or worded here: the tally
+    the hook built already carries its own sections and summaries, in the order it
+    means them to be read.
 
     What is OPEN survives this: the selection's identity is its key, not its
     position, so the highlight is re-pointed at the same unit/actor afterwards --
     and a filter that hides it leaves it open rather than swapping it for
     whichever row inherited the index."""
     with filtering.rebuilding():
-        _fill_top(state)
+        opened = _opened(state)
+        view = TOP.open(_top_table(state), state, ordered=True,
+                        note=state.channel if state.mode == BY_STORY else "")
+        if view is None:
+            return
+        state.status = view.summary + _elsewhere_note(state, view)
+        if opened and view.index_of_key(opened) < 0:
+            state.status += " · {0} still open (filtered out)".format(opened)
 
 
-def _elsewhere(state, query):
-    """How many rows the OTHER channel has for this query, and its label.
+def _elsewhere_note(state, view):
+    """Nothing HERE is not nothing ANYWHERE: the list is split in two and the search
+    only sees the half in front, so an empty result is otherwise indistinguishable
+    from the game not having it -- while the other half may be showing it.
 
-    Only asked when this channel has none, and only of a table already read --
-    a search box must not trigger a cabmap read on every keystroke."""
-    if not query or state.mode != BY_STORY:
-        return 0, ""
+    Only asked when this channel has none, and only of a table already read -- a
+    search box must not trigger a cabmap read on every keystroke."""
+    query = state.search.strip()
+    if view.matched or not query or state.mode != BY_STORY:
+        return ""
     other = datasets.DIALOG if state.channel == datasets.CUTSCENE else datasets.CUTSCENE
     table = _UNITS.get((BY_STORY, other))
     try:
         if table is None:
             table = datasets.story_units(other, _language())
             _UNITS[(BY_STORY, other)] = table
-        return len(cabmap_state.BRIDGE.search_data_table(table, query, None)), other
+        found = len(cabmap_state.BRIDGE.search_data_table(table, query, None))
     except Exception:
-        return 0, other
-
-
-def _fill_top(state):
-    state.entries.clear()
-    table = _top_table(state)
-    if table is None:
-        return
-    query = state.search.strip()
-    matched = cabmap_state.BRIDGE.search_data_table(table, query, state.filter_rules)
-    # Nothing HERE is not nothing ANYWHERE: the list is split in two and the search
-    # only sees the half in front, so an empty result is otherwise indistinguishable
-    # from the game not having it -- while the other half may be showing it.
-    hint = ""
-    if len(matched) == 0 and query:
-        elsewhere, other = _elsewhere(state, query)
-        if elsewhere:
-            hint = " \u00b7 {0} match(es) in {1} -- switch Channel".format(
-                elsewhere, other)
-    by_story = state.mode == BY_STORY
-    key_column = _key_column(state)
-    keys = table.values(key_column)
-    if by_story:
-        # Units of one mission belong together, and the mission is what the game
-        # plays them from -- so the folder prefix only orders the units nothing
-        # attributed, which is exactly the set it is still the best answer for.
-        missions = table.values("mission")
-        groups = table.values("group")
-        order = sorted((int(index) for index in matched),
-                       key=lambda index: (missions[index] or groups[index], keys[index]))
-    else:
-        # Named first, characters ahead of the rest of the named cast, and inside
-        # each the most-animated first -- which puts the cast the story revolves
-        # around on top and leaves the nameless cameras and props at the bottom.
-        # WHO one is, and whether the game names them at all, is the hook's join.
-        named = table.values("named")
-        clips = table.values("clips")
-        order = sorted((int(index) for index in matched),
-                       key=lambda index: (_ACTOR_RANK.get(named[index], len(_ACTOR_RANK)),
-                                          -float(clips[index])))
-    columns = ("unit", "group", "shots", "clips", "actors", "variants",
-               "mission", "title", "kind", "chapter", "place", "lines") if by_story \
-        else ("actor", "who", "title", "named", "character", "kinds", "units",
-              "cutscenes", "dialogs", "clips", "stories", "missions", "places")
-    rows = [{name: table.cell(index, name) for name in columns}
-            for index in order[:cabmap_state.LIST_CAP]]
-    for row in rows:
-        row["group"] = _unit_group(row) if by_story else _actor_group(row)
-
-    counts = {}
-    for row in rows:
-        counts[row["group"]] = counts.get(row["group"], 0) + 1
-
-    current_group = None
-    for row in rows:
-        if row["group"] and row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.group = current_group
-            header.is_group = True
-        entry = state.entries.add()
-        # The row's IDENTITY stays the game's own token either way; what is DRAWN
-        # is the name it has. Keying on the drawn name would break the moment two
-        # of them share one, which this cast does -- both protagonists are 管理员.
-        entry.key = row["unit"] if by_story else row["actor"]
-        entry.label = entry.key if by_story else (row["who"] or row["actor"])
-        entry.group = row["group"]
-        entry.detail = _unit_detail(row) if by_story else _actor_detail(row)
-    opened = _opened(state)
-    shown = filtering.restore_selection(state, opened)
-    hidden = "" if shown or not opened else " · {0} still open (filtered out)".format(opened)
-    state.status = "{0} of {1} {2}{3}{4}".format(
-        len(order), len(table),
-        "{0} unit(s)".format(state.channel) if by_story else "actor(s)",
-        "" if len(order) == len(rows) else
-        " · showing {0}, narrow the filter to see the rest".format(len(rows)),
-        hidden) + hint
-
-
-def _unit_group(row):
-    """The header a unit is drawn under: the mission that plays it, under that
-    mission's own name. Only a unit no mission reaches falls back to the folder
-    prefix the game's own file naming leads with."""
-    if row.get("title"):
-        return row["title"]
-    return row.get("mission") or row["group"]
-
-
-def _unit_detail(row):
-    """The one-line summary of a unit: what it plays and where it happens. A shot
-    count of zero is a unit whose animations the game does not ship separately,
-    which is worth reading rather than hiding."""
-    parts = []
-    if row.get("place"):
-        parts.append(row["place"])
-    shots = int(row["shots"] or 0)
-    if shots:
-        parts.append("{0} shot(s)".format(shots))
-    parts.append("{0} clip(s)".format(int(row["clips"] or 0)))
-    lines = int(row.get("lines") or 0)
-    if lines:
-        parts.append("{0} line(s)".format(lines))
-    actors = int(row["actors"] or 0)
-    if actors:
-        parts.append("{0} actor(s)".format(actors))
-    if row["variants"]:
-        parts.append(row["variants"])
-    return " · ".join(parts)
-
-
-# What kind of name the game has for a row, as headers, in the order a cast list
-# is worth reading in. WHICH one a row is comes from the hook's join against the
-# game's own rosters; only the wording and the order are ours.
-_ACTOR_GROUPS = {datasets.ACTOR_CHARACTER: "Characters",
-                 datasets.ACTOR_NPC: "Named cast",
-                 datasets.ACTOR_PLACED: "Named cast"}
-_ACTOR_RANK = {datasets.ACTOR_CHARACTER: 0, datasets.ACTOR_NPC: 1, datasets.ACTOR_PLACED: 2}
-_UNNAMED_GROUP = "Unnamed (cameras, props, crowd)"
-
-
-def _actor_group(row):
-    """Whether the game gives this one a name, and of which kind. One the game's
-    own rosters do not know is still listed -- the story animates plenty of
-    cameras, props and crowd models -- it is just filed as what it is."""
-    return _ACTOR_GROUPS.get(row["named"], _UNNAMED_GROUP)
-
-
-def _actor_detail(row):
-    """The one-line summary of one person: how much of the story they are in. The
-    stories are NAMED in the box under the list rather than here, since a lead
-    appears in sixty of them and no list row is that wide."""
-    parts = []
-    if row["title"]:
-        parts.append(row["title"])
-    stories = int(row["stories"] or 0)
-    if stories:
-        parts.append("{0} story(s)".format(stories))
-    parts.append("{0} clip(s)".format(int(row["clips"] or 0)))
-    cutscenes = int(row["cutscenes"] or 0)
-    dialogs = int(row["dialogs"] or 0)
-    if cutscenes:
-        parts.append("{0} cutscene".format(cutscenes))
-    if dialogs:
-        parts.append("{0} dialogue".format(dialogs))
-    return " · ".join(parts)
+        return ""
+    return "" if not found else \
+        " \u00b7 {0} match(es) in {1} -- switch Channel".format(found, other)
 
 
 def _open_entry(state, key):
@@ -839,11 +676,7 @@ def _bucket(row, by_story):
 
 
 def _selected_entry(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return TOP.picked(state)
 
 
 def _checked(state):
@@ -856,13 +689,12 @@ def _checked(state):
 #: mode is known when the mode changes what a row means -- by actor a unit row is
 #: a performer, by story it is a scene.
 def _unit_columns(by_actor):
-    return (app_layout.ListColumn(
-                "label", width=0.72,
-                icon="OUTLINER_OB_ARMATURE" if by_actor else "SEQ_STRIP_DUPLICATE"),
-            app_layout.ListColumn("detail", align=app_layout.RIGHT, enabled=False))
+    return (TOP.column("", width=0.72,
+                       icon="OUTLINER_OB_ARMATURE" if by_actor else "SEQ_STRIP_DUPLICATE"),
+            TOP.column("detail", align=app_layout.RIGHT, enabled=False))
 
 
-_UNIT_GROUP = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_UNIT_GROUP = TOP.column("", icon="OUTLINER_COLLECTION")
 
 _CLIP_COLUMNS = (
     # Only a row that IS a clip can be built, so only that row's box can be ticked.
@@ -1060,8 +892,7 @@ def _goto_unit(context, arguments):
     # selection the user cannot see reads as nothing having happened.
     state.search = unit
     _rebuild_top(state)
-    index = next((position for position, entry in enumerate(state.entries)
-                  if not entry.is_group and entry.key == unit), -1)
+    index = TOP.view.index_of_key(unit) if TOP.view is not None else -1
     if index < 0:
         state.status = "'{0}' is not in the {1} list.".format(unit, channel)
         return {"CANCELLED"}
@@ -1255,11 +1086,10 @@ def draw_story_tab(layout, context):
         layout.row(align=True).prop(state, "channel", expand=True)
     filtering.draw_search_row(layout, state,
                               extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    layout.list(state, "entries", "active_index",
-                _unit_columns(state.mode == BY_ACTOR), rows=8,
-                identifier="story_units", group_key="is_group",
-                group_column=_UNIT_GROUP)
-    layout.label(text=state.status, icon="INFO")
+    app_view.draw_list(TOP, layout, state, _unit_columns(state.mode == BY_ACTOR),
+                       "story_units", rows=8, group_column=_UNIT_GROUP)
+    if state.status:
+        layout.label(text=state.status, icon="INFO")
 
     opened = _opened(state)
     if not opened:

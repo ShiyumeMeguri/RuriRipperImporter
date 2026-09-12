@@ -19,14 +19,13 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unity import class_registry
 from . import datasets
 
 STATE = "ruri_kk_scene"
 SPEC_KEY = "Illusion:scene"
-
-_FILTER_FIELDS = (("name", "Name"), ("bundle", "Bundle"), ("group", "Group"))
 
 # What a level contributes, by class NAME -- the ids come from the shared
 # all-version registry, so nothing here can drift against the file format. The
@@ -57,18 +56,16 @@ def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
 
-SCENE_ENTRY = Schema("IllusionSceneEntry", """One drawn line: a group header or a
-place the game names.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
+#: This tab's live view and the seats that draw it. Which column is the name, the
+#: id or the family is each column's own statement, made where the hook builds the
+#: place table.
+BOUND = app_view.Bound(SPEC_KEY)
 
 SCENE = Schema("IllusionScene", """The place browser's whole state.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name or bundle",
           update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=SCENE_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Refresh to read the game's scene list."),
     Field("reset_scene", app_state.BOOL, True, "Reset Scene",
@@ -84,59 +81,30 @@ HANDLERS = app_state.Handlers(
     "Illusion.scene", base=filtering.HANDLERS, on_filter_edit=_on_filter_edit)
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=SPEC_KEY, fields=_FILTER_FIELDS,
+    key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
 
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return BOUND.picked(state)
 
 
 def selected_place(state):
-    entry = selected(state)
-    if entry is None:
-        return None
-    table = datasets.table(datasets.PLACES)
-    if table is None:
-        return None
-    for index in range(len(table)):
-        if table.cell(index, "id") == entry.key:
-            return {name: table.cell(index, name) for name in table.names}
-    return None
+    """Every column of the place the user is on. The drawn line IS the row, so
+    there is nothing to look up."""
+    entry = BOUND.picked(state)
+    return None if entry is None else entry.values()
 
 
 def rebuild(state):
-    state.entries.clear()
-    matched, table = datasets.search(datasets.PLACES, {}, state.search.strip(),
-                                     state.filter_rules)
-    if table is None:
-        state.status = datasets.why_empty(datasets.PLACES) or "Load a cabmap, then refresh."
-        return
-
-    rows = [{name: table.cell(index, name) for name in table.names} for index in matched]
-    rows.sort(key=lambda row: (row["group"], row["name"]))
-    counts = {}
-    for row in rows:
-        counts[row["group"]] = counts.get(row["group"], 0) + 1
-
-    current_group = None
-    for row in rows:
-        if row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["name"]
-        entry.key = row["id"]
-    state.status = "{0} of {1} place(s).".format(len(rows), len(table))
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
+    """Ask the kernel for the drawn list as it is now stated. Nothing is matched,
+    sorted, grouped or counted here."""
+    with filtering.rebuilding():
+        table = datasets.table(datasets.PLACES)
+        if table is None:
+            state.status = datasets.why_empty(datasets.PLACES) or "Load a cabmap, then refresh."
+        BOUND.open(table, state)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +184,8 @@ REVEAL = command.COMMANDS.define(
     icon="FILE_FOLDER", poll=_has_selection)
 
 
-_COLUMNS = (app_layout.ListColumn("label", icon="WORLD"),)
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_COLUMNS = (BOUND.column("", icon="WORLD"),)
+_GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def draw(layout, context):
@@ -225,9 +193,8 @@ def draw(layout, context):
 
     command.draw_progress(layout, state)
     filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="illusion_scenes", group_key="is_group",
-                group_column=_GROUP_COLUMN)
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "illusion_places",
+                       group_column=_GROUP_COLUMN)
     layout.label(text=state.status, icon="INFO")
 
     place = selected_place(state)
