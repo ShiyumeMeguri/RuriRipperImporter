@@ -295,19 +295,29 @@ RULES_PANEL = "RURI_PT_filter_popover"
 
 
 # ── descriptions ──────────────────────────────────────────────────────────────
-def draw_search_row(layout, state, extra_operator=None):
+def draw_search_row(layout, state, extra_operator=None, search_field="search",
+                    rules=True, extra_arguments=None):
     """The shared widget: quick-search box + the funnel that opens the rule
     editor, with the active rule count as the funnel's badge. ``extra_operator``
     is an optional (command_id, icon) a list wants on the same row (a Refresh,
-    typically), so every tab's search line reads identically."""
+    typically), so every tab's search line reads identically.
+
+    The funnel belongs to the tab's OWN list -- the rule editor edits whichever
+    list the tab declared. A second list inside the same tab says so (``rules``
+    off) rather than drawing a funnel that would edit its neighbour's rules."""
     row = layout.row(align=True)
-    row.prop(state, "search", icon="VIEWZOOM", text="")
-    active = sum(1 for rule in state.filter_rules if rule.enabled)
+    row.prop(state, search_field, icon="VIEWZOOM", text="")
+    active = sum(1 for rule in state.filter_rules if rule.enabled) if rules else 0
     # A text badge (the active rule count) carries the "filter active" signal
     # instead of a second icon.
-    row.popover(RULES_PANEL, text=str(active) if active else "", icon="FILTER")
+    if rules:
+        row.popover(RULES_PANEL, text=str(active) if active else "", icon="FILTER")
     if extra_operator is not None:
-        row.operator(extra_operator[0], text="", icon=extra_operator[1])
+        # A shared command serves several lists, so the button carries WHICH list
+        # pressed it -- stated by the caller, because only it knows.
+        pressed = row.operator(extra_operator[0], text="", icon=extra_operator[1])
+        for name, value in (extra_arguments or {}).items():
+            setattr(pressed, name, value)
     return row
 
 

@@ -27,14 +27,10 @@ from ...Kernel.app import state as app_state
 from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unity import class_registry
-from .. import section
-from . import SECTIONS, datasets
+from . import datasets
 
 STATE = "ruri_kk_chara"
 SPEC_KEY = "Illusion:cast"
-
-MODEL_SECTION = "model"
-ANIME_SECTION = "anime"
 
 #: The seven outfits the game's own customization slots are numbered by.
 COORDINATES = ("School01", "School02", "Gym", "Swim", "Club", "Plain", "Pajamas")
@@ -75,9 +71,10 @@ def state_of(context):
 BOUND = app_view.Bound(SPEC_KEY)
 
 CHARA = Schema("IllusionChara", """The character tab's own state.""", (
-    Field("section", app_state.ENUM, MODEL_SECTION, "Section", items="section_items"),
+    Field("facet", app_state.ENUM, None, "Kind", "Which of the game's own kinds to list",
+          items="facet_items", update="on_filter_edit"),
     Field("search", app_state.STRING, "", "Filter", "Filter by name, file or folder",
-          update="on_cast_edit", live=True),
+          update="on_filter_edit", live=True),
     Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, ""),
@@ -91,29 +88,6 @@ CHARA = Schema("IllusionChara", """The character tab's own state.""", (
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
-#: What each pane of this tab is called, and which declared section answers for
-#: it. The capability itself is stated ONCE, next to the module it gates (this
-#: package's SECTIONS): driving a face is blend shapes and playing an animation is
-#: a timeline, and a host with neither still assembles the character.
-_SECTION_PANES = ((MODEL_SECTION, "Model",
-                   "Build a character from one of the game's own cards", "chara"),
-                  (ANIME_SECTION, "Anime", "Every animation the game ships, by who plays it",
-                   "anime"))
-
-
-def _section_items(state, context):
-    return [(key, label, description)
-            for key, label, description, name in _SECTION_PANES
-            if section(SECTIONS, name).available]
-
-
-def _on_cast_edit(state, context):
-    rebuild(state)
-
-
-HANDLERS = app_state.Handlers(
-    "Illusion.chara", base=filtering.HANDLERS,
-    section_items=_section_items, on_cast_edit=_on_cast_edit)
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
     key=SPEC_KEY, fields=BOUND.fields,
@@ -157,6 +131,9 @@ def rebuild(state):
         if table is None:
             state.status = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
         BOUND.open(table, state)
+
+
+HANDLERS = cast_panel.handlers(BOUND, "Illusion.chara", rebuild)
 
 
 
@@ -294,58 +271,46 @@ def _seeds(_context, state):
     return datasets.cabs_for(bundles)
 
 
-PANEL = cast_panel.Panel(
-    BOUND, _COLUMNS, "illusion_cast", REFRESH.id, state_of, STATE, seeds=_seeds,
-    group_column=_GROUP_COLUMN, actions=(BUILD.id,))
-
-
-def draw_model(layout, context):
-    state = state_of(context)
-    command.draw_progress(layout, state)
-    app_view.draw_head(BOUND, layout, state, REFRESH.id)
-    app_view.draw_list(BOUND, layout, state, _COLUMNS, "illusion_cast",
-                       group_column=_GROUP_COLUMN)
-    if state.status:
-        layout.label(text=state.status, icon="ERROR")
-
-    card = selected_card(state)
-    options = layout.column(align=True)
-    options.enabled = bool(card)
-    options.prop(state, "coordinate")
-    toggles = options.row(align=True)
+def _options(layout, context, state):
+    """What this game adds under its cast list: which outfit she wears, which
+    families of pieces to build, and what that comes to."""
+    layout.prop(state, "coordinate")
+    toggles = layout.row(align=True)
     toggles.prop(state, "build_hair", toggle=True)
     toggles.prop(state, "build_clothes", toggle=True)
     toggles.prop(state, "build_accessories", toggle=True)
-    if card:
-        rows = plan(state)
-        counts = {}
-        for part in rows:
-            counts[part["slot"]] = counts.get(part["slot"], 0) + 1
-        box = options.box()
-        box.label(text="{0} part(s) from {1} bundle(s)".format(
-            len(rows), len({part["bundle"] for part in rows})))
-        box.label(text=", ".join("{0} {1}".format(count, slot)
-                                 for slot, count in sorted(counts.items())))
-    # 与浏览器同一份导入选项 —— 组装走的也是宿主那一个导入入口。
-    app_browser.draw_import_options(options, context)
-    options.operator(BUILD.id)
+    if not selected_card(state):
+        return
+    rows = plan(state)
+    counts = {}
+    for part in rows:
+        counts[part["slot"]] = counts.get(part["slot"], 0) + 1
+    box = layout.box()
+    box.label(text="{0} part(s) from {1} bundle(s)".format(
+        len(rows), len({part["bundle"] for part in rows})))
+    box.label(text=", ".join("{0} {1}".format(count, slot)
+                             for slot, count in sorted(counts.items())))
 
-    shaders = layout.column(align=True)
-    shaders.enabled = bool(card)
-    shaders.prop(state, "shader_output")
-    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
+
+def _draw_catalog(layout, context):
+    """The studio's own animation catalog, in the shape its own kinds need -- an
+    ordinary animation one per row, an H act as two partners side by side."""
+    from . import anime
+    anime.draw(layout, context)
+
+
+PANEL = cast_panel.Panel(
+    BOUND, _COLUMNS, "illusion_cast", REFRESH.id, state_of, STATE, seeds=_seeds,
+    group_column=_GROUP_COLUMN, options=_options, actions=(BUILD.id,),
+    animations=(cast_panel.ENGINE_CLIPS,
+                cast_panel.Source("catalog", "Catalog",
+                                  "Every animation the studio catalogs, under its own "
+                                  "names -- an H act as two partners side by side",
+                                  _draw_catalog)))
 
 
 def draw_tab(layout, context):
-    """The Character tab: pick a section this host can offer, then draw it."""
-    state = state_of(context)
-    # 分面是下拉菜单 —— 与其他游戏的同一条 UX。
-    layout.prop(state, "section", text="")
-    if state.section == MODEL_SECTION:
-        draw_model(layout, context)
-        return
-    from . import anime
-    anime.draw(layout, context)
+    cast_panel.draw(PANEL, layout, context, state_of(context))
 
 
 def register():
@@ -355,4 +320,5 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    cast_panel.forget(BOUND)
     BOUND.close()

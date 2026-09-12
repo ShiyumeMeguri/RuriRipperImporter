@@ -64,25 +64,14 @@ list is asked for, and the seats it is drawn in.""", (
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
-def _on_filter_edit(state, context):
-    rebuild(state)
-
-
-def _facet_items(state, context):
-    return BOUND.facet_choices(state, context)
-
-
-HANDLERS = app_state.Handlers("SBUE.characters", base=filtering.HANDLERS,
-                              on_filter_edit=_on_filter_edit,
-                              facet_items=_facet_items)
-
-
 def rebuild(state):
     """Ask the kernel for this list as it is now stated. Nothing is evaluated on
     this side -- the text, the rules and the facet go over as typed."""
     with filtering.rebuilding():
         BOUND.open(table(), state)
 
+
+HANDLERS = cast_panel.handlers(BOUND, "SBUE.characters", rebuild)
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
     key=SPEC_KEY, fields=BOUND.fields,
@@ -202,7 +191,13 @@ _COLUMNS = (
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "unreal_characters", REFRESH.id, state_of, STATE,
     seeds=lambda _context, state: _packages(state),
-    actions=(IMPORT.id, REVEAL.id), shaders=_shaders)
+    actions=(IMPORT.id, REVEAL.id), shaders=_shaders,
+    # 这套引擎把表情记在网格自己的 morph 列表里,不是 Unity 的混合形状 —— 问的是同一个
+    # 问题,所以画在同一格里,只是换成这个解码器说它的那份数据集。
+    face_dataset=("unreal.morphtargets", "packages"),
+    # 动画序列住在独立的包里,而角色的包并不引用它们:这套引擎里「这一位的动画」
+    # 还没有真源可问,所以这格不开,而不是开一格空的。
+    animations=())
 
 
 def draw(layout, context):
@@ -216,5 +211,6 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    cast_panel.forget(BOUND)
     BOUND.close()
     _TABLE[0] = None

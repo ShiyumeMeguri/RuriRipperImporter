@@ -25,8 +25,8 @@ ARCHIVES = "exilium.vfs.archives"
 
 # The two casts the game publishes. A panel states WHICH cast it wants, never how
 # one is read.
-CHARACTERS = "characters"
-MODELS = "models"
+CHARACTERS = "Characters"
+MODELS = "Models"
 
 
 def _table(dataset_id, **args):

@@ -186,9 +186,11 @@ class Bound:
     replaces the old one (and releases its pinned buffers); the seats stay.
     """
 
-    __slots__ = ("key", "view", "table", "seats", "index", "search_field", "_facets")
+    __slots__ = ("key", "view", "table", "seats", "index", "search_field", "facet_field",
+                 "rules_field", "_facets")
 
-    def __init__(self, key, seats="rows", index="active_index", search="search"):
+    def __init__(self, key, seats="rows", index="active_index", search="search",
+                 facet="facet", rules="filter_rules"):
         self.key = key
         self.view = None
         self.table = None
@@ -198,6 +200,11 @@ class Bound:
         self.seats = seats
         self.index = index
         self.search_field = search
+        self.facet_field = facet
+        #: WHERE the user's Include/Exclude rules for this list live, or "" for a
+        #: list the rule editor does not edit -- a second list inside a tab that
+        #: already spent the editor on its first one.
+        self.rules_field = rules
         #: The facet switch's entries, kept HERE rather than read off the live view.
         #: A host's dynamic switch stores a position, and asking a view that is
         #: mid-replacement would hand back a shorter list for one instant -- which
@@ -225,9 +232,10 @@ class Bound:
         self.close()
         if table is None:
             return None
-        self.view = View.open(table, facet=_facet(state),
+        self.view = View.open(table, facet=getattr(state, self.facet_field, "") or EVERY,
                               search=getattr(state, self.search_field, ""),
-                              rules=list(getattr(state, "filter_rules", ())) + list(standing),
+                              rules=list(getattr(state, self.rules_field, ())
+                                         if self.rules_field else ()) + list(standing),
                               **query)
         self._facets = self.view.facet_items()
         self.seat(state, chosen)
@@ -390,19 +398,18 @@ class Picked:
         return self._bound.view.values(self.row)
 
 
-def _facet(state):
-    return getattr(state, "facet", "") or EVERY
-
-
-def draw_head(bound, layout, state, refresh_id):
+def draw_head(bound, layout, state, refresh_id, arguments=None):
     """The one line every view-backed list opens with: which facet, and re-read.
 
     The facet is a MENU, not a row of buttons: a build that files its rows under
     a dozen kinds would otherwise push the list itself off the panel. It is drawn
     only where the view says there is a choice to make."""
     if len(bound.facet_items()) > 1:
-        layout.prop(state, "facet", text="")
-    filtering.draw_search_row(layout, state, extra_operator=(refresh_id, "FILE_REFRESH"))
+        layout.prop(state, bound.facet_field, text="")
+    filtering.draw_search_row(layout, state, extra_operator=(refresh_id, "FILE_REFRESH"),
+                              search_field=bound.search_field,
+                              rules=bool(bound.rules_field),
+                              extra_arguments=arguments)
 
 
 def draw_list(bound, layout, state, columns, identifier, rows=10, group_column=None,

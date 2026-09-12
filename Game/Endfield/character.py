@@ -8,39 +8,29 @@ do it all along.
 
 So the composition is:
 
-``Cast``   the game's own cast, its two rosters and the Story pane -- needs nothing
-           but the game's tables, so every host draws it (``roster``).
-``Story``  what the Story pane opens onto: the animations story playback uses. Needs
-           an animation surface (``story``).
-``Face``   the SkeletalMorph emotion/pose/lipsync library, bound to a rig and baked.
-           Needs morph targets (``face``).
+``Cast``   the game's own cast -- needs nothing but the game's tables, so every
+           host draws it.
+``Anim``   the animations the selected one plays: the engine's own answer (what its
+           animator names, plus the library this game files elsewhere), and this
+           game's story filing beside it. Needs an animation surface (``story``).
+``Face``   the expressions the selected one was built with: the engine's own answer
+           (the named blend shapes its meshes carry), and this game's SkeletalMorph
+           emotion/pose/lipsync library beside it. Needs morph targets (``face``).
 
-Each section asks for what it needs and is simply absent otherwise. Nothing here
-imports a host.
+All three are the ONE cast panel's own panes (``Kernel.app.cast_panel``), declared
+by the roster and filled by this game's two extra sources. Each asks for what it
+needs and is simply absent otherwise. Nothing here imports a host.
 """
 
 from __future__ import annotations
 
-from .. import section
-from . import SECTIONS, roster
+from . import roster
 
 
 def draw_tab(layout, context):
-    """The tab body: the cast browser, then whatever this host can add to it.
+    """The tab body.
 
-    Both halves describe; neither renders. A tab is drawn inside the host panel's
-    own description, so the layout handed here is the neutral one and a tab body
-    that reached for a host toolkit would break the whole panel."""
-    pane = roster.draw(layout.box(), context)
-
-    if pane is roster.STORY_PANE:
-        # The Story pane IS the story browser's own list; a host with no animation
-        # surface has nothing to open under it.
-        if section(SECTIONS, "story").available:
-            from . import story
-            story.draw_story_tab(layout, context)
-        return
-
-    if section(SECTIONS, "face").available:
-        from . import face
-        face.draw(layout, context)
+    It describes; it does not render. A tab is drawn inside the host panel's own
+    description, so the layout handed here is the neutral one and a tab body that
+    reached for a host toolkit would break the whole panel."""
+    roster.draw(layout.box(), context)

@@ -69,18 +69,6 @@ ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
-def _on_filter_edit(state, context):
-    rebuild(state)
-
-
-def _facet_items(state, context):
-    return BOUND.facet_choices(state, context)
-
-
-HANDLERS = app_state.Handlers(
-    "EXILIUM.roster", base=filtering.HANDLERS,
-    facet_items=_facet_items,
-    on_filter_edit=_on_filter_edit)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -110,6 +98,9 @@ def rebuild(state):
         BOUND.open(rows(state), state, note=language(state))
 
 
+HANDLERS = cast_panel.handlers(BOUND, "EXILIUM.roster", rebuild)
+
+
 # ---------------------------------------------------------------------------
 # What the buttons do
 # ---------------------------------------------------------------------------
@@ -134,6 +125,21 @@ def _refresh(context, arguments):
     _ROWS[tongue] = table
     rebuild(state)
     return None
+
+
+def archives_for(address):
+    """Which archives one catalog address IS.
+
+    This title addresses everything by a catalog ADDRESS, and which archives one
+    address lives in is the hook's own join. A character's renderers carry no mesh
+    of their own and the meshes its list names live in OTHER archives, so a prefab
+    reaches those too -- or a closure resolved from it has nothing for the resolver
+    to find (see mesh_resolver). Stated once: Load seeds with this, and so does
+    every question the shared buttons ask about a row."""
+    cabs = [row["cab"] for row in datasets.cabs_for([address]) if row["cab"]]
+    if not cabs or not str(address).lower().endswith(".prefab"):
+        return cabs
+    return list(mesh_resolver.seeds_for(address, cabs, _asset_name(address)))
 
 
 def _asset_name(address):
@@ -163,12 +169,8 @@ def load_address(context, address, label):
             "download it in the game first.".format(label) if known else
             "'{0}' is not in this install's catalog.".format(label))
         return
-    # A character's renderers carry no mesh of their own, and the meshes its list
-    # names live in other archives -- seed those too or the closure has nothing for
-    # the resolver to find (see mesh_resolver).
     name = _asset_name(address)
-    seeds = (mesh_resolver.seeds_for(address, cabs, name)
-             if address.lower().endswith(".prefab") else cabs)
+    seeds = archives_for(address)
     cabmap_state.clear_selection()
     for cab in seeds:
         cabmap_state.SELECTED_CABS.add(cab)
@@ -234,7 +236,12 @@ def _outfits(context, arguments):
 
 
 def _outfits_poll(context):
-    return _has_selection(context) and state_of(context).kind == CHARACTERS
+    """Only a CHARACTER has models of her own to show -- which the picked row says
+    itself, in the game's own filing."""
+    if not _has_selection(context):
+        return False
+    entry = BOUND.picked(state_of(context))
+    return entry is not None and entry.cell("kind") == CHARACTERS
 
 
 REFRESH = command.COMMANDS.define(
@@ -282,37 +289,19 @@ _GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def _seeds(_context, state):
-    """What the picked one IS, as archive names. This title addresses everything by
-    a catalog ADDRESS, and which archives one address lives in is the hook's own
-    join -- the same one Load walks."""
+    """What the picked one IS, as archive names -- the same set Load seeds with, so
+    what the shared buttons read about a row is what loading that row would read."""
     entry = BOUND.picked(state)
-    if entry is None or not entry.payload:
-        return []
-    return [row["cab"] for row in datasets.cabs_for([entry.payload]) if row["cab"]]
+    return [] if entry is None or not entry.payload else archives_for(entry.payload)
+
+
+PANEL = cast_panel.Panel(
+    BOUND, _COLUMNS, "exilium_roster", REFRESH.id, state_of, STATE, seeds=_seeds,
+    group_column=_GROUP_COLUMN, actions=(LOAD.id, REVEAL.id, OUTFITS.id))
 
 
 def draw(layout, context):
-    state = state_of(context)
-
-    command.draw_progress(layout, state)
-    app_view.draw_head(BOUND, layout, state, REFRESH.id)
-    app_view.draw_list(BOUND, layout, state, _COLUMNS, "exilium_roster",
-                       group_column=_GROUP_COLUMN)
-
-    entry = BOUND.picked(state)
-    options = layout.column(align=True)
-    # 与浏览器同一份导入选项 —— Load 走的本来就是浏览器自己的导入。
-    app_browser.draw_import_options(options, context)
-    actions = options.column(align=True)
-    actions.enabled = entry is not None
-    actions.operator(LOAD.id)
-    shaders = layout.column(align=True)
-    shaders.enabled = entry is not None
-    shaders.prop(state, "shader_output")
-    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
-    actions.operator(REVEAL.id)
-    if entry is not None and entry.cell("kind") == CHARACTERS:
-        actions.operator(OUTFITS.id)
+    cast_panel.draw(PANEL, layout, context, state_of(context))
 
 
 def register():
@@ -322,4 +311,6 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    cast_panel.forget(BOUND)
+    BOUND.close()
     _ROWS.clear()

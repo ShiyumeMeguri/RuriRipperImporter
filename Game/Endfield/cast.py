@@ -420,10 +420,14 @@ def _as_character(member, lod):
     character = member.get("character") or ""
     if not character:
         return None
-    declared = character_model(character)
+    # WHICH of the game's model families is wanted is the member's own statement: the
+    # data asset only ever declares the in-world actor, so asking for anything else
+    # goes straight to the family the game names that model after.
+    family = member.get("family") or datasets.POST_MODEL
+    declared = character_model(character) if family == datasets.POST_MODEL else ""
     rows = datasets.part_rows(declared, cast=CHARACTERS) if declared else []
     if not rows:
-        rows = datasets.model_rows(character, "postmodel", cast=CHARACTERS)
+        rows = datasets.model_rows(character, family, cast=CHARACTERS)
     if not rows:
         return None
     chosen, _level = _at_detail_level(rows, lod)

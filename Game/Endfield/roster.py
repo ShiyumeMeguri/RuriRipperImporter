@@ -12,16 +12,19 @@ select, Load to bring it in. What "bring it in" MEANS is the host's
 (:meth:`Kernel.host.Host.import_packages`); this module's business ends at
 resolving the row to what the game says it is made of.
 
+The tab's SHAPE -- the pane switch, the facet, the search row, the list, the
+shared buttons under it, the Anim and Face panes -- is the one every cast tab has
+(``Kernel.app.cast_panel``). What is stated here is only what is this game's:
+which sources its Anim and Face panes have besides the engine's own, and the one
+option it adds under the list.
+
 Nothing here imports a host. The Blender panel next door is a shell that
 materialises this declaration; Painter's dock renders the same one.
 """
 
 from __future__ import annotations
 
-import json
-
 from ...Kernel import host as host_port
-from ...Kernel.app import browser as app_browser
 from ...Kernel.app import cast_panel
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
@@ -37,19 +40,17 @@ BROWSER_STATE = "ruri_cabmap"
 SPEC_KEY = "Endfield:character"
 
 CHARACTERS = datasets.CHARACTERS
+UI_MODELS = datasets.UI_MODELS
 NPCS = datasets.NPCS
-CAST_PANE = "cast"
-STORY_PANE = "story"
 
-#: This tab's live view and the seats that draw it. The kind is not a facet here:
-#: this game keeps its two casts in two tables, so the switch picks the TABLE and
-#: the view narrows nothing. Which column is the name, the id, the profession or
-#: the "has a model" test is each column's own statement, made in the hook.
+#: This tab's live view and the seats that draw it. Which column is the name, the
+#: id, the profession, the kind or the "has a model" test is each column's own
+#: statement, made in the hook.
 BOUND = app_view.Bound(SPEC_KEY)
 
-#: Loaded row lists, by (kind, language). Module scope, not panel state:
-#: rebuilding the drawn list must not cost a re-read, and a column table is not
-#: something a host's property system can hold anyway.
+#: Loaded row lists, by language. Module scope, not panel state: rebuilding the
+#: drawn list must not cost a re-read, and a column table is not something a
+#: host's property system can hold anyway.
 _ROWS = {}
 
 
@@ -95,16 +96,7 @@ def rebuild(state):
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-
-_CAST_PANE = "cast"
-_PANE_ITEMS = (
-    (_CAST_PANE, "Cast", "Everyone the game ships a model for -- narrow by kind below"),
-    (STORY_PANE, "Story", "The animations the game plays during story, under its own filing"),
-)
-
 ROSTER = Schema("Roster", """The cast browser's state.""", (
-    Field("pane", app_state.ENUM, _CAST_PANE, "Pane", items="pane_items",
-          update="on_pane_change"),
     Field("facet", app_state.ENUM, None, "Kind",
           "Which of the game's own kinds to list", items="facet_items",
           update="on_filter_edit"),
@@ -117,51 +109,64 @@ ROSTER = Schema("Roster", """The cast browser's state.""", (
     Field("load_expressions", app_state.BOOL, False, "Expressions",
           "Also load this character's SkeletalMorph expression library. Off by "
           "default: it is a separate, much larger asset family than the model"),
-    Field("model_kind", app_state.ENUM, "postmodel", "Model",
-          "Which of the game's own model families to import",
-          items=(("postmodel", "Post", "The in-world actor model"),
-                 ("uimodel", "UI", "The model menus and portraits pose"))),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
-def _pane_items(state, context):
-    """The cast, plus Story where the host has an animation surface to play one on.
-    A pane offered in a host that cannot show it is a tab that opens onto
-    nothing."""
-    if host_port.ANIMATION in host_port.current().capabilities:
-        return _PANE_ITEMS
-    return _PANE_ITEMS[:1]
-
-
-def _facet_items(state, context):
-    return BOUND.facet_choices(state, context)
-
-
-def _on_filter_edit(state, context):
-    rebuild(state)
-
-
-def _on_pane_change(state, context):
-    """The pane picks WHAT is on screen; the facet narrows the cast once it is.
-    Switching pane only redraws -- a command invoked from a property update runs
-    with the UI mid-update, and its poll failing there raises rather than
-    reporting."""
-    if state.pane != STORY_PANE and rows(state) is None:
-        state.status = "Refresh to read the cast out of the game's tables."
-
-
-HANDLERS = app_state.Handlers(
-    "Endfield.roster", base=filtering.HANDLERS,
-    pane_items=_pane_items,
-    facet_items=_facet_items,
-    on_filter_edit=_on_filter_edit,
-    on_pane_change=_on_pane_change)
+HANDLERS = cast_panel.handlers(BOUND, "Endfield.roster", rebuild)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
     key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
+
+
+# ---------------------------------------------------------------------------
+# What a row IS
+# ---------------------------------------------------------------------------
+def _member(entry):
+    """One picked row in the game's own identity words.
+
+    The kind is not a branch on behaviour: a playable character and an npc are two
+    answers to one question (``cast.resolve``), and a character's in-world actor
+    and the model its menus pose are two families of the same answer. Which one
+    this row gets is the game's own filing, carried on the row."""
+    kind = entry.cell("kind")
+    return {"key": entry.key, "label": entry.label,
+            "character": entry.key if kind in (CHARACTERS, UI_MODELS) else "",
+            "template": entry.key if kind == NPCS else "",
+            "family": datasets.UI_MODEL if kind == UI_MODELS else datasets.POST_MODEL}
+
+
+def _loadable(context, entry):
+    member = _member(entry)
+    return member, cast.resolve([member], detail_level(context)).get(member["key"] or "")
+
+
+def _seeds(context, state):
+    """What the picked one IS, as archive names -- what every shared button below
+    the list is asked of."""
+    entry = BOUND.picked(state)
+    if entry is None:
+        return []
+    _stated, packages = _loadable(context, entry)
+    return list(packages.cabs) if packages is not None else []
+
+
+def _anim_seeds(context, state):
+    """Where this one's animations ALSO live.
+
+    A character prefab names its animator, but the body animation library is a
+    folder of its own the prefab never references -- and for a character that
+    ships none, the shared library of its body type is what it actually plays.
+    Both are facts this game states (``animation_anchor``), handed over as seeds
+    so the one engine reader files those clips under whatever names them."""
+    entry = BOUND.picked(state)
+    if entry is None:
+        return []
+    kind = entry.cell("kind")
+    return datasets.animation_cabs(
+        entry.key, NPCS if kind == NPCS else CHARACTERS)
 
 
 # ---------------------------------------------------------------------------
@@ -191,21 +196,14 @@ def _refresh(context, arguments):
 
 
 def _load(context, arguments):
-    """What loading the selected one IS, as steps -- resolve, read, hand over.
-
-    The kind is not a branch: a playable character and an npc are two answers to
-    one question (``cast.resolve``), and which one this row gets is the game's own
-    filing, not a case this command picks."""
+    """What loading the selected one IS, as steps -- resolve, read, hand over."""
     state = state_of(context)
     entry = BOUND.picked(state)
-    member = {"key": entry.key, "label": entry.label,
-              "character": entry.key if entry.cell("kind") == CHARACTERS else "",
-              "template": entry.key if entry.cell("kind") == NPCS else ""}
-    packages = yield command.Read(
-        lambda: cast.resolve([member], detail_level(context)).get(member["key"] or ""), 0.3)
+    member, packages = yield command.Read(lambda: _loadable(context, entry), 0.3)
     if packages is None:
         return loading.Built(warnings=[
-            "The game states no model for '{0}'.".format(entry.label or entry.key)])
+            "The game states no {0} for '{1}'.".format(
+                member["family"], entry.label or entry.key)])
     resolved = yield command.Read(lambda: loading.resolve_closure(packages.cabs), 0.75)
     yield command.Mark(0.85)
     return host_port.current().import_packages(
@@ -218,45 +216,11 @@ def _settle_load(context, built):
     state = state_of(context)
     if built is None or (built.armature is None and not built.imported):
         return {"CANCELLED"}
-    if state.load_expressions and host_port.MORPH_TARGETS in host_port.current().capabilities:
+    if state.load_expressions and host_port.supports(host_port.MORPH_TARGETS):
         from . import face
         face.load_library_for(context, BOUND.picked(state),
-                                         (built.manifest or {}).get("facial_morph", ""))
+                              (built.manifest or {}).get("facial_morph", ""))
     return {"FINISHED"}
-
-
-def _animation_rules(anchor):
-    """按钮装进浏览器的 Include 规则集(全部成立才显示 —— 规则编辑器的 AND 语义)。
-    搜索框刻意留空:规则是这个按钮的查询,搜索框留给使用者在其上再缩小范围。"""
-    return [
-        {"field": "container", "relation": "contains", "value": anchor, "action": "include"},
-        {"field": "type_names", "relation": "contains", "value": "AnimationClip", "action": "include"},
-    ]
-
-
-def _animations(context, arguments):
-    """List this one's animation clips over in the bundle browser.
-
-    Anchored on the container path, not the name: the id also keys thousands of
-    per-line dialogue morph clips, and a name search buries the body animation
-    library under them. Falls back to the body-type group's shared library when
-    this one ships no animation folder of its own -- said out loud rather than
-    substituted silently, because "these are not hers" matters."""
-    state = state_of(context)
-    entry = BOUND.picked(state)
-    if entry is None:
-        return {"CANCELLED"}
-    found = datasets.animation_anchor(entry.key, entry.cell("kind"))
-    if found is None:
-        state.status = "No animation folder for '{0}' in the loaded cabmap.".format(entry.label)
-        return {"CANCELLED"}
-    state.status = (
-        "'{0}' ships no animations of its own; showing the {1} body-type library it "
-        "actually plays ({2} rows).".format(entry.label, found["group"], found["hits"])
-        if found["group"] else
-        "{0}: {1} animation rows.".format(entry.label, found["hits"]))
-    return command.COMMANDS.get("ruri.cabmap_show_rules").run(
-        context, {"rules": json.dumps(_animation_rules(found["anchor"]))})
 
 
 def _reveal(context, arguments):
@@ -268,8 +232,12 @@ def _reveal(context, arguments):
     if entry is None:
         return {"CANCELLED"}
     reveal = command.COMMANDS.get("ruri.cabmap_reveal")
-    if entry.cell("kind") == CHARACTERS:
-        found = datasets.model_rows(entry.key, state.model_kind, cast=CHARACTERS)
+    kind = entry.cell("kind")
+    if kind in (CHARACTERS, UI_MODELS):
+        found = datasets.model_rows(
+            entry.key,
+            datasets.UI_MODEL if kind == UI_MODELS else datasets.POST_MODEL,
+            cast=CHARACTERS)
         if found:
             row = found[0]
             return reveal.run(context, {"query": entry.key, "cab": row["cab"],
@@ -293,11 +261,6 @@ LOAD = command.COMMANDS.define(
     description="Import this one's model, exactly as the bundle browser would",
     poll=_has_selection, steps=True, status_state=STATE, settle=_settle_load,
     failure="Loading this one's model failed")
-ANIMATIONS = command.COMMANDS.define(
-    "ruri.roster_animations", "Find Animations", _animations,
-    description=("Switch to the bundle browser and list this one's animation clips "
-                 "(body animations, not the per-line dialogue morphs)"),
-    poll=_has_selection)
 REVEAL = command.COMMANDS.define(
     "ruri.roster_reveal", "Open Containing Folder", _reveal,
     description="Switch to the bundle browser and open where this one's assets live",
@@ -326,63 +289,46 @@ _COLUMNS = (
 )
 
 
+def _options(layout, context, state):
+    """The one thing this game adds under its cast list. The expression library is
+    another asset family and another import, so it is a choice made before Load --
+    and only where there is a face to put it on."""
+    if host_port.supports(host_port.MORPH_TARGETS):
+        layout.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
 
-def _seeds(context, state):
-    """What the picked one IS, as archive names -- what every shared button below
-    the list is asked of. The kind is not a branch: a playable character and an npc
-    are two answers to one question (``cast.resolve``), and which one this row gets
-    is the game's own filing."""
-    entry = BOUND.picked(state)
-    if entry is None:
-        return []
-    member = {"key": entry.key, "label": entry.label,
-              "character": entry.key if entry.cell("kind") == CHARACTERS else "",
-              "template": entry.key if entry.cell("kind") == NPCS else ""}
-    packages = cast.resolve([member], detail_level(context)).get(member["key"] or "")
-    return list(packages.cabs) if packages is not None else []
+
+def _draw_story(layout, context):
+    """The animations story playback uses, filed the way the game files them."""
+    from . import story
+    story.draw_story_tab(layout, context)
+
+
+def _draw_library(layout, context):
+    """The SkeletalMorph emotion/pose/lipsync library: browse it, bind its ctrl
+    drivers to a rig, bake its animations."""
+    from . import face
+    face.draw(layout, context)
 
 
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "roster", REFRESH.id, state_of, STATE, seeds=_seeds,
-    actions=(LOAD.id, REVEAL.id, ANIMATIONS.id))
+    anim_seeds=_anim_seeds, options=_options, actions=(LOAD.id, REVEAL.id),
+    # 这个游戏自己写下来的两份目录,与引擎自己答得出的那两份并列在同一格里 ——
+    # 「统一」不是把它们摊平成一份,是它们在同一个地方,并说清各自出自哪儿。
+    animations=(cast_panel.ENGINE_CLIPS,
+                cast_panel.Source("story", "Story",
+                                  "The animations story playback uses, under the game's "
+                                  "own filing -- a cutscene by shot, a dialogue by line",
+                                  _draw_story)),
+    expressions=(cast_panel.ENGINE_SHAPES,
+                 cast_panel.Source("library", "Library",
+                                   "The game's own SkeletalMorph emotion/pose/lipsync "
+                                   "library, bindable to a rig and bakeable",
+                                   _draw_library)))
 
 
 def draw(layout, context):
-    """The cast browser. Returns which pane is on screen, so the tab that owns it
-    can hand the rest of its space to the story browser instead."""
-    state = state_of(context)
-
-    if state.loading:
-        layout.progress(state.progress, state.load_line)
-    # 页签内的分面是下拉菜单,不是一排按钮:面数随游戏自己的分类走,铺开就把列表挤没了。
-    layout.prop(state, "pane", text="")
-    if state.pane == STORY_PANE:
-        layout.operator(REFRESH.id, text="Refresh", icon="FILE_REFRESH")
-        return STORY_PANE
-
-    filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    app_view.draw_list(BOUND, layout, state, _COLUMNS, "roster")
-
-    entry = BOUND.picked(state)
-    options = layout.column(align=True)
-    options.enabled = entry is not None
-    options.row(align=True).prop(state, "model_kind", expand=True)
-    # 与浏览器**同一份**导入选项 —— Load 走的本来就是浏览器自己的导入,
-    # 所以这里画的就是那一份,不是它的第二个子集。
-    app_browser.draw_import_options(options, context, browser_of(context))
-    # 表情库是这个页签自己的事:它是另一族资产、另一次导入,只有能驱动形态键的
-    # 宿主才有地方放。
-    if host_port.MORPH_TARGETS in host_port.current().capabilities:
-        options.prop(state, "load_expressions", toggle=True, icon="SHAPEKEY_DATA")
-    options.operator(LOAD.id, icon="IMPORT")
-    options.operator(REVEAL.id, icon="FILE_FOLDER")
-    options.operator(ANIMATIONS.id, icon="ANIM_DATA")
-
-    shaders = layout.column(align=True)
-    shaders.enabled = entry is not None
-    shaders.prop(state, "shader_output")
-    shaders.operator(cast_panel.SHADERS.id, icon="NODE_MATERIAL").panel = BOUND.key
-    return state.pane
+    cast_panel.draw(PANEL, layout, context, state_of(context))
 
 
 def register():
@@ -392,5 +338,6 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    cast_panel.forget(BOUND)
     BOUND.close()
     _ROWS.clear()
