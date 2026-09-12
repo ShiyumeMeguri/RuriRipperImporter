@@ -26,6 +26,7 @@ from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
 from ...RuriRipperPyBridge.session import cabmap_state
+from ...RuriRipperPyBridge.unreal import direct
 from . import datasets, read
 
 STATE = "ruri_unreal_characters"
@@ -95,6 +96,15 @@ def selected(state):
     return None
 
 
+def _packages(entry):
+    """The packages one row states, split the way the decoder joins its lists.
+
+    A character is one row and may be several packages -- a build whose model is a
+    body and a weapon says so -- and importing it is ONE thing the user asked for,
+    so the whole row goes to the host as one statement."""
+    return [package for package in entry.package.split(direct.SLOT_SEPARATOR) if package]
+
+
 # ---------------------------------------------------------------------------
 # What the buttons do
 # ---------------------------------------------------------------------------
@@ -131,10 +141,14 @@ def _import(context, arguments):
         state.status = blocked
         return
     options = app_browser.as_options(browser)
-    package = entry.package
-    stated = yield command.Read(lambda: read.package(package, entry.name, options), 0.7)
+    packages = _packages(entry)
+    if not packages:
+        state.status = "{0}: this install ships no model for that role.".format(entry.name)
+        return
+    stated = yield command.Read(
+        lambda: read.packages(packages, entry.name, options, key=packages[0]), 0.7)
     if stated is None:
-        state.status = "'{0}' places nothing this install carries.".format(package)
+        state.status = "'{0}' places nothing this install carries.".format(packages[0])
         return
     yield command.Mark(0.8)
     built = host_port.current().import_packages(context, stated, options)
@@ -156,8 +170,11 @@ def _shaders(context, arguments):
     if not output:
         state.status = "State a Shader Folder first."
         return
-    package = entry.package
-    rows = yield command.Read(lambda: datasets.shaders(package, output), 0.9)
+    packages = _packages(entry)
+    if not packages:
+        state.status = "{0}: this install ships no model for that role.".format(entry.name)
+        return
+    rows = yield command.Read(lambda: datasets.shaders(packages[0], output), 0.9)
     if not rows:
         state.status = "{0}: no archive carries a shader map for its materials.".format(entry.name)
         return
@@ -170,7 +187,8 @@ def _reveal(context, arguments):
     if entry is None:
         return {"CANCELLED"}
     return command.COMMANDS.get("ruri.cabmap_reveal").run(
-        context, {"cab": entry.package, "query": entry.name, "folder": ""})
+        context, {"cab": _packages(entry)[0] if _packages(entry) else "",
+                  "query": entry.name, "folder": ""})
 
 
 REFRESH = command.COMMANDS.define(
