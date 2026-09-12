@@ -268,6 +268,15 @@ class Bound:
         """What loading the picked row needs, in the build's own words."""
         return "" if self.view is None else self.value(state, self.view.payload_column)
 
+    def rows(self):
+        """Every drawn line as its columns, headers skipped -- for a command that
+        acts on the WHOLE list rather than on the picked row. It is what is on
+        screen, read back; nothing is matched or re-derived to produce it."""
+        if self.view is None:
+            return []
+        return [self.view.values(row) for row in range(len(self.view))
+                if not self.view.is_group(row)]
+
     def keys(self):
         """Every drawn line's key, headers skipped -- what a command that acts on
         the WHOLE list (import this window, not this row) is handed."""

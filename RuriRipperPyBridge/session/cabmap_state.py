@@ -37,24 +37,15 @@ from ..runtime import pythonnet_bridge
 # per-game sessions (SESSIONS/ACTIVE) and BRIDGE all ride through a reload intact.
 HOLDS_PROCESS_STATE = True
 
-# The bundle browser's own budget: it lists a 260k-row cabmap, where materializing
-# a match set whole would cost seconds per keystroke. It is a BROWSER number, not a
-# general one -- a list whose whole result set is in the thousands materializes all
-# of it (see LIST_CAP) so the user can simply scroll, rather than being cut off at
-# a boundary that looks exactly like "the game has no more of these".
-DISPLAY_CAP = 500  # max cabmap rows ever materialized into the browser at once
-# What any other list may materialize. Sized so every published list (2084 npcs,
-# 963 story actors, 509 story units) lands whole and scrolls natively; a list that
-# would exceed it is truncated AND says so, never silently.
-LIST_CAP = 20000
-# What a CAST list may materialize. A build that files every entity a level spawns
-# as cast rows hands over eighteen thousand of them, and materializing that many
-# host list items costs a minute per switch -- the list is not the thing the user
-# reads, the first screenful is, and the kind switch and the search are what get
-# them there. So the cap is the browser's own DISPLAY_CAP reasoning applied one
-# list over: hand back a screenful's worth with room to scroll, and SAY how many
-# matched.
-CAST_CAP = 2000
+# How many rows the bundle browser ever materializes at once. It lists a cabmap of
+# hundreds of thousands of rows, where materializing a match set whole would cost
+# seconds per keystroke -- so a search that matches two hundred thousand still hands
+# back this many, and the count comes back separately so the UI can say so honestly.
+#
+# This is the browser's own number because the browser materializes its own records.
+# Every other list is a VIEW, and a view has exactly one budget, stated once next to
+# the thing that spends it (Kernel.app.view.WINDOW).
+DISPLAY_CAP = 500
 SEARCH_DEBOUNCE_SECONDS = 0.25  # the host's own timer applies this
 
 # The CLR session, process-wide and shared by every game's cabmap (its _map is

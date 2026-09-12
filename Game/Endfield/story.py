@@ -179,7 +179,7 @@ def _on_view_change(state, context):
     mid-update, and a failing poll there raises instead of reporting."""
     state.unit = ""
     state.actor = ""
-    state.clips.clear()
+    CLIPS.close()
     state.clip_status = ""
     _forget_context(state)
     if _top_table(state) is None:
@@ -201,15 +201,31 @@ def _on_entry_pick(state, context):
     _open_entry(state, entry.key)
 
 
-def _on_clip_check(row, context):
-    """A tick writes straight into the open selection's checked set, so it
-    survives the list being rebuilt by a filter edit or a redraw."""
-    state = state_of(context)
-    checked = _CHECKED.setdefault(_selection_key(state), {})
-    if row.selected and row.clip:
-        checked[row.container] = row.cab
+def _clip_checked(seat):
+    """Whether this row is ticked. The seat stores nothing: what is checked is
+    keyed by what the row IS, so narrowing the filter after ticking twenty clips
+    cannot quietly import whatever happened to still be on screen."""
+    if CLIPS.view is None:
+        return False
+    return CLIPS.cell(seat, "container") in _CHECKED.get(_open_selection[0], {})
+
+
+def _check_clip(seat, ticked):
+    """A tick writes straight into the open selection's checked set."""
+    if CLIPS.view is None:
+        return
+    checked = _CHECKED.setdefault(_open_selection[0], {})
+    container = CLIPS.cell(seat, "container")
+    if ticked and CLIPS.cell(seat, "clip"):
+        checked[container] = CLIPS.cell(seat, "cab")
     else:
-        checked.pop(row.container, None)
+        checked.pop(container, None)
+
+
+#: Which selection the drawn clip list belongs to. A seat's getter is called while
+#: the list is being DRAWN, where there is no context to ask -- so the answer is
+#: recorded when the list is opened, which is the only moment it changes.
+_open_selection = [(None, "", "")]
 
 
 #: The top list's live view and the seats that draw it. Both modes are views of
@@ -218,54 +234,28 @@ def _on_clip_check(row, context):
 #: statement, made where that tally is built.
 TOP = app_view.Bound("Endfield:story")
 
-STORY_CLIP = Schema("EndfieldStoryClip", """One drawn line of the clip list: a
-shot/kind header, or one animation the unit plays. ``clip`` is false for a row the
-game files next to the animations without it being one (a dialogue timeline's morph
-asset), which is why the import button counts them separately instead of failing on
-them.""", (
-    Field("label", app_state.STRING, ""),
-    Field("channel", app_state.STRING, ""),
-    Field("unit", app_state.STRING, ""),
-    Field("shot", app_state.STRING, ""),
-    Field("kind", app_state.STRING, ""),
-    Field("actor", app_state.STRING, ""),
-    Field("name", app_state.STRING, ""),
-    Field("container", app_state.STRING, ""),
-    Field("cab", app_state.STRING, ""),
-    Field("clip", app_state.BOOL, True),
-    Field("is_group", app_state.BOOL, False),
-    Field("selected", app_state.BOOL, False, update="on_clip_check"),
+#: The three lists under it. Each is a view of one of the hook's own tables, so
+#: each states only WHERE it lives in this tab's state.
+CLIPS = app_view.Bound("Endfield:storyclips", seats="clips",
+                       index="clips_active_index", search="clip_search")
+LINES = app_view.Bound("Endfield:storylines", seats="lines",
+                       index="lines_active_index", search="line_search")
+QUESTS = app_view.Bound("Endfield:storyquests", seats="quests",
+                        index="quests_active_index", search="")
+
+
+#: One seat of the clip list. It carries the tick the user makes, which is the one
+#: thing about a drawn row that is NOT the view's to answer -- and even that stores
+#: nothing here: it reads and writes the checked set, keyed by the row's own
+#: container, so a refill cannot scramble what was ticked.
+CLIP_SEAT = Schema("EndfieldClipSeat", """One seat of the clip list.""", (
+    Field("row", app_state.INT, -1),
+    Field("selected", app_state.BOOL, None, "Build",
+          getter="clip_checked", setter="check_clip"),
 ))
 
-STORY_LINE = Schema("EndfieldStoryLine", """One drawn line of what a unit says: a
-spoken line, a reply the player is offered, or a cutscene subtitle. ``who`` is the
-speaker's display name, which a cutscene subtitle does not have -- the game files
-those without a speaker row, so the row is drawn as the narration it is rather than
-blamed on nobody.""", (
-    Field("label", app_state.STRING, ""),
-    Field("kind", app_state.STRING, ""),
-    Field("speaker", app_state.STRING, ""),
-    Field("who", app_state.STRING, ""),
-    Field("text", app_state.STRING, ""),
-    Field("emotion", app_state.STRING, ""),
-    Field("order", app_state.INT, 0),
-    Field("is_group", app_state.BOOL, False),
-))
 
-STORY_QUEST = Schema("EndfieldStoryQuest", """One objective of the mission that plays
-the open unit, in the words the player reads. ``dialog`` and ``cutscene`` are what
-the game itself says this objective waits on, which is the one attribution that is
-stated rather than read off a file name.""", (
-    Field("label", app_state.STRING, ""),
-    Field("quest", app_state.STRING, ""),
-    Field("description", app_state.STRING, ""),
-    Field("waits", app_state.STRING, ""),
-    Field("place", app_state.STRING, ""),
-    Field("dialog", app_state.STRING, ""),
-    Field("cutscene", app_state.STRING, ""),
-    Field("main_path", app_state.INT, -1),
-    Field("is_group", app_state.BOOL, False),
-))
+
 
 #: How much of the place a unit happens in to bring with it. The names are the
 #: projection's own, asked for by name so this side states no branch of its own.
@@ -309,7 +299,7 @@ STORY = Schema("EndfieldStory", """The story browser's whole state.""", (
     Field("clip_search", app_state.STRING, "", "Filter",
           "Filter these animations by unit, shot, kind, actor or name",
           update="on_clip_filter_edit", live=True),
-    Field("clips", app_state.COLLECTION, element=STORY_CLIP),
+    Field("clips", app_state.COLLECTION, element=CLIP_SEAT),
     Field("clips_active_index", app_state.INT, 0),
     Field("clip_status", app_state.STRING, ""),
 
@@ -335,11 +325,11 @@ STORY = Schema("EndfieldStory", """The story browser's whole state.""", (
     Field("line_search", app_state.STRING, "", "Filter",
           "Filter what is said by speaker, text or emotion",
           update="on_line_filter_edit", live=True),
-    Field("lines", app_state.COLLECTION, element=STORY_LINE),
+    Field("lines", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("lines_active_index", app_state.INT, 0),
     Field("line_status", app_state.STRING, ""),
 
-    Field("quests", app_state.COLLECTION, element=STORY_QUEST),
+    Field("quests", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("quests_active_index", app_state.INT, 0),
     Field("quest_status", app_state.STRING, ""),
 
@@ -358,7 +348,9 @@ HANDLERS = app_state.Handlers(
     "Endfield.story", base=filtering.HANDLERS,
     on_filter_edit=_on_filter_edit, on_clip_filter_edit=_on_clip_filter_edit,
     on_line_filter_edit=_on_line_filter_edit, on_view_change=_on_view_change,
-    on_entry_pick=_on_entry_pick, on_clip_check=_on_clip_check)
+    on_entry_pick=_on_entry_pick,
+    clip_checked=lambda seat: _clip_checked(seat),
+    check_clip=lambda seat, ticked: _check_clip(seat, ticked))
 
 
 def _rebuild_top(state):
@@ -412,7 +404,7 @@ def _open_entry(state, key):
     by_story = state.mode == BY_STORY
     state.unit = key if by_story else ""
     state.actor = "" if by_story else key
-    state.clips.clear()
+    CLIPS.close()
     state.clip_status = ""
     _forget_context(state)
     if not key or cabmap_state.BRIDGE is None:
@@ -464,9 +456,9 @@ def _forget_context(state):
     state.mission_character = ""
     state.unit_summary = ""
     state.unit_relation = ""
-    state.lines.clear()
+    LINES.close()
     state.line_status = ""
-    state.quests.clear()
+    QUESTS.close()
     state.quest_status = ""
 
 
@@ -510,7 +502,7 @@ def _open_context(state, unit):
     if mission is not None:
         state.mission_description = mission.get("description", "")
         state.mission_character = mission.get("who", "") or mission.get("character", "")
-    _fill_quests(state, quests)
+    _rebuild_quests(state)
 
 
 def _unit_speaking(table, spoken):
@@ -539,140 +531,27 @@ def _row_of(table, key, column="unit"):
 
 
 def _rebuild_clips(state):
-    table = _clips_table(state)
+    """Ask the kernel for the clip list. Which column is its name and which is its
+    section depend on the mode -- by story a clip is its actor under its shot, by
+    actor it is its own name under the story it came from -- so the view is told
+    which, rather than the table carrying both answers as one."""
     with filtering.rebuilding():
-        _fill_clips(state, table)
+        _open_selection[0] = _selection_key(state)
+        by_story = state.mode == BY_STORY
+        CLIPS.open(_clips_table(state), state, ordered=True,
+                   label_column="actorLabel" if by_story else "name",
+                   group_column="shotSection" if by_story else "storySection")
+        checked = _CHECKED.get(_open_selection[0], {})
+        state.clip_status = ("" if CLIPS.view is None else CLIPS.summary) + (
+            " · {0} checked".format(len(checked)) if checked else "")
 
 
-def _fill_clips(state, table):
-    highlighted = filtering.selected_key(state, "clips", "clips_active_index", "container")
-    state.clips.clear()
-    if table is None:
-        return
-    checked = _CHECKED.get((state.channel, state.unit), {})
-    matched = cabmap_state.BRIDGE.search_data_table(table, state.clip_search.strip(), None)
-    by_story = state.mode == BY_STORY
-    order = sorted(int(index) for index in matched)
-    rows = [{name: table.cell(index, name)
-             for name in ("channel", "unit", "shot", "kind", "actor", "name", "container",
-                          "cab", "clip", "title", "place")}
-            for index in order[:cabmap_state.LIST_CAP]]
-
-    counts = {}
-    for row in rows:
-        counts[_bucket(row, by_story)] = counts.get(_bucket(row, by_story), 0) + 1
-
-    current = None
-    for row in rows:
-        bucket = _bucket(row, by_story)
-        if bucket != current:
-            current = bucket
-            header = state.clips.add()
-            header.label = "{0}  ({1})".format(bucket, counts[bucket])
-            header.is_group = True
-            header.channel = row["channel"]
-            header.unit = row["unit"]
-        item = state.clips.add()
-        item.channel = row["channel"]
-        item.unit = row["unit"]
-        item.shot = row["shot"]
-        item.kind = row["kind"]
-        item.actor = row["actor"]
-        item.name = row["name"]
-        item.container = row["container"]
-        item.cab = row["cab"]
-        item.clip = bool(int(row["clip"] or 0))
-        item.selected = row["container"] in checked
-        # By story the actor is the useful half of the name; by actor it is the
-        # constant, so the name (which for a library clip says what it DOES) is.
-        item.label = (row["actor"] or row["name"]) if by_story else row["name"]
-    filtering.restore_selection(state, highlighted, "clips", "clips_active_index", "container")
-    state.clip_status = "{0} of {1} row(s){2}{3}".format(
-        len(order), len(table),
-        "" if len(order) == len(rows) else " · showing {0}".format(len(rows)),
-        " · {0} checked".format(len(checked)) if checked else "")
-
-
-def _rebuild_lines(state):
+def _rebuild_quests(state):
+    """The mission's own quest graph, in the order its main path walks it -- which
+    is the order the hook states it in, so the view keeps it."""
     with filtering.rebuilding():
-        _fill_lines(state, _lines_table(state))
-
-
-def _fill_lines(state, table):
-    """What the open unit says, in the game's own playback order. Filtering runs
-    through the same C# engine the other lists use, over the very table the rows
-    came from -- so searching a speaker's name or a phrase is one vectorized pass
-    and nothing is matched here."""
-    state.lines.clear()
-    if table is None:
-        state.line_status = ""
-        return
-    matched = cabmap_state.BRIDGE.search_data_table(table, state.line_search.strip(), None)
-    order = sorted(int(index) for index in matched)
-    rows = [{name: table.cell(index, name)
-             for name in ("order", "kind", "speaker", "who", "text", "emotion")}
-            for index in order[:cabmap_state.LIST_CAP]]
-    for row in rows:
-        item = state.lines.add()
-        item.kind = row["kind"]
-        item.speaker = row["speaker"]
-        item.who = row["who"] or row["speaker"]
-        item.text = row["text"]
-        item.emotion = row["emotion"]
-        item.order = int(float(row["order"] or 0))
-        item.label = row["text"]
-    state.line_status = "{0} of {1} line(s){2}".format(
-        len(order), len(table),
-        "" if len(order) == len(rows) else " · showing {0}".format(len(rows)))
-
-
-def _fill_quests(state, table):
-    """The mission's own quest graph, in the order its main path walks it. One
-    drawn row per objective, under the quest it belongs to -- which is the shape
-    the game itself tracks, and the reason a quest with several objectives reads
-    as several things to do rather than one."""
-    state.quests.clear()
-    if table is None:
-        state.quest_status = ""
-        return
-    rows = [{name: table.cell(index, name)
-             for name in ("quest", "mainPath", "objective", "description", "waitsOn",
-                          "place", "dialog", "cutscene")}
-            for index in range(len(table))][:cabmap_state.LIST_CAP]
-    current = None
-    for row in rows:
-        if row["quest"] != current:
-            current = row["quest"]
-            header = state.quests.add()
-            header.label = row["quest"]
-            header.quest = row["quest"]
-            header.main_path = int(float(row["mainPath"] or -1))
-            header.is_group = True
-        item = state.quests.add()
-        item.quest = row["quest"]
-        item.description = row["description"]
-        item.waits = row["waitsOn"]
-        item.place = row["place"]
-        item.dialog = row["dialog"]
-        item.cutscene = row["cutscene"]
-        item.main_path = int(float(row["mainPath"] or -1))
-        item.label = row["description"] or row["waitsOn"] or row["quest"]
-    state.quest_status = "{0} objective(s) over {1} quest(s)".format(
-        len(rows), len({row["quest"] for row in rows}))
-
-
-def _bucket(row, by_story):
-    """The group a clip row is drawn under -- always the game's own split. Inside
-    one unit that is the shot (a cutscene) or what the asset drives (a dialogue);
-    across one actor it is the unit itself, prefixed by the channel it came from,
-    since that is what tells a cutscene line apart from a library state."""
-    if by_story:
-        return row["shot"] or row["kind"] or "(ungrouped)"
-    if not row["unit"]:
-        return row["channel"]
-    # Across one actor the useful header is WHICH STORY this is from, which is
-    # the whole reason the actor view raises the question in the first place.
-    return "{0} · {1}".format(row["title"] or row["channel"], row["unit"])
+        QUESTS.open(_quests_table(state), state, ordered=True)
+        state.quest_status = "" if QUESTS.view is None else QUESTS.summary
 
 
 def _selected_entry(state):
@@ -696,46 +575,70 @@ def _unit_columns(by_actor):
 
 _UNIT_GROUP = TOP.column("", icon="OUTLINER_COLLECTION")
 
+def _is_clip(seat):
+    """Whether this row IS an animation. The game files assets next to its clips
+    that are not clips (a dialogue timeline's morph asset), and only a clip can be
+    built -- so only a clip's box can be ticked."""
+    return bool(CLIPS.cell(seat, "clip"))
+
+
+def _clip_kind(seat):
+    return CLIPS.cell(seat, "kind")
+
+
 _CLIP_COLUMNS = (
-    # Only a row that IS a clip can be built, so only that row's box can be ticked.
-    app_layout.ListColumn("", width=0.08, prop="selected",
-                          enabled=lambda row: bool(row.clip)),
-    app_layout.ListColumn("kind", width=0.28,
-                          icon=lambda row: _KIND_ICONS.get(row.kind, _DEFAULT_KIND_ICON)),
-    app_layout.ListColumn("label", width=0.75),
-    app_layout.ListColumn(lambda row: "" if row.clip else "not a clip",
+    app_layout.ListColumn("", width=0.08, prop="selected", enabled=_is_clip),
+    app_layout.ListColumn(_clip_kind, width=0.28,
+                          icon=lambda seat: _KIND_ICONS.get(_clip_kind(seat),
+                                                            _DEFAULT_KIND_ICON)),
+    CLIPS.column("", width=0.75),
+    app_layout.ListColumn(lambda seat: "" if _is_clip(seat) else "not a clip",
                           align=app_layout.RIGHT, enabled=False),
 )
 #: By actor a clip group IS a story unit, so it carries the way into it; by story
 #: it is a caption, which is what an empty values dict says.
-_CLIP_GROUP = app_layout.ListColumn("label", icon="SEQUENCE")
+_CLIP_GROUP = CLIPS.column("", icon="SEQUENCE")
+
+def _is_option(seat):
+    return LINES.cell(seat, "kind") == datasets.LINE_OPTION
+
+
+def _speaker(seat):
+    return LINES.cell(seat, "who")
+
 
 _LINE_COLUMNS = (
     app_layout.ListColumn(
-        lambda row: "" if row.kind == datasets.LINE_OPTION else (row.who or ""),
+        lambda seat: "" if _is_option(seat) else _speaker(seat),
         width=0.2, align=app_layout.RIGHT,
-        icon=lambda row: ("TRIA_RIGHT" if row.kind == datasets.LINE_OPTION
-                          else ("" if row.who else "REC")),
-        enabled=lambda row: bool(row.who) or row.kind == datasets.LINE_OPTION),
-    app_layout.ListColumn("text", width=0.8),
-    app_layout.ListColumn("emotion", align=app_layout.RIGHT, enabled=False),
+        icon=lambda seat: ("TRIA_RIGHT" if _is_option(seat)
+                           else ("" if _speaker(seat) else "REC")),
+        enabled=lambda seat: bool(_speaker(seat)) or _is_option(seat)),
+    LINES.column("text", width=0.8),
+    LINES.column("emotion", align=app_layout.RIGHT, enabled=False),
 )
 
+def _quest_link(seat):
+    return QUESTS.cell(seat, "dialog") or QUESTS.cell(seat, "cutscene")
+
+
 _QUEST_COLUMNS = (
-    app_layout.ListColumn("label", width=0.7, icon="DOT"),
+    QUESTS.column("", width=0.7, icon="DOT"),
     # What the game itself says this objective waits on is the one link that is
     # stated rather than read off a file name -- so it is a click. An objective
     # that waits on nothing states no arguments and the cell is its place instead.
-    app_layout.ListColumn(lambda row: (row.dialog or row.cutscene) or row.place,
+    app_layout.ListColumn(lambda seat: _quest_link(seat) or QUESTS.cell(seat, "place"),
                           align=app_layout.RIGHT, icon="ZOOM_SELECTED",
                           command="ruri.story_goto_unit",
-                          values=lambda row: (
-                              {"channel": datasets.CUTSCENE if row.cutscene else datasets.DIALOG,
-                               "spoken": row.dialog or row.cutscene}
-                              if (row.dialog or row.cutscene) else {})),
+                          values=lambda seat: (
+                              {"channel": (datasets.CUTSCENE if QUESTS.cell(seat, "cutscene")
+                                           else datasets.DIALOG),
+                               "spoken": _quest_link(seat)}
+                              if _quest_link(seat) else {})),
 )
-_QUEST_GROUP = app_layout.ListColumn(
-    "label", icon=lambda row: "KEYFRAME_HLT" if row.main_path >= 0 else "KEYFRAME")
+_QUEST_GROUP = QUESTS.column(
+    "", icon=lambda seat: ("KEYFRAME_HLT" if float(QUESTS.cell(seat, "mainPath") or -1) >= 0
+                           else "KEYFRAME"))
 
 
 # ---------------------------------------------------------------------------
@@ -788,15 +691,11 @@ def _select(context, arguments):
         # The whole set, not just what is drawn: unchecking has to be able to undo a
         # check made under a different filter.
         _CHECKED.pop(_selection_key(state), None)
-    for item in state.clips:
-        if item.is_group or not item.clip:
+    for row in CLIPS.rows():
+        if not row["clip"]:
             continue
-        if mode == "ALL":
-            item.selected = True
-        elif mode == "NONE":
-            item.selected = False
-        elif mode == "KIND":
-            item.selected = item.kind == kind
+        if mode == "ALL" or (mode == "KIND" and row["kind"] == kind):
+            _CHECKED.setdefault(_open_selection[0], {})[row["container"]] = row["cab"]
     return None
 
 
@@ -814,10 +713,10 @@ def _import_checked(context, arguments):
         return {"CANCELLED"}
 
     by_actor = {}
-    for item in state.clips:
-        if item.is_group or not item.clip or item.container not in checked:
+    for row in CLIPS.rows():
+        if not row["clip"] or row["container"] not in checked:
             continue
-        by_actor.setdefault(item.actor, []).append(item.cab)
+        by_actor.setdefault(row["actor"], []).append(row["cab"])
     for _container, cab in checked.items():
         if not any(cab in cabs for cabs in by_actor.values()):
             by_actor.setdefault("", []).append(cab)
@@ -914,10 +813,10 @@ def _reveal(context, arguments):
     if checked:
         container, cab = next(iter(checked.items()))
     else:
-        drawn = [item for item in state.clips if not item.is_group]
+        drawn = CLIPS.rows()
         if not drawn:
             return reveal.run(context, {"cab": "", "query": opened, "folder": ""})
-        container, cab = drawn[0].container, drawn[0].cab
+        container, cab = drawn[0]["container"], drawn[0]["cab"]
     return reveal.run(context, {"cab": cab, "query": opened,
                                 "folder": container.rpartition("/")[0]})
 
@@ -971,9 +870,9 @@ def _kinds_in(state):
     buttons that make sense for THIS selection rather than a tabulated list of
     every kind the game has."""
     kinds = []
-    for item in state.clips:
-        if not item.is_group and item.clip and item.kind and item.kind not in kinds:
-            kinds.append(item.kind)
+    for row in CLIPS.rows():
+        if row["clip"] and row["kind"] and row["kind"] not in kinds:
+            kinds.append(row["kind"])
     return kinds
 
 
@@ -1060,8 +959,7 @@ def _draw_script(box, state):
     said = box.column(align=True)
     said.label(text="Said in this unit", icon="OUTLINER_OB_FONT")
     said.prop(state, "line_search", icon="VIEWZOOM", text="")
-    box.list(state, "lines", "lines_active_index", _LINE_COLUMNS, rows=10,
-             identifier="story_lines")
+    app_view.draw_list(LINES, box, state, _LINE_COLUMNS, "story_lines", summary=False)
     box.label(text=state.line_status or "This unit speaks nothing the text tables carry.",
               icon="INFO")
     if not state.mission:
@@ -1069,9 +967,8 @@ def _draw_script(box, state):
     box.separator()
     box.label(text="{0} · what the player is asked to do".format(
         state.mission_title or state.mission), icon="KEYFRAME_HLT")
-    box.list(state, "quests", "quests_active_index", _QUEST_COLUMNS, rows=8,
-             identifier="story_quests", group_key="is_group",
-             group_column=_QUEST_GROUP)
+    app_view.draw_list(QUESTS, box, state, _QUEST_COLUMNS, "story_quests", rows=8,
+                       group_column=_QUEST_GROUP, summary=False)
     box.label(text=state.quest_status, icon="INFO")
 
 
@@ -1124,11 +1021,13 @@ def draw_story_tab(layout, context):
 
     by_actor = state.mode == BY_ACTOR
     box.list(state, "clips", "clips_active_index", _CLIP_COLUMNS, rows=10,
-             identifier="story_clips", group_key="is_group",
+             identifier="story_clips", group_key=CLIPS.is_group,
              group_column=_CLIP_GROUP,
              group_command=GOTO_UNIT.id,
-             group_values=lambda row: ({"channel": row.channel, "unit": row.unit}
-                                       if row.unit and by_actor else {}))
+             visible_count=CLIPS.count,
+             group_values=lambda seat: (
+                 {"channel": CLIPS.cell(seat, "channel"), "unit": CLIPS.cell(seat, "unit")}
+                 if CLIPS.cell(seat, "unit") and by_actor else {}))
 
     checked = _checked(state)
     box.label(text=state.clip_status, icon="INFO")
@@ -1137,14 +1036,15 @@ def draw_story_tab(layout, context):
         # The row in front of the user names a story; make going there one click,
         # since "which cutscene is this from" is the question the actor view
         # raises and cannot answer on its own.
-        highlighted = state.clips[state.clips_active_index]             if 0 <= state.clips_active_index < len(state.clips) else None
+        picked = CLIPS.picked(state)
+        highlighted = None if picked is None else picked.values()
         jump = actions.row()
-        jump.enabled = highlighted is not None and bool(highlighted.unit)
+        jump.enabled = highlighted is not None and bool(highlighted["unit"])
         opened = jump.operator(GOTO_UNIT.id, icon="ZOOM_SELECTED",
-                               text="Open {0}".format(highlighted.unit) if highlighted is not None
-                               and highlighted.unit else "Open This Story")
+                               text="Open {0}".format(highlighted["unit"]) if highlighted is not None
+                               and highlighted["unit"] else "Open This Story")
         if highlighted is not None:
-            opened.channel = highlighted.channel
+            opened.channel = highlighted["channel"]
             opened.unit = highlighted.unit
     if state.mode == BY_STORY:
         whole = actions.column(align=True)
