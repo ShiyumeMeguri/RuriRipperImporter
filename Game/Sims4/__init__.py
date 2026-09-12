@@ -8,8 +8,9 @@ ships the catalogue every lot is built out of, or the user folder beside the pla
 documents, which holds the saves, the tray and whatever the player added to Mods. Both are
 this game and both are read the same way; which one is open only changes what is there.
 
-One contribution for now:
+Two contributions:
 
+``Scene`` tab  every saved lot the setup carries -- a whole house each, imported assembled.
 ``Prop`` tab   every object the setup can place, picked by name and imported whole.
 
 Declared as one GAME_MODULE row (see ``Game``).
@@ -25,7 +26,7 @@ from .. import GameModule, GameSection, GameTab
 #: OBJECT is a mesh tree, and what the decoder hands over for one is the same normalised
 #: placement statement every other non-Unity source hands over -- which every host's
 #: builder takes, each in its own idiom.
-SECTIONS = (GameSection("props"),)
+SECTIONS = (GameSection("scene"), GameSection("props"))
 
 _LOADED = []
 
@@ -71,6 +72,9 @@ GAME_MODULE = GameModule(
     engine="Sims4",
     sections=SECTIONS,
     tabs=(
+        GameTab("scene", "Scene",
+                "Every saved lot this setup carries -- a whole house each, imported assembled",
+                ("scene", "draw")),
         GameTab("props", "Prop",
                 "Every object this setup can place, picked by name and imported whole",
                 ("props", "draw")),

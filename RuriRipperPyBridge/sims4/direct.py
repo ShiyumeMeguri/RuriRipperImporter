@@ -22,6 +22,7 @@ from __future__ import annotations
 from .. import placements
 
 PROPS = "sims4.props"
+LOTS = "sims4.lots"
 PLACEMENTS = "sims4.placements"
 MESH_GEOMETRY = "sims4.mesh.geometry"
 MATERIALS = "sims4.materials"
@@ -37,6 +38,11 @@ mesh_material_paths = placements.mesh_material_paths
 def props(bridge):
     """Every object the setup can place, as plain rows."""
     return placements.rows(bridge.game_data(PROPS))
+
+
+def lots(bridge):
+    """Every saved lot the setup carries -- a whole house each -- as plain rows."""
+    return placements.rows(bridge.game_data(LOTS))
 
 
 def placement_rows(bridge, key):
