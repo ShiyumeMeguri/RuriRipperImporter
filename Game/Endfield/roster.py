@@ -77,7 +77,7 @@ def language(state):
 
 
 def rows(state):
-    return _ROWS.get((state.kind, language(state)))
+    return _ROWS.get(language(state))
 
 
 def rebuild(state):
@@ -89,26 +89,25 @@ def rebuild(state):
     vectorized sweep, then the shared rule evaluator). This side receives lines and
     reads cells."""
     with filtering.rebuilding():
-        BOUND.open(rows(state), state,
-                   note="{0} · {1}".format(state.kind, language(state)))
+        BOUND.open(rows(state), state, note=language(state))
 
 
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 
+_CAST_PANE = "cast"
 _PANE_ITEMS = (
-    (CHARACTERS, "Characters", "Playable characters, grouped by the game's own profession"),
-    (NPCS, "NPCs", "Non-playable cast, one row per distinct model prefab"),
+    (_CAST_PANE, "Cast", "Everyone the game ships a model for -- narrow by kind below"),
     (STORY_PANE, "Story", "The animations the game plays during story, under its own filing"),
 )
-_KIND_ITEMS = _PANE_ITEMS[:2]
 
 ROSTER = Schema("Roster", """The cast browser's state.""", (
-    Field("pane", app_state.ENUM, CHARACTERS, "Pane", items="pane_items",
+    Field("pane", app_state.ENUM, _CAST_PANE, "Pane", items="pane_items",
           update="on_pane_change"),
-    Field("kind", app_state.ENUM, CHARACTERS, "Cast", items=_KIND_ITEMS,
-          update="on_kind_change"),
+    Field("facet", app_state.ENUM, None, "Kind",
+          "Which of the game's own kinds to list", items="facet_items",
+          update="on_filter_edit"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group", update="on_filter_edit", live=True),
     Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
@@ -126,12 +125,16 @@ ROSTER = Schema("Roster", """The cast browser's state.""", (
 
 
 def _pane_items(state, context):
-    """The two casts, plus Story where the host has an animation surface to play
-    one on. A pane offered in a host that cannot show it is a tab that opens onto
+    """The cast, plus Story where the host has an animation surface to play one on.
+    A pane offered in a host that cannot show it is a tab that opens onto
     nothing."""
     if host_port.ANIMATION in host_port.current().capabilities:
         return _PANE_ITEMS
-    return _KIND_ITEMS
+    return _PANE_ITEMS[:1]
+
+
+def _facet_items(state, context):
+    return BOUND.facet_choices(state, context)
 
 
 def _on_filter_edit(state, context):
@@ -139,27 +142,20 @@ def _on_filter_edit(state, context):
 
 
 def _on_pane_change(state, context):
-    """三格一行里前两格选的是 cast,第三格根本不是 cast —— 所以 pane 是显示面、
-    kind 仍是「哪个 cast」。pane 单向写 kind(反向永不发生),两者语义各自完整。"""
-    if state.pane in (CHARACTERS, NPCS) and state.kind != state.pane:
-        state.kind = state.pane
-
-
-def _on_kind_change(state, context):
-    """Switching cast only redraws; it never fires the refresh command. A command
-    invoked from a property update runs with the UI mid-update, and its poll
-    failing there raises rather than reporting."""
-    if rows(state) is None:
-        state.status = "Refresh to read the {0} out of the game's tables.".format(state.kind)
-    rebuild(state)
+    """The pane picks WHAT is on screen; the facet narrows the cast once it is.
+    Switching pane only redraws -- a command invoked from a property update runs
+    with the UI mid-update, and its poll failing there raises rather than
+    reporting."""
+    if state.pane != STORY_PANE and rows(state) is None:
+        state.status = "Refresh to read the cast out of the game's tables."
 
 
 HANDLERS = app_state.Handlers(
     "Endfield.roster", base=filtering.HANDLERS,
     pane_items=_pane_items,
+    facet_items=_facet_items,
     on_filter_edit=_on_filter_edit,
-    on_pane_change=_on_pane_change,
-    on_kind_change=_on_kind_change)
+    on_pane_change=_on_pane_change)
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -185,11 +181,11 @@ def _refresh(context, arguments):
     tongue = language(state)
     state.language = tongue
     try:
-        table = datasets.cast(state.kind, tongue)
+        table = datasets.cast(tongue)
     except Exception as exc:
         state.status = "{0}: {1}".format(type(exc).__name__, exc)
         return {"CANCELLED"}
-    _ROWS[(state.kind, tongue)] = table
+    _ROWS[tongue] = table
     rebuild(state)
     return None
 
@@ -203,8 +199,8 @@ def _load(context, arguments):
     state = state_of(context)
     entry = BOUND.picked(state)
     member = {"key": entry.key, "label": entry.label,
-              "character": entry.key if state.kind == CHARACTERS else "",
-              "template": entry.key if state.kind == NPCS else ""}
+              "character": entry.key if entry.cell("kind") == CHARACTERS else "",
+              "template": entry.key if entry.cell("kind") == NPCS else ""}
     packages = yield command.Read(
         lambda: cast.resolve([member], detail_level(context)).get(member["key"] or ""), 0.3)
     if packages is None:
@@ -250,7 +246,7 @@ def _animations(context, arguments):
     entry = BOUND.picked(state)
     if entry is None:
         return {"CANCELLED"}
-    found = datasets.animation_anchor(entry.key, state.kind)
+    found = datasets.animation_anchor(entry.key, entry.cell("kind"))
     if found is None:
         state.status = "No animation folder for '{0}' in the loaded cabmap.".format(entry.label)
         return {"CANCELLED"}
@@ -272,7 +268,7 @@ def _reveal(context, arguments):
     if entry is None:
         return {"CANCELLED"}
     reveal = command.COMMANDS.get("ruri.cabmap_reveal")
-    if state.kind == CHARACTERS:
+    if entry.cell("kind") == CHARACTERS:
         found = datasets.model_rows(entry.key, state.model_kind, cast=CHARACTERS)
         if found:
             row = found[0]
@@ -340,8 +336,8 @@ def _seeds(context, state):
     if entry is None:
         return []
     member = {"key": entry.key, "label": entry.label,
-              "character": entry.key if state.kind == CHARACTERS else "",
-              "template": entry.key if state.kind == NPCS else ""}
+              "character": entry.key if entry.cell("kind") == CHARACTERS else "",
+              "template": entry.key if entry.cell("kind") == NPCS else ""}
     packages = cast.resolve([member], detail_level(context)).get(member["key"] or "")
     return list(packages.cabs) if packages is not None else []
 

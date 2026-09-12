@@ -101,14 +101,15 @@ def language_for_locale(locale):
     return rows[0]["language"] if rows else ""
 
 
-def cast(kind, language):
-    """One cast, already joined to its display names and reduced to what a list
-    draws: key/label/detail/group, plus the game's own columns to filter on.
+def cast(language):
+    """The WHOLE cast, already joined to its display names and reduced to what a
+    list draws: kind/key/label/detail/group, plus the game's own columns to filter
+    on. One table, because it is one list -- which half a row is, is its ``kind``,
+    and narrowing by that is the facet switch every list here already has.
 
-    A cast that has rows the game ships nothing loadable for carries a ``shipped``
-    column saying which is which -- so the list can drop what it could not load
-    without a second crossing to ask."""
-    return _table(CAST, cast=kind, language=language)
+    A row the game ships nothing loadable for carries a ``shipped`` column saying
+    so, which is how the list drops it without a second crossing to ask."""
+    return _table(CAST, language=language)
 
 
 # ── story playback ──────────────────────────────────────────────────────────
