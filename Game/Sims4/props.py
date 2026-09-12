@@ -115,7 +115,7 @@ REFRESH = command.COMMANDS.define(
     description="Read every object this setup can place off the decoder",
     icon="FILE_REFRESH", internal=True, poll=_loaded)
 IMPORT = command.COMMANDS.define(
-    "ruri.sims4_prop_import", "Import Object", _import,
+    "ruri.sims4_prop_import", "Load Model", _import,
     description="Import this object whole, exactly as the browser would",
     icon="IMPORT", poll=_has_selection, steps=True, status_state=STATE,
     failure="Sims 4 object import failed")

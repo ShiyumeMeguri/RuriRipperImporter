@@ -178,12 +178,12 @@ REFRESH = command.COMMANDS.define(
     description="Read the cast this install ships off the decoder",
     icon="FILE_REFRESH", internal=True, poll=_loaded)
 IMPORT = command.COMMANDS.define(
-    "ruri.unreal_character_import", "Import Character", _import,
+    "ruri.unreal_character_import", "Load Model", _import,
     description="Import this row whole, exactly as the browser would",
     icon="IMPORT", poll=_has_selection, steps=True, status_state=STATE,
     failure="Unreal character import failed")
 REVEAL = command.COMMANDS.define(
-    "ruri.unreal_character_reveal", "Reveal", _reveal,
+    "ruri.unreal_character_reveal", "Open Containing Folder", _reveal,
     description="Show the selected row's package in the file browser",
     icon="FILE_FOLDER", internal=True, poll=_has_selection)
 

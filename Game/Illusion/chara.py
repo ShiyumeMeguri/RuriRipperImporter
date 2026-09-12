@@ -34,7 +34,6 @@ STATE = "ruri_kk_chara"
 SPEC_KEY = "Illusion:cast"
 
 MODEL_SECTION = "model"
-FACE_SECTION = "face"
 ANIME_SECTION = "anime"
 
 #: The seven outfits the game's own customization slots are numbered by.
@@ -89,10 +88,6 @@ CHARA = Schema("IllusionChara", """The character tab's own state.""", (
     Field("build_hair", app_state.BOOL, True, "Hair"),
     Field("build_clothes", app_state.BOOL, True, "Clothes"),
     Field("build_accessories", app_state.BOOL, True, "Accessories"),
-    # Whose named expressions the Face section lists -- the character's own
-    # personality number, as her card states it. Read off the card by the build, so
-    # it is right without anyone having to know it.
-    Field("personality", app_state.INT, 0, "Personality", minimum=-100, soft_maximum=100),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
@@ -102,9 +97,8 @@ CHARA = Schema("IllusionChara", """The character tab's own state.""", (
 #: a timeline, and a host with neither still assembles the character.
 _SECTION_PANES = ((MODEL_SECTION, "Model",
                    "Build a character from one of the game's own cards", "chara"),
-                  (FACE_SECTION, "Face", "Drive the head's blend-shape patterns",
-                   "face"),
-                  (ANIME_SECTION, "Anime", "The studio's animation catalog", "anime"))
+                  (ANIME_SECTION, "Anime", "Every animation the game ships, by who plays it",
+                   "anime"))
 
 
 def _section_items(state, context):
@@ -164,16 +158,6 @@ def rebuild(state):
             state.status = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
         BOUND.open(table, state)
 
-
-def personality_of(state):
-    """The personality number the selected card states, which is whose named
-    expressions the Face section lists. It is a column of the row the user picked,
-    so it is read off that row -- never looked up by scanning the cast."""
-    stated = BOUND.value(state, "personality")
-    try:
-        return int(float(stated))
-    except (TypeError, ValueError):
-        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +244,6 @@ def _build(context, arguments):
     yield command.Mark(0.8)
     lines = []
     built = host_port.current().import_packages(context, packages, options, lines, resolved)
-    state.personality = personality_of(state)
     state.status = "{0}: {1} piece(s). {2}".format(
         packages.label, built.imported, "  ".join(built.warnings[:2]))
     return built
@@ -284,7 +267,7 @@ REFRESH = command.COMMANDS.define(
     description="Read the game's customization catalog and its character cards",
     icon="FILE_REFRESH", poll=_loaded)
 BUILD = command.COMMANDS.define(
-    "ruri.kk_chara_build", "Build Character", _build,
+    "ruri.kk_chara_build", "Load Model", _build,
     description="Resolve every part this character wears and assemble her",
     icon="IMPORT", poll=_has_card, steps=True, status_state=STATE,
     settle=_settle_build, failure="Character build failed")
@@ -360,12 +343,6 @@ def draw_tab(layout, context):
     layout.prop(state, "section", text="")
     if state.section == MODEL_SECTION:
         draw_model(layout, context)
-        return
-    # The other two are a face and a timeline, so each is imported only where
-    # this host answers what it needs.
-    if state.section == FACE_SECTION:
-        from . import face
-        face.draw(layout, context)
         return
     from . import anime
     anime.draw(layout, context)

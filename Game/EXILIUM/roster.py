@@ -66,9 +66,6 @@ ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
     Field("language", app_state.STRING, ""),
-    Field("downloaded_only", app_state.BOOL, True, "Downloaded",
-          "Hide what the catalog names but this install never downloaded. Those rows "
-          "have nothing to import; showing them offers a Load button that lies"),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE, cast_panel.CAST_STATE))
 
 
@@ -116,8 +113,7 @@ def rebuild(state):
     go to the same C# engine the bundle browser searches with, over the very buffers
     this table was built from. This side receives row ids and reads cells."""
     with filtering.rebuilding():
-        BOUND.open(rows(state), state, note=state.kind,
-                   shipped_only=state.downloaded_only)
+        BOUND.open(rows(state), state, note=state.kind)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +309,6 @@ def draw(layout, context):
 
     entry = BOUND.picked(state)
     options = layout.column(align=True)
-    options.prop(state, "downloaded_only", toggle=True, icon="IMPORT")
     # 与浏览器同一份导入选项 —— Load 走的本来就是浏览器自己的导入。
     app_browser.draw_import_options(options, context)
     actions = options.column(align=True)
