@@ -20,12 +20,12 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
-from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, mesh_resolver
 
@@ -48,17 +48,11 @@ def state_of(context):
 # ---------------------------------------------------------------------------
 # What the panel remembers
 # ---------------------------------------------------------------------------
-#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with. The
-#: kind is not a column: this game keeps its two casts in two tables, so the switch
-#: picks the TABLE and the browser narrows nothing.
-CAST = app_cast.Cast(SPEC_KEY, label="label", identifier="key", detail="detail",
-                     group="group", shipped="shipped", payload="address",
-                     cap=cabmap_state.LIST_CAP,
-                     labels={"key": "Id", "label": "Name", "display": "English",
-                             "group": "Role", "detail": "Detail", "character": "Character",
-                             "address": "Address", "container": "Asset",
-                             "archives": "Archives", "models": "Outfits",
-                             "shipped": "Downloaded"})
+#: This tab's live view and the seats that draw it. The kind is not a facet:
+#: this game keeps its two casts in two tables, so the switch picks the TABLE
+#: and the view narrows nothing. Which column is the name, the id, the role or
+#: the "downloaded" test is each column's own statement, made in the hook.
+BOUND = app_view.Bound(SPEC_KEY)
 
 ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("kind", app_state.ENUM, CHARACTERS, "Cast", update="on_kind_change",
@@ -67,7 +61,7 @@ ROSTER = Schema("ExiliumRoster", """The cast browser's whole state.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group",
           update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
     Field("language", app_state.STRING, ""),
@@ -86,7 +80,6 @@ def _on_kind_change(state, context):
     invoked from a property update runs with the UI mid-update, and its poll
     failing there raises rather than reporting."""
     if rows(state) is None:
-        state.entries.clear()
         state.status = "Refresh to read the {0} out of the game's tables.".format(state.kind)
         return
     rebuild(state)
@@ -98,24 +91,8 @@ HANDLERS = app_state.Handlers(
     on_kind_change=_on_kind_change)
 
 
-def _filter_fields():
-    """The rule vocabulary = the columns the CURRENTLY loaded cast has. The two
-    casts are different projections, so their filterable fields genuinely differ --
-    read off the table, never tabulated."""
-    if not host_port.bound():
-        return CAST.fields(None)
-    try:
-        table = rows(state_of(None))
-    except Exception:
-        # Asking for THIS game's columns while another game's install is mounted
-        # is a question its data layer answers by raising; the rule editor is not
-        # the place that breaks over it.
-        table = None
-    return CAST.fields(table)
-
-
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=SPEC_KEY, fields=_filter_fields,
+    key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
@@ -138,12 +115,8 @@ def rebuild(state):
     go to the same C# engine the bundle browser searches with, over the very buffers
     this table was built from. This side receives row ids and reads cells."""
     with filtering.rebuilding():
-        app_cast.fill(state, CAST, rows(state), note=state.kind,
-                      shipped_only=state.downloaded_only)
-
-
-def selected(state):
-    return app_cast.selected(state)
+        BOUND.open(rows(state), state, note=state.kind,
+                   shipped_only=state.downloaded_only)
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +127,7 @@ def _loaded(context):
 
 
 def _has_selection(context):
-    return _loaded(context) and selected(state_of(context)) is not None
+    return _loaded(context) and BOUND.picked(state_of(context)) is not None
 
 
 def _refresh(context, arguments):
@@ -219,7 +192,7 @@ def load_address(context, address, label):
 
 
 def _load(context, arguments):
-    entry = selected(state_of(context))
+    entry = BOUND.picked(state_of(context))
     if entry is None:
         return
     for step in load_address(context, entry.address, entry.label):
@@ -238,7 +211,7 @@ def reveal_address(context, address, fallback):
 
 
 def _reveal(context, arguments):
-    entry = selected(state_of(context))
+    entry = BOUND.picked(state_of(context))
     if entry is None:
         return {"CANCELLED"}
     return reveal_address(context, entry.address, entry.key)
@@ -247,7 +220,7 @@ def _reveal(context, arguments):
 def _outfits(context, arguments):
     """List the selected character's own models, in the Models pane."""
     state = state_of(context)
-    entry = selected(state)
+    entry = BOUND.picked(state)
     if entry is None:
         return {"CANCELLED"}
     wanted = entry.key
@@ -295,20 +268,25 @@ OUTFITS = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 # What it looks like
 # ---------------------------------------------------------------------------
+def _id_cell(seat):
+    """The id, unless the name already IS the id."""
+    key = BOUND.cell(seat, "key")
+    return "" if key == BOUND.cell(seat) else "({0})".format(key)
+
+
 #: A cast row: the name, the id when the game gives it one of its own, and
 #: whatever detail that projection carries. A row the install never downloaded is
 #: dimmed rather than hidden while the filter says to show it -- it is real data
 #: with nothing behind it here.
 _COLUMNS = (
-    app_layout.ListColumn("label", width=0.55,
-                          icon=lambda row: ("OUTLINER_OB_ARMATURE" if row.shipped
-                                            else "LIBRARY_DATA_BROKEN"),
-                          active=lambda row: row.shipped),
-    app_layout.ListColumn(lambda row: "" if row.key == row.label else "({0})".format(row.key),
-                          width=0.5, enabled=False),
-    app_layout.ListColumn("detail", align=app_layout.RIGHT, enabled=False),
+    BOUND.column("", width=0.55,
+                 icon=lambda seat: ("OUTLINER_OB_ARMATURE" if BOUND.shipped(seat)
+                                    else "LIBRARY_DATA_BROKEN"),
+                 active=BOUND.shipped),
+    app_layout.ListColumn(_id_cell, width=0.5, enabled=False),
+    BOUND.column("detail", align=app_layout.RIGHT, enabled=False),
 )
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def draw(layout, context):
@@ -318,10 +296,10 @@ def draw(layout, context):
     # 分面是下拉菜单,不是一排按钮 —— 每个游戏的分面数不同,铺开就把列表挤没了。
     layout.prop(state, "kind", text="")
     filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    app_cast.draw_list(layout, state, _COLUMNS, "exilium_roster",
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "exilium_roster",
                        group_column=_GROUP_COLUMN)
 
-    entry = selected(state)
+    entry = BOUND.picked(state)
     options = layout.column(align=True)
     options.prop(state, "downloaded_only", toggle=True, icon="IMPORT")
     # 与浏览器同一份导入选项 —— Load 走的本来就是浏览器自己的导入。

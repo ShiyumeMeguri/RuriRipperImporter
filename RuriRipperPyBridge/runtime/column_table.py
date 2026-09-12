@@ -56,7 +56,7 @@ def _mapped(address, length):
 class ColumnTable:
     """One projected table, mapped straight onto the C# side's own buffers."""
 
-    __slots__ = ("handle", "name", "row_count", "names", "roles",
+    __slots__ = ("handle", "name", "row_count", "names", "titles", "roles",
                  "_pinned", "_kinds", "_data", "_offsets", "_scalars", "_text_cache")
 
     def __init__(self, pinned):
@@ -65,6 +65,8 @@ class ColumnTable:
         self.name = str(pinned.Name)
         self.row_count = int(pinned.RowCount)
         self.names = [str(name) for name in pinned.Names]
+        #: What a person should see each column called, worded on the other side.
+        self.titles = [str(title) for title in pinned.Titles]
         self.roles = [int(role) for role in pinned.Roles]
         self._kinds = [str(kind) for kind in pinned.Kinds]
         self._data = []

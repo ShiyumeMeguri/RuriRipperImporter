@@ -58,6 +58,10 @@ class View:
         #: What loading this row needs -- the column the decoder marked as the
         #: payload, whatever that build happens to call it.
         self.payload_column = self._rows.first_named(column_table.PAYLOAD)
+        #: Whether the install has anything behind a row. A view that was asked
+        #: to show unshipped rows anyway still knows which they are, so they can
+        #: be drawn as what they are rather than silently dropped.
+        self.shipped_column = self._rows.first_named(column_table.SHIPPED)
         self._group = "is_group"
 
     @classmethod
@@ -100,6 +104,12 @@ class View:
     def is_group(self, row):
         return bool(self._rows.cell(row, self._group))
 
+    def shipped(self, row):
+        if not self.shipped_column:
+            return True
+        stated = self._rows.cell(row, self.shipped_column)
+        return bool(stated) and stated != "0"
+
     def has(self, column):
         return column in self._rows.names
 
@@ -128,11 +138,12 @@ class View:
 
     def fields(self):
         """The rule editor's vocabulary: the columns this view actually carries,
-        the displayed name first because a new rule starts on the first field."""
-        leading = self._label
-        names = sorted(self._rows.names, key=lambda name: 0 if name == leading else 1)
-        return tuple((name, name.replace("_", " ").title()) for name in names
-                     if name != self._group)
+        under the names the decoder gave them, the displayed name first because a
+        new rule starts on the first field."""
+        titled = [(name, title) for name, title in zip(self._rows.names, self._rows.titles)
+                  if name != self._group]
+        titled.sort(key=lambda pair: 0 if pair[0] == self._label else 1)
+        return tuple(titled)
 
 
 #: One drawn line's SEAT in the host's list. It carries no content -- the view
@@ -211,6 +222,15 @@ class Bound:
         """What loading the picked row needs, in the build's own words."""
         return "" if self.view is None else self.value(state, self.view.payload_column)
 
+    def picked(self, state):
+        """The picked line as the two things a command ever asks of it -- what the
+        game calls it and what the game keys it by -- or None when the pick is a
+        section header or nothing. Two cell reads, not a record: there is no copy
+        of the row on this side to go stale."""
+        row = self.selected(state)
+        return None if row < 0 else Picked(self, row)
+
+
     # -- what a description reads ------------------------------------------
     def cell(self, seat, column=""):
         return "" if self.view is None else self.view.text(seat.row, column)
@@ -220,6 +240,10 @@ class Bound:
 
     def is_group(self, seat):
         return self.view is not None and self.view.is_group(seat.row)
+
+    def shipped(self, seat):
+        """Whether this install has anything behind the line in this seat."""
+        return self.view is None or self.view.shipped(seat.row)
 
     @property
     def count(self):
@@ -241,6 +265,36 @@ class Bound:
 
     def fields(self):
         return (("label", "Name"),) if self.view is None else self.view.fields()
+
+
+class Picked:
+    """The line the user is on. Reads through to the view, so it cannot go stale
+    and there is no copy of the row on this side."""
+
+    __slots__ = ("_bound", "row")
+
+    def __init__(self, bound, row):
+        self._bound = bound
+        self.row = row
+
+    @property
+    def key(self):
+        return self._bound.view.key(self.row)
+
+    @property
+    def label(self):
+        return self._bound.view.label(self.row)
+
+    @property
+    def shipped(self):
+        return self._bound.view.shipped(self.row)
+
+    @property
+    def payload(self):
+        return self.cell(self._bound.view.payload_column)
+
+    def cell(self, column=""):
+        return self._bound.view.text(self.row, column)
 
 
 def _facet(state):

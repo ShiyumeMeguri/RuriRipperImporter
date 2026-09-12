@@ -18,12 +18,12 @@ from __future__ import annotations
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
-from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unity import class_registry
 from .. import section
@@ -69,19 +69,18 @@ def state_of(context):
 # ---------------------------------------------------------------------------
 # What the panel remembers
 # ---------------------------------------------------------------------------
-#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with. A
-#: card is CALLED by whichever of three columns the game filled in, so the label is
-#: stated as that chain rather than as one column that is often empty.
-CAST = app_cast.Cast(SPEC_KEY, label=("name", "file", "path"), identifier="path",
-                     detail="file", group="folder")
+#: This tab's live view and the seats that draw it. WHICH column is the name, the
+#: id, the section or the outfit count is not stated here -- each column says so
+#: itself, where the hook builds the cast.
+BOUND = app_view.Bound(SPEC_KEY)
 
 CHARA = Schema("IllusionChara", """The character tab's own state.""", (
     Field("section", app_state.ENUM, MODEL_SECTION, "Section", items="section_items"),
     Field("search", app_state.STRING, "", "Filter", "Filter by name, file or folder",
           update="on_cast_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
-    Field("status", app_state.STRING, "Refresh to read the game's characters."),
+    Field("status", app_state.STRING, ""),
     Field("coordinate", app_state.ENUM, "0", "Outfit",
           "Which of the character's seven outfits to build",
           items=tuple((str(index), name, "The character's {0} outfit".format(name))
@@ -122,7 +121,7 @@ HANDLERS = app_state.Handlers(
     section_items=_section_items, on_cast_edit=_on_cast_edit)
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=SPEC_KEY, fields=(("name", "Name"), ("file", "File"), ("folder", "Folder")),
+    key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
@@ -130,13 +129,8 @@ FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
 # ---------------------------------------------------------------------------
 # The rows
 # ---------------------------------------------------------------------------
-def selected(state):
-    return app_cast.selected(state)
-
-
 def selected_card(state):
-    entry = selected(state)
-    return entry.key if entry else ""
+    return BOUND.payload(state)
 
 
 def plan(state):
@@ -164,26 +158,21 @@ def wanted_plan(state):
 
 def rebuild(state):
     with filtering.rebuilding():
-        matched, table = datasets.search(datasets.CAST, {}, state.search.strip(),
-                                         state.filter_rules)
+        table = datasets.table(datasets.CAST)
         if table is None:
-            state.entries.clear()
             state.status = datasets.why_empty(datasets.CAST) or "Load a cabmap, then refresh."
-            return
-        app_cast.fill(state, CAST, table, matched=matched)
+        BOUND.open(table, state)
 
 
 def personality_of(state):
     """The personality number the selected card states, which is whose named
-    expressions the Face section lists."""
-    table = datasets.table(datasets.CAST)
-    card = selected_card(state)
-    if table is None or not card:
+    expressions the Face section lists. It is a column of the row the user picked,
+    so it is read off that row -- never looked up by scanning the cast."""
+    stated = BOUND.value(state, "personality")
+    try:
+        return int(float(stated))
+    except (TypeError, ValueError):
         return 0
-    for index in range(len(table)):
-        if table.cell(index, "path") == card:
-            return int(datasets.number(table, index, "personality"))
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +231,7 @@ def _parts(rows):
 def _build(context, arguments):
     """Resolve every piece this character wears and hand them over as ONE thing."""
     state = state_of(context)
-    entry = selected(state)
+    name = BOUND.value(state)
     rows = wanted_plan(state)
     if not rows:
         state.status = "That card resolves to nothing importable."
@@ -259,7 +248,7 @@ def _build(context, arguments):
 
     options = app_browser.as_options(app_browser.state_of(context))
     packages = loading.Packages(
-        selected_card(state), entry.label if entry else "Character", loading.ASSEMBLY,
+        selected_card(state), name or "Character", loading.ASSEMBLY,
         cabs, parts=_parts(rows), export_class_ids=_class_ids(options),
         manifest={"plan": rows})
     # One read for the whole plan: the pieces share bundles heavily, and a closure
@@ -304,18 +293,20 @@ BUILD = command.COMMANDS.define(
 # What it looks like
 # ---------------------------------------------------------------------------
 _COLUMNS = (
-    app_layout.ListColumn("label", width=0.7, icon="OUTLINER_OB_ARMATURE"),
-    app_layout.ListColumn("detail", align=app_layout.RIGHT, enabled=False),
+    BOUND.column("", width=0.7, icon="OUTLINER_OB_ARMATURE"),
+    BOUND.column("file", align=app_layout.RIGHT, enabled=False),
 )
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def draw_model(layout, context):
     state = state_of(context)
     command.draw_progress(layout, state)
-    filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    app_cast.draw_list(layout, state, _COLUMNS, "illusion_cast",
+    app_view.draw_head(BOUND, layout, state, REFRESH.id)
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "illusion_cast",
                        group_column=_GROUP_COLUMN)
+    if state.status:
+        layout.label(text=state.status, icon="ERROR")
 
     card = selected_card(state)
     options = layout.column(align=True)
@@ -365,3 +356,4 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    BOUND.close()

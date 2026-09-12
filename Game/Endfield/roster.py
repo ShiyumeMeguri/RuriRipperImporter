@@ -22,12 +22,12 @@ import json
 
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
-from ...Kernel.app import cast as app_cast
 from ...Kernel.app import command, filtering
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import loading, schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import cast, datasets
 
@@ -40,16 +40,11 @@ NPCS = datasets.NPCS
 CAST_PANE = "cast"
 STORY_PANE = "story"
 
-#: WHICH COLUMN ANSWERS WHAT, for the one cast browser every game draws with.
-#: The kind is not a column here: this game keeps its two casts in two tables, so
-#: the switch picks the TABLE and the browser narrows nothing.
-CAST = app_cast.Cast(SPEC_KEY, label="label", identifier="key", detail="detail",
-                     group="group", named="display", shipped="shipped",
-                     cap=cabmap_state.LIST_CAP,
-                     labels={"key": "Id", "display": "Name", "english": "English",
-                             "group": "Profession", "npc": "Npc Id", "template": "Template",
-                             "label": "Name", "detail": "Detail", "also": "Also Worn By",
-                             "shipped": "Has A Model"})
+#: This tab's live view and the seats that draw it. The kind is not a facet here:
+#: this game keeps its two casts in two tables, so the switch picks the TABLE and
+#: the view narrows nothing. Which column is the name, the id, the profession or
+#: the "has a model" test is each column's own statement, made in the hook.
+BOUND = app_view.Bound(SPEC_KEY)
 
 #: Loaded row lists, by (kind, language). Module scope, not panel state:
 #: rebuilding the drawn list must not cost a re-read, and a column table is not
@@ -85,20 +80,16 @@ def rows(state):
 
 
 def rebuild(state):
-    """Rebuild the drawn line list, through the one fill every cast browser uses.
+    """Ask the kernel for the drawn list as it is now stated.
 
     The filter is NOT evaluated here: the search text and the Include/Exclude
     rules go to the same C# engine the bundle browser searches with, over the very
     buffers this table was built from (one ASCII fold per column, then a parallel
-    vectorized sweep, then the shared rule evaluator). This side receives row ids
-    and reads cells."""
+    vectorized sweep, then the shared rule evaluator). This side receives lines and
+    reads cells."""
     with filtering.rebuilding():
-        app_cast.fill(state, CAST, rows(state),
-                      note="{0} · {1}".format(state.kind, language(state)))
-
-
-def selected(state):
-    return app_cast.selected(state)
+        BOUND.open(rows(state), state,
+                   note="{0} · {1}".format(state.kind, language(state)))
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +110,7 @@ ROSTER = Schema("Roster", """The cast browser's state.""", (
           update="on_kind_change"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name, id or group", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=app_cast.CAST_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Load a cabmap, then refresh the roster."),
     Field("language", app_state.STRING, ""),
@@ -158,9 +149,7 @@ def _on_kind_change(state, context):
     invoked from a property update runs with the UI mid-update, and its poll
     failing there raises rather than reporting."""
     if rows(state) is None:
-        state.entries.clear()
         state.status = "Refresh to read the {0} out of the game's tables.".format(state.kind)
-        return
     rebuild(state)
 
 
@@ -172,24 +161,8 @@ HANDLERS = app_state.Handlers(
     on_kind_change=_on_kind_change)
 
 
-def _filter_fields():
-    """The rule vocabulary = the columns the CURRENTLY loaded roster table has.
-    Characters and NPCs are different projections, so their filterable fields
-    genuinely differ -- read off the table, never tabulated."""
-    if not host_port.bound():
-        return CAST.fields(None)
-    try:
-        table = rows(host_port.current().panel_state(None, STATE))
-    except Exception:
-        # Asking for THIS game's columns while another game's install is mounted
-        # is a question its data layer answers by raising; the rule editor is not
-        # the place that breaks over it.
-        table = None
-    return CAST.fields(table)
-
-
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=SPEC_KEY, fields=_filter_fields,
+    key=SPEC_KEY, fields=BOUND.fields,
     state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
@@ -202,7 +175,7 @@ def _loaded(context):
 
 
 def _has_selection(context):
-    return _loaded(context) and selected(state_of(context)) is not None
+    return _loaded(context) and BOUND.picked(state_of(context)) is not None
 
 
 def _refresh(context, arguments):
@@ -227,7 +200,7 @@ def _load(context, arguments):
     one question (``cast.resolve``), and which one this row gets is the game's own
     filing, not a case this command picks."""
     state = state_of(context)
-    entry = selected(state)
+    entry = BOUND.picked(state)
     member = {"key": entry.key, "label": entry.label,
               "character": entry.key if state.kind == CHARACTERS else "",
               "template": entry.key if state.kind == NPCS else ""}
@@ -250,7 +223,7 @@ def _settle_load(context, built):
         return {"CANCELLED"}
     if state.load_expressions and host_port.MORPH_TARGETS in host_port.current().capabilities:
         from . import face
-        face.load_library_for(context, selected(state),
+        face.load_library_for(context, BOUND.picked(state),
                                          (built.manifest or {}).get("facial_morph", ""))
     return {"FINISHED"}
 
@@ -273,7 +246,7 @@ def _animations(context, arguments):
     this one ships no animation folder of its own -- said out loud rather than
     substituted silently, because "these are not hers" matters."""
     state = state_of(context)
-    entry = selected(state)
+    entry = BOUND.picked(state)
     if entry is None:
         return {"CANCELLED"}
     found = datasets.animation_anchor(entry.key, state.kind)
@@ -294,7 +267,7 @@ def _reveal(context, arguments):
     query is the id the game itself keys that row by -- no path convention of ours
     is involved."""
     state = state_of(context)
-    entry = selected(state)
+    entry = BOUND.picked(state)
     if entry is None:
         return {"CANCELLED"}
     reveal = command.COMMANDS.get("ruri.cabmap_reveal")
@@ -331,23 +304,28 @@ ANIMATIONS = command.COMMANDS.define(
 REVEAL = command.COMMANDS.define(
     "ruri.roster_reveal", "Open Containing Folder", _reveal,
     description="Switch to the bundle browser and open where this one's assets live",
-    poll=lambda context: selected(state_of(context)) is not None)
+    poll=lambda context: BOUND.picked(state_of(context)) is not None)
 
 
 # ---------------------------------------------------------------------------
 # The tab
 # ---------------------------------------------------------------------------
+def _id_cell(seat):
+    """The id, unless the name already IS the id."""
+    key = BOUND.cell(seat, "key")
+    return "" if key == BOUND.cell(seat) else "({0})".format(key)
+
+
 #: Three siblings in a row share the width equally, which is what this list has
 #: always looked like: name, then the game's own id, then the detail hard right.
 #: As split factors that is a third of the whole, then half of what is left.
 _COLUMNS = (
-    app_layout.ListColumn("label", "Name", width=0.34, icon="OUTLINER_OB_ARMATURE"),
+    BOUND.column("", label="Name", width=0.34, icon="OUTLINER_OB_ARMATURE"),
     # The game's own id, dimmed: with several rows sharing a display name it is
     # the only thing that tells them apart. Blank when the name already IS the
     # id, so nothing is printed twice.
-    app_layout.ListColumn(lambda row: "" if row.key == row.label else "({0})".format(row.key),
-                          "Id", width=0.5, enabled=False),
-    app_layout.ListColumn("detail", "Detail", align=app_layout.RIGHT),
+    app_layout.ListColumn(_id_cell, "Id", width=0.5, enabled=False),
+    BOUND.column("detail", label="Detail", align=app_layout.RIGHT),
 )
 
 
@@ -365,9 +343,9 @@ def draw(layout, context):
         return STORY_PANE
 
     filtering.draw_search_row(layout, state, extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    app_cast.draw_list(layout, state, _COLUMNS, "roster")
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "roster")
 
-    entry = selected(state)
+    entry = BOUND.picked(state)
     options = layout.column(align=True)
     options.enabled = entry is not None
     options.row(align=True).prop(state, "model_kind", expand=True)
@@ -391,4 +369,5 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
+    BOUND.close()
     _ROWS.clear()
