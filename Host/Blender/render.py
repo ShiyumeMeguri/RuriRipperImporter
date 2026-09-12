@@ -143,6 +143,13 @@ def draw(description, target, context):
 _LIST_SPECS = {}
 
 
+def _is_group(group_key, item):
+    """Whether one drawn line is a section header. A list that owns its records
+    says so with a field of theirs; a list bound to a VIEW owns no records -- the
+    view knows -- so the description may answer with a callable instead."""
+    return group_key(item) if callable(group_key) else getattr(item, group_key, False)
+
+
 def _list_id(spec):
     return spec["identifier"] or (spec["collection"] + "_list")
 
@@ -183,7 +190,7 @@ class RURI_UL_described(bpy.types.UIList):
                   active_property, index):
         spec = _LIST_SPECS[self.list_id]
         group_key = spec["group_key"]
-        if group_key and getattr(item, group_key, False):
+        if group_key and _is_group(group_key, item):
             group_column = spec["group_column"]
             group_values = spec["group_values"]
             row = target.row(align=True)
@@ -233,10 +240,18 @@ class RURI_UL_described(bpy.types.UIList):
         """Filtering already happened against the game's own fields rather than
         the drawn string. A list that HIDES rather than removes says so with a
         field of its own, and this is where that verdict is applied."""
-        visible_key = _LIST_SPECS[self.list_id]["visible_key"]
+        spec = _LIST_SPECS[self.list_id]
+        records = getattr(data, propname)
+        drawn = spec["visible_count"]
+        if drawn >= 0:
+            # A pooled list: the view already said how many lines there are, so
+            # the tail is hidden rather than removed -- two C-level list builds,
+            # not a python pass over four thousand records on every redraw.
+            drawn = min(drawn, len(records))
+            return [self.bitflag_filter_item] * drawn + [0] * (len(records) - drawn), []
+        visible_key = spec["visible_key"]
         if not visible_key:
             return [], []
-        records = getattr(data, propname)
         return [self.bitflag_filter_item if getattr(record, visible_key, True) else 0
                 for record in records], []
 

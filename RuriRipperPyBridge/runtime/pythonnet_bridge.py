@@ -802,8 +802,28 @@ class RipperBridge:
         from . import column_table
         token = cancellation if cancellation is not None \
             else getattr(System.Threading.CancellationToken, "None")
-        return column_table.ColumnTable.from_packed(self._bridge.GameDataTable(
+        return column_table.ColumnTable.from_pinned(self._bridge.GameDataTable(
             self._map, str(dataset_id), _named_args(args), token))
+
+    def open_view(self, table_or_handle, facet="", query="", rules=None, note="",
+                  shipped_only=True, sort_column="", sort_direction=0, window=0):
+        """One drawn list, composed ENTIRELY on the C# side: quick search, the
+        Include/Exclude rules, the facet, the shipped test, the sort, the group
+        headers, the window and the status line all happen there, over the very
+        buffers the table was built from.
+
+        What comes back is the answer, not the ingredients: a View whose rows are
+        the lines to draw in the order to draw them. This side reads cells out of
+        it and does not filter, sort, join, count or format anything -- which is
+        what makes a list of eighteen thousand cost the same as one of fifty.
+
+        Which column answers what (the name, the id, the facet, the section) is
+        not stated here: it is the column's own role, declared in C# where the
+        table is built."""
+        handle = getattr(table_or_handle, "handle", table_or_handle)
+        return self._bridge.OpenView(str(handle), str(facet), query or "", _flat_rules(rules),
+                                     str(note), bool(shipped_only), str(sort_column),
+                                     int(sort_direction), int(window))
 
     def game_data_blob(self, dataset_id, cancellation=None, **args):
         """One published dataset whose payload is bytes rather than rows."""

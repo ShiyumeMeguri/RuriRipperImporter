@@ -557,12 +557,18 @@ class Renderer:
         table.setEnabled(enabled)
 
         group_key = spec["group_key"]
+        # A pooled list draws exactly the lines the view says it has; the rest of
+        # the pool is not a line at all.
+        drawn = spec["visible_count"]
         for index, record in enumerate(records):
+            if 0 <= drawn <= index:
+                break
             if visible_key and not getattr(record, visible_key, True):
                 continue
             row = table.rowCount()
             table.insertRow(row)
-            if group_key and getattr(record, group_key, False):
+            if group_key and (group_key(record) if callable(group_key)
+                              else getattr(record, group_key, False)):
                 item = QtWidgets.QTableWidgetItem(spec["group_column"].text(record))
                 font = item.font()
                 font.setBold(True)

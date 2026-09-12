@@ -228,7 +228,7 @@ class Layout:
     def list(self, state, collection, index_key, columns, rows=10, identifier="",
              on_click="", click_argument="index", group_key="", group_column=None,
              group_command="", group_values=None, row_action="", row_action_icon="",
-             row_action_width=0.88, visible_key=""):
+             row_action_width=0.88, visible_key="", visible_count=-1):
         """A row list.
 
         ``columns`` are :class:`ListColumn`. ``on_click`` names the command every
@@ -249,14 +249,23 @@ class Layout:
 
         ``visible_key`` is the record field the filter already decided: a row
         it says False for is HIDDEN rather than removed, so a row ticked before
-        the search box was typed into is still ticked afterwards."""
+        the search box was typed into is still ticked afterwards.
+
+        ``visible_count`` is how many of the collection's records are actually a
+        line right now, for a list whose records are a POOL rather than the
+        answer. A list bound to a view owns no records of its own -- the view
+        says how many lines there are and what each one reads -- so the pool
+        grows to the largest it has ever needed and the tail is hidden, instead
+        of being torn down and rebuilt on every keystroke. -1 means every record
+        is a line."""
         self._child(LIST, state=state, collection=collection, index_key=index_key,
                     columns=tuple(columns), rows=rows, identifier=identifier,
                     on_click=on_click, click_argument=click_argument,
                     group_key=group_key, group_column=group_column,
                     group_command=group_command, group_values=group_values,
                     row_action=row_action, row_action_icon=row_action_icon,
-                    row_action_width=row_action_width, visible_key=visible_key)
+                    row_action_width=row_action_width, visible_key=visible_key,
+                    visible_count=visible_count)
 
     # -- modifiers ---------------------------------------------------------
     def __setattr__(self, name, value):
