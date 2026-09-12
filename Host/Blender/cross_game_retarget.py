@@ -213,7 +213,7 @@ def _candidate_avatar_cabs(session_key):
     candidates = []
     for index in range(len(rows)):
         if avatar_id in _class_ids_at(rows, index):
-            candidates.append((int(rows.deps[index]), rows.cab(index)))
+            candidates.append((int(rows.cell(index, "deps")), rows.cell(index, "cab")))
     candidates.sort(key=lambda pair: pair[0])
     return candidates, avatar_id
 

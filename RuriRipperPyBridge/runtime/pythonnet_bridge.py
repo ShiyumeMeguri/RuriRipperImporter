@@ -671,17 +671,42 @@ class RipperBridge:
             self.reinitialize(decoder, root, options)
 
     def enumerate_table(self):
-        """The row set as a columnar row_table.RowTable -- raw blob/offset
-        buffers in ONE interop crossing, nothing materialized per row (the
-        load-path optimum; see row_table.py)."""
+        """The loaded cabmap as a column_table.ColumnTable, its display words
+        already decided on the other side (CabRows). One interop crossing, the
+        buffers pinned rather than copied, nothing materialized per row."""
+        from . import column_table
+        return column_table.ColumnTable.from_pinned(self._bridge.EnumerateTable(self._loaded()))
+
+    def folder_children(self, folder):
+        """One virtual folder's child folders and how many rows are under each,
+        as a table. The tree itself is built once per map on the other side, in
+        one pass over the container paths; this side never walks it."""
+        from . import column_table
+        return column_table.ColumnTable.from_pinned(
+            self._bridge.CabFolderChildren(self._loaded(), str(folder)))
+
+    def folder_files(self, folder):
+        """The rows listed IN one virtual folder, as row ids."""
+        import numpy as np
+        payload = self._bridge.CabFolderFiles(self._loaded(), str(folder))
+        return np.frombuffer(bytes(payload), dtype="<i4")
+
+    def folder_exists(self, folder):
+        """Whether a remembered folder still exists in THIS map."""
+        return bool(self._bridge.CabFolderExists(self._loaded(), str(folder)))
+
+    def folder_of(self, row_index, query="", folder=""):
+        """(folder, leaf name) for one row as it is CURRENTLY being shown -- the
+        two halves of "jump to this row's folder", answered together so they
+        cannot disagree about which of a multi-path row's names is meant."""
+        found = self._bridge.CabFolderOf(self._loaded(), int(row_index), str(query), str(folder))
+        return str(found[0]), str(found[1])
+
+    def _loaded(self):
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() (or use_session(key) "
                                "to select a loaded game's map) first.")
-        # Imported here, not at module scope: row_table needs numpy, and this
-        # module has to stay importable (for claim_runtime_early) before the
-        # bootstrap has installed it.
-        from . import row_table
-        return row_table.RowTable.from_packed(self._bridge.EnumerateTablePacked(self._map))
+        return self._map
 
     def search_table(self, query, rules=None, sort_column="name", sort_direction=0):
         """Quick search + Include/Exclude rules + sort over the loaded cabmap, on the C#

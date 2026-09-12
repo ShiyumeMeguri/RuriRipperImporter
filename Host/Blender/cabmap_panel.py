@@ -400,7 +400,7 @@ def _reveal(context, arguments):
 
     cabmap_state.apply_filter(query)
     matches = list(cabmap_state.VISIBLE)
-    folders = {cabmap_state.folder_of(row, cabmap_state.best_path_index_for_jump(row, query))
+    folders = {cabmap_state.folder_of(row, query)
                for row in matches}
     if len(folders) == 1:
         state.search = ""
@@ -1006,7 +1006,7 @@ class RURI_OT_discover_animations(bpy.types.Operator):
                      if cab in rows_by_cab and "AnimationClip" in rows_by_cab[cab]["type_names"]]
         # By folder first, name second: a closure mixes several of the game's own
         # animation folders, and folder order is what makes that readable.
-        clip_rows.sort(key=lambda r: (_clip_folder(r.container_path()).lower(), r["name"].lower()))
+        clip_rows.sort(key=lambda r: (_clip_folder(r["container"]).lower(), r["name"].lower()))
 
         state.available_clips.clear()
         state.animation_character_name = (target_rows[0]["name"] if len(target_rows) == 1
@@ -1020,7 +1020,7 @@ class RURI_OT_discover_animations(bpy.types.Operator):
             # and one CAB can host several clips -- identity, never names).
             item.guid = row["cab"]
             item.name = row["name"]
-            item.folder = _clip_folder(row.container_path())
+            item.folder = _clip_folder(row["container"])
             item.size_bytes = 0  # not known without resolving/exporting -- see RURI_UL_animation_clips
         _apply_animation_filter(state)
         carry = None

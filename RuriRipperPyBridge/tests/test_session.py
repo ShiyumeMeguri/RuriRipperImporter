@@ -10,34 +10,102 @@ from ..session import cabmap_state
 
 
 class _FakeRows:
-    """The subset of row_table.RowTable the session's tree/selection touch."""
+    """The subset of column_table.ColumnTable the session's selection touches."""
 
     def __init__(self, entries):
         # entries: (cab, name, [container_path, ...])
         self._entries = list(entries)
-        self._index = {cab: i for i, (cab, _n, _p) in enumerate(self._entries)}
 
     def __len__(self):
         return len(self._entries)
 
-    def cab(self, i):
-        return self._entries[i][0]
+    @property
+    def row_count(self):
+        return len(self._entries)
 
-    def name(self, i):
-        return self._entries[i][1]
+    def values(self, column):
+        return [self.cell(index, column) for index in range(len(self._entries))]
 
-    def container_path_count(self, i):
-        return len(self._entries[i][2])
+    def cell(self, index, column):
+        return self.row(index)[column]
 
-    def container_path(self, i, p):
-        return self._entries[i][2][p]
+    def row(self, index):
+        cab, name, paths = self._entries[index]
+        return {"cab": cab, "name": name, "container": "  |  ".join(paths),
+                "paths": list(paths)}
 
-    def cab_to_index(self):
-        return self._index
 
-    def __getitem__(self, i):
-        cab, name, paths = self._entries[i]
-        return {"cab": cab, "name": name, "container": "  |  ".join(paths)}
+class _FakeBridge:
+    """What the kernel answers about one map's folder tree. The tree itself is
+    built there; these tests only check that the session ASKS it and keeps what
+    comes back per game."""
+
+    #: No map is loaded under any key here, so activate() only switches this
+    #: side's view -- which is exactly the case these tests are about.
+    maps_by_key = {}
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def _tree(self):
+        folders = {}
+        for index in range(len(self._rows)):
+            for path in self._rows.row(index)["paths"]:
+                segments = [part for part in path.split("/") if part]
+                for depth in range(len(segments)):
+                    parent = "/".join(segments[:depth])
+                    folders.setdefault(parent, {}).setdefault(segments[depth], [])
+                folders.setdefault("/".join(segments[:-1]), {}).setdefault(
+                    segments[-1], []).append(index)
+        return folders
+
+    def folder_exists(self, folder):
+        return folder in self._tree() or folder == ""
+
+    def folder_children(self, folder):
+        tree = self._tree()
+        names = sorted(name for name in tree.get(folder, {})
+                       if (folder + "/" + name if folder else name) in tree)
+        return _FakeFolders([(name, len(tree[folder][name])) for name in names])
+
+    def folder_files(self, folder):
+        tree = self._tree()
+        found = []
+        for files in tree.get(folder, {}).values():
+            found.extend(files)
+        return _FakeIds(sorted(found))
+
+    def rename_session(self, old_key, new_key):
+        """Nothing is loaded here, so renaming a slot is a no-op."""
+
+    def search_table(self, query, rules, sort_column, sort_direction):
+        """Every row matches: what this side does with the ids is the subject,
+        not the matching, which is the kernel's."""
+        return _FakeIds(range(len(self._rows)))
+
+    def folder_of(self, row_index, query="", folder=""):
+        paths = self._rows.row(row_index)["paths"]
+        if not paths:
+            return "", ""
+        segments = [part for part in paths[0].split("/") if part]
+        return "/".join(segments[:-1]), segments[-1]
+
+
+class _FakeFolders:
+    def __init__(self, pairs):
+        self._pairs = pairs
+
+    @property
+    def row_count(self):
+        return len(self._pairs)
+
+    def cell(self, row, column):
+        return self._pairs[row][0 if column == "name" else 1]
+
+
+class _FakeIds(list):
+    def tolist(self):
+        return list(self)
 
 
 _EF_ROWS = _FakeRows([
@@ -51,12 +119,13 @@ _KK_ROWS = _FakeRows([
 
 
 def _load_into_active(rows):
-    """Stand in for load_rows() without a bridge: seed the active session's ROWS
-    and rebuild its folder tree at the root."""
+    """Stand in for load_rows(): seed the active session's ROWS and point it at
+    the root, with a bridge that answers about the folders those rows are in."""
+    cabmap_state.BRIDGE = _FakeBridge(rows)
     cabmap_state.ACTIVE.ROWS = rows
-    cabmap_state.ACTIVE._ROWS_BY_CAB = None
+    cabmap_state.ACTIVE._CAB_INDEX = None
     cabmap_state.clear_selection()
-    cabmap_state._build_tree(())
+    cabmap_state.browse_dir(())
 
 
 class TestSessionIsolation(unittest.TestCase):
@@ -162,8 +231,9 @@ class TestSessionIsolation(unittest.TestCase):
     def test_apply_filter_with_no_bridge_clears_visible(self):
         cabmap_state.activate("__test_ef__")
         _load_into_active(_EF_ROWS)
+        cabmap_state.BRIDGE = None  # nothing to ask -> nothing shown, and no crash
         cabmap_state.apply_filter("pelica")
-        self.assertEqual(cabmap_state.VISIBLE, [])  # BRIDGE is None -> empty, no crash
+        self.assertEqual(cabmap_state.VISIBLE, [])
 
     def test_unknown_module_attribute_raises(self):
         with self.assertRaises(AttributeError):

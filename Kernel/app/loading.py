@@ -308,8 +308,8 @@ def _archives():
     by_cab = {}
     rows = {}
     for index in range(len(table.cabs)):
-        source = str(table.source(index))
-        by_cab[table.cab(index)] = source
+        source = str(table.cell(index, "source"))
+        by_cab[table.cell(index, "cab")] = source
         rows[source] = rows.get(source, 0) + 1
     gone = {source: count for source, count in rows.items()
             if not os.path.isfile(os.path.join(root, source.replace("\\", "/")))}

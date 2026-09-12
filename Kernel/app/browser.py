@@ -80,7 +80,7 @@ _FOLDER_COLUMN = vocabulary.ListColumn(
 
 
 def _add_file_item(state, selected_cabs, idx, name_override=None):
-    row = cabmap_state.ROWS[idx]
+    row = cabmap_state.ROWS.row(idx)
     item = state.window.add()
     item.is_folder = False
     item.row_index = idx
@@ -89,7 +89,7 @@ def _add_file_item(state, selected_cabs, idx, name_override=None):
     item.container = row["container"]
     item.type_names = row["type_names"]
     item.source = row["source"]
-    item.deps = row["deps"]
+    item.deps = int(row["deps"])
     item.selected = row["cab"] in selected_cabs
     return item
 
@@ -1241,8 +1241,7 @@ the funnel popover) -- same as unticking a rule's own checkbox there."""
         return {"CANCELLED"}
 
     target_cab = item.cab
-    path_index = cabmap_state.best_path_index_for_jump(item.row_index, state.search)
-    folder = cabmap_state.folder_of(item.row_index, path_index)
+    folder = cabmap_state.folder_of(item.row_index, state.search)
     state.search = ""
     for rule in state.filter_rules:
         rule.enabled = False
@@ -1276,7 +1275,7 @@ to Ctrl+A / Alt+A / Ctrl+I while the cursor is over the RuriRipper
 sidebar, and mirrored as the All/None/Invert buttons under the list."""
     state = state_of(context)
     selection = cabmap_state.SELECTED_CABS
-    visible_cabs = [cabmap_state.ROWS[i]["cab"] for i in cabmap_state.VISIBLE]
+    visible_cabs = [cabmap_state.ROWS.cell(i, "cab") for i in cabmap_state.VISIBLE]
     if arguments["mode"] == "ALL":
         selection.update(visible_cabs)
     elif arguments["mode"] == "NONE":
@@ -1643,7 +1642,8 @@ def _cabmap_click(context, arguments):
         except ValueError:
             anchor_at = clicked_at
         low, high = sorted((anchor_at, clicked_at))
-        spanned = {cabmap_state.ROWS[position]["cab"] for position in visible[low:high + 1]}
+        spanned = {cabmap_state.ROWS.cell(position, "cab")
+                   for position in visible[low:high + 1]}
         if not arguments["extend"]:
             selection.clear()
         selection.update(spanned)
