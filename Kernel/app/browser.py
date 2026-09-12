@@ -817,6 +817,30 @@ def _set_cabmap_path(self, value):
     _ensure_active_config(self).cabmap_path = value
 
 
+#: The folder an install's decompiled shader source goes in, under the install itself.
+SHADER_OUTPUT_FOLDER = "RuriShaderOutput"
+
+
+def _default_shader_output(config):
+    """Where THIS install's shader source goes when nobody said otherwise: a folder of
+    its own under the install's root. Derived on read rather than seeded once, so a tab
+    that was set up before this field existed has a place to write to as well, and a
+    user who empties the field gets the default back instead of nothing."""
+    root = host_port.current().absolute_path(config.game_root) if config.game_root else ""
+    return os.path.join(root, SHADER_OUTPUT_FOLDER) if root else ""
+
+
+def _get_shader_output(self):
+    config = _active_config(self)
+    if config is None:
+        return ""
+    return config.shader_output or _default_shader_output(config)
+
+
+def _set_shader_output(self, value):
+    _ensure_active_config(self).shader_output = value
+
+
 def _get_browsed_dir(self):
     config = _active_config(self)
     return config.browsed_dir if config is not None else ""
@@ -1836,6 +1860,75 @@ def _clip_guids(clip_rows, clips_by_cab):
     return guids, missing
 
 
+#: What a row has to hold before there is anything to decompile about it. Both engines'
+#: decoders fill a row's type list with the same vocabulary, so this is one test and not
+#: one per engine -- a build whose materials are its own assets and a build whose material
+#: programs live in a shared archive both say "Material" here.
+SHADING_TYPES = ("Material", "Shader")
+
+
+def _shader_rows(state):
+    """The selected rows a decompile can answer about: the ones that say they hold a
+    material or a shader. Read off what the row itself states it holds, never off its
+    name or its folder."""
+    wanted = []
+    for row in _selected_target_rows(state):
+        held = [name.strip() for name in str(row["type_names"]).split(",")]
+        if any(name in SHADING_TYPES for name in held):
+            wanted.append(row)
+    return wanted
+
+
+def _read_shaders(context, arguments):
+    """Write out the source of every shader the selected rows reach.
+
+    The button is the same button on every install; only the answer differs. A game whose
+    engine ships no shader ASSET says how to answer for itself (``Game.shaders_of``), and
+    everything else goes down the one shared road: the closure of these rows, every shader
+    in it, decompiled."""
+    state = state_of(context)
+    config = _ensure_active_config(state)
+    blocked = _blocking_required_options(config)
+    if blocked:
+        _announce(context, blocked, host_port.ERROR)
+        return
+    _sync_bridge_to_tab(config)
+
+    rows = _shader_rows(state)
+    if not rows:
+        _announce(context, "Select a row that holds a material or a shader.", host_port.ERROR)
+        return
+    output = host_port.current().absolute_path(state.shader_output) if state.shader_output else ""
+    if not output:
+        _announce(context, "State a Shader Folder first.", host_port.ERROR)
+        return
+
+    seeds = [row["cab"] for row in rows]
+    stated = Game.shaders_of(_module_game_name(config), config.engine_family)
+    if stated is not None:
+        produced = yield app_command.Read(lambda: stated(seeds, output), 0.8)
+        _announce(context, "{0} row(s) -> {1} archive(s) in {2}".format(
+            len(seeds), len(produced or []), output))
+        return
+    found = yield app_command.Read(
+        lambda: cabmap_state.BRIDGE.export_shaders(seeds, output), 0.8)
+    _announce(context, "{0} row(s) -> {1} shader(s) in {2}".format(
+        len(seeds), 0 if found is None else found.row_count, output))
+
+
+def _shader_poll(context):
+    state = state_of(context)
+    return state.loaded and cabmap_state.BRIDGE is not None
+
+
+READ_SHADERS = app_command.COMMANDS.define(
+    "ruri.cabmap_shaders", "Decompile Shaders", _read_shaders,
+    description=("Write out, as source, every shader the selected row(s) reach -- any row "
+                 "that holds a material or a shader, on either engine"),
+    icon="NODE_MATERIAL", poll=_shader_poll, steps=True, status_state=STATE,
+    failure="Reading these shaders failed")
+
+
 def _import_poll(context):
     state = state_of(context)
     return state.loaded and cabmap_state.BRIDGE is not None
@@ -2170,6 +2263,14 @@ def draw(layout, context):
         cloth_row.active = host.selected_rig(context) is not None
         cloth_row.operator(IMPORT_SECONDARY_MOTION.id)
 
+    # Asking what a row is MADE of and asking what it was COMPILED as are two
+    # questions about the same selection, so the second one lives beside the first
+    # -- and states where its answer goes, because that is per install.
+    shading = gated.column(align=True)
+    shading.active = len(_shader_rows(state)) > 0
+    shading.prop(state, "shader_output")
+    shading.operator(READ_SHADERS.id, icon="NODE_MATERIAL")
+
 
 # ---------------------------------------------------------------------------
 # Registration
@@ -2178,6 +2279,7 @@ HANDLERS = app_state.Handlers(
     "browser", base=filtering.HANDLERS,
     get_game_root=_get_game_root, set_game_root=_set_game_root,
     get_cabmap_path=_get_cabmap_path, set_cabmap_path=_set_cabmap_path,
+    get_shader_output=_get_shader_output, set_shader_output=_set_shader_output,
     get_loaded=_get_loaded,
     get_browsed_dir=_get_browsed_dir, set_browsed_dir=_set_browsed_dir,
     on_search_edit=_on_search_edit, on_animation_search=_on_animation_search,

@@ -38,6 +38,13 @@ SECTIONS = (GameSection("characters"), GameSection("levels"))
 _LOADED = []
 
 
+def _read_shaders(packages, output):
+    """What the selected assets compiled to. Nothing is decided here: the decoder takes
+    the packages as named and answers per archive it had to open."""
+    from . import datasets
+    return datasets.shaders(packages, output)
+
+
 def _import_packages(context, packages, options):
     """Every package built from what the decoder states it holds.
 
@@ -90,6 +97,7 @@ GAME_MODULE = GameModule(
                 ("characters", "draw")),
     ),
     importer=_import_packages,
+    shaders=lambda packages, output: _read_shaders(packages, output),
     settings_schema=datasets.SETTINGS_SCHEMA,
     register=_register,
     unregister=_unregister,

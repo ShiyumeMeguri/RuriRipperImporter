@@ -89,10 +89,6 @@ CAST_STATE = Schema("CastState", """The cast panel's shared state.""", (
     #: not move the user off what they picked.
     Field("facet_picked", app_state.BOOL, False),
 
-    Field("shader_output", app_state.STRING, "", "Shader Folder",
-          "Where Decompile Shaders writes the source it reads out of this row",
-          subtype=app_state.DIRECTORY),
-
     Field("anim_source", app_state.ENUM, None, "From",
           "Where these animations are listed from", items="cast_anim_sources",
           update="on_cast_anim_source"),
@@ -271,7 +267,11 @@ def _read_shaders(context, arguments):
     entry = panel.bound.picked(state)
     if entry is None:
         return {"CANCELLED"}
-    output = host_port.current().absolute_path(state.shader_output) if state.shader_output else ""
+    # Per INSTALL, not per panel: which folder this game's shaders go in belongs to the
+    # tab the game is open on, the same way its root and its cabmap do.
+    from . import browser as app_browser
+    asked_for = app_browser.state_of(context).shader_output
+    output = host_port.current().absolute_path(asked_for) if asked_for else ""
     if not output:
         state.status = "State a Shader Folder first."
         return {"CANCELLED"}
@@ -617,7 +617,7 @@ def draw_actor(panel, layout, context, state):
     # 并且都只在有选中行时可用。
     asked = layout.column(align=True)
     asked.enabled = picked is not None
-    asked.prop(state, "shader_output")
+    asked.prop(app_browser.state_of(context), "shader_output")
     asked.operator(SHADERS.id, icon="NODE_MATERIAL").panel = panel.bound.key
     if panel.animation_rules is not None:
         asked.operator(ANIMATIONS.id, icon="ANIM_DATA").panel = panel.bound.key

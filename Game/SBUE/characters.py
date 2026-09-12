@@ -142,7 +142,7 @@ def _shaders(state, output):
     button itself -- what lands on disk is the vertex and pixel stages as source,
     one file per variant."""
     packages = _packages(state)
-    return datasets.shaders(packages[0], output) if packages else []
+    return datasets.shaders(packages, output) if packages else []
 
 
 def _reveal(context, arguments):

@@ -139,11 +139,11 @@ class GameModule:
 
     __slots__ = ("game_name", "label", "tabs", "sections", "face_retarget",
                  "secondary_motion", "engine", "settings_schema", "importer",
-                 "directory", "package", "_register", "_unregister")
+                 "shaders", "directory", "package", "_register", "_unregister")
 
     def __init__(self, game_name, label, tabs, register, unregister, sections=(),
                  face_retarget=None, secondary_motion=None, engine=None,
-                 settings_schema=None, importer=None):
+                 settings_schema=None, importer=None, shaders=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
@@ -195,6 +195,14 @@ class GameModule:
         #
         # The callable takes (context, packages, options) and returns the objects it built.
         self.importer = importer
+        # How this game answers "what did these assets compile to". A build whose engine
+        # ships shaders AS assets is answered by the shared reader -- the closure of the
+        # rows, every shader in it, decompiled. A build whose engine ships none (a
+        # material's program is blobs in an archive shared by thousands) cannot be, so
+        # its module says how instead, and no caller learns which kind it is looking at.
+        #
+        # The callable takes (packages, output) and returns one row per archive written.
+        self.shaders = shaders
         self.tabs = tuple(tabs)
         # The parts those tabs are composed of, each with the capability it needs
         # (see GameSection). Stated here so the same join that proves no TAB is
@@ -302,6 +310,14 @@ def secondary_motion_of(game_name):
     ships none simply never answers and the option never appears."""
     game = module_for(game_name)
     return game.secondary_motion if game is not None else None
+
+
+def shaders_of(game_name, engine=""):
+    """How ONE game answers what its assets compiled to, or None to use the shared reader.
+    Asked wherever a selection can be decompiled, so the button is the same button on
+    every install and only the answer differs."""
+    game = module_for(game_name, engine)
+    return game.shaders if game is not None else None
 
 
 def tabs_of(game_name, engine=""):

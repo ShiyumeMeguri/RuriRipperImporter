@@ -199,6 +199,10 @@ the kernel, replaceable per tab, and empty for a plain Unity build that needs no
     Field("game_root", state.STRING, ""),
     Field("cabmap_path", state.STRING, ""),
     Field("browsed_dir", state.STRING, ""),
+    # Empty means "wherever this install's own root says", which is what the browser's
+    # scalar view answers with -- so a tab set up before anyone thought about shaders
+    # still has a place to put them, and a tab the user pointed elsewhere keeps it.
+    Field("shader_output", state.STRING, ""),
     # How this install is READ beyond its folder, as JSON {name: value}: whatever its
     # decoder declared it needs to open the files (an archive key, an engine version,
     # a schema file). Stated by the module that claims the install, pushed to the
@@ -246,6 +250,10 @@ BROWSER = Schema("Browser", """The cabmap browser's whole state.""", (
           "Existing cabmap FILE to load, or output path to build one -- defaults to a "
           "filename built from the install's own name, editable",
           subtype=state.FILE, getter="get_cabmap_path", setter="set_cabmap_path"),
+    Field("shader_output", state.STRING, "", "Shader Folder",
+          "Where Decompile Shaders writes the source -- defaults to RuriShaderOutput "
+          "under this install's own root, editable, remembered per tab",
+          subtype=state.DIRECTORY, getter="get_shader_output", setter="set_shader_output"),
     # Read-only on purpose: it is an observation of the live session, so there is
     # nothing for a caller to set and no way for it to disagree with reality.
     Field("loaded", state.BOOL, False, getter="get_loaded"),
