@@ -563,7 +563,7 @@ def draw(panel, layout, context, state):
         layout.prop(state, "pane", text="")
     # A host that cannot answer a pane does not offer it, and a remembered pane it
     # no longer offers draws the one every host has rather than an empty panel.
-    pane = state.pane if state.pane in panes else CAST
+    pane = state.pane if state.pane in panes else ACTOR
     if pane == ANIM:
         _draw_pane(panel, layout, context, state, ANIM, None)
         return
@@ -574,7 +574,7 @@ def draw(panel, layout, context, state):
 
 
 def _pane_items(panel):
-    made = [CAST]
+    made = [ACTOR]
     if panel.animations and host_port.supports(host_port.ANIMATION):
         made.append(ANIM)
     if panel.expressions and host_port.supports(host_port.MORPH_TARGETS):
