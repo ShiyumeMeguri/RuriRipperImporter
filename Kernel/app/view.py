@@ -33,6 +33,17 @@ from ...RuriRipperPyBridge.session import cabmap_state
 #: The facet entry that means "do not narrow". Mirrors View.EveryFacet.
 EVERY = "*"
 
+#: What a column ANSWERS, for a list this side publishes. Re-exported so a panel
+#: states its columns without reaching past the kernel into the bridge.
+LABEL = column_table.LABEL
+KEY = column_table.KEY
+DETAIL = column_table.DETAIL
+GROUP = column_table.GROUP
+FACET = column_table.FACET
+NAMED = column_table.NAMED
+SHIPPED = column_table.SHIPPED
+PAYLOAD = column_table.PAYLOAD
+
 #: How many lines a host will materialize for one list. The ONE budget, because
 #: there is one list. It is not a limit on what can be FOUND -- the view always
 #: reports how many matched and says so on the status line -- it is how many host
@@ -197,6 +208,21 @@ class Bound:
         self.seat(state, chosen)
         return self.view
 
+    def publish(self, columns, rows, roles, state, **query):
+        """Hand the kernel a list THIS side found, then draw it as a view.
+
+        Some lists have no table behind them because nothing read them out of a
+        table: a display stage is discovered by parsing the assets the game ships,
+        a story unit by walking what a cutscene references. Those rows still get
+        the one search, the one rule evaluator, the one sort and the one section
+        pass -- they are published as a table first, rather than growing a second,
+        worse list implementation on this side.
+
+        ``columns`` are spelled as anywhere else ("name", "count#",
+        "name|Displayed Name"); ``roles`` says positionally what each answers."""
+        cabmap_state.BRIDGE.open_host_table(self.key, columns, rows, roles)
+        return self.open(self.key, state, **query)
+
     def seat(self, state, chosen=""):
         """Grow the seat pool to cover the view and put the cursor back on the
         row carrying ``chosen``. The cursor is an IDENTITY: the row at position
@@ -228,6 +254,14 @@ class Bound:
     def payload(self, state):
         """What loading the picked row needs, in the build's own words."""
         return "" if self.view is None else self.value(state, self.view.payload_column)
+
+    def keys(self):
+        """Every drawn line's key, headers skipped -- what a command that acts on
+        the WHOLE list (import this window, not this row) is handed."""
+        if self.view is None:
+            return []
+        return [self.view.key(row) for row in range(len(self.view))
+                if not self.view.is_group(row)]
 
     def picked(self, state):
         """The picked line as the two things a command ever asks of it -- what the

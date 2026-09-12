@@ -765,14 +765,17 @@ class RipperBridge:
         payload = self._bridge.SearchDataTable(str(handle), query or "", _flat_rules(rules))
         return np.frombuffer(bytes(payload), dtype=np.int32)
 
-    def open_host_table(self, handle, columns, rows):
+    def open_host_table(self, handle, columns, rows, roles=()):
         """Publish a list THIS side assembled as a searchable table, so it gets
         the same vectorized search and the same rules as every other list
         instead of a hand-rolled substring scan.
 
         ``rows`` is an iterable of per-row sequences, one value per column, in
-        ``columns`` order; everything is sent as text (that is what the rules
-        and the quick search read). Re-publishing under the same handle
+        ``columns`` order; everything is sent as text and a column spelled with a
+        trailing ``#`` is parsed back to a number on arrival. ``roles`` states
+        positionally what each column ANSWERS (see column_table's LABEL/KEY/...),
+        which is what lets a list this side assembled be drawn by the same view
+        engine as one the hook published. Re-publishing under the same handle
         replaces it, which is what a refreshed list wants. Needs no cabmap and
         no game hook -- searching is a core capability. Returns the handle."""
         flat = []
@@ -782,6 +785,7 @@ class RipperBridge:
                 raise ValueError(f"row has {len(values)} value(s) for {len(columns)} column(s)")
             flat.extend("" if value is None else str(value) for value in values)
         return str(self._bridge.OpenHostTable(str(handle), _string_array(list(columns)),
+                                              _int_array(list(roles)) if roles else None,
                                               _string_array(flat)))
 
     def game_data(self, dataset_id, cancellation=None, **args):

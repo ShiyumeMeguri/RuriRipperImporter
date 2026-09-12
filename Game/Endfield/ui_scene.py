@@ -27,6 +27,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas, staging
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, ui_scene_state
 
@@ -38,17 +39,19 @@ def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
 
-STAGE_ENTRY = Schema("EndfieldStageEntry", """One drawn line: a folder header or a
-display stage.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
+#: This tab's live view and the seats that draw it. The rows are DISCOVERED here
+#: (a stage is found by reading the assets the game ships, not by reading a table),
+#: so they are published to the kernel and drawn as a view like every other list.
+BOUND = app_view.Bound("Endfield:uistage")
+
+#: What one discovered stage states, and what each column answers.
+_COLUMNS_PUBLISHED = ("label|Stage", "key|Id", "group|Folder")
+_ROLES = (app_view.LABEL, app_view.KEY | app_view.PAYLOAD, app_view.GROUP)
 
 UI_SCENE_STATE = Schema("EndfieldUIScene", """The display-stage browser's state.""", (
     Field("search", app_state.STRING, "", "Filter", "Filter by stage or folder name",
           update="on_search", live=True),
-    Field("entries", app_state.COLLECTION, element=STAGE_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("import_art", app_state.BOOL, True, "Stage Prefab",
           "Import the stage's own prefab -- its floor, sky sphere, shadow plane and "
@@ -82,32 +85,17 @@ HANDLERS = app_state.Handlers("Endfield.ui_scene", on_search=_on_search)
 
 
 def rebuild(state):
-    """Refill the drawn list from what discovery found, grouped by the folder the
-    game itself filed each stage in."""
-    state.entries.clear()
-    needle = (state.search or "").strip().lower()
-    rows = [row for row in ui_scene_state.SCENES
-            if not needle or needle in row["label"].lower() or needle in row["group"].lower()]
-    current_group = None
-    for row in sorted(rows, key=lambda one: (one["group"], one["label"])):
-        if row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = current_group
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["label"]
-        entry.key = row["id"]
-    if state.active_index >= len(state.entries):
-        state.active_index = 0
+    """Hand what discovery found to the kernel and draw the view it answers with.
+    The filter, the ordering and the folder sections all happen there."""
+    BOUND.publish(_COLUMNS_PUBLISHED,
+                  [(row["label"], row["id"], row["group"]) for row in ui_scene_state.SCENES],
+                  _ROLES, state)
 
 
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return ui_scene_state.row_by_id(entry.key)
-    return None
+    """The stage the user is on, as discovery stated it."""
+    entry = BOUND.picked(state)
+    return None if entry is None else ui_scene_state.row_by_id(entry.key)
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +207,8 @@ LOAD = command.COMMANDS.define(
     status_state=STATE, failure="Loading this display stage failed")
 
 
-_COLUMNS = (app_layout.ListColumn("label", icon="LIGHT_AREA"),)
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="FILE_FOLDER")
+_COLUMNS = (BOUND.column("", icon="LIGHT_AREA"),)
+_GROUP_COLUMN = BOUND.column("", icon="FILE_FOLDER")
 
 
 def draw_ui_scene_tab(layout, context):
@@ -237,10 +225,10 @@ def draw_ui_scene_tab(layout, context):
         layout.operator(REFRESH.id, icon="FILE_REFRESH")
         return
 
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="endfield_ui_scenes", group_key="is_group",
-                group_column=_GROUP_COLUMN)
-    layout.label(text=state.status or ui_scene_state.STATUS, icon="INFO")
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "endfield_ui_scenes",
+                       group_column=_GROUP_COLUMN)
+    if state.status:
+        layout.label(text=state.status, icon="INFO")
 
     row = selected(state)
     if row is not None:

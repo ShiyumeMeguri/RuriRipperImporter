@@ -34,6 +34,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from . import datasets, read
 
@@ -57,15 +58,21 @@ KINDS = (
 #: and the rows redraw.
 _WORLDS = {"rows": [], "unit_scale": 0.0}
 _CELLS = {"world": "", "rows": [], "error": ""}
-#: handle -> the row list last published under it, so a keystroke re-searches an
-#: already-open table instead of rebuilding one that has not changed.
-_published = {}
-
 #: What the list is searched and ruled over. ``kind`` is the decoder's own word for
 #: which of the build's tables claimed a level -- empty for a build that names none of
 #: them, which is the family answer -- so a rule on it costs nothing where it is absent.
-_LEVEL_FIELDS = (("name", "Name"), ("kind", "Kind"), ("world", "Package"))
-_CELL_FIELDS = (("name", "Cell"), ("level", "Package"), ("grid", "Grid"))
+#: The two halves' live views and the seats that draw them, and what each column
+#: of the published rows answers. A half is a view over what the decoder read, so
+#: nothing here filters, sorts or counts.
+LEVEL_BOUND = app_view.Bound("ruri.unreal.level")
+CELL_BOUND = app_view.Bound("ruri.unreal.cell")
+
+_LEVEL_COLUMNS_PUBLISHED = ("name|Name", "kind|Kind", "world|Package", "partitioned#")
+_LEVEL_ROLES = (app_view.LABEL, app_view.DETAIL, app_view.KEY | app_view.PAYLOAD, 0)
+
+_CELL_COLUMNS_PUBLISHED = ("cell|Cell", "level|Package", "grid|Grid", "hlevel#|Detail Level",
+                           "alwaysLoaded#|Always Loaded", "present#|Present")
+_CELL_ROLES = (app_view.LABEL, app_view.KEY | app_view.PAYLOAD, app_view.DETAIL, 0, 0, 0)
 
 
 def state_of(context):
@@ -86,28 +93,13 @@ def _active_state(context):
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-LEVEL_ENTRY = Schema("UnrealLevelEntry", """One self-contained level.""", (
-    Field("key", app_state.STRING, ""),
-    Field("name", app_state.STRING, ""),
-    Field("kind", app_state.STRING, ""),
-))
-
-CELL_ENTRY = Schema("UnrealCellEntry", """One streaming cell of a partitioned
-world.""", (
-    Field("key", app_state.STRING, ""),
-    Field("name", app_state.STRING, ""),
-    Field("hlevel", app_state.INT, 0),
-    Field("always_loaded", app_state.BOOL, False),
-    Field("present", app_state.BOOL, False),
-))
-
 LEVELS = Schema("UnrealLevels", """The self-contained half, plus which half of the
 tab is on screen.""", (
     Field("kind", app_state.ENUM, LEVEL, "Kind",
           "Which of the engine's two kinds of level to browse", items=KINDS),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by level name or package", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=LEVEL_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("status", app_state.STRING, "Refresh to read the levels this install ships."),
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
@@ -116,7 +108,7 @@ WORLDS = Schema("UnrealWorld", """One partitioned world and the window of it to
 read.""", (
     Field("search", app_state.STRING, "", "Filter",
           "Filter by cell name, package or grid", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=CELL_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
     Field("world", app_state.ENUM, None, "World",
           "The partitioned world to stream a window of", items="world_choices",
@@ -173,8 +165,8 @@ def _filter_fields(context=None):
     try:
         state = state_of(None)
     except (KeyError, RuntimeError):
-        return _LEVEL_FIELDS
-    return _LEVEL_FIELDS if state.kind == LEVEL else _CELL_FIELDS
+        return LEVEL_BOUND.fields()
+    return LEVEL_BOUND.fields() if state.kind == LEVEL else CELL_BOUND.fields()
 
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
@@ -186,33 +178,28 @@ FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
 # ---------------------------------------------------------------------------
 # The lists
 # ---------------------------------------------------------------------------
-def _matching(handle, rows, columns, values_of, state):
-    """The rows passing the search box and every enabled rule, matched by the same
-    C# engine every other list here uses. Falls back to the unfiltered rows only
-    when there is no bridge to ask, which is also the only state in which there is
-    nothing to show."""
-    if cabmap_state.BRIDGE is None or not rows:
-        return list(rows)
-    if _published.get(handle) is not rows:
-        cabmap_state.BRIDGE.open_host_table(handle, columns, [values_of(row) for row in rows])
-        _published[handle] = rows
-    ids = cabmap_state.BRIDGE.search_data_table(handle, state.search.strip(),
-                                                state.filter_rules)
-    return [rows[index] for index in ids if 0 <= index < len(rows)]
-
-
-def _level_rows():
-    return [row for row in _WORLDS["rows"] if str(row.get("partitioned", "0")) != "1"]
-
-
-def _cell_rows(state):
-    return [row for row in _CELLS["rows"]
-            if state.use_always_loaded or str(row.get("alwaysLoaded", "0")) != "1"]
-
-
 def _rebuild(state):
+    """Ask the kernel for whichever half this record is. Neither the narrowing nor
+    the ordering nor the count happens here: the rows are published once and every
+    keystroke is a question asked on the other side."""
     with filtering.rebuilding():
-        _fill_levels(state) if _is_levels(state) else _fill_cells(state)
+        if _is_levels(state):
+            LEVEL_BOUND.publish(
+                _LEVEL_COLUMNS_PUBLISHED,
+                [(row.get("name", "") or row.get("world", ""), row.get("kind", ""),
+                  row.get("world", ""), row.get("partitioned", "0"))
+                 for row in _WORLDS["rows"]],
+                _LEVEL_ROLES, state,
+                standing=[cabmap_state.Rule("partitioned", "is_not", "1", "include")])
+            return
+        CELL_BOUND.publish(
+            _CELL_COLUMNS_PUBLISHED,
+            [(row.get("cell", ""), row.get("level", ""), row.get("grid", ""),
+              row.get("hlevel", 0), row.get("alwaysLoaded", "0"), row.get("present", "0"))
+             for row in _CELLS["rows"]],
+            _CELL_ROLES, state,
+            standing=([] if state.use_always_loaded
+                      else [cabmap_state.Rule("alwaysLoaded", "is_not", "1", "include")]))
 
 
 def _is_levels(state):
@@ -222,45 +209,8 @@ def _is_levels(state):
     return hasattr(state, "kind")
 
 
-def _fill_levels(state):
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    rows = _matching("ruri.unreal.level", _level_rows(),
-                     tuple(key for key, _label in _LEVEL_FIELDS),
-                     lambda row: (row.get("name", ""), row.get("kind", ""),
-                                  row.get("world", "")), state)
-    for row in rows:
-        entry = state.entries.add()
-        entry.key = row.get("world", "")
-        entry.name = row.get("name", "") or row.get("world", "")
-        entry.kind = row.get("kind", "")
-    state.status = "{0} of {1} self-contained level(s)".format(
-        len(state.entries), len(_level_rows()))
-    filtering.restore_selection(state, chosen)
-
-
-def _fill_cells(state):
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    rows = _matching("ruri.unreal.cell\x1f" + _CELLS["world"], _cell_rows(state),
-                     tuple(key for key, _label in _CELL_FIELDS),
-                     lambda row: (row.get("cell", ""), row.get("level", ""),
-                                  row.get("grid", "")), state)
-    for row in rows:
-        entry = state.entries.add()
-        entry.key = row.get("level", "")
-        entry.name = row.get("cell", "")
-        entry.hlevel = int(float(row.get("hlevel", 0) or 0))
-        entry.always_loaded = str(row.get("alwaysLoaded", "0")) == "1"
-        entry.present = str(row.get("present", "0")) == "1"
-    state.status = "{0} cell(s) in the window".format(len(state.entries))
-    filtering.restore_selection(state, chosen)
-
-
 def selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        return state.entries[state.active_index]
-    return None
+    return (LEVEL_BOUND if _is_levels(state) else CELL_BOUND).picked(state)
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +269,7 @@ def _has_world(context):
 
 
 def _has_cells(context):
-    return _loaded(context) and bool(len(world_state_of(context).entries))
+    return _loaded(context) and bool(CELL_BOUND.count)
 
 
 def _refresh(context, arguments):
@@ -333,7 +283,6 @@ def _refresh(context, arguments):
     except Exception as exc:
         state.status = "{0}: {1}".format(type(exc).__name__, exc)
         return {"CANCELLED"}
-    _published.clear()
     _rebuild(state)
     _rebuild(world)
     return None
@@ -357,7 +306,6 @@ def _read_cells(context, arguments):
         _CELLS["error"] = "{0}: {1}".format(type(exc).__name__, exc)
         state.status = _CELLS["error"]
         return {"CANCELLED"}
-    _published.clear()
     _rebuild(state)
     return None
 
@@ -398,7 +346,7 @@ def _import_level(context, arguments):
 
 def _import_window(context, arguments):
     state = world_state_of(context)
-    for step in _import(context, state, [entry.key for entry in state.entries], "cell"):
+    for step in _import(context, state, CELL_BOUND.keys(), "cell"):
         yield step
 
 
@@ -439,21 +387,30 @@ IMPORT_WORLD = command.COMMANDS.define(
 # What it looks like
 # ---------------------------------------------------------------------------
 _LEVEL_COLUMNS = (
-    app_layout.ListColumn("name", width=0.6, icon="FILE_3D"),
-    app_layout.ListColumn("kind", width=0.2, enabled=False),
-    app_layout.ListColumn("key", align=app_layout.RIGHT, enabled=False),
+    LEVEL_BOUND.column("", width=0.6, icon="FILE_3D"),
+    LEVEL_BOUND.column("kind", width=0.2, enabled=False),
+    LEVEL_BOUND.column("world", align=app_layout.RIGHT, enabled=False),
 )
 #: A cell the cook folded into the world package is pinned; one the window names
 #: but this install does not carry is dimmed rather than hidden -- it is real
 #: partition data with nothing behind it here.
+def _cell_pinned(seat):
+    return CELL_BOUND.cell(seat, "alwaysLoaded") not in ("", 0, 0.0)
+
+
+def _cell_present(seat):
+    return CELL_BOUND.cell(seat, "present") not in ("", 0, 0.0)
+
+
 _CELL_COLUMNS = (
-    app_layout.ListColumn("name", width=0.75,
-                          icon=lambda row: ("PINNED" if row.always_loaded else
-                                            ("MESH_GRID" if row.present
-                                             else "GHOST_DISABLED")),
-                          active=lambda row: row.present or row.always_loaded),
-    app_layout.ListColumn(lambda row: "L{0}".format(row.hlevel),
-                          align=app_layout.RIGHT, enabled=False),
+    CELL_BOUND.column("", width=0.75,
+                      icon=lambda seat: ("PINNED" if _cell_pinned(seat) else
+                                         ("MESH_GRID" if _cell_present(seat)
+                                          else "GHOST_DISABLED")),
+                      active=lambda seat: _cell_present(seat) or _cell_pinned(seat)),
+    app_layout.ListColumn(
+        lambda seat: "L{0}".format(int(CELL_BOUND.cell(seat, "hlevel") or 0)),
+        align=app_layout.RIGHT, enabled=False),
 )
 
 
@@ -466,9 +423,7 @@ def _draw_self_contained(layout, context):
     if not _WORLDS["rows"]:
         layout.label(text="Refresh to read the levels this install ships.", icon="INFO")
         return
-    layout.list(state, "entries", "active_index", _LEVEL_COLUMNS, rows=10,
-                identifier="unreal_levels")
-    layout.label(text=state.status, icon="INFO")
+    app_view.draw_list(LEVEL_BOUND, layout, state, _LEVEL_COLUMNS, "unreal_levels")
     app_browser.draw_import_options(layout, context)
     tail = layout.column(align=True)
     tail.enabled = selected(state) is not None
@@ -523,15 +478,13 @@ def _draw_streaming(layout, context):
         layout.label(text="Read the cells of this world to pick a window.", icon="INFO")
         return
     filtering.draw_search_row(layout, state)
-    layout.list(state, "entries", "active_index", _CELL_COLUMNS, rows=10,
-                identifier="unreal_cells")
-    layout.label(text=state.status, icon="INFO")
-    if not len(state.entries):
+    app_view.draw_list(CELL_BOUND, layout, state, _CELL_COLUMNS, "unreal_cells")
+    if not CELL_BOUND.count:
         layout.label(text="Nothing in this window: widen Size, or turn Always loaded on.",
                      icon="INFO")
     app_browser.draw_import_options(layout, context)
     tail = layout.column(align=True)
-    tail.enabled = bool(len(state.entries))
+    tail.enabled = bool(CELL_BOUND.count)
     tail.operator(IMPORT_WINDOW.id, icon="IMPORT")
     layout.operator(IMPORT_WORLD.id, icon="IMPORT")
 
@@ -558,7 +511,8 @@ def unregister():
     host = host_port.current()
     host.unregister_state(WORLD_STATE)
     host.unregister_state(STATE)
-    _published.clear()
+    LEVEL_BOUND.close()
+    CELL_BOUND.close()
     _WORLDS["rows"] = []
     _WORLDS["unit_scale"] = 0.0
     _CELLS["rows"] = []
