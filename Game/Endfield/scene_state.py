@@ -81,6 +81,12 @@ STREAMING = "streaming"
 
 SCENES = {SELF_CONTAINED: [], STREAMING: []}   # kind -> list[dict]
 LANDMARKS = {}          # streaming map id -> list[dict], its named places
+
+MAPS = "maps"
+PLACES = "places"
+#: The two tables the scene LIST is drawn from, held exactly as the hook built
+#: them. The list is a view of one of these; nothing re-shapes them on this side.
+TABLES = {}
 SUMMARIES = {}          # map id -> dict, the cached per-map chunk summary
 TABLE = None            # ColumnTable -- the current selection's IMPORTABLE placements, columnar
 MATERIALS_BY_ROW = {}   # {placement row -> tuple of material container paths}
@@ -103,6 +109,8 @@ def load_scenes(language):
     map, and how the ids group are the game's own facts, stated by the hook."""
     global SCENES, LANDMARKS, STATUS
 
+    TABLES[MAPS] = datasets.scene_map_table(language)
+    TABLES[PLACES] = datasets.landmark_table(language)
     scenes = datasets.scene_maps(language)
     LANDMARKS = {scene["id"]: [] for scene in scenes}
     for place in datasets.landmarks(language):
@@ -242,6 +250,7 @@ def reset():
     global RESOLVED_CABS, CLOSURE_CABS, CURRENT_MAP, CURRENT_WINDOW, STATUS
     SCENES = {SELF_CONTAINED: [], STREAMING: []}
     LANDMARKS = {}
+    TABLES.clear()
     SUMMARIES = {}
     TABLE = None
     MATERIALS_BY_ROW = {}

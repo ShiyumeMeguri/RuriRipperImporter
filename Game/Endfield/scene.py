@@ -34,6 +34,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
+from ...Kernel.app import view as app_view
 from ...RuriRipperPyBridge.session import cabmap_state
 from .. import section
 from . import SECTIONS, datasets, scene_state
@@ -45,14 +46,10 @@ SELF_CONTAINED = scene_state.SELF_CONTAINED
 STREAMING = scene_state.STREAMING
 UI_STAGE = "ui"
 
-#: What a scene row can be filtered by -- the same three values the list draws,
-#: which is also exactly what gets published to the search engine.
-_FILTER_FIELDS = (("name", "Name"), ("id", "Id"), ("group", "Group"))
-_FILTER_COLUMNS = tuple(key for key, _label in _FILTER_FIELDS)
-
-#: handle -> the row list last published under it, so a keystroke re-searches an
-#: already-open table instead of rebuilding one that has not changed.
-_published = {}
+#: This half's live view and the seats that draw it. WHICH half is on screen is a
+#: standing rule over the hook's own two tables, not a second list shape: whole
+#: scenes are the map table, a world's places are the landmark table.
+BOUND = app_view.Bound(TAB_KEY)
 
 #: Read once: a redraw runs this, and the machine's RAM does not change.
 _machine_memory_gb = []
@@ -81,13 +78,6 @@ def _kinds():
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-SCENE_ENTRY = Schema("EndfieldSceneEntry", """One drawn line: a family header or a
-scene/place.""", (
-    Field("label", app_state.STRING, ""),
-    Field("key", app_state.STRING, ""),
-    Field("is_group", app_state.BOOL, False),
-))
-
 SCENE = Schema("EndfieldScene", """The scene browser's whole state: which half is on
 screen, what each half has selected, and how much of a place to take.""", (
     Field("kind", app_state.ENUM, SELF_CONTAINED, "Kind",
@@ -95,7 +85,7 @@ screen, what each half has selected, and how much of a place to take.""", (
           update="on_kind"),
     Field("search", app_state.STRING, "", "Filter",
           "Filter by displayed name or id", update="on_filter_edit", live=True),
-    Field("entries", app_state.COLLECTION, element=SCENE_ENTRY),
+    Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0, update="on_selection"),
     Field("world_map", app_state.ENUM, None, "Map",
           "Which open-world map's places to list", items="map_items",
@@ -113,19 +103,21 @@ screen, what each half has selected, and how much of a place to take.""", (
 ), include=(schemas.FILTER_STATE, schemas.LOADING_STATE))
 
 
-def _rows(state):
-    """What this half lists: whole scenes, or one streaming map's named places."""
+def _table(state):
+    """WHICH of the hook's tables this half lists: the maps, or their places."""
+    return scene_state.TABLES.get(
+        scene_state.MAPS if state.kind == SELF_CONTAINED else scene_state.PLACES)
+
+
+def _standing(state):
+    """This half's own constraint, in the same rule vocabulary the user's are in."""
     if state.kind == SELF_CONTAINED:
-        return scene_state.SCENES[SELF_CONTAINED]
-    return scene_state.LANDMARKS.get(state.world_map, [])
+        return [cabmap_state.Rule("streaming", "is", "0", "include")]
+    return [cabmap_state.Rule("scene", "is", state.world_map or "", "include")]
 
 
 def _selected(state):
-    if 0 <= state.active_index < len(state.entries):
-        entry = state.entries[state.active_index]
-        if not entry.is_group:
-            return entry
-    return None
+    return BOUND.picked(state)
 
 
 def _map_name(state):
@@ -209,7 +201,7 @@ HANDLERS = app_state.Handlers(
     on_map_change=_on_map_change)
 
 FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
-    key=TAB_KEY, fields=_FILTER_FIELDS, state_for=state_of,
+    key=TAB_KEY, fields=BOUND.fields, state_for=state_of,
     apply=lambda context: rebuild(state_of(context))))
 
 
@@ -230,65 +222,16 @@ def _read_summary(state, map_name):
 # ---------------------------------------------------------------------------
 # The list
 # ---------------------------------------------------------------------------
-def _filter_handle(state):
-    """One open table per list. The streaming half's places change with the map,
-    so its map is part of the handle -- switching maps opens a different table
-    rather than searching the previous one."""
-    return ("ruri.endfield.scene" if state.kind == SELF_CONTAINED
-            else "ruri.endfield.world\x1f" + state.world_map)
-
-
-def _matching_rows(state):
-    """The rows passing the search box AND every enabled rule -- matched by the
-    SAME C# engine the asset-bundle browser uses, over this list published as a
-    table. No matching happens on this side."""
-    rows = _rows(state)
-    if cabmap_state.BRIDGE is None or not rows:
-        return list(rows)
-    handle = _filter_handle(state)
-    if _published.get(handle) is not rows:
-        cabmap_state.BRIDGE.open_host_table(
-            handle, _FILTER_COLUMNS,
-            [(row["label"], row["id"], row.get("group", "")) for row in rows])
-        _published[handle] = rows
-    ids = cabmap_state.BRIDGE.search_data_table(handle, state.search.strip(),
-                                                state.filter_rules)
-    return [rows[index] for index in ids if 0 <= index < len(rows)]
-
-
 def rebuild(state):
-    """Rebuild the drawn line list. Whole scenes are grouped by the id family the
-    game files them under; a map's places are not -- there are a handful and they
-    are all siblings."""
+    """Ask the kernel for the drawn list as it is now stated. Nothing is matched,
+    sorted, grouped or counted here: the search text, the user's rules and this
+    half's own standing rule all go to the one engine, over the very buffers the
+    hook built its tables from."""
     with filtering.rebuilding():
-        _fill(state)
-
-
-def _fill(state):
-    chosen = filtering.selected_key(state)
-    state.entries.clear()
-    if state.kind == UI_STAGE:
-        filtering.restore_selection(state, chosen)
-        return
-    rows = _matching_rows(state)
-    grouped = state.kind == SELF_CONTAINED
-    rows.sort(key=lambda row: (row["group"] if grouped else "", row["id"]))
-
-    counts = {}
-    for row in rows:
-        counts[row.get("group", "")] = counts.get(row.get("group", ""), 0) + 1
-
-    current_group = None
-    for row in rows:
-        if grouped and row["group"] != current_group:
-            current_group = row["group"]
-            header = state.entries.add()
-            header.label = "{0}  ({1})".format(current_group, counts[current_group])
-            header.is_group = True
-        entry = state.entries.add()
-        entry.label = row["label"]
-        entry.key = row["id"]
-    filtering.restore_selection(state, chosen)
+        if state.kind == UI_STAGE:
+            BOUND.open(None, state)
+            return
+        BOUND.open(_table(state), state, standing=_standing(state))
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +269,6 @@ def _refresh(context, arguments):
         # inventory explicitly so the first map is ready either way.
         state.world_map = maps[0]["id"]
         _read_summary(state, state.world_map)
-    _published.clear()
     rebuild(state)
     state.status = scene_state.STATUS
     return None
@@ -408,23 +350,27 @@ IMPORT = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 #: Filtering already happened in rebuild, against the game's own fields rather
 #: than the drawn string, so no row is hidden here.
+def _id_cell(seat):
+    """The game's own id, blank when the name already IS the id -- so a scene the
+    game ships no name for is not printed twice."""
+    key = BOUND.cell(seat, "key")
+    return "" if key == BOUND.cell(seat) else key
+
+
 _COLUMNS = (
-    app_layout.ListColumn("label", width=0.72, icon="WORLD"),
-    # The game's own id, dimmed -- blank when the name already IS the id, so a
-    # scene the game ships no name for is not printed twice.
-    app_layout.ListColumn(lambda row: "" if row.key == row.label else row.key,
-                          align=app_layout.RIGHT, enabled=False),
+    BOUND.column("", width=0.72, icon="WORLD"),
+    app_layout.ListColumn(_id_cell, align=app_layout.RIGHT, enabled=False),
 )
-_GROUP_COLUMN = app_layout.ListColumn("label", icon="OUTLINER_COLLECTION")
+_GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 
 
 def _draw_list(layout, state):
     filtering.draw_search_row(layout, state,
                               extra_operator=(REFRESH.id, "FILE_REFRESH"))
-    layout.list(state, "entries", "active_index", _COLUMNS, rows=10,
-                identifier="endfield_scenes", group_key="is_group",
-                group_column=_GROUP_COLUMN)
-    layout.label(text=state.status, icon="INFO")
+    app_view.draw_list(BOUND, layout, state, _COLUMNS, "endfield_scenes",
+                       group_column=_GROUP_COLUMN)
+    if state.status:
+        layout.label(text=state.status, icon="INFO")
 
 
 def _system_memory_gb():
@@ -547,5 +493,5 @@ def register():
 
 def unregister():
     host_port.current().unregister_state(STATE)
-    _published.clear()
+    BOUND.close()
     scene_state.reset()

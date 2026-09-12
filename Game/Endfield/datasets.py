@@ -215,6 +215,18 @@ def story_actors(channel="", language=""):
 
 # ── scenes ──────────────────────────────────────────────────────────────────
 
+def scene_map_table(language):
+    """The scene table exactly as the hook built it -- what the scene LIST is a
+    view of. The dict form below stays for the loaders, which genuinely want every
+    row's values; a list wants a view, not rows."""
+    return _table(MAPS, language=language)
+
+
+def landmark_table(language):
+    """The places table exactly as the hook built it."""
+    return _table(LANDMARKS, language=language)
+
+
 def scene_maps(language):
     """Every scene the game ships streaming data for, under its own name, its own
     grouping, and the game's own streaming/self-contained split."""

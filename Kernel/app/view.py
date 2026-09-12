@@ -175,18 +175,25 @@ class Bound:
         if view is not None:
             view.close()
 
-    def open(self, table, state, **query):
+    def open(self, table, state, standing=(), **query):
         """Re-ask the C# side for this list, then seat it.
 
         Every word of the question -- the search text, the rules, the facet --
-        goes over as it was typed; nothing is evaluated here."""
+        goes over as it was typed; nothing is evaluated here.
+
+        ``standing`` are the panel's OWN constraints, in the same rule vocabulary
+        the user's are in: "this half of the tab is the streaming maps", "these
+        are the places of the map on screen". They ride alongside the user's rules
+        through the one evaluator rather than being a second kind of narrowing
+        with its own meaning of ``is``."""
         self.table = table
         chosen = self.selected_key(state)
         self.close()
         if table is None:
             return None
         self.view = View.open(table, facet=_facet(state), search=getattr(state, "search", ""),
-                              rules=list(getattr(state, "filter_rules", ())), **query)
+                              rules=list(getattr(state, "filter_rules", ())) + list(standing),
+                              **query)
         self.seat(state, chosen)
         return self.view
 
