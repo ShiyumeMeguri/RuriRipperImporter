@@ -36,6 +36,7 @@ MENU = "menu"
 POPOVER = "popover"
 LIST = "list"
 PROGRESS = "progress"
+NATIVE = "native"
 
 LEFT = "LEFT"
 CENTER = "CENTER"
@@ -229,6 +230,25 @@ class Layout:
 
     def progress(self, factor, text=""):
         self._child(PROGRESS, factor=factor, text=text)
+
+    def native(self, draw):
+        """A part only THIS application has a surface for, drawn by its own renderer
+        with its own widgets: ``draw(target, context)`` is handed the host's real
+        layout object.
+
+        This is NOT the raw-widget escape hatch the vocabulary above deliberately
+        lacks. What may go through here is a SECTION that only one driver registers
+        (see :mod:`Kernel.app.look`) -- the other application never composes one,
+        because it answers that question with something else or does not answer it
+        at all. A body BOTH hosts draw may not use it: the vocabulary is what makes
+        those portable, and reaching past it there is exactly the per-host branch
+        this layer exists to prevent.
+
+        What actually needs it is a control made of the host's own OBJECTS rather
+        than of values -- a datablock picker, a search field over a rig's bones, the
+        application's own material-slot list. Those have no neutral spelling because
+        the things they pick have no neutral existence."""
+        self._child(NATIVE, draw=draw)
 
     def list(self, state, collection, index_key, columns, rows=10, identifier="",
              on_click="", click_argument="index", group_key="", group_column=None,

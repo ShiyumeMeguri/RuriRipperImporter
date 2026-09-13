@@ -240,7 +240,7 @@ def _draw_main_light(layout, context):
     if not lights:
         picker.label(text="This scene has no light objects.", icon="ERROR")
         return
-    grid = picker.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+    grid = picker.grid_flow(columns=2, even_columns=True, align=True)
     for light in sorted(lights, key=lambda o: o.name):
         op = grid.operator(RURI_OT_main_light_set.bl_idname, text=light.name,
                            icon="LIGHT_" + light.data.type)
@@ -252,8 +252,14 @@ def draw_materials_section(layout, context):
 
     A host that shows a material's own parameters natively needs no such panel and
     registers none; this one's materials are GENERATED node groups, which have no
-    native surface at all."""
-    material_panel.draw_materials(layout, context)
+    native surface at all.
+
+    Drawn natively (``layout.native``): what it puts on screen is made of this
+    application's own objects -- the slot list belonging to the mesh, an image
+    datablock picker, a search field over the rig's bones -- and none of those has a
+    neutral spelling, because none of the things they pick exists in the other
+    host."""
+    layout.native(material_panel.draw_materials)
 
 
 def draw_main_light_section(layout, context):

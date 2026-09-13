@@ -326,6 +326,8 @@ class Renderer:
         elif kind == app_layout.PROGRESS:
             self._progress(spec, target)
             return
+        elif kind == app_layout.NATIVE:
+            spec["draw"](target, self._context)
         elif kind == app_layout.LIST:
             self._list(spec, target, enabled)
             return

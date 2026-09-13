@@ -100,6 +100,9 @@ def render(node, target, context):
     elif kind == app_layout.PROGRESS:
         made = target
         target.progress(factor=spec["factor"], text=spec["text"], type="BAR")
+    elif kind == app_layout.NATIVE:
+        made = target
+        spec["draw"](target, context)
     elif kind == app_layout.LIST:
         made = target
         # Filing the description is a dict write, which a draw may do; making the
