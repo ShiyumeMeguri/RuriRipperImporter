@@ -975,6 +975,7 @@ class RipperBridge:
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() (or use_session(key) "
                                "to select a loaded game's map) first.")
+        self.release_last_import()
         cab_names = list(cab_names)
         formats = _string_array(_texture_formats)
         class_ids = None if export_class_ids is None else _int_array(export_class_ids)
@@ -1000,6 +1001,7 @@ class RipperBridge:
         if self._map is None:
             raise RuntimeError("No cabmap loaded -- call load_cab_map()/build_cab_map() (or use_session(key) "
                                "to select a loaded game's map) first.")
+        self.release_last_import()
         formats = _string_array(_texture_formats)
         excluded = _string_array([str(name) for name in excluded_class_names]) \
             if excluded_class_names else None
@@ -1007,6 +1009,58 @@ class RipperBridge:
             self._map, _string_array([str(path) for path in seed_container_paths]),
             excluded, formats)
         return self._absorb_closure(result)
+
+    def release_last_import(self):
+        """Drop what the LAST closure crossing left on this side, and hand the
+        memory back to the operating system.
+
+        Every map below holds the previous import's payload and is replaced
+        wholesale by the next one, so at the moment a new crossing starts they are
+        the previous window's geometry and nothing will read them again. Letting
+        _absorb_closure replace them at the END of the new crossing keeps the old
+        window resident right through the peak of the new one -- which is the
+        difference between a second import that fits and one that pages.
+
+        Rebound rather than cleared: a caller still holding a map it was handed
+        (BridgeAssetDatabase keeps the dicts it was built from) must keep seeing
+        what it was given, and what is genuinely still referenced is exactly what
+        should NOT be freed.
+
+        Measured, one 82-asset window re-imported in the same process: the process
+        stood at 5.19 GB after the document was emptied and comes back to 2.74 GB
+        here, of which 1.83 GB is the loaded cabmap and the decoder -- session
+        state, not the window. The collect is the aggressive, compacting one on
+        purpose: a plain GC.Collect() sweeps the same garbage but leaves the heap
+        COMMITTED (3.98 GB against 1.84 GB, measured side by side), and committed
+        memory nothing is using is exactly what a machine runs out of. It is the
+        committed heap rather than live objects that grows across imports -- it was
+        watched over eight crossings of one window and came back down on its own at
+        the fifth, so this hands back a budget the runtime is keeping, not a leak
+        it is holding."""
+        import gc
+
+        import System
+        from Python.Runtime import Finalizer
+        self.clip_curves_by_guid = {}
+        self.mesh_blobs_by_guid = {}
+        self.root_cabs_by_guid = {}
+        self.asset_paths_by_guid = {}
+        self.texture_srgb_by_guid = {}
+        self.clip_guid_by_key = {}
+        self.seed_asset_guids_by_path = {}
+        self.closure_graph = None
+        # In this order. Dropping the references above drops PYTHON's; the .NET
+        # object behind each wrapper is only released when pythonnet's finalizer
+        # runs, and that batches until 200 of them have queued up -- so the sweep
+        # below would walk a heap whose biggest objects are still rooted by handles
+        # nobody wants any more.
+        gc.collect()
+        Finalizer.Instance.Collect()
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode = \
+            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce
+        System.GC.Collect(2, System.GCCollectionMode.Aggressive, True, True)
+        System.GC.WaitForPendingFinalizers()
+        System.GC.Collect(2, System.GCCollectionMode.Aggressive, True, True)
 
     def _absorb_closure(self, result):
         """Unpack a ClosureResult -- the ONE decoder for every closure-shaped
