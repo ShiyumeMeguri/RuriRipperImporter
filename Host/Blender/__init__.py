@@ -122,8 +122,23 @@ class BlenderHost(host_port.Host):
         return active if active is not None and active.type == "ARMATURE" else None
 
     def clear_scene(self, context):
-        bpy.ops.object.select_all(action="SELECT")
-        bpy.ops.object.delete(use_global=False)
+        """Empty the document: the objects, the collections holding them, and
+        every data-block they were the last user of.
+
+        Deleting the objects is not emptying it. A window import files its
+        placements under a collection per distinct asset, and the meshes,
+        materials and images those objects point at are DATA-BLOCKS that outlive
+        them -- Blender keeps a zero-user data-block until something purges it.
+        Measured on one 82-asset scene imported twice: after the second reset the
+        file held 164 collections, 166 meshes and 249 images for a scene showing
+        none of them, and the pile grows with every reset until the next window is
+        being built on top of every window before it.
+
+        Selecting is also not the same as covering: a selection reaches what the
+        view layer lets it, so anything in a hidden or excluded collection
+        survived a reset that claimed to have emptied the document."""
+        bpy.data.batch_remove(list(bpy.data.objects) + list(bpy.data.collections))
+        bpy.data.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
 
     def load_display_stage(self, context, stage, options):
         from . import ui_stage
