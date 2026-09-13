@@ -218,14 +218,23 @@ def selected_row_indices():
     return sorted(index_of[cab] for cab in ACTIVE.SELECTED_CABS if cab in index_of)
 
 
+def cab_index(session=None):
+    """cab -> row id for one install's rows, built once per loaded map. The one
+    index this side keeps, because a SELECTION is this side's own fact: which rows
+    the user clicked is not something the decoder can be asked.
+
+    Takes a session so a caller working on a named install (a cross-game import
+    reads the SOURCE install's rows) asks for that one rather than for whichever
+    tab happens to be on screen."""
+    session = ACTIVE if session is None else session
+    if session._CAB_INDEX is None:
+        session._CAB_INDEX = {cab: index
+                              for index, cab in enumerate(session.ROWS.values("cab"))}
+    return session._CAB_INDEX
+
+
 def _cab_index():
-    """cab -> row id, built once per loaded map. The one index this side keeps,
-    because a SELECTION is this side's own fact: which rows the user clicked is
-    not something the decoder can be asked."""
-    if ACTIVE._CAB_INDEX is None:
-        cabs = ACTIVE.ROWS.values("cab")
-        ACTIVE._CAB_INDEX = {cab: index for index, cab in enumerate(cabs)}
-    return ACTIVE._CAB_INDEX
+    return cab_index()
 
 
 def selected_row_dicts():

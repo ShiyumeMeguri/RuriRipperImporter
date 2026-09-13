@@ -194,12 +194,15 @@ _AvatarScore = collections.namedtuple(
 _SOURCE_AVATAR_CACHE = {}
 
 
-def _class_ids_at(rows, index):
-    """The ClassIDs one cabmap row carries, decoded from the columnar
-    class_starts/class_flat pair -- the one reader of that encoding here."""
-    start = int(rows.class_starts[index])
-    end = int(rows.class_starts[index + 1])
-    return set(int(class_id) for class_id in rows.class_flat[start:end])
+def _carries(rows, index, *class_names):
+    """Whether one cabmap row carries every one of these classes.
+
+    Read off the row table's own statement of what the row holds -- the decoder
+    writes it as the engine's class names (CabRows.TypeNames), so this side neither
+    re-derives it from the map nor keeps a second encoding of it. Matched whole
+    rather than as text: 'Avatar' is not 'AvatarMask'."""
+    carried = {name.strip() for name in str(rows.cell(index, "type_names") or "").split(",")}
+    return all(name in carried for name in class_names)
 
 
 def _candidate_avatar_cabs(session_key):
@@ -212,7 +215,7 @@ def _candidate_avatar_cabs(session_key):
         raise CrossGameRetargetError("The class registry has no 'Avatar' class id.")
     candidates = []
     for index in range(len(rows)):
-        if avatar_id in _class_ids_at(rows, index):
+        if _carries(rows, index, "Avatar"):
             candidates.append((int(rows.cell(index, "deps")), rows.cell(index, "cab")))
     candidates.sort(key=lambda pair: pair[0])
     return candidates, avatar_id
@@ -261,9 +264,9 @@ def _graph_avatar_cabs(session_key, clip_cab):
     bridge = cabmap_state.BRIDGE
     if bridge is None or not clip_cab:
         return []
-    rows = cabmap_state.session_for(session_key).ROWS
-    index_of = rows.cab_to_index()
-    avatar_id = class_registry.id_for_name("Avatar")
+    session = cabmap_state.session_for(session_key)
+    rows = session.ROWS
+    index_of = cabmap_state.cab_index(session)
     hop1 = bridge.find_direct_dependents([clip_cab])
     if not hop1:
         return []
@@ -271,8 +274,8 @@ def _graph_avatar_cabs(session_key, clip_cab):
     found = []
     for cab in bridge.resolve_closure_cab_names(hop1 + hop2):
         index = index_of.get(cab)
-        if index is not None and avatar_id in _class_ids_at(rows, index):
-            found.append((int(rows.deps[index]), cab))
+        if index is not None and _carries(rows, index, "Avatar"):
+            found.append((int(rows.cell(index, "deps")), cab))
     found.sort()
     return found
 
@@ -465,28 +468,20 @@ def _host_candidate_cabs(session_key, avatar_cab):
     bridge = cabmap_state.BRIDGE
     session = cabmap_state.session_for(session_key)
     rows = session.ROWS
-    index_of = rows.cab_to_index()
-    gameobject_id = class_registry.id_for_name("GameObject")
-    animator_id = class_registry.id_for_name("Animator")
-    if gameobject_id is None or animator_id is None:
-        raise CrossGameRetargetError("The class registry has no 'GameObject'/'Animator' class id.")
+    index_of = cabmap_state.cab_index(session)
     ranked = []
     for cab in bridge.find_direct_dependents([avatar_cab]):
         index = index_of.get(cab)
-        if index is None:
-            continue
-        classes = _class_ids_at(rows, index)
-        if gameobject_id not in classes or animator_id not in classes:
+        if index is None or not _carries(rows, index, "GameObject", "Animator"):
             continue
         closure = bridge.resolve_closure_cab_names([cab])
-        ranked.append((len(closure), int(rows.deps[index]), cab))
+        ranked.append((len(closure), int(rows.cell(index, "deps")), cab))
     ranked.sort()
     ordered = [cab for _closure_size, _dependency_count, cab in ranked]
     self_index = index_of.get(avatar_cab)
-    if self_index is not None and avatar_cab not in ordered:
-        classes = _class_ids_at(rows, self_index)
-        if gameobject_id in classes and animator_id in classes:
-            ordered.append(avatar_cab)
+    if (self_index is not None and avatar_cab not in ordered
+            and _carries(rows, self_index, "GameObject", "Animator")):
+        ordered.append(avatar_cab)
     return ordered
 
 
