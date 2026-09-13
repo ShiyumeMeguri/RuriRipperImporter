@@ -29,7 +29,9 @@ C# 侧是秒级且能并行。把逻辑放在 py 里等于给整条链装一个�
 | `Host/<宿主>/` | 另一个宿主的 API;任何游戏名 |
 | `Game/<游戏>/` | 别的游戏的知识 |
 
-`RuriRipperPyBridge/` 是独立 git 子模块:改它单独提交再 bump 父仓。
+`RuriRipperPyBridge/` 曾是独立子模块,**现在不是**:本仓直接跟踪它的文件
+(无 `.gitmodules`,`git ls-files` 里就是普通 100644 条目),改它和改别处一样**提交进本仓**。
+目录里还留着一个嵌套 `.git`,其 remote 已 404 —— 提交进那一份等于扔掉。
 
 **宿主差异一律声明成能力**(`Kernel/host.py` 的 `SKELETON`/`ANIMATION`/…),
 **禁止 `if host.name == ...`** —— 那是一张按宿主分的行为表,判据是能力名里不许出现宿主名。
