@@ -816,6 +816,20 @@ class RipperBridge:
         return column_table.ColumnTable.from_pinned(self._bridge.ExportShaders(
             self._loaded(), _string_array(list(seed_cabs)), str(output_dir)))
 
+    def export_all_shaders(self, output_dir):
+        """Every shader the INSTALL ships, written out as source -- the same answer as
+        export_shaders with nothing selected to narrow it.
+
+        Which rows those are is picked on the other side, off the loaded map, so this
+        never sweeps the table; and the closure deliberately stops at the shaders rather
+        than reaching on to everything that uses them.
+
+        Returns one row per shader: what the game calls it, where it landed, how big it
+        came out and which archive carried it."""
+        from . import column_table
+        return column_table.ColumnTable.from_pinned(self._bridge.ExportAllShaders(
+            self._loaded(), str(output_dir)))
+
     def open_host_table(self, handle, columns, rows, roles=()):
         """Publish a list THIS side assembled as a searchable table, so it gets
         the same vectorized search and the same rules as every other list

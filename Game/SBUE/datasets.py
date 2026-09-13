@@ -17,6 +17,7 @@ WORLDS = "unreal.worlds"
 WORLD_CELLS = "unreal.world.cells"
 CHARACTERS = "unreal.characters"
 SHADERS = "unreal.shaders"
+SHADERS_ALL = "unreal.shaders.all"
 
 
 def _rows(dataset_id, **args):
@@ -62,6 +63,15 @@ def shaders(packages, output):
     if cabmap_state.BRIDGE is None or not wanted or not output:
         return []
     return _rows(SHADERS, packages=wanted, output=output)
+
+
+def all_shaders(output):
+    """Decompile every shader this install ships, into ``output``. The same answer as
+    ``shaders`` with nothing named: which packages "every" is stays on the decoder's side,
+    which already knows what each one holds."""
+    if cabmap_state.BRIDGE is None or not output:
+        return []
+    return _rows(SHADERS_ALL, output=output)
 
 
 def worlds():

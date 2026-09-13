@@ -139,11 +139,11 @@ class GameModule:
 
     __slots__ = ("game_name", "label", "tabs", "sections", "face_retarget",
                  "secondary_motion", "engine", "settings_schema", "importer",
-                 "shaders", "directory", "package", "_register", "_unregister")
+                 "shaders", "all_shaders", "directory", "package", "_register", "_unregister")
 
     def __init__(self, game_name, label, tabs, register, unregister, sections=(),
                  face_retarget=None, secondary_motion=None, engine=None,
-                 settings_schema=None, importer=None, shaders=None):
+                 settings_schema=None, importer=None, shaders=None, all_shaders=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
@@ -203,6 +203,12 @@ class GameModule:
         #
         # The callable takes (packages, output) and returns one row per archive written.
         self.shaders = shaders
+        # The SAME question with nothing named to narrow it: everything this install ships.
+        # A module that answers one answers both, because the two are one lane -- which
+        # packages "everything" is stays on the far side, where the map already states it.
+        #
+        # The callable takes (output) and returns one row per archive written.
+        self.all_shaders = all_shaders
         self.tabs = tuple(tabs)
         # The parts those tabs are composed of, each with the capability it needs
         # (see GameSection). Stated here so the same join that proves no TAB is
@@ -318,6 +324,13 @@ def shaders_of(game_name, engine=""):
     every install and only the answer differs."""
     game = module_for(game_name, engine)
     return game.shaders if game is not None else None
+
+
+def all_shaders_of(game_name, engine=""):
+    """How ONE game answers what its WHOLE install compiled to, or None to use the shared
+    reader. The same contribution point as shaders_of with nothing selected to narrow it."""
+    game = module_for(game_name, engine)
+    return game.all_shaders if game is not None else None
 
 
 def tabs_of(game_name, engine=""):

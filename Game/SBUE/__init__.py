@@ -45,6 +45,13 @@ def _read_shaders(packages, output):
     return datasets.shaders(packages, output)
 
 
+def _read_all_shaders(output):
+    """What the whole install compiled to. Which packages that is comes from the mounted
+    map on the decoder's side, so nothing is enumerated here."""
+    from . import datasets
+    return datasets.all_shaders(output)
+
+
 def _import_packages(context, packages, options):
     """Every package built from what the decoder states it holds.
 
@@ -98,6 +105,7 @@ GAME_MODULE = GameModule(
     ),
     importer=_import_packages,
     shaders=lambda packages, output: _read_shaders(packages, output),
+    all_shaders=lambda output: _read_all_shaders(output),
     settings_schema=datasets.SETTINGS_SCHEMA,
     register=_register,
     unregister=_unregister,

@@ -1879,6 +1879,27 @@ def _shader_rows(state):
     return wanted
 
 
+def _shader_ready(context, state):
+    """The tab a decompile runs against, with its required options met and its bridge pointed
+    at this install -- or None once it has said what is missing. Stated once so the two
+    decompile buttons cannot drift on what they demand before either can start."""
+    config = _ensure_active_config(state)
+    blocked = _blocking_required_options(config)
+    if blocked:
+        _announce(context, blocked, host_port.ERROR)
+        return None
+    _sync_bridge_to_tab(config)
+    return config
+
+
+def _shader_output(context, state):
+    """Where a decompile writes, or "" once it has said there is nowhere yet."""
+    output = host_port.current().absolute_path(state.shader_output) if state.shader_output else ""
+    if not output:
+        _announce(context, "State a Shader Folder first.", host_port.ERROR)
+    return output
+
+
 def _read_shaders(context, arguments):
     """Write out the source of every shader the selected rows reach.
 
@@ -1887,20 +1908,15 @@ def _read_shaders(context, arguments):
     everything else goes down the one shared road: the closure of these rows, every shader
     in it, decompiled."""
     state = state_of(context)
-    config = _ensure_active_config(state)
-    blocked = _blocking_required_options(config)
-    if blocked:
-        _announce(context, blocked, host_port.ERROR)
+    config = _shader_ready(context, state)
+    if config is None:
         return
-    _sync_bridge_to_tab(config)
-
     rows = _shader_rows(state)
     if not rows:
         _announce(context, "Select a row that holds a material or a shader.", host_port.ERROR)
         return
-    output = host_port.current().absolute_path(state.shader_output) if state.shader_output else ""
+    output = _shader_output(context, state)
     if not output:
-        _announce(context, "State a Shader Folder first.", host_port.ERROR)
         return
 
     seeds = [row["cab"] for row in rows]
@@ -1916,6 +1932,33 @@ def _read_shaders(context, arguments):
         len(seeds), 0 if found is None else found.row_count, output))
 
 
+def _read_all_shaders(context, arguments):
+    """Write out the source of every shader the INSTALL ships.
+
+    The same question as the selected-rows button with nothing named to narrow it, and it
+    takes the same two roads for the same reason. WHICH rows "every" is stays on the far
+    side in both: the map already states what each row holds, so neither road is answered
+    by this side walking the table."""
+    state = state_of(context)
+    config = _shader_ready(context, state)
+    if config is None:
+        return
+    output = _shader_output(context, state)
+    if not output:
+        return
+
+    stated = Game.all_shaders_of(_module_game_name(config), config.engine_family)
+    if stated is not None:
+        produced = yield app_command.Read(lambda: stated(output), 0.8)
+        _announce(context, "whole install -> {0} archive(s) in {1}".format(
+            len(produced or []), output))
+        return
+    found = yield app_command.Read(
+        lambda: cabmap_state.BRIDGE.export_all_shaders(output), 0.8)
+    _announce(context, "whole install -> {0} shader(s) in {1}".format(
+        0 if found is None else found.row_count, output))
+
+
 def _shader_poll(context):
     state = state_of(context)
     return state.loaded and cabmap_state.BRIDGE is not None
@@ -1927,6 +1970,13 @@ READ_SHADERS = app_command.COMMANDS.define(
                  "that holds a material or a shader, on either engine"),
     icon="NODE_MATERIAL", poll=_shader_poll, steps=True, status_state=STATE,
     failure="Reading these shaders failed")
+
+READ_ALL_SHADERS = app_command.COMMANDS.define(
+    "ruri.cabmap_shaders_all", "Decompile All Shaders", _read_all_shaders,
+    description=("Write out, as source, every shader this install ships -- no selection, "
+                 "the whole map, on either engine"),
+    icon="SHADERFX", poll=_shader_poll, steps=True, status_state=STATE,
+    failure="Reading this install's shaders failed")
 
 
 def _import_poll(context):
@@ -2266,9 +2316,11 @@ def draw(layout, context):
     # questions about the same selection, so the second one lives beside the first
     # -- and states where its answer goes, because that is per install.
     shading = gated.column(align=True)
-    shading.active = len(_shader_rows(state)) > 0
     shading.prop(state, "shader_output")
-    shading.operator(READ_SHADERS.id, icon="NODE_MATERIAL")
+    selected = shading.row(align=True)
+    selected.active = len(_shader_rows(state)) > 0
+    selected.operator(READ_SHADERS.id, icon="NODE_MATERIAL")
+    shading.operator(READ_ALL_SHADERS.id, icon="SHADERFX")
 
 
 # ---------------------------------------------------------------------------
