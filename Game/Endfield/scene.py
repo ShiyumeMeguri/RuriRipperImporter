@@ -355,16 +355,12 @@ IMPORT = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 #: Filtering already happened in rebuild, against the game's own fields rather
 #: than the drawn string, so no row is hidden here.
-def _id_cell(seat):
-    """The game's own id, blank when the name already IS the id -- so a scene the
-    game ships no name for is not printed twice."""
-    key = BOUND.cell(seat, "key")
-    return "" if key == BOUND.cell(seat) else key
-
-
 _COLUMNS = (
     BOUND.column("", width=0.72, icon="WORLD"),
-    app_layout.ListColumn(_id_cell, align=app_layout.RIGHT, enabled=False),
+    # The game's own id, dimmed and blank when the name already IS the id. The two
+    # halves are two tables that key themselves differently (a map by its own name,
+    # a place by its level id), so the cell asks for the KEY rather than a column.
+    BOUND.key_column(align=app_layout.RIGHT, enabled=False),
 )
 _GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")
 

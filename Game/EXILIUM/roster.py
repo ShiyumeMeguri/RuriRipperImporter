@@ -257,12 +257,6 @@ OUTFITS = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 # What it looks like
 # ---------------------------------------------------------------------------
-def _id_cell(seat):
-    """The id, unless the name already IS the id."""
-    key = BOUND.cell(seat, "key")
-    return "" if key == BOUND.cell(seat) else "({0})".format(key)
-
-
 #: A cast row: the name, the id when the game gives it one of its own, and
 #: whatever detail that projection carries. A row the install never downloaded is
 #: dimmed rather than hidden while the filter says to show it -- it is real data
@@ -272,7 +266,7 @@ _COLUMNS = (
                  icon=lambda seat: ("OUTLINER_OB_ARMATURE" if BOUND.shipped(seat)
                                     else "LIBRARY_DATA_BROKEN"),
                  active=BOUND.shipped),
-    app_layout.ListColumn(_id_cell, width=0.5, enabled=False),
+    BOUND.key_column("({0})", width=0.5, enabled=False),
     BOUND.column("detail", align=app_layout.RIGHT, enabled=False),
 )
 _GROUP_COLUMN = BOUND.column("", icon="OUTLINER_COLLECTION")

@@ -355,6 +355,21 @@ class Bound:
         column = self.view.column_of(role)
         return self.view.text(seat.row, column) if column else ""
 
+    def key_column(self, template="{0}", **stated):
+        """The row's own id, drawn only where it says something the name does not.
+
+        With several rows sharing a display name the id is the only thing that
+        tells them apart, and where the game ships no name of its own the id IS
+        the displayed name -- printing it twice says nothing. Which column that
+        id is, the table says; asking for the role rather than naming a column is
+        what lets one panel draw a build that files its key under ``map`` and
+        another that files it under ``levelId``."""
+        def cell(seat):
+            key = self.role_cell(seat, column_table.KEY)
+            return "" if not key or key == self.cell(seat) else template.format(key)
+
+        return app_layout.ListColumn(cell, role=column_table.KEY, **stated)
+
     def is_group(self, seat):
         return self.view is not None and self.view.is_group(seat.row)
 

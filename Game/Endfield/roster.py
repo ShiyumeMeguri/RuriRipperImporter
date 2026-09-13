@@ -281,21 +281,12 @@ REVEAL = command.COMMANDS.define(
 # ---------------------------------------------------------------------------
 # The tab
 # ---------------------------------------------------------------------------
-def _id_cell(seat):
-    """The id, unless the name already IS the id."""
-    key = BOUND.cell(seat, "key")
-    return "" if key == BOUND.cell(seat) else "({0})".format(key)
-
-
 #: Three siblings in a row share the width equally, which is what this list has
 #: always looked like: name, then the game's own id, then the detail hard right.
 #: As split factors that is a third of the whole, then half of what is left.
 _COLUMNS = (
     BOUND.column("", label="Name", width=0.34, icon="OUTLINER_OB_ARMATURE"),
-    # The game's own id, dimmed: with several rows sharing a display name it is
-    # the only thing that tells them apart. Blank when the name already IS the
-    # id, so nothing is printed twice.
-    app_layout.ListColumn(_id_cell, "Id", width=0.5, enabled=False),
+    BOUND.key_column("({0})", label="Id", width=0.5, enabled=False),
     BOUND.column("detail", label="Detail", align=app_layout.RIGHT),
 )
 
