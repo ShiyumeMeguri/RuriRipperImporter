@@ -1053,7 +1053,7 @@ def draw_story_tab(layout, context):
                                and highlighted["unit"] else "Open This Story")
         if highlighted is not None:
             opened.channel = highlighted["channel"]
-            opened.unit = highlighted.unit
+            opened.unit = highlighted["unit"]
     if state.mode == BY_STORY:
         whole = actions.column(align=True)
         built = whole.row()
