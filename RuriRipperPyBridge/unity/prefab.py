@@ -182,12 +182,18 @@ def iter_renderers(prefab, go_to_node, options=None, stats=None, at_level=None):
     stats = stats if stats is not None else SkipStats()
     # A caller that knows this game states detail some other way hands the test in;
     # everyone else gets the prefab's own LOD components.
+    #
+    # The test is handed the renderer's COMPONENT and the name of the GameObject
+    # that owns it, because those are the two identities a build states its levels
+    # by: the engine's own LODGroup points at file ids, a build that ships no
+    # LODGroup at all names the transform instead. Handing over only the component
+    # made every such build reach for a name that is not on it.
     if at_level is None:
         discard = lod_discard_set(prefab, filters["detail_level"])
-        at_level = lambda renderer: renderer.file_id not in discard
+        at_level = lambda renderer, name: renderer.file_id not in discard
 
-    def accept(renderer, node):
-        if not at_level(renderer):
+    def accept(renderer, node, name):
+        if not at_level(renderer, name):
             stats.lod += 1
             return None
         if (not filters["import_shadow_proxies"]
@@ -207,12 +213,13 @@ def iter_renderers(prefab, go_to_node, options=None, stats=None, at_level=None):
     for smr in prefab.all("SkinnedMeshRenderer"):
         go_id = (smr.data.get("m_GameObject") or {}).get("fileID")
         node = go_to_node.get(go_id)
-        disabled = accept(smr, node)
+        name = go_name(prefab, go_id)
+        disabled = accept(smr, node, name)
         if disabled is None:
             continue
         yield RendererInfo(
             document=smr, kind="skinned", go_id=go_id, node=node,
-            name=go_name(prefab, go_id), mesh_ref=smr.data.get("m_Mesh"),
+            name=name, mesh_ref=smr.data.get("m_Mesh"),
             material_refs=smr.data.get("m_Materials") or [],
             bones=smr.data.get("m_Bones") or [],
             submesh_range=static_batch_range(smr), disabled=disabled)
@@ -220,7 +227,8 @@ def iter_renderers(prefab, go_to_node, options=None, stats=None, at_level=None):
     for mr in prefab.all("MeshRenderer"):
         go_id = (mr.data.get("m_GameObject") or {}).get("fileID")
         node = go_to_node.get(go_id)
-        disabled = accept(mr, node)
+        name = go_name(prefab, go_id)
+        disabled = accept(mr, node, name)
         if disabled is None:
             continue
         if node is None:
@@ -229,7 +237,7 @@ def iter_renderers(prefab, go_to_node, options=None, stats=None, at_level=None):
             continue
         yield RendererInfo(
             document=mr, kind="static", go_id=go_id, node=node,
-            name=go_name(prefab, go_id), mesh_ref=mesh_filter_ref(prefab, node),
+            name=name, mesh_ref=mesh_filter_ref(prefab, node),
             material_refs=mr.data.get("m_Materials") or [], bones=[],
             submesh_range=static_batch_range(mr), disabled=disabled)
 

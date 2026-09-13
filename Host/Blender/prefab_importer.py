@@ -593,7 +593,7 @@ def _detail_test(db, prefab, options):
     if stated is not None:
         return stated
     discard = prefab_scan.lod_discard_set(prefab, level)
-    return lambda renderer: renderer.file_id not in discard
+    return lambda renderer, name: renderer.file_id not in discard
 
 
 def _renderer_mesh_ref(db, prefab_file, renderer, options):

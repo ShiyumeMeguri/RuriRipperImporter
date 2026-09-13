@@ -40,7 +40,14 @@ def _manifest(db, prefab_file):
     if text and "MeshResPath" in text:
         try:
             for row in datasets.role_meshes(text):
-                manifest[str(row["transform"])] = (str(row["name"]), int(float(row["lod"] or -1)))
+                # The HIGHEST level this game authors is 0, and 0 is falsy: reading
+                # it as "no level stated" made every top-level piece exempt from the
+                # detail test and pushed the wanted level to the lowest one the list
+                # happens to carry -- so a character arrived wearing two of itself.
+                stated = row["lod"]
+                manifest[str(row["transform"])] = (
+                    str(row["name"]),
+                    int(float(stated)) if stated not in (None, "") else -1)
         except Exception:
             manifest = {}
     _MANIFESTS[key] = manifest
@@ -119,8 +126,8 @@ def detail(db, prefab_file, level, options=None):
     # nothing, exactly as a LODGroup that stops short of the wanted level does.
     wanted = min(stated, key=lambda candidate: (abs(candidate - level), candidate))
 
-    def at_level(renderer):
-        declared = manifest.get(renderer.name)
+    def at_level(_renderer, name):
+        declared = manifest.get(name)
         return declared is None or declared[1] < 0 or declared[1] == wanted
     return at_level
 

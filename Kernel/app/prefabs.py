@@ -69,7 +69,14 @@ def mesh_ref(db, prefab_file, renderer, options):
 
 def detail_test(db, prefab, level, options):
     """The game's own verdict on which renderers are at ``level``, or None when it
-    states none and the engine's own LOD declaration should decide."""
+    states none and the engine's own LOD declaration should decide.
+
+    A rule answers with a test of ``(renderer_component, gameobject_name)``: the
+    renderer's own UnityDocument -- which is what the engine's LODGroup points at,
+    by file id -- and the name of the GameObject carrying it, which is what a build
+    shipping no LODGroup at all states its levels by. Both, because which of the
+    two a build uses is the build's own business; a rule reaching for anything else
+    is reaching for something no caller has."""
     for rule in DETAIL_RULES:
         stated = rule(db, prefab, level, options)
         if stated is not None:
