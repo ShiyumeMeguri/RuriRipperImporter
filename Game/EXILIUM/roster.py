@@ -171,9 +171,8 @@ def load_address(context, address, label):
     # resolved closure exports over a thousand roots that have nothing to do with
     # what was asked for -- loading one character used to bring in a scene's worth
     # of strangers. The address named exactly one asset, so name it to the import.
-    for step in app_browser.IMPORT_SELECTED.run(
-            context, {"reset_scene": False, "only_root_names": name}):
-        yield step
+    yield from app_browser.IMPORT_SELECTED.run(
+        context, {"reset_scene": False, "only_root_names": name})
     state.status = "Loaded '{0}' from {1} cab(s).".format(label, len(cabs))
 
 
@@ -181,8 +180,7 @@ def _load(context, arguments):
     entry = BOUND.picked(state_of(context))
     if entry is None:
         return
-    for step in load_address(context, entry.payload, entry.label):
-        yield step
+    yield from load_address(context, entry.payload, entry.label)
 
 
 def reveal_address(context, address, fallback):

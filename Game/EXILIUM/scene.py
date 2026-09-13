@@ -99,8 +99,7 @@ def _load(context, arguments):
     entry = BOUND.picked(state_of(context))
     if entry is None:
         return
-    for step in roster.load_address(context, entry.key, entry.label):
-        yield step
+    yield from roster.load_address(context, entry.key, entry.label)
 
 
 def _reveal(context, arguments):

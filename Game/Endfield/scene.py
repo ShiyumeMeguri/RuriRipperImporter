@@ -315,8 +315,7 @@ def _import(context, arguments):
     state_id = int(state.scene_state_id or 0)
     window = rect + (state_id, detail)
     if scene_state.CURRENT_MAP != map_name or scene_state.CURRENT_WINDOW != window:
-        for step in _discover(context, arguments):
-            yield step
+        yield from _discover(context, arguments)
     packages = scene_state.packages(_label(state))
     if packages is None:
         state.status = "This selection resolves to nothing importable."

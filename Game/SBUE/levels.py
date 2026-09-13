@@ -340,20 +340,17 @@ def _import(context, state, packages, what):
 def _import_level(context, arguments):
     state = state_of(context)
     entry = selected(state)
-    for step in _import(context, state, [entry.key if entry else ""], "level"):
-        yield step
+    yield from _import(context, state, [entry.key if entry else ""], "level")
 
 
 def _import_window(context, arguments):
     state = world_state_of(context)
-    for step in _import(context, state, CELL_BOUND.keys(), "cell"):
-        yield step
+    yield from _import(context, state, CELL_BOUND.keys(), "cell")
 
 
 def _import_world(context, arguments):
     state = world_state_of(context)
-    for step in _import(context, state, [state.world], "world"):
-        yield step
+    yield from _import(context, state, [state.world], "world")
 
 
 REFRESH = command.COMMANDS.define(

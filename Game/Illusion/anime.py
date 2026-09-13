@@ -276,14 +276,12 @@ def _import_rows(context, rows):
 
 
 def _import(context, arguments):
-    for step in _import_rows(context, [selected_animation(state_of(context))]):
-        yield step
+    yield from _import_rows(context, [selected_animation(state_of(context))])
 
 
 def _import_side(context, arguments):
     state = state_of(context)
-    for step in _import_rows(context, [selected_side(state, arguments["side"])]):
-        yield step
+    yield from _import_rows(context, [selected_side(state, arguments["side"])])
 
 
 REFRESH = command.COMMANDS.define(

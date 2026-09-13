@@ -383,35 +383,48 @@ def _reveal(context, arguments):
     if folder:
         state.search = ""
         cabmap_state.browse_dir(tuple(p for p in folder.split("/") if p))
-        _rebuild_window(state)
-        # Opening the folder is only half of "reveal": without moving the
-        # highlight the list keeps whatever row was selected before, which reads
-        # as having jumped to a completely unrelated asset.
-        if cab:
-            for position, item in enumerate(state.window):
-                if not item.is_folder and item.cab == cab:
-                    state.active_index = position
-                    state.cursor_cab = item.cab
-                    cabmap_state.clear_selection()
-                    cabmap_state.SELECTED_CABS.add(item.cab)
-                    break
-        _redraw_all(context)
-        return None
-
-    cabmap_state.apply_filter(query)
-    matches = list(cabmap_state.VISIBLE)
-    folders = {cabmap_state.folder_of(row, query)
-               for row in matches}
-    if len(folders) == 1:
-        state.search = ""
-        cabmap_state.browse_dir(folders.pop())
     else:
-        state.search = query
+        cabmap_state.apply_filter(query)
+        matches = list(cabmap_state.VISIBLE)
+        folders = {cabmap_state.folder_of(row, query)
+                   for row in matches}
+        # One folder is somewhere to open -- unless that folder is the ROOT, which
+        # is what every row of a build whose containers carry no path at all
+        # resolves to. Opening the root is not "where this lives": it is the whole
+        # map, with the one thing that found the row thrown away on the way. So a
+        # landing that says nothing leaves the search standing instead.
+        landing = folders.pop() if len(folders) == 1 else None
+        if landing:
+            state.search = ""
+            cabmap_state.browse_dir(landing)
+        else:
+            state.search = query
+        if not matches:
+            state.status = "Nothing in the loaded cabmap carries '{0}'.".format(query)
+
     _rebuild_window(state)
+    # Opening the place is only half of "reveal": a listing that keeps whatever
+    # row was selected before reads as having jumped to an unrelated asset -- and
+    # on a build that files everything at the root it is the only half there is,
+    # which is why this is the ONE landing both roads take.
+    if cab and not _cursor_on(state, cab):
+        state.status = ("Opened where '{0}' lives, but the listing on screen does "
+                        "not carry it -- narrow it and it will be there.".format(cab))
     _redraw_all(context)
-    if not matches:
-        state.status = "Nothing in the loaded cabmap carries '{0}'.".format(query)
     return None
+
+
+def _cursor_on(state, cab):
+    """Put the cursor on one cab of the listing drawn now, and say whether it was
+    there to put it on."""
+    for position, item in enumerate(state.window):
+        if not item.is_folder and item.cab == cab:
+            state.active_index = position
+            state.cursor_cab = item.cab
+            cabmap_state.clear_selection()
+            cabmap_state.SELECTED_CABS.add(item.cab)
+            return True
+    return False
 
 
 def _show_rules(context, arguments):

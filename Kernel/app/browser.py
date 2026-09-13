@@ -1969,8 +1969,7 @@ def _import_with_dependents(context, arguments):
     _sync_window_selection(state)
     if added:
         _announce(context, "Importing with {0} direct dependent(s) added.".format(len(added)))
-    for step in _import_selected(context, arguments):
-        yield step
+    yield from _import_selected(context, arguments)
 
 
 IMPORT_WITH_DEPENDENTS = app_command.COMMANDS.define(
