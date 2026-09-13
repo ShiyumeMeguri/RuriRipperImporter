@@ -629,7 +629,7 @@ def draw_actor(panel, layout, context, state):
 #: build calls this row, and whatever the build says about it, hard right.
 def _shared_columns(bound):
     return (bound.column("", width=0.68),
-            bound.column("detail", align=app_layout.RIGHT, enabled=False))
+            bound.role_column(app_view.DETAIL, align=app_layout.RIGHT, enabled=False))
 
 
 def _elsewhere(panel, pane, layout):

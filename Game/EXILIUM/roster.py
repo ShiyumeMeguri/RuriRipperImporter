@@ -181,7 +181,7 @@ def _load(context, arguments):
     entry = BOUND.picked(state_of(context))
     if entry is None:
         return
-    for step in load_address(context, entry.address, entry.label):
+    for step in load_address(context, entry.payload, entry.label):
         yield step
 
 
@@ -200,7 +200,7 @@ def _reveal(context, arguments):
     entry = BOUND.picked(state_of(context))
     if entry is None:
         return {"CANCELLED"}
-    return reveal_address(context, entry.address, entry.key)
+    return reveal_address(context, entry.payload, entry.key)
 
 
 def _outfits(context, arguments):

@@ -172,11 +172,13 @@ REVEAL = command.COMMANDS.define(
 
 #: Name, then the build's own id, then the build's own finer kind hard right --
 #: which is what tells several rows sharing a display name apart. Each cell names
-#: the COLUMN it reads off the view; "" is whatever the row is called.
+#: the ROLE it reads, never a column: one decoder answers for every Unreal build
+#: and they do not file a cast under the same column names. Naming them outright
+#: meant the list could not be drawn at all for a build without those columns.
 _COLUMNS = (
     BOUND.column("", label="Name", width=0.4, icon="OUTLINER_OB_ARMATURE"),
-    BOUND.column("id", label="Id", width=0.45, align=app_layout.RIGHT, enabled=False),
-    BOUND.column("type", label="Type", align=app_layout.RIGHT, enabled=False),
+    BOUND.role_column(app_view.KEY, label="Id", width=0.45, align=app_layout.RIGHT, enabled=False),
+    BOUND.role_column(app_view.DETAIL, label="Type", align=app_layout.RIGHT, enabled=False),
 )
 
 

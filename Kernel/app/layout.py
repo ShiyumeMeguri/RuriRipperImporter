@@ -107,10 +107,10 @@ class ListColumn:
     """
 
     __slots__ = ("key", "label", "width", "align", "prop", "command", "values",
-                 "icon", "enabled", "active")
+                 "icon", "enabled", "active", "role")
 
     def __init__(self, key, label="", width=0.0, align="", prop="", command="",
-                 values=None, icon="", enabled=None, active=None):
+                 values=None, icon="", enabled=None, active=None, role=None):
         #: Attribute read off the row record, or a callable (record) -> str.
         self.key = key
         self.label = label
@@ -127,6 +127,11 @@ class ListColumn:
         self.icon = icon
         self.enabled = enabled
         self.active = active
+        #: The ROLE this cell reads, for a column addressed by what it means rather
+        #: than by what one build happens to call it. A list drops such a column
+        #: whole when its table carries nothing in that role, so a panel shared by
+        #: several builds names no build's column and shows no empty one either.
+        self.role = role
 
     def text(self, record):
         if callable(self.key):

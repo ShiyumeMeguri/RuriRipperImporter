@@ -102,6 +102,12 @@ class View:
     def __len__(self):
         return self._rows.row_count
 
+    def column_of(self, role):
+        """What this build calls the column carrying ``role``, or "" when it carries
+        none. The table states its own roles, so a panel shared by several builds
+        asks for a MEANING and never for a name only one of them uses."""
+        return self._rows.first_named(role)
+
     def text(self, row, column=""):
         return self._rows.cell(row, column or self._label)
 
@@ -331,6 +337,24 @@ class Bound:
     def column(self, name="", **stated):
         return app_layout.ListColumn(key=lambda seat: self.cell(seat, name), **stated)
 
+    def carries(self, role):
+        """Whether the open table has a column in ``role`` at all."""
+        return self.view is not None and bool(self.view.column_of(role))
+
+    def role_column(self, role, **stated):
+        """A column addressed by what it MEANS. Which column that is, this build's
+        own table says; a build whose table says nothing about that role shows no
+        such column, rather than a blank one or -- as naming the column outright
+        did -- a list that cannot draw at all on every other build."""
+        return app_layout.ListColumn(
+            key=lambda seat: self.role_cell(seat, role), role=role, **stated)
+
+    def role_cell(self, seat, role):
+        if self.view is None:
+            return ""
+        column = self.view.column_of(role)
+        return self.view.text(seat.row, column) if column else ""
+
     def is_group(self, seat):
         return self.view is not None and self.view.is_group(seat.row)
 
@@ -415,6 +439,8 @@ def draw_head(bound, layout, state, refresh_id, arguments=None):
 def draw_list(bound, layout, state, columns, identifier, rows=10, group_column=None,
               summary=True):
     """The list and what it came to, drawn the same way for every game."""
+    columns = [column for column in columns
+               if column.role is None or bound.carries(column.role)]
     layout.list(state, bound.seats, bound.index, columns, rows=rows, identifier=identifier,
                 group_key=bound.is_group, group_column=group_column or bound.column(),
                 visible_count=bound.count)
