@@ -638,8 +638,16 @@ def _rows_to_options(config):
 
 
 def _options_to_rows(config, options):
+    """Fill the form from the values IN EFFECT: what this tab applied, else what the decoder
+    already answers this install with, else the schema's default.
+
+    A recognised title brings its engine, its archive keys and its reflection schema with it,
+    and those answers belong in the fields that hold them. Rendering them beside an empty
+    field instead made two places state one value, and left the field -- the one a reader
+    looks at -- saying the install was still missing what it was already open on."""
     for row in config.source_option_rows:
-        value = options.get(row.name, row.default)
+        applied = options.get(row.name, "")
+        value = applied if str(applied).strip() else (row.effective or row.default)
         if row.kind == "flag":
             row.flag_value = str(value).lower() in ("1", "true")
         elif row.kind == "path":
@@ -1464,12 +1472,6 @@ def draw_source_options(layout, context, config, dataset_id):
             line.prop(row, "choice_value", text=row.name)
         else:
             line.prop(row, "value", text=row.name)
-        # An option the decoder already answered says so beside its own field. A
-        # recognised title brings its engine, its archive keys and its reflection
-        # schema with it, and a row left blank would read as "still to be found"
-        # when the install is in fact already open on exactly that value.
-        if row.effective and not (_option_row_value(row) or "").strip():
-            line.label(text=row.effective, icon="CHECKMARK")
     layout.operator(APPLY_SOURCE_OPTIONS.id, icon="CHECKMARK")
 
 
