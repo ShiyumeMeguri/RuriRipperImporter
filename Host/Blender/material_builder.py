@@ -35,6 +35,9 @@ _DEFAULT_TABLE = []
 UNITY_GUID_PROPERTY = "ruri_unity_guid"
 # 图数据块上的标记:色彩空间已按资产自己声明的值定死,任何按槽推断的一方都不许改写它。
 COLORSPACE_STATED_PROPERTY = "ruri_colorspace_stated"
+#: Channel 3 of an RGBA map. Blender never colour-manages alpha, so a role that reads
+#: only this channel puts no requirement on the image's colour space.
+_ALPHA_CHANNEL = 3
 
 
 def unresolved_for(game):
@@ -446,6 +449,21 @@ def _disable_alpha_interpretation(image):
         pass
 
 
+def _enable_alpha_channel(image):
+    """Give an image back its alpha, for the one case that asks for it.
+
+    Images arrive with alpha interpretation OFF (see _disable_alpha_interpretation) because these
+    games routinely store something else in the 4th channel. A material that WIRES that channel as
+    opacity is the material saying it is opacity there -- and while the interpretation is off, the
+    Alpha output reads 1.0 everywhere, so a cutout keeps the whole card and a tree's leaves come
+    out as opaque quads. CHANNEL_PACKED reads the stored value literally and still lets nothing
+    bleed into the colour."""
+    try:
+        image.alpha_mode = "CHANNEL_PACKED"
+    except Exception:
+        pass
+
+
 def _wire_packed(nt, bsdf, img, label, channels, location):
     """A texture whose channels carry scalar roles: metallic and roughness go straight
     to the BSDF, smoothness through 1 - x; occlusion, specular, opacity and height have
@@ -460,6 +478,8 @@ def _wire_packed(nt, bsdf, img, label, channels, location):
     sep = nt.nodes.new("ShaderNodeSeparateColor")
     sep.location = (x + 300, y)
     nt.links.new(node.outputs["Color"], sep.inputs["Color"])
+    if _ALPHA_CHANNEL in channels.values():
+        _enable_alpha_channel(img)
     outputs = {0: sep.outputs["Red"], 1: sep.outputs["Green"], 2: sep.outputs["Blue"], 3: node.outputs["Alpha"]}
     metallic = channels.get("metallic")
     if metallic in outputs:
@@ -809,7 +829,23 @@ class MaterialBuilder:
         if opacity_texture is not None and opacity_texture is base and opacity_channel == 3:
             wire_alpha = True
         if base_node is not None and wire_alpha:
-            nt.links.new(base_node.outputs["Alpha"], bsdf.inputs["Alpha"])
+            # An alpha TEST is not alpha blending: a material stating a cutoff is asking for
+            # every texel to be all there or not there at all, and handing its soft alpha to a
+            # stochastic blend instead loses most of it to dithering noise -- foliage comes out
+            # as thin slivers of the canopy it should be. So the cutoff, when the layer states
+            # one, becomes the comparison the game itself makes.
+            cutoff = roles.floats.get("alpha_cutoff")
+            _enable_alpha_channel(base_node.image)
+            alpha_socket = base_node.outputs["Alpha"]
+            if cutoff is not None and float(cutoff) > 0.0:
+                test = nt.nodes.new("ShaderNodeMath")
+                test.operation = "GREATER_THAN"
+                test.location = (-100, -150)
+                test.label = "alpha cutoff {0:.3f}".format(float(cutoff))
+                test.inputs[1].default_value = float(cutoff)
+                nt.links.new(alpha_socket, test.inputs[0])
+                alpha_socket = test.outputs["Value"]
+            nt.links.new(alpha_socket, bsdf.inputs["Alpha"])
         if mode is not None:
             try:
                 mat.surface_render_method = "BLENDED" if float(mode) >= 1.5 else "DITHERED"
@@ -841,7 +877,14 @@ class MaterialBuilder:
         roughness_wired = False
         for index, packed in enumerate(roles.packed()):
             claimed_slots.add(packed.name)
-            img = self._load_image(packed.guid, non_color=True)
+            # ALPHA IS NOT COLOUR MANAGED. Reading channel 3 of an image says nothing about how
+            # its RGB is to be read, so a map used only for its alpha must not drag the image to
+            # Non-Color: it is routinely the SAME picture as the base colour (one game states the
+            # diffuse under two names, 1500 of 1663 materials measured), the colour space lives on
+            # the shared image datablock, and the last writer wins -- so the whole game renders
+            # dark with nothing anywhere to show for it.
+            reads_colour = any(channel != _ALPHA_CHANNEL for channel in packed.channels.values())
+            img = self._load_image(packed.guid, non_color=reads_colour)
             if img is None:
                 continue
             channels = dict(packed.channels)

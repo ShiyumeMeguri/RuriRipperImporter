@@ -195,7 +195,13 @@ class TextureSource:
             path = paths_read[index]
             self._images[path] = table.cell(index, "image")
             self._names[path] = names[index]
-            self._srgb[path] = srgb[index] == "1"
+            # A BLANK is "this source states no colour space", which is not the same fact as
+            # "linear" and must not be read as one: a decoder whose format carries no such flag
+            # would otherwise force every colour texture it hands over into Non-Color, and a
+            # whole game renders dark with nothing to show for it. Unknown stays None so the
+            # builder falls back to the ROLE the texture fills.
+            stated = srgb[index]
+            self._srgb[path] = None if stated == "" else stated == "1"
         # A path the decoder answered nothing for is held as absent on purpose: asking again
         # every time a material mentions it would re-read the archive for a texture that
         # is not there.

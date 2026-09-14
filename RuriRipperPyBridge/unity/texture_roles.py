@@ -145,7 +145,13 @@ class RoleTable:
         for name, role in (layer.get("colors") or {}).items():
             self.colors[str(name)] = str(role)
         for name, role in (layer.get("floats") or {}).items():
-            self.floats[str(name)] = str(role)
+            # A float may need its UNIT stated as well as its role: a game whose shaders
+            # take an alpha threshold in 0-255 states the same role as one that takes 0-1,
+            # and only the layer knows which. The plain string form stays the common case.
+            if isinstance(role, dict):
+                self.floats[str(name)] = (str(role.get("role")), float(role.get("scale", 1.0)))
+            else:
+                self.floats[str(name)] = (str(role), 1.0)
         keyword = layer.get("proven_keyword")
         if isinstance(keyword, str) and keyword:
             self.proven_keyword = keyword
@@ -183,9 +189,12 @@ class RoleTable:
                 colors[role] = value
         floats = {}
         for name, value in props.floats.items():
-            role = self.floats.get(name)
+            stated = self.floats.get(name)
+            if stated is None:
+                continue
+            role, scale = stated
             if role in FLOAT_VALUE_ROLES and role not in floats:
-                floats[role] = value
+                floats[role] = value * scale
         return Resolution(textures, colors, floats, unmapped, proven)
 
 
