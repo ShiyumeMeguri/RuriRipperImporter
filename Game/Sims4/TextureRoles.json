@@ -15,6 +15,7 @@
     "AmbientOcclusionMap": {"channels": {"occlusion": 0}},
     "AlphaMap": {"channels": {"opacity": 3}},
     "CubeEnvMap": {"role": "none"},
+    "FloorCubeMap": {"role": "none"},
     "BakedLightMap": {"role": "none"},
     "AdditiveLightMap": {"role": "none"},
     "DropShadowAtlas": {"role": "none"},
@@ -28,6 +29,6 @@
     "EmissionMapColor": "emission"
   },
   "floats": {
-    "AlphaMaskThreshold": "alpha_cutoff"
+    "AlphaMaskThreshold": {"role": "alpha_cutoff", "scale": 0.00392156862745098}
   }
 }

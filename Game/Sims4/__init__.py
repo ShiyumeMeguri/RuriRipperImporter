@@ -7,6 +7,8 @@ A SETUP is either half of what the game installs: the folder it is installed in,
 ships the catalogue every lot is built out of, or the user folder beside the player's
 documents, which holds the saves, the tray and whatever the player added to Mods. Both are
 this game and both are read the same way; which one is open only changes what is there.
+Naming the OTHER half in the source options reads them together, which is what a saved
+house needs: the house is a list of GUIDs into the catalogue the install ships.
 
 Two contributions:
 
@@ -21,6 +23,7 @@ from __future__ import annotations
 import importlib
 
 from .. import GameModule, GameSection, GameTab
+from ...RuriRipperPyBridge.sims4 import direct as datasets
 
 #: This game's panels ask the host for nothing the browser does not already ask for. An
 #: OBJECT is a mesh tree, and what the decoder hands over for one is the same normalised
@@ -71,6 +74,7 @@ GAME_MODULE = GameModule(
     label="The Sims 4",
     engine="Sims4",
     sections=SECTIONS,
+    settings_schema=datasets.SETTINGS_SCHEMA,
     tabs=(
         GameTab("scene", "Scene",
                 "Every saved lot this setup carries -- a whole house each, imported assembled",

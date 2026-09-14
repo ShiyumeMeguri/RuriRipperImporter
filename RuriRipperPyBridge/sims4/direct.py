@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from .. import placements
 
+SETTINGS_SCHEMA = "sims4.settings.schema"
 PROPS = "sims4.props"
 LOTS = "sims4.lots"
 PLACEMENTS = "sims4.placements"
