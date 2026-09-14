@@ -15,13 +15,13 @@
 | MainLight | 割点(宿主兑现) | Scene | Identity | directional light record (direction toward light, linear radiance) | 主光从哪来是**管线的组织方式**:有的走 cbuffer 单槽(HG 的 type_LightDataBuffer c0/c1),有的走聚簇灯列表首项,有的按可见性每帧重排;编译器看见的只是几次 cbuffer 读 |
 | ScreenDepth | 折缺席值 | Pipeline | Declared | raw device depth | reversed-Z / 线性 / 对数深度三种约定并存,_ZBufferParams 的打包也是引擎私有;而材质节点图读不到深度缓冲 |
 | ScreenSpaceShadowMask | 折缺席值 | Pipeline | Identity | [0,1] screen-space resolved shadow mask | 解算通道数与语义各家自定(HG 是 .x 场景 / .y 角色图集),而且它是本帧的一张 RT;编译器看见的只是一次按屏幕坐标的纹理取值 |
-| ShadowAttenuation | 折缺席值 | Pipeline | Identity | [0,1] attenuation | CSM / ASM / 接触阴影 / 屏幕空间阴影四条链各家自选,级联划分与滤波核全是私有实现;编译器看见的是一堆 shadowmap 比较采样 |
+| ShadowAttenuation | 割点(宿主兑现) | Scene | Identity | [0,1] attenuation | CSM / ASM / 接触阴影 / 屏幕空间阴影四条链各家自选,级联划分与滤波核全是私有实现;编译器看见的是一堆 shadowmap 比较采样 |
 
 ### 不可发射函数
 
 | 函数 | 原因 |
 |---|---|
-| EndfieldCharaGBufferPassVertex[OverlayShadow] | 内建 mul 无节点图等价 |
+| EndfieldCharaGBufferPassVertex[OverlayShadow] | uniform UNITY_MATRIX_P 为结构/资源型(float4x4),无节点图等价 |
 
 ## 栈 ruri_scene_uber_endfield
 
@@ -35,9 +35,15 @@
 | MainLight | 割点(宿主兑现) | Scene | Identity | directional light record (direction toward light, linear radiance) | 主光从哪来是**管线的组织方式**:有的走 cbuffer 单槽(HG 的 type_LightDataBuffer c0/c1),有的走聚簇灯列表首项,有的按可见性每帧重排;编译器看见的只是几次 cbuffer 读 |
 | ScreenColor | 折缺席值 | Pipeline | Declared | linear scene radiance | 有的管线是 RT 有的是 copy,分辨率/mip 链/色彩空间各不相同;而材质节点图**根本读不到**已绘制的帧缓冲 |
 | ScreenDepth | 折缺席值 | Pipeline | Declared | raw device depth | reversed-Z / 线性 / 对数深度三种约定并存,_ZBufferParams 的打包也是引擎私有;而材质节点图读不到深度缓冲 |
-| ShadowAttenuation | 折缺席值 | Pipeline | Identity | [0,1] attenuation | CSM / ASM / 接触阴影 / 屏幕空间阴影四条链各家自选,级联划分与滤波核全是私有实现;编译器看见的是一堆 shadowmap 比较采样 |
+| ShadowAttenuation | 割点(宿主兑现) | Scene | Identity | [0,1] attenuation | CSM / ASM / 接触阴影 / 屏幕空间阴影四条链各家自选,级联划分与滤波核全是私有实现;编译器看见的是一堆 shadowmap 比较采样 |
 | SpecularRadiance | 割点(宿主兑现) | Scene | Declared | linear radiance | 反射探针的存储各家不同(cube / 八面体图集 / 聚簇),粗糙度→mip 的映射也是各家自定;编译器看见的只是一次 cube 采样加一条经验曲线 |
 
+### 不可发射函数
+
+| 函数 | 原因 |
+|---|---|
+| SampleNormalMap | uniform _UseBumpMap 挂 [ShaderProperty] 但 Default 缺失/不可解析——禁止发明默认值 |
+| Dissolve | 内建 radians(F) 无节点图等价(part Lit) |
 
 ## 栈 ruri_effect_uber_endfield
 
@@ -50,6 +56,35 @@
 | ScreenColor | 折缺席值 | Pipeline | Declared | linear scene radiance | 有的管线是 RT 有的是 copy,分辨率/mip 链/色彩空间各不相同;而材质节点图**根本读不到**已绘制的帧缓冲 |
 | ScreenDepth | 折缺席值 | Pipeline | Declared | raw device depth | reversed-Z / 线性 / 对数深度三种约定并存,_ZBufferParams 的打包也是引擎私有;而材质节点图读不到深度缓冲 |
 
+### 不可发射函数
+
+| 函数 | 原因 |
+|---|---|
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
+| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
 
 ## 栈 ruri_shadowreceiver_endfield
 

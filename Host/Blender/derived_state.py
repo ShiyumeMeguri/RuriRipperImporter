@@ -54,8 +54,9 @@ LIGHT_SET = "light_set"        # 灯的增删/类型/可见性(生成栈的灯�
 LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(同上,表像素)
 WORLD = "world"                # 世界被换(环境采样是建组时快照,只有这件事还要重接兑现面)
 RIG = "rig"                    # 骨架的骨骼名册变了(顶点腿的骨骼基座按名字接进几何节点)
+ENGINE = "engine"              # 渲染引擎被换(表面闭包与能力答案按引擎建:EEVEE 走原生灯节点,其余走灯表)
 
-ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD, RIG))
+ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD, RIG, ENGINE))
 
 # 去抖窗口:批量导入的几百次 announce、相机拖动的每帧变更,都收敛成末尾的一次落地。
 DEBOUNCE_SECONDS = 0.1
@@ -102,7 +103,9 @@ class Stage:
 
 
 def _run_capabilities(change):
-    """材质的环境查询兑现面重接。只剩一个触发者:**世界被换**(环境采样是建组时快照)。
+    """材质的环境查询兑现面重接。两个触发者:**世界被换**(环境采样是建组时快照)与
+    **渲染引擎被换**(表面闭包与能力答案按引擎建,EEVEE 的 Light Accumulation 到别的引擎是
+    空闭包,别的引擎的 Emission 回到 EEVEE 则灯链非法 —— 两个方向都是整场全黑)。
 
     灯**一概不进这条路** —— 缺省主光是从 Blender 内置闭包反解出来的(六轴辐照度探针),
     材质树里没有任何灯物体指针,加灯/删灯/挪灯/换色由依赖图重算闭包就完了。
@@ -145,7 +148,7 @@ def _run_material_panels(change):
 # 表就是调度策略的全部。顺序 = 注册顺序:兑现节点先接好,顶点腿再按材质真值建树,
 # 后处理最后落在合成器上(三者互不读对方产物,顺序只为报告好读)。
 STAGES = (
-    Stage("capabilities", (WORLD,), _run_capabilities),
+    Stage("capabilities", (WORLD, ENGINE), _run_capabilities),
     Stage("light-tables", (LIGHT_SET, LIGHT_VALUES), _run_light_tables),
     Stage("vertex", (OBJECTS, MATERIALS, CAMERA, RIG), _run_vertex),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
@@ -299,6 +302,7 @@ _light_values = None
 _camera = None
 _world = None
 _rig = None
+_engine = None
 
 
 def _light_set_signature(scene):
@@ -401,7 +405,8 @@ def _camera_touched(depsgraph):
 
 
 def _resnapshot(scene):
-    global _light_set, _light_values, _camera, _world, _rig
+    global _light_set, _light_values, _camera, _world, _rig, _engine
+    _engine = scene.render.engine
     _light_set = _light_set_signature(scene)
     _light_values = _light_values_signature(scene)
     _camera = _camera_signature(scene)
@@ -411,9 +416,16 @@ def _resnapshot(scene):
 
 @bpy.app.handlers.persistent
 def _on_depsgraph_update(scene, depsgraph):
-    global _light_set, _light_values, _camera, _world, _rig
+    global _light_set, _light_values, _camera, _world, _rig, _engine
     if _flushing:
         return
+    # 引擎签名是一次字符串比较,每拍都问;它不靠任何被更新的数据块判"碰没碰"。
+    # 注册时没有场景可采(启动期 register 跑在文件加载之前)的话,第一拍只采基准不算换引擎。
+    if _engine is None:
+        _engine = scene.render.engine
+    elif scene.render.engine != _engine:
+        _engine = scene.render.engine
+        _mark((ENGINE,), whole_scene=True)
     if _rig_touched(depsgraph):
         rig = _rig_signature(scene)
         if rig != _rig:
