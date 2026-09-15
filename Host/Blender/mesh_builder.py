@@ -33,6 +33,20 @@ def build_mesh_object(context, decoded, name, armature_obj, smr_bones,
     mesh.loops.add(n_tris * 3)
     mesh.polygons.add(n_tris)
     loop_verts = triangles.reshape(-1).astype(np.int32)
+    # A corner naming a vertex the mesh does not have is not a mesh Blender can
+    # refuse -- foreach_set stores whatever it is given, and the index is only
+    # read much later, when something asks for topology (vert_to_face_map), by
+    # which point it writes THROUGH that index and takes the process down with
+    # an access violation and no Python to report it. So the one place the
+    # decoder's numbers become Blender's memory is where they are checked.
+    if n_tris and (loop_verts.max() >= n_verts or loop_verts.min() < 0):
+        bad = int(((loop_verts >= n_verts) | (loop_verts < 0)).sum())
+        bpy.data.meshes.remove(mesh)
+        raise RuntimeError(
+            "'{0}' was decoded with {1} corner(s) naming vertices outside its own {2} "
+            "(index range {3}..{4}) -- refusing to build it, because Blender would not "
+            "fault until it next read the topology.".format(
+                name, bad, n_verts, int(loop_verts.min()), int(loop_verts.max())))
     mesh.loops.foreach_set("vertex_index", loop_verts)
     loop_starts = (np.arange(n_tris, dtype=np.int32) * 3)
     mesh.polygons.foreach_set("loop_start", loop_starts)
