@@ -129,9 +129,16 @@ def _place(context, row, index, built, meshes, materials, shared, rigs, options)
         obj = bpy.data.objects.new(row["name"], None)
         context.collection.objects.link(obj)
     parent = int(row["parent"])
-    top = not (0 <= parent < len(built) and built[parent] is not None)
-    if not top:
+    attached = 0 <= parent < len(built) and built[parent] is not None
+    if attached:
         obj.parent = built[parent]
+    # A row riding a rig a SIBLING component brought is not top level, whatever its
+    # attachment says: it already hangs under that armature, and the armature carries
+    # the actor's once-only top-level yaw. Converting it as a root too would apply that
+    # yaw a second time -- which is a mesh visibly rotated off the body it belongs to.
+    rig = rigs.get(index)
+    rides = rig is not None and rig[2] != index
+    top = not attached and not rides
     convert = coordinate.convert_root_matrix if top else coordinate.convert_matrix
     obj.matrix_basis = convert(coordinate.unity_trs(
         {"x": row["px"], "y": row["py"], "z": row["pz"]},
