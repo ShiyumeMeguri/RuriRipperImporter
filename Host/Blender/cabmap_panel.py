@@ -29,7 +29,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                         IntProperty, PointerProperty, StringProperty)
 
 from . import (armature_builder, cross_game_retarget, filter_ui, material_builder,
-               prefab_importer, render, rna, step_loader)
+               prefab_importer, render, rna, step_loader, unreal_importer)
 from ... import Game
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as _browser
@@ -1065,14 +1065,24 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
 
     def execute(self, context):
         state = context.scene.ruri_cabmap
-        build_state = cabmap_state.ANIMATION_BUILD_STATE
-        if build_state is None:
-            self.report({"WARNING"}, "No character discovered -- click Discover Animations first.")
-            return {"CANCELLED"}
-
         checked_keys = [item.guid for item in state.available_clips if item.selected]
         if not checked_keys:
             self.report({"WARNING"}, "No animations checked.")
+            return {"CANCELLED"}
+
+        # This engine ships no AnimationClip to export in the first place -- an
+        # AnimSequence never was one, so the closure/guid machinery below (built for
+        # a Unity clip's export) does not apply. It reads its own clips straight off
+        # the decoder (see unreal_importer.import_animations) and binds them onto
+        # whichever armature the user is working on, same as the Unity path below
+        # does through cross_game_retarget -- just without a Unity clip in between.
+        config = _active_config(state)
+        if config is not None and config.engine_family == "UnrealEngine":
+            return self._execute_unreal(context, state, checked_keys)
+
+        build_state = cabmap_state.ANIMATION_BUILD_STATE
+        if build_state is None:
+            self.report({"WARNING"}, "No character discovered -- click Discover Animations first.")
             return {"CANCELLED"}
 
         arm_obj = bpy.data.objects.get(build_state["arm_name"]) if build_state["arm_name"] else None
@@ -1234,6 +1244,33 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
         for warning in build_warnings[:5]:
             self.report({"WARNING"}, warning)
         self.report({"INFO"}, f"Built {built} animation action(s) on {arm_obj.name}.")
+        return {"FINISHED"}
+
+    def _execute_unreal(self, context, state, checked_keys):
+        """Every checked row's own sequences as actions, straight off this engine's
+        own clip curves. Each checked row is a CAB (see RURI_OT_discover_animations
+        -- there is no Unity guid for one of these to have been translated into),
+        which is the same string a 'package' argument to this engine's datasets
+        already takes, so no resolution step of our own sits in between."""
+        options = state.as_options()
+        built = 0
+        failures = []
+        for package in dict.fromkeys(checked_keys):
+            try:
+                touched = unreal_importer.import_animations(
+                    context, cabmap_state.BRIDGE, package, options)
+            except RuntimeError as exc:
+                failures.append(str(exc))
+                continue
+            if touched:
+                built += 1
+        for failure in failures[:5]:
+            self.report({"WARNING"}, failure)
+        if built == 0:
+            if not failures:
+                self.report({"WARNING"}, "The checked row(s) carry no animation sequence.")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Built action(s) from {built} package(s).")
         return {"FINISHED"}
 
 
