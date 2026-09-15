@@ -1255,19 +1255,31 @@ class RURI_OT_import_selected_animations(bpy.types.Operator):
         options = state.as_options()
         built = 0
         failures = []
+        crashed = 0
         for package in dict.fromkeys(checked_keys):
             try:
                 touched = unreal_importer.import_animations(
                     context, cabmap_state.BRIDGE, package, options)
             except RuntimeError as exc:
+                # The expected, worded conditions _import_animations itself raises
+                # (no armature selected, no rig identity) -- one line is the whole
+                # story, no traceback needed.
                 failures.append(str(exc))
+                continue
+            except Exception as exc:
+                # Anything else (a decoder/bridge failure, a missing native
+                # dependency, ...) must never vanish silently -- same two-line
+                # ERROR + console-traceback treatment the Unity path above uses,
+                # so "nothing happened" always has a reason on screen.
+                crashed += 1
+                _report_exception(self, f"'{package}' animation import failed", exc)
                 continue
             if touched:
                 built += 1
         for failure in failures[:5]:
             self.report({"WARNING"}, failure)
         if built == 0:
-            if not failures:
+            if not failures and not crashed:
                 self.report({"WARNING"}, "The checked row(s) carry no animation sequence.")
             return {"CANCELLED"}
         self.report({"INFO"}, f"Built action(s) from {built} package(s).")
