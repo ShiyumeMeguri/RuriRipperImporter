@@ -43,10 +43,11 @@ def materialise(context, packages, options=None):
         return loading.Built(warnings=["'{0}' places nothing.".format(packages.label)])
     meshes = packages.library
     materials = _build_materials(packages, options)
+    rigs = _rigs(context, rows, meshes, options)
     built = []
     shared = {}
-    for row in rows:
-        built.append(_place(context, row, built, meshes, materials, shared, options))
+    for index, row in enumerate(rows):
+        built.append(_place(context, row, index, built, meshes, materials, shared, rigs, options))
     made = [obj for obj in built if obj is not None]
     return loading.Built(armature=next((obj for obj in made if obj.type == "ARMATURE"), None),
                          imported=len(made))
@@ -110,16 +111,17 @@ def _skeleton_nodes(rows):
             for bone in rows]
 
 
-def _place(context, row, built, meshes, materials, shared, options):
+def _place(context, row, index, built, meshes, materials, shared, rigs, options):
     """One row as a Blender object: a mesh where it renders one, a light where it lights, an
     empty otherwise -- so a transform other rows hang under never disappears.
 
-    The object returned is the one that CARRIES the placement: a skinned mesh hangs under the
-    armature its weights index, so the armature is the placement and the mesh rides it.
+    The object returned is the one that CARRIES the placement: the armature for the row the rig
+    was built from (the rig stands where that component stands), the mesh itself for every other
+    row -- including the ones riding a rig a sibling component brought.
     """
     entry = meshes.get(row["mesh"])
     if entry is not None:
-        obj = _mesh_object(context, row, entry, materials, meshes, shared, options)
+        obj = _mesh_object(context, row, index, entry, materials, meshes, shared, rigs, options)
     elif row["light"]:
         obj = _light_object(row)
         context.collection.objects.link(obj)
@@ -140,7 +142,49 @@ def _place(context, row, built, meshes, materials, shared, options):
     return obj
 
 
-def _mesh_object(context, row, entry, materials, meshes, shared, options):
+def _rigs(context, rows, meshes, options):
+    """Which armature drives each skinned row: ``{row index: (armature, {stated bone: built
+    bone}, owner row)}``, one armature per (actor, skeleton) rather than one per mesh.
+
+    A character is not one mesh. The build wears a body, a head state and a hair on ONE
+    skeleton, each its own component, and every one of them indexes the SAME reference
+    skeleton -- so a rig per component is three copies of one skeleton with the character torn
+    between them, which is not what the actor is. The actor is the boundary: components of one
+    actor whose bones a single skeleton covers share that skeleton's armature; a second actor's
+    identical skeleton is a second character and gets its own, which is why the row's own actor
+    (never its attachment -- a Blueprint's components can all sit at the top) decides it.
+
+    The fullest skeleton in a group is the one built, so a component naming fewer bones rides the
+    complete rig rather than forcing a second one; ties go to the heaviest mesh, which is the
+    body, so the armature reads as the character rather than as whichever component came first.
+    """
+    if not options.get("import_skeleton", True):
+        return {}
+    skinned = {}
+    for index, row in enumerate(rows):
+        entry = meshes.get(row["mesh"])
+        if entry is not None and entry[3]:
+            skinned.setdefault(int(row.get("actor", 0) or 0), []).append((index, entry))
+    rigs = {}
+    for actor in sorted(skinned):
+        chosen = []
+        for index, entry in sorted(skinned[actor],
+                                   key=lambda pair: (-len(pair[1][3]), -len(pair[1][0].positions))):
+            stated = {bone["name"] for bone in entry[3]}
+            rig = next((held for held, covered in chosen if stated <= covered), None)
+            if rig is None:
+                armature, built = armature_builder.build_armature_from_nodes(
+                    context, _skeleton_nodes(entry[3]), rows[index]["name"] + "_Armature")
+                rig = (armature,
+                       {bone["name"]: built.get(at, bone["name"])
+                        for at, bone in enumerate(entry[3])},
+                       index)
+                chosen.append((rig, stated))
+            rigs[index] = rig
+    return rigs
+
+
+def _mesh_object(context, row, index, entry, materials, meshes, shared, rigs, options):
     """A placement that renders a mesh: the mesh with its slots, and -- when it is skinned --
     the armature its weights index, with the mesh parented to it.
 
@@ -148,17 +192,17 @@ def _mesh_object(context, row, entry, materials, meshes, shared, options):
     over 56 distinct meshes, so building a fresh mesh per placement writes the same 215k
     vertices 5.47 MILLION times over. A placement that renders the same mesh with the same
     materials as one already built gets an object over the SAME mesh datablock -- Blender's own
-    linked duplicate, which is what the engine does with them too. Skinned placements are not
-    shared: their weights live in vertex groups on the object, and their armature is their own.
+    linked duplicate, which is what the engine does with them too. Skinned placements keep their
+    own mesh (their weights live in vertex groups on the object) but NOT their own armature: the
+    rig they ride is whichever one their actor's skeleton was built into (see :func:`_rigs`).
 
     Returns whichever of the two the placement's own transform belongs on.
     """
-    decoded, _own, bones, skeleton = entry
-    nodes = _skeleton_nodes(skeleton) if skeleton else []
+    decoded, _own, bones, _skeleton = entry
     paths = loading.slot_paths(row, meshes)
     slots = [materials.get(path) for path in paths]
-    skinned = bool(nodes) and options.get("import_skeleton", True)
-    if not skinned:
+    rig = rigs.get(index)
+    if rig is None:
         key = (row["mesh"], tuple(paths))
         existing = shared.get(key)
         if existing is not None:
@@ -167,18 +211,20 @@ def _mesh_object(context, row, entry, materials, meshes, shared, options):
             derived_state.announce(obj)
             return obj
     armature = None
-    if skinned:
-        armature, names = armature_builder.build_armature_from_nodes(
-            context, nodes, row["name"] + "_Armature")
-        bones = [names.get(index, bone) for index, bone in enumerate(bones)]
+    if rig is not None:
+        armature, names, owner = rig
+        # By NAME, not by index: the rig may have been built from a SIBLING component's
+        # skeleton, whose bone order is its own.
+        bones = [names.get(bone, bone) for bone in bones]
     mesh = mesh_builder.build_mesh_object(
         context, decoded, row["name"], armature,
         [{"fileID": bone} for bone in bones],
         {bone: bone for bone in bones},
         slots, options)
-    if not skinned:
+    if rig is None:
         shared[(row["mesh"], tuple(paths))] = mesh.data
-    return armature if armature is not None else mesh
+        return mesh
+    return armature if owner == index else mesh
 
 
 def _light_object(row):
