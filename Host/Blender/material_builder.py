@@ -254,26 +254,31 @@ def rewire_capabilities(materials=None):
                if mat is not None and any(rewire(mat) for rewire in CAPABILITY_REWIRES))
 
 
-# ---- Light tables refresh, same registry contract ----
-# Where a rewire rebuilds fulfilment NODES, this only rewrites the light table's
-# PIXELS. The split is not an optimisation, it is what actually changed: moving
-# or recolouring a light changes table contents; adding or removing one can
-# change the graph itself (zero lights takes a different fulfilment branch).
-LIGHT_TABLE_REFRESHERS = []
+# ---- Light role refresh, same registry contract ----
+# A rewire rebuilds fulfilment NODES; this only re-stamps WHICH LIGHT IS THE MAIN
+# ONE -- a per-light custom property the host's own light loop reads. No CPU-written
+# texture stands in for lights any more, so a light that moves costs the shading
+# nothing: the host re-renders, and no material is invalidated.
+LIGHT_ROLE_REFRESHERS = []
 
 
-def register_light_table_refresh(refresh):
-    if refresh not in LIGHT_TABLE_REFRESHERS:
-        LIGHT_TABLE_REFRESHERS.append(refresh)
+def register_light_role_refresh(refresh):
+    if refresh not in LIGHT_ROLE_REFRESHERS:
+        LIGHT_ROLE_REFRESHERS.append(refresh)
 
 
-def unregister_light_table_refresh(refresh):
-    if refresh in LIGHT_TABLE_REFRESHERS:
-        LIGHT_TABLE_REFRESHERS.remove(refresh)
+def unregister_light_role_refresh(refresh):
+    if refresh in LIGHT_ROLE_REFRESHERS:
+        LIGHT_ROLE_REFRESHERS.remove(refresh)
 
 
-def refresh_light_tables():
-    return sum(refresh() for refresh in LIGHT_TABLE_REFRESHERS)
+def refresh_light_roles():
+    """Re-stamp the main-light role. Unlike the rewire and vertex registries there is
+    nothing per-material to count here -- each shading stack re-picks ONE light -- so the
+    report counts the refreshers that ran and ignores what they hand back."""
+    for refresh in LIGHT_ROLE_REFRESHERS:
+        refresh()
+    return len(LIGHT_ROLE_REFRESHERS)
 
 
 # 灯变了谁去重接 —— 不在这里。本模块只拥有「有哪些派生态能力」(上面四张注册表);

@@ -1,7 +1,7 @@
 """场景派生态的唯一调度器 —— 「什么时候重建 Ruri 生成的场景衍生物」只在这里回答一次。
 
 派生态 = 不是从资产直接读出来、而是**由场景真值算出来**的东西:顶点腿(壳层位移 /
-反壳描边 / 脸部骨骼基座)、材质的环境查询兑现节点、灯表像素、合成器后处理链。
+反壳描边 / 脸部骨骼基座)、材质的环境查询兑现节点、主光身份、合成器后处理链。
 它们的共同点是「输入变了就必须重算,不重算画面静默错」。
 
 ## 为什么不是各导入路径自己调 apply_xxx
@@ -27,7 +27,7 @@
   这里只认注册表,不认任何游戏)。
 
 阶段本体不在这里:生成的着色栈自己 `register_vertex_stage` / `register_capability_rewire`
-/ `register_light_table_refresh` / `register_post_stage`(那是生成器拥有的契约)。本模块
+/ `register_light_role_refresh` / `register_post_stage`(那是生成器拥有的契约)。本模块
 只拥有**时机**:谁在什么变更下跑、跑在哪个范围上。
 
 ## 时机是空闲态,不是操作符结束
@@ -50,11 +50,11 @@ from . import material_builder
 OBJECTS = "objects"            # 有新对象进场
 MATERIALS = "materials"        # 有新材质进场
 CAMERA = "camera"              # 活动相机的身份/位姿/投影/输出分辨率
-LIGHT_SET = "light_set"        # 灯的增删/类型/可见性(生成栈的灯表:改像素即生效,零重接)
-LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(同上,表像素)
+LIGHT_SET = "light_set"        # 灯的增删/类型/可见性(只影响谁是主光,零重接)
+LIGHT_VALUES = "light_values"  # 灯的位姿/颜色/强度/锥角(宿主自己读灯,这里只重挑主光)
 WORLD = "world"                # 世界被换(环境采样是建组时快照,只有这件事还要重接兑现面)
 RIG = "rig"                    # 骨架的骨骼名册变了(顶点腿的骨骼基座按名字接进几何节点)
-ENGINE = "engine"              # 渲染引擎被换(表面闭包与能力答案按引擎建:EEVEE 走原生灯节点,其余走灯表)
+ENGINE = "engine"              # 渲染引擎被换(表面闭包与能力答案按引擎建;灯只有宿主自己的原生灯节点)
 
 ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, LIGHT_SET, LIGHT_VALUES, WORLD, RIG, ENGINE))
 
@@ -107,8 +107,8 @@ def _run_capabilities(change):
     **渲染引擎被换**(表面闭包与能力答案按引擎建,EEVEE 的 Light Accumulation 到别的引擎是
     空闭包,别的引擎的 Emission 回到 EEVEE 则灯链非法 —— 两个方向都是整场全黑)。
 
-    灯**一概不进这条路** —— 缺省主光是从 Blender 内置闭包反解出来的(六轴辐照度探针),
-    材质树里没有任何灯物体指针,加灯/删灯/挪灯/换色由依赖图重算闭包就完了。
+    灯**一概不进这条路** —— 材质树读的是宿主自己的原生灯节点,加灯/删灯/挪灯/换色由
+    宿主的光循环自己吃掉;这边只在灯集合变化时重挑主光身份(light-roles 阶段)。
     唯一还绑灯的是用户主动指定的逐角色覆盖灯,由设置它的算子对那一张材质单独重接。
 
     这条纪律的理由是量出来的:重接是 O(材质 × 树),单张 NPR 角色材质 ~0.8s、24 张 20 秒。
@@ -117,8 +117,10 @@ def _run_capabilities(change):
     return material_builder.rewire_capabilities(scope)
 
 
-def _run_light_tables(_change):
-    return material_builder.refresh_light_tables()
+def _run_light_roles(_change):
+    """主光身份重刷。灯的增删/位姿/颜色都走这条 —— 它只改灯上的一个自定义属性,
+    宿主的光循环下一帧就按新身份走;没有任何 CPU 写纹理,所以挪灯不再拖着材质重求值。"""
+    return material_builder.refresh_light_roles()
 
 
 def _run_vertex(change):
@@ -149,7 +151,7 @@ def _run_material_panels(change):
 # 后处理最后落在合成器上(三者互不读对方产物,顺序只为报告好读)。
 STAGES = (
     Stage("capabilities", (WORLD, ENGINE), _run_capabilities),
-    Stage("light-tables", (LIGHT_SET, LIGHT_VALUES), _run_light_tables),
+    Stage("light-roles", (LIGHT_SET, LIGHT_VALUES), _run_light_roles),
     Stage("vertex", (OBJECTS, MATERIALS, CAMERA, RIG), _run_vertex),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
