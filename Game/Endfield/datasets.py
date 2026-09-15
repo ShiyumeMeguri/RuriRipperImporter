@@ -102,9 +102,10 @@ POST_MODEL = "postmodel"
 UI_MODEL = "uimodel"
 
 
-def language_for_locale(locale):
+def language_for_locale(locale=""):
     """The game language a host locale reads as. Which languages exist, and which
-    locale lands on which, are the game's own facts."""
+    locale lands on which, are the game's own facts; WHICH locale that is, is the
+    session's -- stating nothing here asks about the language the host declared."""
     rows = _rows(LANGUAGE, locale=str(locale or ""))
     return rows[0]["language"] if rows else ""
 

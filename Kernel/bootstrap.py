@@ -50,6 +50,7 @@ def configure():
     pythonnet_bridge.set_bin_dir(host.bin_dir())
     pythonnet_bridge.set_bin_dir_hint(host.bin_dir_hint())
     pythonnet_bridge.set_texture_formats(tuple(host.texture_containers()))
+    pythonnet_bridge.set_locale(host.locale())
 
     try:
         pythonnet_bridge.claim_runtime_early()
@@ -68,3 +69,4 @@ def republish_paths():
     typed them once."""
     host = host_port.current()
     pythonnet_bridge.set_bin_dir(host.bin_dir())
+    pythonnet_bridge.set_locale(host.locale())

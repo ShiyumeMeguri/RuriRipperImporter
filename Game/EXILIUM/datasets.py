@@ -39,7 +39,7 @@ def _rows(dataset_id, **args):
             for index in range(len(table))]
 
 
-def language_for_locale(locale):
+def language_for_locale(locale=""):
     """The text package a host locale reads through. Which packages exist, and
     which locale lands on which, are the game's own facts."""
     rows = _rows(LANGUAGE, locale=str(locale or ""))

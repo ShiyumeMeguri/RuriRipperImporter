@@ -459,6 +459,16 @@ def set_source_options(options):
     _bridge_type.SetSourceOptions(_string_array(flat))
 
 
+def set_locale(locale):
+    """State the language the HOST is showing its user, as that host names it
+    ("en_US", "ja_JP", "zh_CN"). The application's own UI language, never the
+    machine's: a decoder that joins a roster to its text reads it off the session,
+    so switching the application's language switches every roster and nothing else
+    has to be told. Pushing the same value again is free."""
+    _ensure_runtime()
+    _bridge_type.SetLocale(str(locale or ""))
+
+
 def _string_array(strings):
     """pythonnet does not auto-marshal a plain Python list to
     IEnumerable<string>/string[] -- build a real System.String[] explicitly."""

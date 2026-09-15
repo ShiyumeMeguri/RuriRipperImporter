@@ -72,9 +72,12 @@ def detail_level(context):
 
 
 def language(state):
-    """The game language this roster is shown in -- the host's own locale, mapped
-    onto the languages the game ships."""
-    return datasets.language_for_locale(host_port.current().locale())
+    """The game language this roster is shown in.
+
+    Which language the HOST reads in is a session fact, stated once when the driver
+    came up and restated when it changes -- so this asks only the game-specific half:
+    which of the languages this game ships does that locale read as."""
+    return datasets.language_for_locale("")
 
 
 def rows(state):

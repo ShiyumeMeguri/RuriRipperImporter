@@ -73,7 +73,7 @@ FILTER_SPEC = filtering.register_spec(filtering.FilterSpec(
 # The rows
 # ---------------------------------------------------------------------------
 def language(state):
-    return datasets.language_for_locale(host_port.current().locale())
+    return datasets.language_for_locale("")
 
 
 def rows(state):

@@ -255,7 +255,7 @@ def _has_selection(context):
 def _language():
     """The game language these lists are shown in -- the host application's own
     locale, mapped onto the languages the game ships."""
-    return datasets.language_for_locale(host_port.current().locale())
+    return datasets.language_for_locale("")
 
 
 def _refresh(context, arguments):

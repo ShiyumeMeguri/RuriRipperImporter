@@ -112,7 +112,7 @@ def _language():
     """The game language this tab is shown in -- Blender's own locale, mapped onto
     the languages the game ships. Same rule as every other list in this add-on, so
     switching Blender's language switches the story with it."""
-    return datasets.language_for_locale(host_port.current().locale())
+    return datasets.language_for_locale("")
 
 
 def _top_table(state):
