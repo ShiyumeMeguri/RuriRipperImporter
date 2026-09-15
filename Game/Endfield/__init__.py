@@ -42,7 +42,6 @@ import importlib
 from ...Kernel import host as host_port
 from ...Kernel.app import look
 from .. import GameModule, GameSection, GameTab
-from . import shader
 
 #: The parts the two tabs are composed of, each with the capability its host must
 #: answer, or None for one every host can offer. This is the ONE statement of it:
@@ -66,14 +65,9 @@ def _register():
                   for one in SECTIONS if one.available]
     for module in _LOADED:
         module.register()
-    # CharacterNPR materials build as generated Ruri Uber node groups instead of
-    # the host's Principled fallback -- a graph provider, so the host core stays
-    # game-blind (see shader/__init__ and material_builder.GRAPH_PROVIDERS).
-    shader.register()
 
 
 def _unregister():
-    shader.unregister()
     for module in reversed(_LOADED):
         module.unregister()
     _LOADED[:] = []

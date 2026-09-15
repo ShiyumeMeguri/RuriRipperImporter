@@ -27,13 +27,23 @@ decodes ONE game at a time, so switching tabs re-selects the decoder
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 import pkgutil
 
 # What a subpackage must expose to be a game module at all.
 _DECLARATION = "GAME_MODULE"
 
+# The generated shading a game folder may carry, as the generator writes it
+# (``Kernel.shaderstack``). A stack is per GAME, a module is per PANEL SET, and the two
+# do not have to line up: one engine family draws every one of its titles' panels out of
+# a single module (see SBUE), while each of those titles shades differently and so ships
+# its own stack. So stacks are found by the folder, not by the module -- a folder with a
+# stack and no GAME_MODULE is an ordinary case, not an oversight.
+_STACK_PACKAGE = "shader"
+
 _MODULES = []
+_STACKS = []
 
 
 class GameTab:
@@ -251,13 +261,21 @@ def discover():
     A subpackage declaring none simply is not a game module. It may declare SEVERAL:
     a family of titles that are the same game rebuilt shares one panel, and stating
     them as four modules out of one folder is what keeps that folder free of
-    per-title code while each title still gets its own identity, tabs and session."""
-    global _MODULES
+    per-title code while each title still gets its own identity, tabs and session.
+
+    The same walk picks up the generated shading each folder carries, for the same
+    reason the modules are picked up here: which titles exist is the folder listing,
+    and nowhere else names one."""
+    global _MODULES, _STACKS
     found = []
+    stacks = []
     for entry in pkgutil.iter_modules(__path__):
         if not entry.ispkg:
             continue
         package = importlib.import_module("{0}.{1}".format(__name__, entry.name))
+        if importlib.util.find_spec("." + _STACK_PACKAGE, package.__name__) is not None:
+            stacks.append(importlib.import_module(
+                "{0}.{1}".format(package.__name__, _STACK_PACKAGE)))
         declared = getattr(package, _DECLARATION, None)
         for module in (declared if isinstance(declared, (list, tuple)) else [declared]):
             if isinstance(module, GameModule):
@@ -266,6 +284,7 @@ def discover():
                 found.append(module)
     found.sort(key=lambda game: game.game_name.lower())
     _MODULES = found
+    _STACKS = stacks
     return _MODULES
 
 
@@ -344,10 +363,18 @@ def tabs_of(game_name, engine=""):
 def register():
     for game in discover():
         game.register()
+    # 生成的着色栈自己往宿主的注册表里挂 provider,核心一个游戏名都不认识
+    # (见 material_builder.GRAPH_PROVIDERS)。挂哪几套按文件夹认,所以一个游戏的栈
+    # 上不上场与它有没有面板模块无关 —— 鸣潮的面板是引擎家族那一份画的,栈是它自己的。
+    for stack in _STACKS:
+        stack.register()
 
 
 def unregister():
-    global _MODULES
+    global _MODULES, _STACKS
+    for stack in reversed(_STACKS):
+        stack.unregister()
+    _STACKS = []
     for game in reversed(_MODULES):
         game.unregister()
     _MODULES = []
