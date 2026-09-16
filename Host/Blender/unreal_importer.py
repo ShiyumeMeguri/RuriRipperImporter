@@ -21,12 +21,39 @@ from mathutils import Quaternion, Vector
 from . import (animation_builder, armature_builder, coordinate, derived_state,
                material_builder, mesh_builder, prefab_importer)
 from ...Kernel.app import loading
+from ...RuriRipperPyBridge.session import cabmap_state
 from ...RuriRipperPyBridge.unreal import direct
 
 # Blender's own name for each light kind the decoder states.
 LIGHT_KINDS = {"spot": "SPOT", "directional": "SUN", "point": "POINT", "area": "AREA"}
 
 _DEGREES = 0.017453292519943295
+
+#: The dataset that says what this install is, including which way its cast's own
+#: asset space faces -- already crossed through the decoder's basis, so the host
+#: never has to know Unreal's axes.
+SESSION = "unreal.session"
+
+
+def _character_forward():
+    """Which way this build's characters face in their OWN space, or None when the
+    install states nothing and Unity's +Z is the honest answer.
+
+    A placed actor needs no such statement -- its component transform turns the
+    mesh. A character imported as a bare skeletal mesh has no component, so the
+    build itself is the only thing that can say."""
+    bridge = cabmap_state.BRIDGE
+    if bridge is None:
+        return None
+    table = bridge.game_data(SESSION)
+    if len(table) < 1:
+        return None
+    try:
+        return (float(table.values("characterForwardX")[0]),
+                float(table.values("characterForwardY")[0]),
+                float(table.values("characterForwardZ")[0]))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
 
 
 def materialise(context, packages, options=None):
@@ -43,11 +70,13 @@ def materialise(context, packages, options=None):
         return loading.Built(warnings=["'{0}' places nothing.".format(packages.label)])
     meshes = packages.library
     materials = _build_materials(packages, options)
-    rigs = _rigs(context, rows, meshes, options)
+    forward = _character_forward()
+    rigs = _rigs(context, rows, meshes, options, forward)
     built = []
     shared = {}
     for index, row in enumerate(rows):
-        built.append(_place(context, row, index, built, meshes, materials, shared, rigs, options))
+        built.append(_place(context, row, index, built, meshes, materials, shared, rigs,
+                            options, forward))
     made = [obj for obj in built if obj is not None]
     return loading.Built(armature=next((obj for obj in made if obj.type == "ARMATURE"), None),
                          imported=len(made))
@@ -111,7 +140,7 @@ def _skeleton_nodes(rows):
             for bone in rows]
 
 
-def _place(context, row, index, built, meshes, materials, shared, rigs, options):
+def _place(context, row, index, built, meshes, materials, shared, rigs, options, source_forward=None):
     """One row as a Blender object: a mesh where it renders one, a light where it lights, an
     empty otherwise -- so a transform other rows hang under never disappears.
 
@@ -139,7 +168,8 @@ def _place(context, row, index, built, meshes, materials, shared, rigs, options)
     rig = rigs.get(index)
     rides = rig is not None and rig[2] != index
     top = not attached and not rides
-    convert = coordinate.convert_root_matrix if top else coordinate.convert_matrix
+    convert = ((lambda matrix: coordinate.convert_root_matrix(matrix, source_forward))
+               if top else coordinate.convert_matrix)
     obj.matrix_basis = convert(coordinate.unity_trs(
         {"x": row["px"], "y": row["py"], "z": row["pz"]},
         {"x": row["qx"], "y": row["qy"], "z": row["qz"], "w": row["qw"]},
@@ -149,7 +179,7 @@ def _place(context, row, index, built, meshes, materials, shared, rigs, options)
     return obj
 
 
-def _rigs(context, rows, meshes, options):
+def _rigs(context, rows, meshes, options, source_forward=None):
     """Which armature drives each skinned row: ``{row index: (armature, {stated bone: built
     bone}, owner row)}``, one armature per (actor, skeleton) rather than one per mesh.
 
@@ -181,7 +211,8 @@ def _rigs(context, rows, meshes, options):
             rig = next((held for held, covered in chosen if stated <= covered), None)
             if rig is None:
                 armature, built = armature_builder.build_armature_from_nodes(
-                    context, _skeleton_nodes(entry[3]), rows[index]["name"] + "_Armature")
+                    context, _skeleton_nodes(entry[3]), rows[index]["name"] + "_Armature",
+                    source_forward=source_forward)
                 rig = (armature,
                        {bone["name"]: built.get(at, bone["name"])
                         for at, bone in enumerate(entry[3])},

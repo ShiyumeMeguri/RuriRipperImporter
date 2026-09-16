@@ -42,18 +42,24 @@ def convert_matrix(unity_matrix):
     return _as_matrix(SPACE.convert_matrix(unity_matrix))
 
 
-def convert_root_matrix(unity_matrix):
+def convert_root_matrix(unity_matrix, source_forward=None):
     """convert_matrix plus the once-only top-level yaw R -- for a top-level
     import object's world matrix ONLY (prefab root, standalone static mesh,
-    rebuilt-skeleton armature, scene placement). An identity input yields R."""
-    return _as_matrix(SPACE.convert_root_matrix(unity_matrix))
+    rebuilt-skeleton armature, scene placement). An identity input yields R.
+
+    ``source_forward`` is which way the SOURCE's asset space faces, in the basis
+    every decoded coordinate crosses in. Left out, it is Unity's own +Z, which is
+    what every caller meant before any source stated otherwise."""
+    return _as_matrix(SPACE.convert_root_matrix(unity_matrix, source_forward))
 
 
-def root_matrix():
+def root_matrix(source_forward=None):
     """The top-level yaw R alone (convert_root_matrix of the identity), as a
     Matrix -- for setting a rebuilt armature OBJECT whose bones already sit in
     Blender space."""
-    return _as_matrix(SPACE.root_rotation)
+    if source_forward is None:
+        return _as_matrix(SPACE.root_rotation)
+    return _as_matrix(SPACE.root_rotation_for(source_forward))
 
 
 def unity_trs(position, rotation, scale):

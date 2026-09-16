@@ -295,7 +295,7 @@ def build_armature_from_avatar(context, avatar_file, name="Avatar"):
     return arm_obj
 
 
-def build_armature_from_nodes(context, raw_nodes, name="Armature"):
+def build_armature_from_nodes(context, raw_nodes, name="Armature", source_forward=None):
     """Build a Blender armature from a reference skeleton already read.
 
     ``raw_nodes`` is ``(bone name, parent index, translation, rotation, path)`` per bone in the
@@ -381,8 +381,10 @@ def build_armature_from_nodes(context, raw_nodes, name="Armature"):
     index_to_bone_name = {index: eb.name for index, eb in index_to_editbone.items()}
     bpy.ops.object.mode_set(mode="OBJECT")
     # A standalone avatar import is always top-level: the root yaw rides on the
-    # armature object, leaving every bone in pure-C armature space.
-    arm_obj.matrix_world = coordinate.root_matrix()
+    # armature object, leaving every bone in pure-C armature space. How far that
+    # yaw turns depends on which way the SOURCE's asset space faces -- an engine
+    # states where its axes point, not which way a studio modelled its cast.
+    arm_obj.matrix_world = coordinate.root_matrix(source_forward)
 
     # The same rig identity build_armature stamps, sourced from the avatar's
     # own tables: TOS full path -> (bone, SkeletonPose local rest). A node TOS

@@ -46,34 +46,59 @@ def _reflection(matrix3):
     return out
 
 
-# 180-degree yaw about the up axis, as a 4x4 (determinant +1). Unity's asset
-# faces +Z; after the Y<->Z swap that lands on Blender +Y, but Blender's front is
-# -Y, so a top-level object is turned by this to face the viewer. Kept separate
-# from the reflection C, which must stay an involution -- a yaw folded into C
-# would break C @ C == I.
-_ROOT_YAW_180 = _reflection(((-1.0, 0.0, 0.0),
-                             (0.0, -1.0, 0.0),
-                             (0.0, 0.0, 1.0)))
+#: Which way a Unity asset's own space faces. Unity states it: a transform's
+#: forward is +Z, and a character authored to be used without a turn faces it.
+UNITY_FORWARD = (0.0, 0.0, 1.0)
+
+
+def _yaw_between(facing, target, up):
+    """The rotation about ``up`` that turns ``facing`` onto ``target``, as a 4x4.
+
+    Both are flattened onto the plane perpendicular to ``up`` first: a top-level
+    import is turned about the up axis and about nothing else, whatever tilt the
+    asset's stated forward carries. A forward parallel to up states no yaw at
+    all, and the identity is the honest answer to that."""
+    up = np.asarray(up, dtype=np.float64)
+    out = np.eye(4, dtype=np.float64)
+    flat = []
+    for vector in (facing, target):
+        vector = np.asarray(vector, dtype=np.float64)
+        vector = vector - np.dot(vector, up) * up
+        norm = float(np.linalg.norm(vector))
+        if norm < 1e-9:
+            return out
+        flat.append(vector / norm)
+    cosine = float(np.dot(flat[0], flat[1]))
+    sine = float(np.dot(np.cross(flat[0], flat[1]), up))
+    cross = np.array([[0.0, -up[2], up[1]],
+                      [up[2], 0.0, -up[0]],
+                      [-up[1], up[0], 0.0]], dtype=np.float64)
+    out[:3, :3] = (np.eye(3) * cosine) + (cross * sine) + (np.outer(up, up) * (1.0 - cosine))
+    return out
 
 
 class Space:
     """One Unity -> target conversion. Immutable; construct the module-level
     constants below rather than one of these per call."""
 
-    __slots__ = ("name", "matrix", "flip_v", "root_rotation", "_matrix3",
-                 "_perm", "_signs", "_determinant")
+    __slots__ = ("name", "matrix", "flip_v", "front", "up", "root_rotation",
+                 "_matrix3", "_perm", "_signs", "_determinant")
 
-    def __init__(self, name, matrix3, flip_v, root_rotation=None):
+    def __init__(self, name, matrix3, flip_v, front=None, up=None):
         self.name = name
         self.matrix = _reflection(matrix3)
         self.flip_v = bool(flip_v)
-        # Applied once to a top-level import object's world matrix, never to
-        # bones, vertices or nested children (see convert_root_matrix).
-        self.root_rotation = (np.eye(4, dtype=np.float64) if root_rotation is None
-                              else np.asarray(root_rotation, dtype=np.float64))
+        #: Where this space's own front and up point, in its own axes. A target
+        #: states them; nothing about the SOURCE belongs here.
+        self.front = np.asarray(front if front is not None else (0.0, 0.0, 1.0), dtype=np.float64)
+        self.up = np.asarray(up if up is not None else (0.0, 1.0, 0.0), dtype=np.float64)
         self._matrix3 = self.matrix[:3, :3]
         self._determinant = float(np.linalg.det(self._matrix3))
         self._perm, self._signs = _signed_permutation(self._matrix3)
+        # Applied once to a top-level import object's world matrix, never to
+        # bones, vertices or nested children (see convert_root_matrix). Derived
+        # from where a UNITY asset faces, so the default is what it always was.
+        self.root_rotation = self.root_rotation_for(UNITY_FORWARD)
 
     def __repr__(self):
         return "<Space {0}>".format(self.name)
@@ -98,15 +123,30 @@ class Space:
 
     # -- conversions --------------------------------------------------------
 
+    def root_rotation_for(self, source_forward):
+        """The once-only top-level yaw for an asset whose OWN space faces
+        ``source_forward`` (stated in Unity axes, the basis every source crosses in).
+
+        An engine states where its axes point; it does not state which way a studio
+        modelled its cast. Unity's transform forward is +Z and that is the default,
+        which reproduces the fixed 180-degree turn this used to carry. A source that
+        hands over a different facing -- an Unreal skeletal mesh has no component
+        transform to turn it, so the build itself has to say -- gets the turn that
+        actually lands it on this space's front."""
+        return _yaw_between(self._matrix3 @ np.asarray(source_forward, dtype=np.float64),
+                            self.front, self.up)
+
     def convert_matrix(self, unity_matrix):
         """Conjugate a Unity 4x4 into this space: ``C @ M @ C`` (float64)."""
         return self.matrix @ np.asarray(unity_matrix, dtype=np.float64) @ self.matrix
 
-    def convert_root_matrix(self, unity_matrix):
+    def convert_root_matrix(self, unity_matrix, source_forward=None):
         """convert_matrix plus the once-only top-level yaw: ``R @ C @ M @ C``.
         For a top-level import object only; det(R) = +1 so winding and tangents
         are untouched. An identity input yields R itself."""
-        return self.root_rotation @ self.convert_matrix(unity_matrix)
+        rotation = (self.root_rotation if source_forward is None
+                    else self.root_rotation_for(source_forward))
+        return rotation @ self.convert_matrix(unity_matrix)
 
     def convert_matrices(self, unity_matrices):
         """convert_matrix over an (n, 4, 4) stack in one broadcast matmul --
@@ -191,18 +231,21 @@ def _signed_permutation(matrix3):
     return tuple(perm), np.asarray(signs, dtype=np.float32)
 
 
-# 4x4 reflection swapping Y and Z (its own inverse). The top-level yaw turns the
-# converted asset to face Blender's -Y front.
+# 4x4 reflection swapping Y and Z (its own inverse). Blender is Z up and its
+# front view looks from -Y, so a character facing the viewer faces -Y; the
+# top-level yaw turns the converted asset onto it.
 BLENDER = Space("blender", ((1.0, 0.0, 0.0),
                             (0.0, 0.0, 1.0),
                             (0.0, 1.0, 0.0)), flip_v=False,
-                root_rotation=_ROOT_YAW_180)
+                front=(0.0, -1.0, 0.0), up=(0.0, 0.0, 1.0))
 
-# 4x4 reflection negating X (its own inverse). glTF's own -X negation already
-# leaves the model facing the viewer, so its top-level rotation is the identity.
+# 4x4 reflection negating X (its own inverse). glTF is Y up and its viewers look
+# down -Z, so the front a model should face is +Z -- which a Unity asset's own
+# +Z already lands on through this reflection, leaving the turn at identity.
 GLTF = Space("gltf", ((-1.0, 0.0, 0.0),
                       (0.0, 1.0, 0.0),
-                      (0.0, 0.0, 1.0)), flip_v=True)
+                      (0.0, 0.0, 1.0)), flip_v=True,
+             front=(0.0, 0.0, 1.0), up=(0.0, 1.0, 0.0))
 
 SPACES = {space.name: space for space in (BLENDER, GLTF)}
 
