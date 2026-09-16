@@ -213,6 +213,21 @@ class Host(abc.ABC):
         it); the host resolves its own when given none. ``report`` collects
         lines for the user. Returns :class:`Kernel.app.loading.Built`."""
 
+    def import_performance(self, context, package, options=None):
+        """Put whatever performance one package holds onto the rig in front of
+        the user; return how many it built.
+
+        The counterpart to :meth:`import_packages` for a package that PLACES
+        nothing. A build states those separately -- a sequence is not a thing in
+        a scene, it is something a thing does -- so a row holding only animation
+        reaches a host here rather than through the placement road, which would
+        correctly report that it placed nothing and stop.
+
+        Not abstract, and answers 0 by default: a host with no timeline (see
+        :data:`ANIMATION`) has nowhere to put a performance, and that is an
+        answer rather than a missing implementation."""
+        return 0
+
     @abc.abstractmethod
     def clear_scene(self, context):
         """Empty the document before an import puts something new in it -- what

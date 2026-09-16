@@ -221,6 +221,16 @@ class BlenderHost(host_port.Host):
                 packages.cabs, export_class_ids=list(packages.export_class_ids) or None)
         return materialiser.materialise(context, packages, resolved, options, report)
 
+    def import_performance(self, context, package, options=None):
+        from ...RuriRipperPyBridge.session import cabmap_state
+        from . import prefab_importer, unreal_importer
+        if cabmap_state.BRIDGE is None:
+            return 0
+        built = unreal_importer.import_animations(
+            context, cabmap_state.BRIDGE, package,
+            prefab_importer.resolve_options(options))
+        return len(built or ())
+
 
 #: Bound BEFORE this driver's own modules are imported, and long before
 #: register(): the option schema a module reads at import is the schema for THIS

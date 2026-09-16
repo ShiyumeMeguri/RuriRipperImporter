@@ -65,12 +65,18 @@ def _import_packages(context, packages, options):
     """
     from ...Kernel import host as host_port
     from . import read
+    host = host_port.current()
     built = 0
     for package in dict.fromkeys(packages):
         stated = read.package(package, package, options)
         if stated is None:
+            # Placing nothing is not holding nothing: a sequence is something a
+            # thing DOES, so the build files it apart from the things it places.
+            # Reporting "built nothing" here is what made every animation row in
+            # the browser a button that did nothing at all.
+            built += host.import_performance(context, package, options)
             continue
-        built += host_port.current().import_packages(context, stated, options).imported
+        built += host.import_packages(context, stated, options).imported
     return built
 
 
