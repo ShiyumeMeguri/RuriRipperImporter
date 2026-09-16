@@ -1774,8 +1774,10 @@ def _import_selected(context, arguments):
         except Exception as exc:
             _report_exception(context, "Import failed", exc)
             return
+        # A module's importer answers HOW MANY it built, not what -- what it built
+        # belongs to the document by then, not to this announcement.
         _announce(context, "{0} object(s) from {1} package(s).".format(
-            len(built), len(packages)) if built else
+            built, len(packages)) if built else
             "The {0} selected package(s) built nothing.".format(len(packages)),
             host_port.INFO if built else host_port.WARNING)
         _redraw_all(context)
