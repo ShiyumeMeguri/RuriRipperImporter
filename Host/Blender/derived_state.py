@@ -1,8 +1,19 @@
 """场景派生态的唯一调度器 —— 「什么时候重建 Ruri 生成的场景衍生物」只在这里回答一次。
 
-派生态 = 不是从资产直接读出来、而是**由场景真值算出来**的东西:顶点腿(壳层位移 /
-反壳描边 / 脸部骨骼基座)、材质的环境查询兑现节点、主光身份、合成器后处理链。
-它们的共同点是「输入变了就必须重算,不重算画面静默错」。
+派生态 = 不是从资产直接读出来、而是**由场景真值算出来**的东西:顶点腿的拓扑(壳层位移 /
+反壳描边)、它那几格相机 uniform、脸部骨骼基座、材质的环境查询兑现节点、主光身份、
+合成器后处理链。它们的共同点是「输入变了就必须重算,不重算画面静默错」。
+
+## 拓扑只认导入,uniform 才认相机(2026-09-19 用户钦定)
+
+顶点腿曾经是**一整段**:建树、灌相机基轴、接脸部基座全在 `apply_vertex_stage` 里,于是它
+不得不同时挂在 CAMERA 与 RIG 上 —— 而挂上去就意味着**推一下镜头就全场重建**,重建又会按
+材质**当下的值**重判一次「这张材质该不该有描边」。现场表现:用户手删掉的修改器过一会儿
+自己长回来,画面上没有任何东西说明是谁加的。
+
+拆开之后判据很干净:**建拓扑(= 建修改器)只认「有东西进场」**,而那两个事实只由导入路径
+announce ⇒ 修改器只在从游戏导入时生成;相机动了、骨改名了各自只重灌自己那几格 uniform,
+一个修改器都不创建、一次材质判断都不重做。
 
 ## 为什么不是各导入路径自己调 apply_xxx
 
@@ -124,14 +135,29 @@ def _run_light_roles(_change):
 
 
 def _run_vertex(change):
-    """顶点腿。相机基轴是逐对象烘进几何节点树的快照,所以相机一变就得全场重建;
-    单纯多了几个对象时只处理这几个。
+    """顶点腿的**拓扑**:壳层位移与反壳描边那棵几何节点树,以及挂着它的那个修改器。
 
-    骨骼名册也在这条路上:脸部基座是按**当下骨名**接进 GeometryNodeBoneInfo 的,而名字
-    是改得动的东西 —— 绑定的身份存在骨的印记上,这里负责把那份身份重新翻成当下的名字。
-    不重接就是 Exists=False、基座属性一个点都不写、SDF 悄悄回到绑定姿势。"""
+    只读「有东西进场」这两个事实,而它们只由导入路径 announce —— 也就是说**修改器只在从
+    游戏导入时生成**。相机与骨名不进这条路,各自只重灌自己那几格 uniform(camera-basis /
+    rig-basis 两阶段):按材质现值重判一次描边,等于让用户删掉的修改器自己长回来。"""
     scope = None if change.whole_scene else change.objects
     return material_builder.apply_vertex_stages(objects=scope)
+
+
+def _run_camera_basis(change):
+    """顶点腿那几格相机 uniform。描边宽度是按投影矩阵与真实 backbuffer 像素解的,相机
+    一动就过期 —— 过期的是**值**不是拓扑,所以这里只把已有顶点树上的那几格重灌一遍,
+    不建树、不建修改器、不重判任何一张材质。"""
+    scope = None if change.whole_scene else change.objects
+    return material_builder.push_camera_stages(objects=scope)
+
+
+def _run_rig_basis(change):
+    """脸部骨骼基座。基座是按**当下骨名**接进材质的,而名字是改得动的东西 —— 绑定的身份
+    存在骨的印记上,这一条负责把那份身份重新翻成当下的名字。不重接就是 Exists=False、
+    基座属性一个点都不写、SDF 悄悄回到绑定姿势。它只碰材质节点与对象属性,不碰修改器。"""
+    scope = None if change.whole_scene else change.objects
+    return material_builder.apply_rig_stages(objects=scope)
 
 
 def _run_post(change):
@@ -152,7 +178,9 @@ def _run_material_panels(change):
 STAGES = (
     Stage("capabilities", (WORLD, ENGINE), _run_capabilities),
     Stage("light-roles", (LIGHT_SET, LIGHT_VALUES), _run_light_roles),
-    Stage("vertex", (OBJECTS, MATERIALS, CAMERA, RIG), _run_vertex),
+    Stage("vertex", (OBJECTS, MATERIALS), _run_vertex),
+    Stage("camera-basis", (CAMERA,), _run_camera_basis),
+    Stage("rig-basis", (OBJECTS, MATERIALS, RIG), _run_rig_basis),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
     # 装过就跳过,所以在灯上反复触发也只是一次 installed() 判断。

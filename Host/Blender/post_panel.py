@@ -180,9 +180,10 @@ class RURI_OT_derived_rebuild(bpy.types.Operator):
     bl_label = "Rebuild Derived State"
     bl_description = ("Force-rebuild everything this add-on derives from the scene: the vertex "
                       "stack (fur shells, outlines, face basis), how every Ruri material reads "
-                      "the lights and world, the light tables and the post chain. Imports, light "
-                      "and camera edits already do this by themselves; this button is for edits "
-                      "nothing can watch, e.g. rewiring the world's own node tree")
+                      "the lights and world, the light tables and the post chain. The vertex "
+                      "stack is otherwise built ONLY when you import from the game -- a camera "
+                      "move just re-fills its uniforms -- so this is also how you get outlines "
+                      "back after deleting the modifier, or pick up material edits made by hand")
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):

@@ -217,6 +217,55 @@ def apply_vertex_stages(objects=None, camera=None):
     return sum(stage(objects=objects, camera=camera) for stage in VERTEX_STAGES)
 
 
+# Camera-basis pushes, same registry contract: each generated shader module registers
+# its own ``push_camera_basis(objects=None, camera=None) -> int``. The camera basis, the
+# half FOV and the backbuffer size are UNIFORMS baked into the vertex tree -- an outline
+# is authored as a constant width in screen pixels, so they go stale the moment the
+# camera moves. What goes stale is the VALUE, not the topology: a stage re-fills those
+# sockets on trees that already exist and never builds one.
+#
+# 拆出来的理由是行为不是性能:与建树合在一条上时,推一下镜头就等于按材质**现值**重判一次
+# 「这张材质该不该有描边」,于是用户手删掉的修改器会自己长回来,而画面上没有任何东西说明
+# 是谁加的。生成修改器只属于从游戏导入的那一刻。
+CAMERA_STAGES = []
+
+
+def register_camera_stage(stage):
+    if stage not in CAMERA_STAGES:
+        CAMERA_STAGES.append(stage)
+
+
+def unregister_camera_stage(stage):
+    if stage in CAMERA_STAGES:
+        CAMERA_STAGES.remove(stage)
+
+
+def push_camera_stages(objects=None, camera=None):
+    return sum(stage(objects=objects, camera=camera) for stage in CAMERA_STAGES)
+
+
+# Rig-basis stages, same registry contract: ``apply_rig_basis(objects=None) -> int``.
+# The face basis is a per-object uniform wired into the MATERIAL, never a geometry
+# attribute, so re-translating a bone identity into today's bone name touches no
+# modifier at all -- which is why it is its own stage instead of a side effect of
+# building the vertex tree.
+RIG_STAGES = []
+
+
+def register_rig_stage(stage):
+    if stage not in RIG_STAGES:
+        RIG_STAGES.append(stage)
+
+
+def unregister_rig_stage(stage):
+    if stage in RIG_STAGES:
+        RIG_STAGES.remove(stage)
+
+
+def apply_rig_stages(objects=None):
+    return sum(stage(objects=objects) for stage in RIG_STAGES)
+
+
 # Capability rewires, same contract again: each generated shader module registers
 # its own ``rewire_capabilities(material) -> bool``. A shader's environment
 # queries -- ambient irradiance, specular radiance, the main light -- are cut at
