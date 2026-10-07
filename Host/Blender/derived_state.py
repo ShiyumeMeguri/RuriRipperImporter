@@ -44,8 +44,9 @@ announce ⇒ 修改器只在从游戏导入时生成;相机动了、骨改名了
 
 所以打开一个文件时派生态一样都不在:材质的树(模板组是插件数据)、顶点树、合成树、视点。
 LOADED 这件事实由开文件与本调度器注册(着色栈刚载入)立起来,第一段阶段(plugin-data)先清光内存里的插件数据、
-再让各栈按材质记录把材质全部现编,其余阶段照常按整场景现建。存盘时文件里什么也不留,下一次打开照样全建 ——
-没有任何一份派生物会在文件里放旧。从别的文件 append 进来的材质与对象(APPENDED)带着的树同样是死的,只编那些。
+再让各栈按材质记录把材质全部现编,其余阶段照常按整场景现建 —— **顶点树除外**:它只在导入那一刻生成,
+开文件不重填,修改器留空。存盘时文件里什么也不留,没有任何一份派生物会在文件里放旧。
+从别的文件 append 进来的材质与对象(APPENDED)带着的树同样是死的,只编那些材质。
 
 ## 时机是空闲态,不是操作符结束
 
@@ -150,19 +151,10 @@ def _run_shadow_sets(change):
 def _run_vertex(change):
     """顶点腿的**拓扑**:壳层位移与反壳描边那棵几何节点树,以及挂着它的那个修改器。
 
-    建拓扑只读「有东西进场」这两个事实,而它们只由导入路径 announce —— 也就是说**修改器只在从
-    游戏导入时生成**。相机与骨名不进这条路,各自只重灌自己那几格 uniform(camera-basis /
-    rig-basis 两阶段):按材质现值重判一次描边,等于让用户删掉的修改器自己长回来。
-
-    开文件 / append 进来之后只重填:树是插件数据,文件不带;修改器是对象的内容,还在。已经挂着的
-    修改器照材质记录重建它那棵树,一个修改器都不增不删。"""
-    built = 0
-    if change.facts & {OBJECTS, MATERIALS}:
-        scope = None if change.whole_scene else change.objects
-        built += material_builder.apply_vertex_stages(objects=scope)
-    if change.facts & {LOADED, APPENDED}:
-        built += material_builder.refill_vertex_stages()
-    return built
+    唯一的生成途径 = 导入从游戏读材质、造出对象的那一刻:范围永远是这批 announce 进来的对象,
+    从不扫整场景。开文件、append、「重建派生态」都不建也不重填 —— 树是插件数据不进 .blend,
+    重开文件后修改器是空的,要壳与描边就重新导入。相机与骨名各自只重灌已有树上那几格 uniform。"""
+    return material_builder.apply_vertex_stages(objects=change.objects)
 
 
 def _run_camera_basis(change):
@@ -198,7 +190,7 @@ STAGES = (
     Stage("plugin-data", (LOADED, APPENDED), _run_plugin_data),
     Stage("capabilities", (WORLD,), _run_capabilities),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
-    Stage("vertex", (OBJECTS, MATERIALS, LOADED, APPENDED), _run_vertex),
+    Stage("vertex", (OBJECTS,), _run_vertex),
     Stage("camera-basis", (CAMERA, LOADED, APPENDED), _run_camera_basis),
     Stage("rig-basis", (OBJECTS, MATERIALS, RIG, LOADED, APPENDED), _run_rig_basis),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,

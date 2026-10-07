@@ -125,12 +125,10 @@ class RURI_OT_post_reset(bpy.types.Operator):
 class RURI_OT_derived_rebuild(bpy.types.Operator):
     bl_idname = "ruri.derived_rebuild"
     bl_label = "Rebuild Derived State"
-    bl_description = ("Force-rebuild everything this add-on derives from the scene: the vertex "
-                      "stack (fur shells, outlines, face basis), how every Ruri material reads "
-                      "the world, and the post chain. The vertex "
-                      "stack is otherwise built ONLY when you import from the game -- a camera "
-                      "move just re-fills its uniforms -- so this is also how you get outlines "
-                      "back after deleting the modifier, or pick up material edits made by hand")
+    bl_description = ("Force-rebuild everything this add-on derives from the scene: the face "
+                      "basis, how every Ruri material reads the world, and the post chain. The "
+                      "vertex stack (fur shells, outlines) is NOT rebuilt here: it is built only "
+                      "at the moment an import reads the game's materials")
     bl_options = {"REGISTER"}
 
     def execute(self, context):
