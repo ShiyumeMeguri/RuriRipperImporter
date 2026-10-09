@@ -503,13 +503,15 @@ def rebuild_plugin_data(purge):
     Without it only the materials this session has not compiled yet (appended from another
     file) are. The compiled materials' environment answers are the current scene's, and are
     stamped so. One stack failing leaves the others compiling; the failures are raised
-    together afterwards. Returns ``(dropped, compiled)``."""
+    together afterwards. A twin that left its session and came back with this file (pasted,
+    appended, saved without the plugin) is handed back to its material before anything is
+    dropped or compiled (see :mod:`linked_twins`). Returns ``(dropped, compiled)``."""
     dropped = 0
+    failures = _linked_twins.return_strays()
     if purge:
         _linked_twins.release()
         dropped = _plugin_data.purge() + sum(drop() for drop in PLUGIN_PURGES)
     compiled = []
-    failures = []
     for compile_all in MATERIAL_COMPILES:
         try:
             compiled.extend(compile_all())
