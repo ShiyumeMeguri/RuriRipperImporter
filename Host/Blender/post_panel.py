@@ -211,9 +211,10 @@ def draw_post_chain_section(layout, context):
                                           icon="CHECKBOX_HLT" if on else "CHECKBOX_DEHLT")
                 toggle.group = stage.post["group"]
                 toggle.kind = kind
+        computed = {name for chain in stage.post.get("chains") or [] for name in chain.get("drives") or []}
         drawn = 0
         for socket in node.inputs:
-            if socket.is_linked:
+            if socket.is_linked or socket.name in computed:
                 continue
             if not hasattr(socket, "default_value"):
                 continue

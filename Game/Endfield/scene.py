@@ -415,9 +415,6 @@ def _stand_up_lighting(context, host, map_name, rect, anchor, states):
     grading = datasets.scene_grading(map_name, anchor, states)
     if grading is not None and host_port.Compositor in host.capabilities:
         host.apply_post_inputs(context, grading["inputs"])
-        if grading["automatic_exposure"]:
-            notes.append("this volume adapts its exposure automatically; only its "
-                         "compensation is applied")
     return notes
 
 

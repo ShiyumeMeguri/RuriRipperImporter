@@ -493,10 +493,14 @@ def scene_grading(map_name, anchor, states):
     spelled out rather than applied in bulk: hue is an offset (identity 0) while
     saturation, contrast and the colour filter are multipliers (identity 1).
 
-    ``exposureStops`` is the phase's own exposure compensation, in stops -- zero is
-    identity as it stands, since the multiplier is two to that power. A phase on automatic
-    exposure adapts to its frame's histogram first, which is not read here, so that comes
-    back as its own flag too.
+    ``exposureStops`` is the phase's manual exposure compensation, in stops -- zero is
+    identity as it stands, since the multiplier is two to that power. ``exposureAuto``
+    says the phase meters its frame instead (the build's histogram auto exposure), and the
+    metering's own parameters ride along as the phase states them: the EV range the
+    histogram spans, the EV range the slots clamp into, the luminance percentile band kept,
+    the exposure clamp range, the metering mode and the compensation the metered
+    exposure is multiplied by. They mean something only with ``exposureAuto`` on, so they
+    go out as stated rather than as differences.
 
     White balance is the LMS coefficients the build computes from the phase's temperature
     and tint (the identity when the phase turns it off); they are multipliers, so the
@@ -514,9 +518,15 @@ def scene_grading(map_name, anchor, states):
     row = _rows(SCENE_ENVIRONMENT, **_viewer(map_name, anchor, states))[0]
     return {
         "tonemap": float(row.get("tonemap") or 0),
-        "automatic_exposure": float(row.get("exposureMode") or 0) < 0.5,
         "inputs": {
-            "exposureStops": float(row.get("exposureCompensation") or 0),
+            "exposureAuto": float(row["exposureAuto"]),
+            "exposureStops": float(row["exposureStops"]),
+            "exposureAutoCompensation": float(row["exposureAutoCompensation"]),
+            "exposureRange": (float(row["exposureRangeX"]), float(row["exposureRangeY"])),
+            "exposureHistogramRange": (float(row["exposureHistogramX"]), float(row["exposureHistogramY"])),
+            "exposurePixelRange": (float(row["exposurePixelX"]), float(row["exposurePixelY"])),
+            "exposureClampRange": (float(row["exposureClampX"]), float(row["exposureClampY"])),
+            "exposureMeteringMode": float(row["exposureMetering"]),
             "gradeColorBalance": (float(row["gradeBalanceL"]) - 1.0,
                                   float(row["gradeBalanceM"]) - 1.0,
                                   float(row["gradeBalanceS"]) - 1.0),
