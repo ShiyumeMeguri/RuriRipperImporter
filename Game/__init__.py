@@ -326,6 +326,26 @@ def modules():
     return list(_MODULES)
 
 
+def stack_modules():
+    """The generated stack packages this session registered, one per game folder that ships a projection for the
+    host the process runs inside."""
+    return list(_STACKS)
+
+
+def reload_stack(stack):
+    """Load one registered stack package again from disk, in place: unregister what the old generation put into
+    the host, run the package's source again (its manifest and runtime come off disk as they are now), register
+    what the new generation declares. The package object stays the same one, so every holder of it sees the new
+    generation. The data the old generation made is not touched here -- dropping it is the caller's step, in
+    the old generation's own vocabulary, before this."""
+    if stack not in _STACKS:
+        raise KeyError("{0} is not a stack package this session registered".format(getattr(stack, "__name__", stack)))
+    stack.unregister()
+    importlib.reload(stack)
+    stack.register()
+    return stack
+
+
 def module_for(product, engine=""):
     """The module that IS ``product``, else the one claiming the install's ``engine``
     family, else None when this add-on ships no panels for it. Exact, case-insensitive

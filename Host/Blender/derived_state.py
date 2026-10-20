@@ -42,7 +42,7 @@ announce ⇒ 修改器只在从游戏导入时生成;相机动了、骨改名了
 
 ## 插件数据从不写进 .blend(见 plugin_data)
 
-所以打开一个文件时派生态一样都不在:材质的树(模板组是插件数据)、顶点树、合成树、视点。
+所以打开一个文件时派生态一样都不在:材质的树(模板组是插件数据)、顶点树、合成树、视点、体积雾介质(文件里只留世界上的陈述)。
 LOADED 这件事实由开文件与本调度器注册(着色栈刚载入)立起来,第一段阶段(plugin-data)先清光内存里的插件数据、
 再让各栈按材质记录把材质全部现编,其余阶段照常按整场景现建 —— **顶点树除外**:它只在导入那一刻生成,
 开文件不重填,修改器留空。存盘时文件里什么也不留,没有任何一份派生物会在文件里放旧。
@@ -141,6 +141,13 @@ def _run_capabilities(change):
     return material_builder.rewire_capabilities(scope, force=change.force)
 
 
+def _run_medium(change):
+    """关卡世界上陈述的体积雾。介质是运行时数据(体积物体、灯的孪生),存盘一个字节都不写,文件里留下的只有世界上的陈述;
+    开文件与着色栈刚载入时照陈述现立,没有陈述就什么都不做。"""
+    from . import LEVEL_SUN, medium
+    return len(medium.restore(change.scene, bpy.data.objects.get(LEVEL_SUN)))
+
+
 def _run_shadow_sets(change):
     """平行光的投影排除集:声明自己的投影不进平行光级联的物体收在一个全排除的集合里(见 shadow_casting),它是每一盏
     平行光的遮挡集合 —— 着色栈把每一盏平行光都当主光照。东西进场时给还没有遮挡集合的平行光挂上,排除集与平行光
@@ -189,6 +196,7 @@ STAGES = (
     # 插件数据不在文件里:先按记录把材质编出来,后面各阶段才有东西可接。
     Stage("plugin-data", (LOADED, APPENDED), _run_plugin_data),
     Stage("capabilities", (WORLD,), _run_capabilities),
+    Stage("medium", (LOADED,), _run_medium),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
     Stage("vertex", (OBJECTS,), _run_vertex),
     Stage("camera-basis", (CAMERA, LOADED, APPENDED), _run_camera_basis),
@@ -335,6 +343,19 @@ def rebuild_all():
     """把所有派生态按整场景重建一次 —— 撤销之后、或用户改了监视器看不见的东西
     (世界的节点树内部接线之类)时的唯一强制路径。"""
     _mark(ALL_FACTS, whole_scene=True, force=True)
+    return flush()
+
+
+def pending():
+    """是否还有攒着没落地的变更:开文件后材质在落地前是空树,不是「编坏了」。"""
+    return bool(_pending_facts)
+
+
+def refresh_after_replacement(objects):
+    """着色栈在会话里被新一代原地顶替、旧一代的插件数据已被清掉之后:只补编还没编的材质,再把依赖它们的派生态
+    按整场景补一遍,并让 ``objects`` 重新生成顶点腿(旧一代的树清掉后它们的修改器是空的)。其余插件数据
+    (介质、关卡图、灯)一概不清不动 —— 这不是开文件那一遍。"""
+    _mark((APPENDED, OBJECTS, MATERIALS), objects=objects, whole_scene=True)
     return flush()
 
 

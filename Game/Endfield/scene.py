@@ -407,10 +407,9 @@ def _stand_up_lighting(context, host, map_name, rect, anchor, states):
     # can reach it (the game rasterises the proxies into a screen mask before lighting).
     notes.extend(host.apply_box_lists(context, datasets.scene_water_wetness_boxes(map_name, rect, states),
                                       datasets.WETNESS_RANGE, datasets.WETNESS_LISTS))
-    # The level's volumetric fog, integrated by the host the way the game integrates it.
-    medium = datasets.scene_medium(map_name, anchor, states)
-    if medium is not None:
-        notes.extend(host.apply_medium(context, medium))
+    # The level's volumetric fog, integrated by the host the way the game integrates it; a phase with none
+    # takes the fog of the one before out.
+    notes.extend(host.apply_medium(context, datasets.scene_medium(map_name, anchor, states)))
     # The level states its own colour grading; a host with a display chain takes it.
     grading = datasets.scene_grading(map_name, anchor, states)
     if grading is not None and host_port.Compositor in host.capabilities:

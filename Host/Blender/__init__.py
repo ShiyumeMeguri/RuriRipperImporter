@@ -336,7 +336,8 @@ HOST = host_port.bind(BlenderHost())
 from ... import Game                                                    # noqa: E402
 from . import (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder,  # noqa: E402
                material_panel, derived_state, allocator, animation_builder, step_loader, browser_panel,
-               post_panel, viewpoint, picture_view, region_picker)
+               shader_inputs, shader_version, shader_update_panel, post_panel, viewpoint, picture_view,
+               region_picker)
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +362,8 @@ def _holds_process_state(module):
 #: reloaded, just after these, so forgetting one costs ordering rather than
 #: correctness.
 _DRIVER_ORDER = (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder, material_panel,
-                 derived_state, animation_builder, step_loader, browser_panel, post_panel, picture_view,
-                 region_picker)
+                 derived_state, animation_builder, step_loader, browser_panel, shader_inputs, shader_version,
+                 shader_update_panel, post_panel, picture_view, region_picker)
 
 
 def _reload_tree(root_name):
@@ -482,6 +483,9 @@ def register():
     # Every game folder under Game/ registers itself; the panel above names none
     # of them and simply draws whatever tabs the enabled hooks turn on.
     Game.register()
+    # The top of the Look tab: after Game, because it lists the shader packages Game registered, and before
+    # the sections below so that it is the first thing the tab says.
+    shader_update_panel.register()
     # Drawn after Game so a stage registered by a game's shader package is
     # already there to be listed.
     post_panel.register()
@@ -507,6 +511,7 @@ def unregister():
     render.unregister()
     animation_builder.unregister_slot_autofix()
     post_panel.unregister()
+    shader_update_panel.unregister()
     Game.unregister()
     region_picker.unregister()
     picture_view.unregister()

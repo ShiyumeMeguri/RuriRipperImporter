@@ -61,6 +61,7 @@ volume self-shadowing is off, as the source's is.
 
 from __future__ import annotations
 
+import json
 import math
 
 import bpy
@@ -68,6 +69,10 @@ from mathutils import Vector
 
 from . import material_builder, plugin_data
 
+#: The custom property on a level's world that keeps the medium's statement as JSON: the level's content, like its
+#: globals and its texel blocks, so a file that holds the world holds the fog. The volume, the lamps' copies and
+#: the shares handed over are derived from it and are made again whenever a file opens (see :func:`restore`).
+STATEMENT_PROPERTY = "ruri_level_medium"
 MEDIUM = "Ruri Level Medium"
 RECEIVERS = "Ruri Level Medium Receivers"
 TWIN_SUFFIX = " (medium)"
@@ -90,10 +95,33 @@ GRID_NAME = "density"
 
 def apply(context, medium, sun):
     """Stand ``medium`` (see :meth:`Kernel.host.SceneGraph.apply_medium`) up in the scene,
-    lit by ``sun`` (the level sun object), replacing whatever medium a previous call stood up.
-    Returns the lines to report."""
+    lit by ``sun`` (the level sun object), replacing whatever medium a previous call stood up, and keep its
+    statement on the level's world. ``medium`` None is a phase that integrates no fog: whatever stood up
+    comes out and the world states none. Returns the lines to report."""
     scene = context.scene
     withdraw(scene)
+    world = material_builder.level_world(scene)
+    if medium is None:
+        if STATEMENT_PROPERTY in world:
+            del world[STATEMENT_PROPERTY]
+        return []
+    world[STATEMENT_PROPERTY] = json.dumps(medium)
+    return _stand_up(scene, medium, sun)
+
+
+def restore(scene, sun):
+    """Stand the medium the scene's world states up again. After a file opens none of it is in memory (the volume
+    and the lamps' copies are runtime data); the world's statement is what is left. A world that states none
+    leaves the scene as it is. Returns the lines to report."""
+    world = scene.world
+    stated = world.get(STATEMENT_PROPERTY) if world is not None else None
+    if stated is None:
+        return []
+    withdraw(scene)
+    return _stand_up(scene, json.loads(stated), sun)
+
+
+def _stand_up(scene, medium, sun):
     if sun is None:
         raise RuntimeError("[medium] the medium scatters the level's main light, and no level sun is stood up")
     unbuildable = _unbuildable(sun, medium)

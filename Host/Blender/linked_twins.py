@@ -159,19 +159,37 @@ def return_strays():
     return unfound
 
 
+def _hand_back(pairs):
+    users = bpy.data.user_map(subset=[twin for _original, twin in pairs])
+    for original, twin in pairs:
+        for user in users.get(twin, ()):
+            if user.library is not None:
+                _repoint_linked(user, twin, original)
+        twin.user_remap(original)
+
+
 def release():
     """Hand every user back to its linked material and forget the twins. The load pass calls this before it
     drops plugin data; pairs whose datablocks are already freed (a file was opened) are only forgotten."""
     live = [pair for pair in _PAIRS if _alive(pair)]
     if live:
-        users = bpy.data.user_map(subset=[twin for _original, twin in live])
-        for original, twin in live:
-            for user in users.get(twin, ()):
-                if user.library is not None:
-                    _repoint_linked(user, twin, original)
-            twin.user_remap(original)
+        _hand_back(live)
     del _PAIRS[:]
     del _HELD[:]
+
+
+def release_matching(selected):
+    """Hand the users of the twins whose linked material ``selected(original)`` picks back to it, remove those
+    twins and forget them; every other twin keeps drawing. A generated stack that is replaced in place releases
+    its own twins this way and compiles them anew. Returns how many were released."""
+    chosen = [pair for pair in _PAIRS if _alive(pair) and selected(pair[0])]
+    if chosen:
+        _hand_back(chosen)
+        for _original, twin in chosen:
+            bpy.data.materials.remove(twin)
+    _PAIRS[:] = [pair for pair in _PAIRS if _alive(pair)]
+    _HELD[:] = [pair for pair in _HELD if _alive(pair)]
+    return len(chosen)
 
 
 def _settle_strays():

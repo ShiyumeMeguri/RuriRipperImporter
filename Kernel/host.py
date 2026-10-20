@@ -216,7 +216,9 @@ class SceneGraph(abc.ABC):
     @abc.abstractmethod
     def apply_medium(self, context, medium):
         """Stand a level's participating medium up in the document, replacing any stood up
-        before, so the host integrates it the way the source integrates its fog. ``medium`` is
+        before, so the host integrates it the way the source integrates its fog, and keep its
+        statement with the level so a document that holds the level holds the fog. ``medium``
+        None is a phase that integrates no fog: the one stood up before comes out. Otherwise it is
         in the source's own world and units:
 
         ``label``            the volume it came from;

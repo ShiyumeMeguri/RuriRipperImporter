@@ -447,6 +447,12 @@ def _drop_caches(*_arguments):
     _PENDING.clear()
 
 
+def forget():
+    """Drop what the panel remembers about materials -- their rows, their rigs, which were read back -- for when
+    materials were replaced by new compilations of their records."""
+    _drop_caches()
+
+
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
