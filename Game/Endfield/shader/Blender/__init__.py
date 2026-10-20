@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(a6718ba63c7b2677):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(0f4613314de63991):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -4689,7 +4689,7 @@ class Stack:
         coordinates[self.POST_CHAIN_KEY] = label
         return coordinates.outputs['Normalized']
 
-    CHAIN_KINDS = ('bloom_pyramid', 'screen_space_reflection', 'water_lighting')
+    CHAIN_KINDS = ('bloom_pyramid', 'screen_space_reflection', 'water_lighting', 'auto_exposure')
 
     def _build_chains(self, scene, tree, render, stage):
         """场景树里现建各图链。替换场景色的链(屏幕空间反射)先建:它合成后的颜色才是主入口与泛光看到的场景色。
@@ -4721,6 +4721,11 @@ class Stack:
                 scene_color = self._render_only(tree, chain['kind'], composed, beneath)
         tree.links.new(scene_color if scene_color is not None else packed.outputs['Vector'],
                        stage.inputs[self.post['color_in']])
+        driven = []
+        for chain in chains:
+            if chain['kind'] == 'auto_exposure' and self._chain_enabled(scene, tree, chain):
+                source = scene_color if scene_color is not None else render.outputs['Image']
+                driven.append((chain, self._auto_exposure(tree, scene, chain, source, width, height)))
         for chain in chains:
             if chain['kind'] != 'bloom_pyramid' or not self._chain_enabled(scene, tree, chain):
                 continue
@@ -4728,6 +4733,13 @@ class Stack:
             source = scene_color if scene_color is not None else render.outputs['Image']
             tree.links.new(self._bloom_pyramid(tree, scene, source, chain, width, height, resolution),
                            stage.inputs[chain['image']])
+        # 算值的链最后接线:接收它的口长在主入口与各趟上(泛光预滤也读曝光),各趟都建完才找得全。
+        for chain, value in driven:
+            for name in chain['drives']:
+                for node in self._stage_nodes(tree):
+                    socket = node.inputs.get(name)
+                    if socket is not None:
+                        tree.links.new(value, socket)
 
     SSR_LEVELS = 7
 
@@ -5223,6 +5235,48 @@ class Stack:
             up = run(upsample, fields[level], [down[level], up],
                      {'texel': texels[level], 'bicubic': (lower[0], lower[1], 1.0 / lower[0], 1.0 / lower[1])})
         return up
+
+    def _auto_exposure(self, tree, scene, chain, source, width, height):
+        """自动曝光的测光(真源 HGLuminanceHistogramCS 与 UberPostPassUtils 的 CalculateAverageLogLuminance /
+        CalculateTargetExposure,算法在生成的内核里):场景色在采样格上(每 sample_stride 个像素取一个,真源的线程步长)
+        逐采样点交出十六个槽的权重;每个槽过一枚 Levels 取整张图的均值 —— 真源「每个线程组累加、CPU 按槽对所有组求和」
+        再除以采样数;十六个均值进 resolve 一趟,它没有坐标场、输入全是单值,出的曝光档位也是单值。返回那个出口,
+        由 _build_chains 接到清单声明的口上。槽的下标 = 内核输出结构里第 slot // 3 张图的第 slot % 3 个通道。"""
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        histogram = passes[chain['roles']['histogram']]
+        resolve = passes[chain['roles']['resolve']]
+        stride = int(chain['sample_stride'])
+        grid = (-(-width // stride), -(-height // stride))
+        geometry = {'exposureSourceSize': (float(width), float(height)),
+                    'exposureSampleGrid': (float(grid[0]), float(grid[1])), 'exposureSampleStride': float(stride)}
+        if set(geometry) - set(chain['geometry']):
+            raise RuntimeError('[ruri-post] 自动曝光链按采样格给的是 {0},清单声明的是 {1}'.format(
+                sorted(geometry), sorted(chain['geometry'])))
+        slot_inputs = [name for name in resolve['inputs'] if name in chain['geometry'] and resolve['sizes'][name] == 1]
+        channels = ('Red', 'Green', 'Blue')
+        if len(slot_inputs) > len(channels) * len(histogram['outs']):
+            raise RuntimeError('[ruri-post] 自动曝光 {0} 个槽装不进直方图一趟的 {1} 张图'.format(
+                len(slot_inputs), len(histogram['outs'])))
+        field = self._level_domain(tree, scene, chain['kind'], 0, grid)
+        counted = tree.nodes.new('CompositorNodeGroup')
+        counted.node_tree = self.group(histogram['group'])
+        counted[self.POST_CHAIN_KEY] = chain['kind']
+        tree.links.new(field, counted.inputs[histogram['coords'][0]])
+        tree.links.new(source, counted.inputs[histogram['images'][0]])
+        resolved = tree.nodes.new('CompositorNodeGroup')
+        resolved.node_tree = self.group(resolve['group'])
+        resolved[self.POST_CHAIN_KEY] = chain['kind']
+        for node, entry in ((counted, histogram), (resolved, resolve)):
+            for name, value in geometry.items():
+                if name in entry['sizes']:
+                    self._write_input(node, name, value, entry['sizes'][name])
+        for slot, name in enumerate(slot_inputs):
+            levels = tree.nodes.new('CompositorNodeLevels')
+            levels[self.POST_CHAIN_KEY] = chain['kind']
+            levels.inputs['Channel'].default_value = channels[slot % len(channels)]
+            tree.links.new(counted.outputs[histogram['outs'][slot // len(channels)]], levels.inputs['Image'])
+            tree.links.new(levels.outputs['Mean'], resolved.inputs[name])
+        return resolved.outputs[resolve['out']]
 
     def refresh_chains(self, scene):
         """出图尺寸、分辨率档或哪条链该开变了就重建图链(级数与各级尺寸都随它们);主入口不动,记下的值照原样写回各组。"""
