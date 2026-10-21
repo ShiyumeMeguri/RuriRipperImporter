@@ -8,8 +8,7 @@
   "operations": [
     "invert",
     "repack_normal",
-    "unpack_normal_alpha_green",
-    "unpack_normal_pair"
+    "unpack_normal_alpha_green"
   ],
   "panel": {
     "variantUniform": "_CharaPartID",
@@ -1426,11 +1425,6 @@
           "Source": "_BumpMap",
           "Channels": "rg",
           "Operation": "unpack_normal_alpha_green"
-        },
-        {
-          "Source": "_SplitNormalMap",
-          "Channels": "rg",
-          "Operation": "unpack_normal_pair"
         }
       ]
     },
@@ -2041,6 +2035,31 @@
     },
     {
       "Kind": "RawTexture",
+      "Id": "_SplitNormalMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [
+        0.2158605,
+        0.2158605,
+        0.2158605,
+        0.5
+      ],
+      "Label": "HN (RG:Normal BA:Specular Normal)",
+      "Declaration": "",
+      "Getter": "",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_SplitNormalMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
       "Id": "_StrokeMap",
       "Semantic": "",
       "Components": 4,
@@ -2181,29 +2200,6 @@
         {
           "Source": "_ParallaxTex",
           "Channels": "gba",
-          "Operation": ""
-        }
-      ]
-    },
-    {
-      "Kind": "RawTexture",
-      "Id": "_SplitNormalMap_ba",
-      "Semantic": "",
-      "Components": 2,
-      "Encoding": "",
-      "Format": "",
-      "Absent": [
-        0.2158605,
-        0.5
-      ],
-      "Label": "_SplitNormalMap 余量(ba)",
-      "Declaration": "",
-      "Getter": "",
-      "MeshMap": "",
-      "Sources": [
-        {
-          "Source": "_SplitNormalMap",
-          "Channels": "ba",
           "Operation": ""
         }
       ]
@@ -3064,35 +3060,35 @@
       "Source": "_SplitNormalMap",
       "Lanes": [
         {
-          "Input": "normal",
-          "Component": 0,
-          "Operation": "repack_normal",
-          "Constant": 0,
-          "Absent": 0.2158605
-        },
-        {
-          "Input": "normal",
-          "Component": 1,
-          "Operation": "repack_normal",
-          "Constant": 0,
-          "Absent": 0.2158605
-        },
-        {
-          "Input": "_SplitNormalMap_ba",
+          "Input": "_SplitNormalMap",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
           "Absent": 0.2158605
         },
         {
-          "Input": "_SplitNormalMap_ba",
+          "Input": "_SplitNormalMap",
           "Component": 1,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0.2158605
+        },
+        {
+          "Input": "_SplitNormalMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0.2158605
+        },
+        {
+          "Input": "_SplitNormalMap",
+          "Component": 3,
           "Operation": "",
           "Constant": 0,
           "Absent": 0.5
         }
       ],
-      "Reshaped": true
+      "Reshaped": false
     },
     {
       "Source": "_StrokeMap",
@@ -3204,7 +3200,6 @@
     "_BumpMap:打包覆盖之外的 ba 位 → 余量原样槽位 _BumpMap_ba",
     "_ClearCoatMask:打包覆盖之外的 gba 位 → 余量原样槽位 _ClearCoatMask_gba",
     "_ParallaxTex:打包覆盖之外的 gba 位 → 余量原样槽位 _ParallaxTex_gba",
-    "_SplitNormalMap:打包覆盖之外的 ba 位 → 余量原样槽位 _SplitNormalMap_ba",
     "纹理形参特化:SampleNormal(_BumpMap) → SampleNormal_BumpMap(源纹理已拆进宿主通道,GLSL 无法把它当采样器传参)",
     "能力 MainLight(GetMainLight/0):@body 兑现(镜像体 + 引擎态)",
     "能力 ShadowAttenuation(MainLightRealtimeShadow/1):宿主无兑现 → 缺席值 1.0(Identity)",

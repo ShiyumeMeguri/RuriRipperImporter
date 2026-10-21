@@ -613,6 +613,8 @@ uniform sampler2D _ShadowLutTex;
 uniform sampler2D _SilkStockingsMask;
 //: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Specular Ramp", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _SpecRampMap;
+//: param custom { "default": "", "default_color": [0.2158605, 0.2158605, 0.2158605, 0.5], "label": "HN (RG:Normal BA:Specular Normal)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SplitNormalMap;
 //: param custom { "default": "", "default_color": [0.5, 0.5, 0.5, 0.5], "label": "Stroke Map(R:anisotropy G:specular offset)", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _StrokeMap;
 //: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "VFX Special Blend Tex", "usage": "texture", "group": "2 贴图" }
@@ -625,8 +627,6 @@ uniform sampler2D _BumpMap_ba;
 uniform sampler2D _ClearCoatMask_gba;
 //: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 0.0], "label": "_ParallaxTex 余量(gba)", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _ParallaxTex_gba;
-//: param custom { "default": "", "default_color": [0.2158605, 0.5, 0.0, 0.0], "label": "_SplitNormalMap 余量(ba)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SplitNormalMap_ba;
 //----------------------------------------------------------------------endregion
 
 #ifndef RURI_PRELUDE_RURILENGTH
@@ -1053,12 +1053,6 @@ float4 ruriRead_RMOSMap(float2 uv) {
     return float4(ruriInput0, ruriInput1, ruriInput2, ruriInput3);
 }
 
-float4 ruriRead_SplitNormalMap(float2 uv) {
-    vec3 ruriInput0 = ruriBakedNormal(ruriSparseCoord, vec3(-0.568279, -0.568279, 0.0));
-    vec4 ruriInput1 = texture(_SplitNormalMap_ba, uv);
-    return float4((ruriInput0.x * 0.5 + 0.5), (ruriInput0.y * 0.5 + 0.5), ruriInput1.x, ruriInput1.y);
-}
-
 //----------------------------------------------------------------------endregion
 
 vec3 UnpackNormalScale(vec4 packedNormal, float bumpScale)
@@ -1099,10 +1093,10 @@ vec3 TransformTangentToWorld(vec3 directionTS, mat3 tangentToWorld)
 vec3 ResolveNormalWS(vec3 normalTS, vec3 positionWS, vec3 vertexNormalWS, vec4 tangentWS, vec2 uv)
 {
     vec3 N = half3(NormalizeNormalPerPixel(vertexNormalWS));
-    vec3 dp1 = ddx(positionWS);
-    vec3 dp2 = ddy(positionWS);
-    vec2 duv1 = ddx(uv);
-    vec2 duv2 = ddy(uv);
+    vec3 dp1 = ddx_fine(positionWS);
+    vec3 dp2 = ddy_fine(positionWS);
+    vec2 duv1 = ddx_fine(uv);
+    vec2 duv2 = ddy_fine(uv);
     vec3 T;
     vec3 B;
     if (dot(tangentWS.xyz, tangentWS.xyz) > 1e-4)
@@ -1213,7 +1207,7 @@ void RURI_INIT_COMMON(SceneVaryings input_, out RuriData outRuriData)
     outRuriData.shadowMask = float4(1.0, 1.0, 1.0, 1.0);
 }
 
-void RURI_SHADOW_COORD(inout RuriData outRuriData)
+void CharacterMacros_RURI_SHADOW_COORD(inout RuriData outRuriData)
 {
     if (!(MAIN_LIGHT_CALCULATE_SHADOWS))
     {
@@ -2032,7 +2026,7 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     vec3 specN;
     if (_UseSpecBumpMap && _UseBumpMap)
     {
-        vec4 nrmSmp = ruriRead_SplitNormalMap(uv);
+        vec4 nrmSmp = texture(_SplitNormalMap, uv);
         float dnX = (nrmSmp.x * 2.0 - 1.0) * _BumpScale;
         float dnY = (nrmSmp.y * 2.0 - 1.0) * _BumpScale;
         float dnZ = max(sqrt(1.0 - saturate(dnX * dnX + dnY * dnY)), 1e-16);
@@ -2045,7 +2039,7 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     else
         if (_UseBumpMap)
         {
-            vec4 nrmSmp = ruriRead_SplitNormalMap(uv);
+            vec4 nrmSmp = texture(_SplitNormalMap, uv);
             float dnX = (nrmSmp.x * 2.0 - 1.0) * _BumpScale;
             float dnY = (nrmSmp.y * 2.0 - 1.0) * _BumpScale;
             float dnZ = max(sqrt(1.0 - saturate(dnX * dnX + dnY * dnY)), 1e-16);
@@ -2640,8 +2634,8 @@ float POM_Tatarchuk(vec2 uv, vec3 V, vec3 normalWS_raw, vec3 tangentDir, float t
     vec3 tbnV = float3(dot(pxTan, V), dot(pxBit, V), dot(pxNrm, V));
     float tbnInvLen = rsqrt(max(dot(tbnV, tbnV), 1.175e-38));
     vec2 pxUV = uv * _ParallaxTex_ST.xy + _ParallaxTex_ST.zw;
-    vec2 pxDxUV = ddx(pxUV);
-    vec2 pxDyUV = ddy(pxUV);
+    vec2 pxDxUV = ddx_fine(pxUV);
+    vec2 pxDyUV = ddy_fine(pxUV);
     float pxSteps = min(20.0, _ParallaxMarchNum);
     float pxStepSz = 1.0 / pxSteps;
     float pxViewZ = max(tbnInvLen * tbnV.z, 0.001);
