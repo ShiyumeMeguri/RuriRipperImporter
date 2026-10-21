@@ -10,8 +10,12 @@ shades differently from Blender without saying so.
 So every game's stack for this host is copied over any shelf that already carries it -- the
 shader and its manifest together, they are one product -- when the plugin starts, whenever a
 shelf finishes reading the disk (Painter then notices the new file and recompiles it), and
-before an import wires a shader. A shelf that does not carry a stack is left alone: putting a
-shader on a shelf is the person's choice, keeping it current is not.
+before an import wires a shader, and whenever the generator deploys a new generation while Painter
+runs: the plugin's own files are watched, and a change of what they hold -- their version hash,
+the generation the manifest names, or their bytes -- is copied the moment it is seen. Nothing is
+taken from what Painter has kept: the comparison is always between the plugin's file and the
+shelf's file as they lie on the disk now. A shelf that does not carry a stack is left alone:
+putting a shader on a shelf is the person's choice, keeping it current is not.
 
 And every instance of the open project that runs one of those shaders is moved onto the
 shelf's copy when the project is ready and whenever a shelf finishes reading the disk -- a
@@ -26,6 +30,7 @@ goes with the old one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -49,6 +54,23 @@ def _products():
         yield name, [stack.asset(name + ".glsl"), stack.manifest_path()]
 
 
+def _digest(path):
+    """The version hash of one file as it lies on the disk now, or empty when there is none."""
+    if not os.path.isfile(path):
+        return ""
+    with open(path, "rb") as handle:
+        return hashlib.sha1(handle.read()).hexdigest()
+
+
+def _generation(manifest_path):
+    """The generation a manifest names, or empty when it names none or cannot be read."""
+    try:
+        with open(manifest_path, encoding="utf-8") as handle:
+            return str(json.load(handle).get("identity") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def sync(report):
     """Copy each stack's shader and manifest over the shelf copies that differ from them.
     Returns how many files were copied; what was copied, or failed to be, goes into ``report``."""
@@ -61,21 +83,21 @@ def sync(report):
                 continue
             for source in product:
                 target = os.path.join(folder, os.path.basename(source))
-                with open(source, "rb") as handle:
-                    wanted = handle.read()
-                held = b""
-                if os.path.isfile(target):
-                    with open(target, "rb") as handle:
-                        held = handle.read()
-                if held == wanted:
+                wanted = _digest(source)
+                held = _digest(target)
+                if wanted == held:
                     continue
+                before = _generation(target)
                 try:
                     shutil.copyfile(source, target)
                 except OSError as error:
                     report.append("!! shelf sync failed {0}: {1}".format(target, error))
                     continue
                 copied += 1
-                report.append("synced {0} into the shelf: {1}".format(os.path.basename(source), target))
+                report.append("synced {0} into the shelf (version {1} -> {2}{3}): {4}".format(
+                    os.path.basename(source), held[:8] or "none", wanted[:8],
+                    ", generation {0} -> {1}".format(before or "unstamped", _generation(source) or "unstamped")
+                    if source.endswith(".manifest.json") else "", target))
     return copied
 
 
@@ -121,6 +143,42 @@ def _announce(report):
 
 
 _save = {"in_flight": False, "follow_due": False}
+
+#: How often the plugin's own shader files are looked at while the host runs, in milliseconds.
+WATCH_INTERVAL = 1500
+
+_watch = {"timer": None, "seen": None}
+
+
+def _signature():
+    """What the plugin's own product files are, by size and time of writing: cheap to read
+    every tick, and any deploy changes it."""
+    found = []
+    for _name, product in _products():
+        for source in product:
+            try:
+                stat = os.stat(source)
+            except OSError:
+                found.append((source, 0, 0))
+                continue
+            found.append((source, stat.st_size, stat.st_mtime_ns))
+    return tuple(found)
+
+
+def _tick():
+    """The generator deployed while Painter ran: copy the new generation onto the shelves now, so
+    the next push finds the shelf current. The shelf then reads the disk and ends its crawl,
+    which moves the project's instances."""
+    try:
+        signature = _signature()
+        if signature == _watch["seen"]:
+            return
+        _watch["seen"] = signature
+        report = []
+        sync(report)
+        _announce(report)
+    except substance_painter.exception.ServiceNotFoundError:
+        _watch["seen"] = None
 
 
 def _follow_now():
@@ -182,8 +240,19 @@ def start():
     except substance_painter.exception.ServiceNotFoundError:
         report.append("the shelves are not up yet; the generated shaders are synced as each finishes reading")
     _announce(report)
+    _watch["seen"] = _signature()
+    timer = QtCore.QTimer()
+    timer.setInterval(WATCH_INTERVAL)
+    timer.timeout.connect(_tick)
+    timer.start()
+    _watch["timer"] = timer
 
 
 def stop():
+    timer = _watch["timer"]
+    if timer is not None:
+        timer.stop()
+        _watch["timer"] = None
+    _watch["seen"] = None
     for event, handler in _EVENTS:
         substance_painter.event.DISPATCHER.disconnect(event, handler)
