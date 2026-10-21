@@ -29,6 +29,8 @@
 #define frac fract
 #define ddx dFdx
 #define ddy dFdy
+#define ddx_fine dFdxFine
+#define ddy_fine dFdyFine
 #define fmod mod
 #define atan2(y, x) atan(y, x)
 #define rsqrt inversesqrt
@@ -970,7 +972,7 @@ vec3 LinearToSRGB(vec3 c) { return vec3(LinearToSRGB(c.r), LinearToSRGB(c.g), Li
 #define _WorldSpaceCameraPos (camera_pos)
 #define _ZBufferParams (vec4(-999.0, 1000.0, -0.999, 1.0))
 #define unity_LightData (vec4(0.0, 0.0, 1.0, 0.0))
-#define unity_OrthoParams (vec4(0.0, 0.0, 0.0, 0.0))
+#define unity_OrthoParams (vec4(0.0, 0.0, 0.0, is_perspective ? 0.0 : 1.0))
 //----------------------------------------------------------------------endregion
 
 //----------------------------------------------------------------------region 宿主原生取值(通道/烘焙网格贴图/环境预滤波)
@@ -1207,7 +1209,7 @@ void RURI_INIT_COMMON(SceneVaryings input_, out RuriData outRuriData)
     outRuriData.shadowMask = float4(1.0, 1.0, 1.0, 1.0);
 }
 
-void CharacterMacros_RURI_SHADOW_COORD(inout RuriData outRuriData)
+void RURI_SHADOW_COORD(inout RuriData outRuriData)
 {
     if (!(MAIN_LIGHT_CALCULATE_SHADOWS))
     {

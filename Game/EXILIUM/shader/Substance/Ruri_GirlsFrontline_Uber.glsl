@@ -29,6 +29,8 @@
 #define frac fract
 #define ddx dFdx
 #define ddy dFdy
+#define ddx_fine dFdxFine
+#define ddy_fine dFdyFine
 #define fmod mod
 #define atan2(y, x) atan(y, x)
 #define rsqrt inversesqrt
@@ -609,7 +611,7 @@ vec3 LinearToSRGB(vec3 c) { return vec3(LinearToSRGB(c.r), LinearToSRGB(c.g), Li
 #define _ScaledScreenParams (vec4(1920.0, 1080.0, 1.0 + 1.0/1920.0, 1.0 + 1.0/1080.0))
 #define _WorldSpaceCameraPos (camera_pos)
 #define unity_LightData (vec4(0.0, 0.0, 1.0, 0.0))
-#define unity_OrthoParams (vec4(0.0, 0.0, 0.0, 0.0))
+#define unity_OrthoParams (vec4(0.0, 0.0, 0.0, is_perspective ? 0.0 : 1.0))
 #define unity_WorldToObject (UNITY_MATRIX_I_M)
 #define unity_WorldTransformParams (vec4(0.0, 0.0, 0.0, 1.0))
 //----------------------------------------------------------------------endregion
@@ -708,10 +710,10 @@ vec3 TransformTangentToWorld(vec3 directionTS, mat3 tangentToWorld)
 vec3 ResolveNormalWS(vec3 normalTS, vec3 positionWS, vec3 vertexNormalWS, vec4 tangentWS, vec2 uv)
 {
     vec3 N = half3(NormalizeNormalPerPixel(vertexNormalWS));
-    vec3 dp1 = ddx(positionWS);
-    vec3 dp2 = ddy(positionWS);
-    vec2 duv1 = ddx(uv);
-    vec2 duv2 = ddy(uv);
+    vec3 dp1 = ddx_fine(positionWS);
+    vec3 dp2 = ddy_fine(positionWS);
+    vec2 duv1 = ddx_fine(uv);
+    vec2 duv2 = ddy_fine(uv);
     vec3 T;
     vec3 B;
     if (dot(tangentWS.xyz, tangentWS.xyz) > 1e-4)
