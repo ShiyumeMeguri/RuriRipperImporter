@@ -221,7 +221,7 @@ def _manifest_plan(manifest, part, name, key, stated, texture_exists):
                 plan.channel_jobs.append(job)
                 plan.channels[input_id] = ChannelSpec(
                     entry.get("Format", ""), entry.get("Encoding") == "Color",
-                    entry.get("Semantic", "") if entry.get("Kind") == "OverflowChannel" else "")
+                    entry.get("Label", "") if entry.get("Kind") == "OverflowChannel" else "")
 
     # The generated shader's parameter names are the source's property names, so values pass
     # through 1:1; the colour ones take the conversion the engine applies on upload, and WHICH ones
