@@ -6,7 +6,6 @@
   "shader": "Ruri_Endfield_Uber.glsl",
   "generated": "Ruri.RenderPipelines.Generator — 勿手改;改真源后重跑 codegen",
   "operations": [
-    "invert",
     "repack_normal",
     "unpack_normal_alpha_green"
   ],
@@ -1430,15 +1429,15 @@
     },
     {
       "Kind": "OverflowChannel",
-      "Id": "user1",
+      "Id": "user4",
       "Semantic": "ClearCoatMask",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "清漆层遮罩 [0,1]",
-      "Declaration": "//: param auto channel_user1\nuniform SamplerSparse slot_user1_tex;",
-      "Getter": "ruriSparseScalar(slot_user1_tex, {coord}, {absent})",
+      "Label": "ClearCoatMask",
+      "Declaration": "//: param auto channel_user4\nuniform SamplerSparse slot_user4_tex;",
+      "Getter": "ruriSparseScalar(slot_user4_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
@@ -1520,15 +1519,15 @@
     },
     {
       "Kind": "OverflowChannel",
-      "Id": "user2",
+      "Id": "user5",
       "Semantic": "EmissionMask",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "自发光强度遮罩 [0,1](逐像素选哪里发光/呼吸)",
-      "Declaration": "//: param auto channel_user2\nuniform SamplerSparse slot_user2_tex;",
-      "Getter": "ruriSparseScalar(slot_user2_tex, {coord}, {absent})",
+      "Label": "EmissionMask",
+      "Declaration": "//: param auto channel_user5\nuniform SamplerSparse slot_user5_tex;",
+      "Getter": "ruriSparseScalar(slot_user5_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
@@ -1764,101 +1763,81 @@
       ]
     },
     {
-      "Kind": "NativeChannel",
-      "Id": "metallic",
+      "Kind": "OverflowChannel",
+      "Id": "user0",
       "Semantic": "Metallic",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "金属度 [0,1]",
-      "Declaration": "//: param auto channel_metallic\nuniform SamplerSparse metallic_tex;",
-      "Getter": "ruriSparseScalar(metallic_tex, {coord}, {absent})",
+      "Label": "R",
+      "Declaration": "//: param auto channel_user0\nuniform SamplerSparse slot_user0_tex;",
+      "Getter": "ruriSparseScalar(slot_user0_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
           "Source": "_MetallicGlossMap",
           "Channels": "r",
           "Operation": ""
-        },
-        {
-          "Source": "_RMOSMap",
-          "Channels": "g",
-          "Operation": ""
         }
       ]
     },
     {
-      "Kind": "NativeChannel",
-      "Id": "specularlevel",
+      "Kind": "OverflowChannel",
+      "Id": "user1",
       "Semantic": "SpecularLevel",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "高光强度系数 [0,1](非金属 F0 的缩放)",
-      "Declaration": "//: param auto channel_specularlevel\nuniform SamplerSparse specularlevel_tex;",
-      "Getter": "ruriSparseScalar(specularlevel_tex, {coord}, {absent})",
+      "Label": "G",
+      "Declaration": "//: param auto channel_user1\nuniform SamplerSparse slot_user1_tex;",
+      "Getter": "ruriSparseScalar(slot_user1_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
           "Source": "_MetallicGlossMap",
           "Channels": "g",
           "Operation": ""
-        },
-        {
-          "Source": "_RMOSMap",
-          "Channels": "a",
-          "Operation": ""
         }
       ]
     },
     {
-      "Kind": "NativeChannel",
-      "Id": "ambientOcclusion",
+      "Kind": "OverflowChannel",
+      "Id": "user2",
       "Semantic": "Occlusion",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "环境光遮蔽 [0,1](1 = 无遮蔽)",
-      "Declaration": "",
-      "Getter": "ruriBakedOcclusion({coord}, {absent})",
-      "MeshMap": "AO",
+      "Label": "B",
+      "Declaration": "//: param auto channel_user2\nuniform SamplerSparse slot_user2_tex;",
+      "Getter": "ruriSparseScalar(slot_user2_tex, {coord}, {absent})",
+      "MeshMap": "",
       "Sources": [
         {
           "Source": "_MetallicGlossMap",
-          "Channels": "b",
-          "Operation": ""
-        },
-        {
-          "Source": "_RMOSMap",
           "Channels": "b",
           "Operation": ""
         }
       ]
     },
     {
-      "Kind": "NativeChannel",
-      "Id": "roughness",
-      "Semantic": "Roughness",
+      "Kind": "OverflowChannel",
+      "Id": "user3",
+      "Semantic": "Smoothness",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "粗糙度 [0,1] = 1 - 光滑度",
-      "Declaration": "//: param auto channel_roughness\nuniform SamplerSparse roughness_tex;",
-      "Getter": "ruriSparseScalar(roughness_tex, {coord}, {absent})",
+      "Label": "A",
+      "Declaration": "//: param auto channel_user3\nuniform SamplerSparse slot_user3_tex;",
+      "Getter": "ruriSparseScalar(slot_user3_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
           "Source": "_MetallicGlossMap",
           "Channels": "a",
-          "Operation": "invert"
-        },
-        {
-          "Source": "_RMOSMap",
-          "Channels": "r",
           "Operation": ""
         }
       ]
@@ -1890,20 +1869,100 @@
     },
     {
       "Kind": "OverflowChannel",
-      "Id": "user3",
+      "Id": "user6",
       "Semantic": "Height",
       "Components": 1,
       "Encoding": "Linear",
       "Format": "L8",
       "Absent": [],
-      "Label": "视差/位移高度 [0,1]",
-      "Declaration": "//: param auto channel_user3\nuniform SamplerSparse slot_user3_tex;",
-      "Getter": "ruriSparseScalar(slot_user3_tex, {coord}, {absent})",
+      "Label": "Height",
+      "Declaration": "//: param auto channel_user6\nuniform SamplerSparse slot_user6_tex;",
+      "Getter": "ruriSparseScalar(slot_user6_tex, {coord}, {absent})",
       "MeshMap": "",
       "Sources": [
         {
           "Source": "_ParallaxTex",
           "Channels": "r",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "roughness",
+      "Semantic": "Roughness",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [],
+      "Label": "粗糙度 [0,1] = 1 - 光滑度",
+      "Declaration": "//: param auto channel_roughness\nuniform SamplerSparse roughness_tex;",
+      "Getter": "ruriSparseScalar(roughness_tex, {coord}, {absent})",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_RMOSMap",
+          "Channels": "r",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "metallic",
+      "Semantic": "Metallic",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [],
+      "Label": "金属度 [0,1]",
+      "Declaration": "//: param auto channel_metallic\nuniform SamplerSparse metallic_tex;",
+      "Getter": "ruriSparseScalar(metallic_tex, {coord}, {absent})",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_RMOSMap",
+          "Channels": "g",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "ambientOcclusion",
+      "Semantic": "Occlusion",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [],
+      "Label": "环境光遮蔽 [0,1](1 = 无遮蔽)",
+      "Declaration": "",
+      "Getter": "ruriBakedOcclusion({coord}, {absent})",
+      "MeshMap": "AO",
+      "Sources": [
+        {
+          "Source": "_RMOSMap",
+          "Channels": "b",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "NativeChannel",
+      "Id": "specularlevel",
+      "Semantic": "SpecularLevel",
+      "Components": 1,
+      "Encoding": "Linear",
+      "Format": "L8",
+      "Absent": [],
+      "Label": "高光强度系数 [0,1](非金属 F0 的缩放)",
+      "Declaration": "//: param auto channel_specularlevel\nuniform SamplerSparse specularlevel_tex;",
+      "Getter": "ruriSparseScalar(specularlevel_tex, {coord}, {absent})",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_RMOSMap",
+          "Channels": "a",
           "Operation": ""
         }
       ]
@@ -2312,7 +2371,7 @@
       "Source": "_ClearCoatMask",
       "Lanes": [
         {
-          "Input": "user1",
+          "Input": "user4",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
@@ -2435,7 +2494,7 @@
           "Absent": 0
         },
         {
-          "Input": "user2",
+          "Input": "user5",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
@@ -2754,30 +2813,30 @@
       "Source": "_MetallicGlossMap",
       "Lanes": [
         {
-          "Input": "metallic",
+          "Input": "user0",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
           "Absent": 1
         },
         {
-          "Input": "specularlevel",
+          "Input": "user1",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
           "Absent": 1
         },
         {
-          "Input": "ambientOcclusion",
+          "Input": "user2",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
           "Absent": 1
         },
         {
-          "Input": "roughness",
+          "Input": "user3",
           "Component": 0,
-          "Operation": "invert",
+          "Operation": "",
           "Constant": 0,
           "Absent": 1
         }
@@ -2822,7 +2881,7 @@
       "Source": "_ParallaxTex",
       "Lanes": [
         {
-          "Input": "user3",
+          "Input": "user6",
           "Component": 0,
           "Operation": "",
           "Constant": 0,
@@ -3194,9 +3253,13 @@
     }
   ],
   "notes": [
-    "外溢分配:ClearCoatMask → user1(按语义名字典序,两侧独立算出同一结果)",
-    "外溢分配:EmissionMask → user2(按语义名字典序,两侧独立算出同一结果)",
-    "外溢分配:Height → user3(按语义名字典序,两侧独立算出同一结果)",
+    "_MetallicGlossMap.r(Metallic):通道包 → user0(逐通道原样,不换算)",
+    "_MetallicGlossMap.g(SpecularLevel):通道包 → user1(逐通道原样,不换算)",
+    "_MetallicGlossMap.b(Occlusion):通道包 → user2(逐通道原样,不换算)",
+    "_MetallicGlossMap.a(Smoothness):通道包 → user3(逐通道原样,不换算)",
+    "外溢分配:ClearCoatMask → user4(按语义名字典序,让开通道包钉住的序号,两侧独立算出同一结果)",
+    "外溢分配:EmissionMask → user5(按语义名字典序,让开通道包钉住的序号,两侧独立算出同一结果)",
+    "外溢分配:Height → user6(按语义名字典序,让开通道包钉住的序号,两侧独立算出同一结果)",
     "_BumpMap:打包覆盖之外的 ba 位 → 余量原样槽位 _BumpMap_ba",
     "_ClearCoatMask:打包覆盖之外的 gba 位 → 余量原样槽位 _ClearCoatMask_gba",
     "_ParallaxTex:打包覆盖之外的 gba 位 → 余量原样槽位 _ParallaxTex_gba",

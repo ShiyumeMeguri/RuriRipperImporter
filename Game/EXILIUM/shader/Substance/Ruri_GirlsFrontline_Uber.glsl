@@ -117,6 +117,18 @@ uniform_specialization int _CharaPartID;
 uniform_specialization bool MAIN_LIGHT_CALCULATE_SHADOWS;
 //: param custom { "default": false, "label": "_NORMALMAP", "group": "1 变体开关" }
 uniform_specialization bool _NORMALMAP;
+//: param custom { "default": "", "default_color": [0.2158605, 0.2158605, 0.2158605, 0.5], "label": "Blend Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _BlendTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "MainTex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _MainTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "RMO Map (RGB)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _RMOTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Diffuse Ramp Map", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _RampMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Specular Map", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _Specularmap;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 0.0, 0.0], "label": "_BumpMap 余量(ba)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _BumpMap_ba;
 const float INV_PI = 0.31830987;
 //: param custom { "default": false, "label": "Adjust Shadow Bias", "group": "Stocking" }
 uniform bool _AdjustShadowBias;
@@ -222,26 +234,14 @@ uniform vec4 light_main;
 uniform SamplerSparse basecolor_tex;
 //: param auto channel_opacity
 uniform SamplerSparse opacity_tex;
-//: param custom { "default": "", "default_color": [0.2158605, 0.2158605, 0.2158605, 0.5], "label": "Blend Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _BlendTex;
-//: param auto channel_user1
-uniform SamplerSparse slot_user1_tex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "MainTex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _MainTex;
+//: param auto channel_user0
+uniform SamplerSparse slot_user0_tex;
 //: param auto channel_roughness
 uniform SamplerSparse roughness_tex;
 //: param auto channel_metallic
 uniform SamplerSparse metallic_tex;
 //: param auto channel_specularlevel
 uniform SamplerSparse specularlevel_tex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "RMO Map (RGB)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _RMOTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Diffuse Ramp Map", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _RampMap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Specular Map", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _Specularmap;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 0.0, 0.0], "label": "_BumpMap 余量(ba)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _BumpMap_ba;
 //----------------------------------------------------------------------endregion
 
 #ifndef RURI_PRELUDE_RURILENGTH

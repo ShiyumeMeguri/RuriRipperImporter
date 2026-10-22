@@ -119,6 +119,56 @@ uniform_specialization bool DISABLE_DRAW_UNDER_HAIR;
 uniform_specialization bool MAIN_LIGHT_CALCULATE_SHADOWS;
 //: param custom { "default": false, "label": "_NORMALMAP", "group": "1 变体开关" }
 uniform_specialization bool _NORMALMAP;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Blend Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _BlendTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Diffuse Ramp", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _DiffRampMap;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Disturb Tex 1", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _DisturbTex1;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Emotion Map", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _EmotionMap;
+//: param custom { "default": "", "default_color": [0.5, 0.5, 1.0, 1.0], "label": "毛发方向(RG)疏密(B)长短(A)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _FurDirMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "皮毛染色", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _FurDyeMap;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Fur Noise", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _FurMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "HighlightMap", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _HighlightMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Line Map", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _LineMap;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Main Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _MainTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Mask Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _MaskTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Matcap", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _MatcapTex;
+//: param custom { "default": "", "default_color": [0.5, 0.5, 1.0, 1.0], "label": "法线图", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _NormalMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "SDF Lightmap", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SDFLightmap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "RimMask/SDFMask/FlatSHMask", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SDFMask;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Shadow Color Lut", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _ShadowLutTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "丝袜遮罩", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SilkStockingsMask;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Specular Ramp", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SpecRampMap;
+//: param custom { "default": "", "default_color": [0.2158605, 0.2158605, 0.2158605, 0.5], "label": "HN (RG:Normal BA:Specular Normal)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _SplitNormalMap;
+//: param custom { "default": "", "default_color": [0.5, 0.5, 0.5, 0.5], "label": "Stroke Map(R:anisotropy G:specular offset)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _StrokeMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "VFX Special Blend Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _VFXSpecialBlendTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "VFX Special Main Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _VFXSpecialMainTex;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 0.0, 0.0], "label": "_BumpMap 余量(ba)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _BumpMap_ba;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 0.0], "label": "_ClearCoatMask 余量(gba)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _ClearCoatMask_gba;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 0.0], "label": "_ParallaxTex 余量(gba)", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _ParallaxTex_gba;
 const float HALF_MIN = 6.1035156E-05;
 //: param custom { "default": false, "label": "__clip", "group": "参数" }
 uniform bool _AlphaClip;
@@ -567,68 +617,26 @@ uniform vec4 light_main;
 uniform SamplerSparse basecolor_tex;
 //: param auto channel_opacity
 uniform SamplerSparse opacity_tex;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Blend Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _BlendTex;
+//: param auto channel_user4
+uniform SamplerSparse slot_user4_tex;
+//: param auto channel_user5
+uniform SamplerSparse slot_user5_tex;
+//: param auto channel_user0
+uniform SamplerSparse slot_user0_tex;
 //: param auto channel_user1
 uniform SamplerSparse slot_user1_tex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Diffuse Ramp", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _DiffRampMap;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Disturb Tex 1", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _DisturbTex1;
 //: param auto channel_user2
 uniform SamplerSparse slot_user2_tex;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Emotion Map", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _EmotionMap;
-//: param custom { "default": "", "default_color": [0.5, 0.5, 1.0, 1.0], "label": "毛发方向(RG)疏密(B)长短(A)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _FurDirMap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "皮毛染色", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _FurDyeMap;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Fur Noise", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _FurMap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "HighlightMap", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _HighlightMap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Line Map", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _LineMap;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Main Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _MainTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Mask Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _MaskTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Matcap", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _MatcapTex;
+//: param auto channel_user3
+uniform SamplerSparse slot_user3_tex;
+//: param auto channel_user6
+uniform SamplerSparse slot_user6_tex;
+//: param auto channel_roughness
+uniform SamplerSparse roughness_tex;
 //: param auto channel_metallic
 uniform SamplerSparse metallic_tex;
 //: param auto channel_specularlevel
 uniform SamplerSparse specularlevel_tex;
-//: param auto channel_roughness
-uniform SamplerSparse roughness_tex;
-//: param custom { "default": "", "default_color": [0.5, 0.5, 1.0, 1.0], "label": "法线图", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _NormalMap;
-//: param auto channel_user3
-uniform SamplerSparse slot_user3_tex;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "SDF Lightmap", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SDFLightmap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "RimMask/SDFMask/FlatSHMask", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SDFMask;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Shadow Color Lut", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _ShadowLutTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "丝袜遮罩", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SilkStockingsMask;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Specular Ramp", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SpecRampMap;
-//: param custom { "default": "", "default_color": [0.2158605, 0.2158605, 0.2158605, 0.5], "label": "HN (RG:Normal BA:Specular Normal)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _SplitNormalMap;
-//: param custom { "default": "", "default_color": [0.5, 0.5, 0.5, 0.5], "label": "Stroke Map(R:anisotropy G:specular offset)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _StrokeMap;
-//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "VFX Special Blend Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _VFXSpecialBlendTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "VFX Special Main Tex", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _VFXSpecialMainTex;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 0.0, 0.0], "label": "_BumpMap 余量(ba)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _BumpMap_ba;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 0.0], "label": "_ClearCoatMask 余量(gba)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _ClearCoatMask_gba;
-//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 0.0], "label": "_ParallaxTex 余量(gba)", "usage": "texture", "group": "2 贴图" }
-uniform sampler2D _ParallaxTex_gba;
 //----------------------------------------------------------------------endregion
 
 #ifndef RURI_PRELUDE_RURILENGTH
@@ -1022,27 +1030,27 @@ float4 ruriRead_BumpMap(float2 uv) {
 }
 
 float4 ruriRead_ClearCoatMask(float2 uv) {
-    float ruriInput0 = ruriSparseScalar(slot_user1_tex, ruriSparseCoord, 1.0);
+    float ruriInput0 = ruriSparseScalar(slot_user4_tex, ruriSparseCoord, 1.0);
     vec4 ruriInput1 = texture(_ClearCoatMask_gba, uv);
     return float4(ruriInput0, ruriInput1.x, ruriInput1.y, ruriInput1.z);
 }
 
 float4 ruriRead_EmissionMap(float2 uv) {
     vec3 ruriInput0 = emissive_intensity * ruriSparseColor(emissive_tex, ruriSparseCoord, vec3(0.0, 0.0, 0.0));
-    float ruriInput1 = ruriSparseScalar(slot_user2_tex, ruriSparseCoord, 0.0);
+    float ruriInput1 = ruriSparseScalar(slot_user5_tex, ruriSparseCoord, 0.0);
     return float4(ruriInput0.x, ruriInput0.y, ruriInput0.z, ruriInput1);
 }
 
 float4 ruriRead_MetallicGlossMap(float2 uv) {
-    float ruriInput0 = ruriSparseScalar(metallic_tex, ruriSparseCoord, 1.0);
-    float ruriInput1 = ruriSparseScalar(specularlevel_tex, ruriSparseCoord, 1.0);
-    float ruriInput2 = ruriBakedOcclusion(ruriSparseCoord, 1.0);
-    float ruriInput3 = ruriSparseScalar(roughness_tex, ruriSparseCoord, 0.0);
-    return float4(ruriInput0, ruriInput1, ruriInput2, (ruriInput3 * -1.0 + 1.0));
+    float ruriInput0 = ruriSparseScalar(slot_user0_tex, ruriSparseCoord, 1.0);
+    float ruriInput1 = ruriSparseScalar(slot_user1_tex, ruriSparseCoord, 1.0);
+    float ruriInput2 = ruriSparseScalar(slot_user2_tex, ruriSparseCoord, 1.0);
+    float ruriInput3 = ruriSparseScalar(slot_user3_tex, ruriSparseCoord, 1.0);
+    return float4(ruriInput0, ruriInput1, ruriInput2, ruriInput3);
 }
 
 float4 ruriRead_ParallaxTex(float2 uv) {
-    float ruriInput0 = ruriSparseScalar(slot_user3_tex, ruriSparseCoord, 1.0);
+    float ruriInput0 = ruriSparseScalar(slot_user6_tex, ruriSparseCoord, 1.0);
     vec4 ruriInput1 = texture(_ParallaxTex_gba, uv);
     return float4(ruriInput0, ruriInput1.x, ruriInput1.y, ruriInput1.z);
 }
