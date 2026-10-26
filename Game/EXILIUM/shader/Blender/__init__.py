@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(9839a38a640f4f34):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(629c3834eb4cb517):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_girlsfrontline 的包入口)—— 运行时。
@@ -1060,25 +1060,60 @@ def _light_axes(g):
     return axes
 
 
-def _world_background(scene):
-    world = getattr(scene, 'world', None)
-    if world is None or not world.use_nodes or world.node_tree is None:
-        return None
-    for nd in world.node_tree.nodes:
-        if nd.type == 'BACKGROUND':
-            return nd
+def _world_output(tree):
+    """EEVEE 取用的世界输出,选法同 Blender:目标是 EEVEE 的压过「全部」,同类里取活动的。"""
+    outputs = [nd for nd in tree.nodes if nd.type == 'OUTPUT_WORLD' and nd.target in ('ALL', 'EEVEE')]
+    return max(outputs, key=lambda nd: (nd.target == 'EEVEE', nd.is_active_output), default=None)
+
+
+def _world_unanswered(world, where, reason):
+    print('[ruri-cap] 世界 {0} 的 {1}:{2} → 环境答不出'.format(world.name, where, reason), flush=True)
     return None
 
 
+def _world_background(scene):
+    """照明光线在世界里看到的 Background(无灯环境光与镜面环境的来源)。从世界输出的 Surface 顺着连线走:
+    混合着色器的 Fac 来自 Light Path 的 Is Camera Ray 时,Fac = 1 那一支只是相机直接看到的背景,照明光线
+    (Is Camera Ray = 0)走第一个 Shader 口。别的形状(没接、别的着色器、别的 Fac 来源)答不出并大声记账,
+    不按节点序猜一个。"""
+    world = getattr(scene, 'world', None)
+    if world is None or not world.use_nodes or world.node_tree is None:
+        return None
+    output = _world_output(world.node_tree)
+    if output is None:
+        return _world_unanswered(world, '世界输出', '没有 EEVEE 取用的世界输出')
+    socket = output.inputs['Surface']
+    for _ in range(len(world.node_tree.nodes)):
+        if not socket.is_linked:
+            return _world_unanswered(world, socket.node.name, '%s 没接' % socket.name)
+        node = socket.links[0].from_node
+        if node.type == 'BACKGROUND':
+            return node
+        if node.type != 'MIX_SHADER':
+            return _world_unanswered(world, node.name, '照明光线走到 %s,只认 Background 与按 Is Camera Ray 分流的混合着色器' % node.bl_idname)
+        factor = node.inputs['Fac']
+        origin = factor.links[0].from_socket if factor.is_linked else None
+        if origin is None or origin.node.type != 'LIGHT_PATH' or origin.identifier != 'Is Camera Ray':
+            return _world_unanswered(world, node.name, 'Fac 不是 Light Path 的 Is Camera Ray,两支怎么混答不出')
+        socket = node.inputs[1]
+    return _world_unanswered(world, output.name, '连线成环')
+
+
 def _world_sample(g, direction, spread):
-    """沿方向对当前世界环境取一次值(环境图复用其 Mapping;平色世界给常量,精确非近似)。"""
-    bg = _world_background(bpy.context.scene)
+    """沿方向对当前世界环境取一次值(环境图复用其 Mapping;平色世界给常量,精确非近似)。Strength 与 Color
+    只认没接线的常量,或 Color 直连带图的环境纹理:口接着别的节点时默认值不是它的值,答不出,不读默认值。"""
+    scene = bpy.context.scene
+    bg = _world_background(scene)
     if bg is None:
         return None
+    if bg.inputs['Strength'].is_linked:
+        return _world_unanswered(scene.world, bg.name, 'Strength 接着别的节点')
     strength = float(bg.inputs['Strength'].default_value)
     color_in = bg.inputs['Color']
     src = color_in.links[0].from_node if color_in.is_linked else None
-    if src is not None and src.type == 'TEX_ENVIRONMENT' and src.image is not None:
+    if src is not None and (src.type != 'TEX_ENVIRONMENT' or src.image is None):
+        return _world_unanswered(scene.world, bg.name, 'Color 接着 %s,只认直连带图的环境纹理' % src.bl_idname)
+    if src is not None:
         d = g.u2b(direction)
         if src.inputs['Vector'].is_linked:
             up = src.inputs['Vector'].links[0].from_node
