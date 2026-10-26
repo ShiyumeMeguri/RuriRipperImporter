@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(d657274f0ba545c0):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(19c40fe35b6e2555):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_wutheringwaves 的包入口)—— 运行时。
@@ -167,11 +167,18 @@ def _world_basis():
     return _WORLD_BASIS[0]
 
 
+def _import_host(relative):
+    """清单点名的宿主模块是相对插件根的路径(Host.Blender.xxx):插件根叫什么由用户磁盘上的文件夹名决定,
+    生成物落在 Game/{游戏}/shader/{宿主}/,根就是这个包名里 .Game. 之前的部分。"""
+    import importlib
+    root = __package__.partition('.Game.')[0]
+    return importlib.import_module(root + '.' + relative)
+
+
 def _host():
     """宿主模块(清单的 host.registry_module,全平台同一个)。插件数据的出生、清理与存盘守卫都住在那边:宿主自己
     也造插件数据块(视点、关卡图占位),同一条规矩只许一处声明。"""
-    import importlib
-    return importlib.import_module(MANIFESTS[0]['host']['registry_module'])
+    return _import_host(MANIFESTS[0]['host']['registry_module'])
 
 
 class G:
@@ -3137,12 +3144,11 @@ class Stack:
     def _rig_identity_api(self, key):
         """宿主那份骨骼身份 API(None = 配方没声明)。身份编码只有宿主一个读者,
         生成物经这一个口子问它,不自己再解一遍那份编码。"""
-        import importlib
         module = self.host.get('rig_identity_module') or ''
         fn = self.host.get(key) or ''
         if not module or not fn:
             return None
-        return getattr(importlib.import_module(module), fn)
+        return getattr(_import_host(module), fn)
 
     def rig_resolve_bone(self, arm, unity_name):
         """Unity 骨名 → 本 rig 当下的 Blender 骨名('' = 这副骨架没有这根)。
@@ -5450,8 +5456,7 @@ class Stack:
     # ==================== 宿主注册 ====================
 
     def _host_module(self):
-        import importlib
-        return importlib.import_module(self.host['registry_module'])
+        return _import_host(self.host['registry_module'])
 
     def register_host(self):
         host = self._host_module()

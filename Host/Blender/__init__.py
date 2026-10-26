@@ -14,7 +14,7 @@ import os
 import sys
 
 import bpy
-from bpy.props import StringProperty
+from bpy.props import BoolProperty, StringProperty
 
 from ...Kernel import bootstrap as kernel_bootstrap
 from ...Kernel import host as host_port
@@ -337,7 +337,7 @@ from ... import Game                                                    # noqa: 
 from . import (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder,  # noqa: E402
                material_panel, derived_state, allocator, animation_builder, step_loader, browser_panel,
                shader_inputs, shader_version, shader_update_panel, post_panel, viewpoint, picture_view,
-               region_picker)
+               region_picker, bin_update)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ def _holds_process_state(module):
 #: correctness.
 _DRIVER_ORDER = (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder, material_panel,
                  derived_state, animation_builder, step_loader, browser_panel, shader_inputs, shader_version,
-                 shader_update_panel, post_panel, picture_view, region_picker)
+                 shader_update_panel, post_panel, picture_view, region_picker, bin_update)
 
 
 def _reload_tree(root_name):
@@ -452,15 +452,29 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
                     "so this one path is all there is to set",
         update=_on_paths_changed)
 
+    ripperhook_auto_update: BoolProperty(
+        name="Keep RipperHook Up To Date",
+        description="Check for a newer RipperHook build when Blender starts and whenever the reader "
+                    "fails to start, and move the bin dir to it. A bin dir you typed yourself is never replaced "
+                    "by this; only the Download / Update button does that",
+        default=True)
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "ripperhook_repo")
+        row = layout.row()
+        row.enabled = not bin_update.running()
+        row.operator(bin_update.RURI_OT_UpdateRipperHook.bl_idname, icon="IMPORT")
+        layout.prop(self, "ripperhook_auto_update")
+        if bin_update.message():
+            layout.label(text=bin_update.message(), icon="ERROR" if bin_update.failed() else "INFO")
         layout.label(text="Point this at the folder every reader builds into "
                           "(e.g. .../Ruri-RipperHook/Source/0Bins/Debug).", icon="INFO")
 
 
 def register():
     bpy.utils.register_class(RuriRipperImporterPreferences)
+    bin_update.register()
     # The records every panel state shares, before the first state that contains one.
     rna.register_shared()
     # ⛔ 插件自己的数据严禁写进 .blend:存盘前的守卫。
@@ -523,4 +537,5 @@ def unregister():
     linked_twins.unregister()
     plugin_data.unregister()
     rna.unregister_shared()
+    bin_update.unregister()
     bpy.utils.unregister_class(RuriRipperImporterPreferences)

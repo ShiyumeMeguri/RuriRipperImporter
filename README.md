@@ -25,8 +25,10 @@
 
 ### 两边都要的一步
 
-工具 DLL 从 https://github.com/FractalTools/Ruri.RipperHook/actions 下载构建产物,解压到
-任意目录 —— 面板里那个 **Bin Dir** 填的就是它。做一次,两个软件共用。
+工具 DLL 不用手动下载:Blender 里启用插件后,**编辑 ▸ 偏好设置 ▸ 插件 ▸ RuriRipperImporter**
+点 **Download / Update RipperHook**,它会下载最新构建并自动把 **Bin Dir** 指过去;
+默认还会在启动时和读取器启动失败时自动检查更新(更新后重启 Blender 生效)。
+Substance Painter 那边的 **Bin Dir** 填同一个文件夹即可。
 
 ### Blender
 

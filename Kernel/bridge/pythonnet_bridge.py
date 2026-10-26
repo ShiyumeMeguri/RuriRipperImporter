@@ -29,6 +29,7 @@ HOLDS_PROCESS_STATE = True
 _runtime_set = False
 _bridge_type = None
 _bin_dir_override = None
+_failure_listener = None
 _bin_dir_hint = ("Set it in the RuriRipper panel, or set the RURI_RIPPERHOOK_BIN "
                  "environment variable.")
 
@@ -279,7 +280,23 @@ def _clr_byte_array(data):
     return array
 
 
+def set_failure_listener(listener):
+    """Called with the exception whenever booting the reader fails, before it
+    propagates -- a host uses it to look for a newer build of the reader."""
+    global _failure_listener
+    _failure_listener = listener
+
+
 def _ensure_runtime():
+    try:
+        _boot_runtime()
+    except Exception as exc:
+        if _failure_listener is not None:
+            _failure_listener(exc)
+        raise
+
+
+def _boot_runtime():
     """Boot CoreCLR (once per host process -- it cannot be re-pointed or
     unloaded once set, whether that "once" was this call or an earlier
     claim_runtime_early()) and load Ruri.RipperHook.dll."""
