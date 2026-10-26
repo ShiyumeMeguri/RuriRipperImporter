@@ -29,8 +29,9 @@ ADDON = __package__.split(".")[0]
 #: environment up rewrites this light rather than adding a second sun.
 LEVEL_SUN = "Ruri Level Sun"
 
-_BIN_DIR_HINT = ('Set it in Edit > Preferences > Add-ons > RuriRipperImporter > '
-                 '"Ruri-RipperHook Bin Dir" (the checkout\'s Source/0Bins/<config>), '
+_BIN_DIR_HINT = ('Click "Download / Update RipperHook" in Edit > Preferences > Add-ons > '
+                 'RuriRipperImporter (it downloads the reader and sets the path; a check is also '
+                 'running in the background now), or set "Ruri-RipperHook Bin Dir" there by hand, '
                  'or set the RURI_RIPPERHOOK_BIN environment variable.')
 
 
