@@ -57,10 +57,18 @@ def configure():
     except Exception as exc:  # best effort -- _ensure_runtime() retries for real on first use
         host.log(host_port.INFO, "early CoreCLR claim skipped: {0}".format(exc))
 
+    install_dependencies()
+    return host
+
+
+def install_dependencies():
+    """Start the dependency install if it is needed and not already running. The
+    same call is the retry after a failed one, because a failed install leaves
+    nothing running."""
+    host = host_port.current()
     _runtime_bootstrap.ensure_async(
         report_fn=lambda message: host.log(host_port.INFO, message),
         on_ready=pythonnet_bridge.claim_runtime_early)
-    return host
 
 
 def republish_paths():

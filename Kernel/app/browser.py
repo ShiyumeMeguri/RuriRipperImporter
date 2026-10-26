@@ -1192,6 +1192,18 @@ browser session, and hand focus to a remaining tab."""
     return None
 
 
+def _retry_install(context, arguments):
+    from ...Kernel import bootstrap
+    bootstrap.install_dependencies()
+    _redraw()
+    return None
+
+
+RETRY_INSTALL = app_command.COMMANDS.define(
+    "ruri.retry_install", "Retry Install", _retry_install,
+    description="Run the pythonnet and clr-loader install again after it failed, without restarting the application.",
+    internal=True)
+
 CLOSE_TAB = app_command.COMMANDS.define(
     "ruri.close_tab", "Close Tab", _close_tab,
     description="The tab's x button: close one install's tab -- drop its config entry and its browser session, and hand focus to a remaining tab.",
@@ -2271,7 +2283,7 @@ def draw(layout, context):
             tail = " ".join(error.split())[-_ERROR_LINE_WIDTH * _ERROR_LINE_COUNT:]
             for start in range(0, len(tail), _ERROR_LINE_WIDTH):
                 layout.label(text=tail[start:start + _ERROR_LINE_WIDTH])
-            layout.label(text="Restart Blender to retry; the full pip output is in the system console.")
+            layout.operator(RETRY_INSTALL.id, icon="FILE_REFRESH")
         else:
             layout.label(text="Installing pythonnet bridge...", icon="INFO")
         return
