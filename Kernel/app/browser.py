@@ -2219,6 +2219,8 @@ DECODER_MENU = vocabulary.declare_menu("RURI_MT_decoder", "Decoder", _decoder_en
 #: something in front of a rig the user has selected. Everything else about them
 #: -- label, tooltip, default, kind, which host gets them -- is the table's.
 _OPTION_ICONS = {"retarget_face": "USER", "import_secondary_motion": "MOD_CLOTH"}
+_ERROR_LINE_WIDTH = 60
+_ERROR_LINE_COUNT = 8
 _OPTION_NEEDS_RIG = ("retarget_face", "import_secondary_motion")
 #: Options only a game that STATES the thing can offer. The host never learns
 #: which games those are; it asks the registry per option.
@@ -2266,7 +2268,10 @@ def draw(layout, context):
         error = bootstrap.last_error()
         if error:
             layout.label(text="pythonnet install failed:", icon="ERROR")
-            layout.label(text=error[:60])
+            tail = " ".join(error.split())[-_ERROR_LINE_WIDTH * _ERROR_LINE_COUNT:]
+            for start in range(0, len(tail), _ERROR_LINE_WIDTH):
+                layout.label(text=tail[start:start + _ERROR_LINE_WIDTH])
+            layout.label(text="Restart Blender to retry; the full pip output is in the system console.")
         else:
             layout.label(text="Installing pythonnet bridge...", icon="INFO")
         return

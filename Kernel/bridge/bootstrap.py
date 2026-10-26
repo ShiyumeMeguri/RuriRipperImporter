@@ -282,7 +282,8 @@ def _install(specs):
     ok, err = _run_external_pip(target, specs)
     if not ok:
         _report("[RuriRipper] external pip unavailable ({0}) -- trying in-process pip.".format(err))
-        ok, err = _run_inprocess_pip(target, specs)
+        in_process_ok, in_process_err = _run_inprocess_pip(target, specs)
+        ok, err = in_process_ok, None if in_process_ok else "{0} | {1}".format(err, in_process_err)
     if ok:
         activate()
         importlib.invalidate_caches()
