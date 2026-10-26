@@ -27,6 +27,7 @@ _runtime_set = False
 _bridge_type = None
 _bin_dir_override = None
 _failure_listener = None
+_locale = ""
 _bin_dir_hint = "Set it in the RuriRipper panel."
 
 
@@ -342,6 +343,7 @@ def _boot_runtime():
     # and modules build into one folder. Nothing above this line names a decoder, and
     # no host carries a path to one: what is in the bin dir is what can be read.
     _bridge_type.LoadDeclaredModules()
+    _bridge_type.SetLocale(_locale)
 
 
 def list_decoders():
@@ -429,9 +431,12 @@ def set_locale(locale):
     ("en_US", "ja_JP", "zh_CN"). The application's own UI language, never the
     machine's: a decoder that joins a roster to its text reads it off the session,
     so switching the application's language switches every roster and nothing else
-    has to be told. Pushing the same value again is free."""
-    _ensure_runtime()
-    _bridge_type.SetLocale(str(locale or ""))
+    has to be told. Pushing the same value again is free. Held until the runtime
+    boots, so stating it never forces a boot before the dependencies exist."""
+    global _locale
+    _locale = str(locale or "")
+    if _bridge_type is not None:
+        _bridge_type.SetLocale(_locale)
 
 
 def _string_array(strings):
