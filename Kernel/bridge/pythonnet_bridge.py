@@ -9,12 +9,9 @@ implementation rather than one per host.
 The bin dir -- the folder that has to contain BOTH Ruri.RipperHook.dll and
 Ruri.RipperHook.CLI.runtimeconfig.json, typically ``<checkout>/Source/0Bins/Release``
 -- is the one genuinely machine-specific value here. No repo-root-relative
-derivation, no configuration guessing, nothing hardcoded: it is resolved, in
-order, from
-
-1. ``set_bin_dir(path)`` -- what the host pushed in (Blender: its
-   AddonPreferences; Painter: its settings file), which is the normal case;
-2. ``$RURI_RIPPERHOOK_BIN`` -- the headless/CLI escape hatch, no UI needed.
+derivation, no configuration guessing, nothing hardcoded: it is what the host
+pushed in through ``set_bin_dir(path)`` (Blender: its AddonPreferences; Painter:
+its settings file), and nothing else.
 """
 
 from __future__ import annotations
@@ -30,8 +27,7 @@ _runtime_set = False
 _bridge_type = None
 _bin_dir_override = None
 _failure_listener = None
-_bin_dir_hint = ("Set it in the RuriRipper panel, or set the RURI_RIPPERHOOK_BIN "
-                 "environment variable.")
+_bin_dir_hint = "Set it in the RuriRipper panel."
 
 
 _texture_formats = ()
@@ -51,8 +47,7 @@ def set_texture_formats(extensions):
 
 
 def set_bin_dir(path):
-    """Push the user-configured bin dir in. Takes priority over RURI_RIPPERHOOK_BIN;
-    an empty value clears it again."""
+    """Push the user-configured bin dir in; an empty value clears it again."""
     global _bin_dir_override
     _bin_dir_override = (path or "").strip() or None
 
@@ -65,7 +60,7 @@ def set_bin_dir_hint(hint):
 
 
 def _configured_bin_dir():
-    return _bin_dir_override or (os.environ.get("RURI_RIPPERHOOK_BIN") or "").strip() or None
+    return _bin_dir_override
 
 
 def _dll_dir():

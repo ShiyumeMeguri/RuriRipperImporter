@@ -31,8 +31,7 @@ LEVEL_SUN = "Ruri Level Sun"
 
 _BIN_DIR_HINT = ('Click "Download / Update RipperHook" in Edit > Preferences > Add-ons > '
                  'RuriRipperImporter (it downloads the reader and sets the path; a check is also '
-                 'running in the background now), or set "Ruri-RipperHook Bin Dir" there by hand, '
-                 'or set the RURI_RIPPERHOOK_BIN environment variable.')
+                 'running in the background now), or set "Ruri-RipperHook Bin Dir" there by hand.')
 
 
 def _preferences():
@@ -456,17 +455,22 @@ class RuriRipperImporterPreferences(bpy.types.AddonPreferences):
     ripperhook_auto_update: BoolProperty(
         name="Keep RipperHook Up To Date",
         description="Check for a newer RipperHook build when Blender starts and whenever the reader "
-                    "fails to start, and move the bin dir to it. A bin dir you typed yourself is never replaced "
-                    "by this; only the Download / Update button does that",
+                    "fails to start, and move the bin dir to it. A bin dir that is not one this add-on "
+                    "downloaded is yours and is never touched",
         default=True)
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "ripperhook_repo")
+        by_hand = bin_update.by_hand(self)
         row = layout.row()
-        row.enabled = not bin_update.running()
+        row.enabled = not by_hand and not bin_update.running()
         row.operator(bin_update.RURI_OT_UpdateRipperHook.bl_idname, icon="IMPORT")
-        layout.prop(self, "ripperhook_auto_update")
+        if by_hand:
+            layout.label(text="Bin Dir is set by hand, so it is never downloaded over or changed. "
+                              "Clear it to let RipperHook be downloaded and kept up to date.", icon="INFO")
+        else:
+            layout.prop(self, "ripperhook_auto_update")
         if bin_update.message():
             layout.label(text=bin_update.message(), icon="ERROR" if bin_update.failed() else "INFO")
         layout.label(text="Point this at the folder every reader builds into "

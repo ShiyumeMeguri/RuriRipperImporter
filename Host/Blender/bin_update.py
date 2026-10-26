@@ -37,32 +37,37 @@ def _redraw():
             area.tag_redraw()
 
 
-def _apply(preferences, replace_custom):
-    if preferences is None or _job.error or not _job.folder:
+def by_hand(preferences):
+    return preferences is not None and bool(preferences.ripperhook_repo)         and not bin_update.is_managed(preferences.ripperhook_repo)
+
+
+def _apply(preferences):
+    if preferences is None or _job.error or not _job.folder or by_hand(preferences):
         return
-    current = preferences.ripperhook_repo
-    if current == _job.folder or not (replace_custom or not current or bin_update.is_managed(current)):
+    if preferences.ripperhook_repo == _job.folder:
         return
     preferences.ripperhook_repo = _job.folder
     print("[RuriRipper] RipperHook bin dir -> {0}".format(_job.folder))
 
 
-def start(replace_custom):
-    """Begin a check-and-install unless one is already running. ``replace_custom``
-    is whether a path the user typed themselves may be replaced: the button says
-    yes, the automatic checks only ever move a path this updater made."""
+def start():
+    """Begin a check-and-install unless one is already running. A bin dir the
+    user pointed somewhere else is theirs: nothing is downloaded and nothing of
+    theirs is changed."""
     global _job
     if running():
         return
     from . import _preferences
     preferences = _preferences()
+    if by_hand(preferences):
+        return
     _job = bin_update.Job(preferences.ripperhook_repo if preferences is not None else "")
 
     def poll():
         _redraw()
         if not _job.finished:
             return POLL_SECONDS
-        _apply(_preferences(), replace_custom)
+        _apply(_preferences())
         _redraw()
         return None
 
@@ -75,7 +80,7 @@ class RURI_OT_UpdateRipperHook(bpy.types.Operator):
     bl_description = "Download the newest RipperHook build and set the bin dir to it"
 
     def execute(self, context):
-        start(True)
+        start()
         return {"FINISHED"}
 
 
@@ -83,7 +88,7 @@ def _automatic():
     from . import _preferences
     preferences = _preferences()
     if preferences is None or preferences.ripperhook_auto_update:
-        start(False)
+        start()
 
 
 def register():

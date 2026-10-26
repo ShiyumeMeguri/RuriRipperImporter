@@ -37,8 +37,7 @@ _STATES = {}
 #: itself here; nothing else in the driver knows a dock exists.
 _REPAINT = []
 
-_BIN_DIR_HINT = ("Set it in the RuriRipper panel's 'RipperHook bin' field, or set the "
-                 "RURI_RIPPERHOOK_BIN environment variable.")
+_BIN_DIR_HINT = "Set it in the RuriRipper panel's 'RipperHook bin' field."
 
 
 class SubstanceHost(host_port.Host, host_port.TextureCache, host_port.TextureSets,
