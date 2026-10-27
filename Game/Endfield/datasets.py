@@ -516,35 +516,39 @@ def scene_grading(map_name, anchor, states):
     out as the volumes state them.
     """
     row = _rows(SCENE_ENVIRONMENT, **_viewer(map_name, anchor, states))[0]
+    return {"tonemap": float(row.get("tonemap") or 0), "inputs": grading_inputs(row)}
+
+
+def grading_inputs(values):
+    """The post stage's own inputs out of the post numbers the hook states by name -- one
+    column of a level's environment row, or one row of a display stage's, both under the
+    same names (:func:`scene_grading` says what each input means and why it is a difference)."""
     return {
-        "tonemap": float(row.get("tonemap") or 0),
-        "inputs": {
-            "exposureAuto": float(row["exposureAuto"]),
-            "exposureStops": float(row["exposureStops"]),
-            "exposureAutoCompensation": float(row["exposureAutoCompensation"]),
-            "exposureRange": (float(row["exposureRangeX"]), float(row["exposureRangeY"])),
-            "exposureHistogramRange": (float(row["exposureHistogramX"]), float(row["exposureHistogramY"])),
-            "exposurePixelRange": (float(row["exposurePixelX"]), float(row["exposurePixelY"])),
-            "exposureClampRange": (float(row["exposureClampX"]), float(row["exposureClampY"])),
-            "exposureMeteringMode": float(row["exposureMetering"]),
-            "gradeColorBalance": (float(row["gradeBalanceL"]) - 1.0,
-                                  float(row["gradeBalanceM"]) - 1.0,
-                                  float(row["gradeBalanceS"]) - 1.0),
-            "gradeColorFilter": (float(row["gradeFilterR"]) - 1.0,
-                                 float(row["gradeFilterG"]) - 1.0,
-                                 float(row["gradeFilterB"]) - 1.0),
-            "gradeHueSatCon": (float(row["gradeHue"]),
-                               float(row["gradeSaturation"]) - 1.0,
-                               float(row["gradeContrast"]) - 1.0),
-            "bloomParams": tuple(float(row["bloomParams" + axis]) for axis in "XYZW"),
-            "bloomThreshold": tuple(float(row["bloomThreshold" + axis]) for axis in "XYZW"),
-            "bloomTint": tuple(float(row["bloomTint" + channel]) for channel in "RGB"),
-            "bloomScatter": float(row["bloomScatter"]),
-            "bloomResolution": float(row["bloomResolution"]),
-            "ssrEnabled": float(row["ssrEnable"]),
-            "ssrScreenFade": float(row["ssrScreenFade"]),
-            "ssrMirrorFade": (float(row["ssrMirrorMultiply"]), float(row["ssrMirrorAdd"])),
-        },
+        "exposureAuto": float(values["exposureAuto"]),
+        "exposureStops": float(values["exposureStops"]),
+        "exposureAutoCompensation": float(values["exposureAutoCompensation"]),
+        "exposureRange": (float(values["exposureRangeX"]), float(values["exposureRangeY"])),
+        "exposureHistogramRange": (float(values["exposureHistogramX"]), float(values["exposureHistogramY"])),
+        "exposurePixelRange": (float(values["exposurePixelX"]), float(values["exposurePixelY"])),
+        "exposureClampRange": (float(values["exposureClampX"]), float(values["exposureClampY"])),
+        "exposureMeteringMode": float(values["exposureMetering"]),
+        "gradeColorBalance": (float(values["gradeBalanceL"]) - 1.0,
+                              float(values["gradeBalanceM"]) - 1.0,
+                              float(values["gradeBalanceS"]) - 1.0),
+        "gradeColorFilter": (float(values["gradeFilterR"]) - 1.0,
+                             float(values["gradeFilterG"]) - 1.0,
+                             float(values["gradeFilterB"]) - 1.0),
+        "gradeHueSatCon": (float(values["gradeHue"]),
+                           float(values["gradeSaturation"]) - 1.0,
+                           float(values["gradeContrast"]) - 1.0),
+        "bloomParams": tuple(float(values["bloomParams" + axis]) for axis in "XYZW"),
+        "bloomThreshold": tuple(float(values["bloomThreshold" + axis]) for axis in "XYZW"),
+        "bloomTint": tuple(float(values["bloomTint" + channel]) for channel in "RGB"),
+        "bloomScatter": float(values["bloomScatter"]),
+        "bloomResolution": float(values["bloomResolution"]),
+        "ssrEnabled": float(values["ssrEnable"]),
+        "ssrScreenFade": float(values["ssrScreenFade"]),
+        "ssrMirrorFade": (float(values["ssrMirrorMultiply"]), float(values["ssrMirrorAdd"])),
     }
 
 
@@ -739,11 +743,15 @@ def ui_stages():
     return _table(UI_STAGES)
 
 
-def ui_stage(stage):
-    """One display stage, resolved by the hook: one row per value it states. ``kind`` says what the
-    row is -- a light or world value (``env``), a character parameter (``param``) or a seed of the
-    stage's own art (``prefab``) -- and ``components`` how many of x..w it carries."""
-    return _rows(UI_STAGE, stage=stage)
+def ui_stage(stage, switches=()):
+    """One display stage, resolved by the hook off the volume stack its prefab carries: one row per
+    value it states. ``kind`` says what the row is -- a light or world value (``env``), an engine
+    global its post-processing volumes blend to (``volume``), a post-processing number (``post``), a
+    volume of the stack (``layer.env`` / ``layer.post``), the phase a block of the environment comes
+    from (``block``) or a seed of the stage's own art (``prefab``) -- and ``components`` how many of
+    x..w it carries. ``switches`` flips volumes from how the prefab authors them, ``"<key>=on"`` or
+    ``"<key>=off"`` each."""
+    return _rows(UI_STAGE, stage=stage, switch=list(switches))
 
 
 # ── npcs and characters ─────────────────────────────────────────────────────

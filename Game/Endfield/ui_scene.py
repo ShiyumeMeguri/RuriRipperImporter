@@ -4,12 +4,13 @@
 browses the little lit stages an interface puts a model on -- CharInfo (the
 character screen), CharFormation, WeaponInfo, the dialog stages -- and loads one
 whole: its own sun, its own ambient, what its own volumes blend to (the character
-lighting and the post-processing switches), and its art.
+lighting and the post-processing switches), the post-processing its camera renders
+under (grading, exposure, bloom, screen-space reflection) and its art.
 
 Which stages there are and what each states is the hook's answer
 (``endfield.ui.stages`` / ``endfield.ui.stage``): it finds them among the game's
 own assets and resolves every value -- a light, the ambient, an engine global its
-volumes state, a seed of the stage's art -- so a version that ships another stage grows
+volumes state, a post number, a seed of the stage's art -- so a version that ships another stage grows
 another row here with no code change, and nothing here reads an asset.
 
 What this module does is put that answer into the shared statement
@@ -23,6 +24,7 @@ from __future__ import annotations
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
 from ...Kernel.app import command
+from ...Kernel.app import layout as app_layout
 from ...Kernel.app import schemas
 from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
@@ -35,7 +37,10 @@ STATE = "ruri_endfield_ui_scene"
 #: What a stated row is, in the dataset's own words.
 ENVIRONMENT = "env"
 VOLUME = "volume"
+POST = "post"
 PREFAB = "prefab"
+ENVIRONMENT_LAYER = "layer.env"
+POST_LAYER = "layer.post"
 
 
 def state_of(context):
@@ -45,11 +50,28 @@ def state_of(context):
 #: This tab's live view and the seats that draw it.
 BOUND = app_view.Bound("Endfield:uistage", rules="")
 
+STACK_LAYER = Schema("EndfieldUIStackLayer", """One volume of a display stage's stack: the switch the
+stage's prefab authors it with, and the one this panel flips it to.""", (
+    Field("key", app_state.STRING, ""),
+    Field("label", app_state.STRING, ""),
+    Field("asset", app_state.STRING, ""),
+    Field("kind", app_state.STRING, ""),
+    Field("priority", app_state.FLOAT, 0.0),
+    Field("weight", app_state.FLOAT, 1.0),
+    Field("authored", app_state.BOOL, True),
+    Field("enabled", app_state.BOOL, True, "",
+          "Apply this volume when the stage is loaded. The stack blends the volumes that are on, in "
+          "priority order, the way the game's volume manager blends them"),
+))
+
 UI_SCENE_STATE = Schema("EndfieldUIScene", """The display-stage browser's state.""", (
     Field("search", app_state.STRING, "", "Filter", "Filter by stage or folder name",
           update="on_search", live=True),
     Field("rows", app_state.COLLECTION, element=app_view.VIEW_ROW),
     Field("active_index", app_state.INT, 0),
+    Field("layers", app_state.COLLECTION, element=STACK_LAYER),
+    Field("layers_index", app_state.INT, 0),
+    Field("layers_stage", app_state.STRING, ""),
     Field("import_art", app_state.BOOL, True, "Stage Prefab",
           "Import the stage's own prefab -- its floor, sky sphere, shadow plane and "
           "cameras -- into its own collection, and look through the camera the game "
@@ -60,14 +82,19 @@ UI_SCENE_STATE = Schema("EndfieldUIScene", """The display-stage browser's state.
     Field("exposure_ev", app_state.FLOAT, 0.0, "Exposure",
           "Stops applied to everything this stage lights -- the sun AND the sky ambient "
           "together, so the balance the asset states is preserved. 0 is the asset's own "
-          "values, unscaled. This control exists because the game sets its absolute level "
-          "at RUNTIME by metering the frame (HGAutoExposure); no field in the asset pins "
-          "it, so there is nothing to read and nothing honest to guess",
+          "values, unscaled. It is a trim on top of the exposure the stage's phase states, "
+          "which the Post-Processing option writes into the post chain (a manual compensation, "
+          "or the frame metering the game runs)",
           soft_minimum=-8.0, soft_maximum=8.0),
     Field("apply_volume", app_state.BOOL, True, "Volume",
           "Write what the stage's own volumes blend to -- the character lighting and the "
           "post-processing switches -- onto the scene's world, the way a level's globals are "
           "written, for every shading stack of this game to read"),
+    Field("apply_post", app_state.BOOL, True, "Post-Processing",
+          "Set the scene's post chain -- the colour grading, the exposure, the bloom and the "
+          "screen-space reflection -- to what the stage's own phase and volumes state, the way "
+          "a level's grading is written. The chain is the scene's, so everything in it is "
+          "graded the way the game's camera grades this stage"),
     Field("reset_scene", app_state.BOOL, False, "Reset Scene",
           "Empty the document first. Off by default: a stage is normally loaded AROUND "
           "a character that is already here"),
@@ -99,9 +126,19 @@ def _value(row):
     return numbers[0] if width == 1 else numbers
 
 
+def _switches(state, key):
+    """The volumes the panel has flipped from how the stage's prefab authors them -- only those, and only for
+    the stage whose stack the list holds."""
+    if state.layers_stage != key:
+        return []
+    return ["{0}={1}".format(layer.key, "on" if layer.enabled else "off")
+            for layer in state.layers if layer.enabled != layer.authored]
+
+
 def statement(state, entry):
     """One stage as the shared statement -- what the host is handed."""
-    rows = datasets.ui_stage(entry.key)
+    rows = datasets.ui_stage(entry.key, _switches(state, entry.key))
+    posted = {row["target"]: row["x"] for row in rows if row["kind"] == POST}
     return {
         "label": entry.label,
         "exposure": float(state.exposure_ev) if state.apply_environment else 0.0,
@@ -110,6 +147,7 @@ def statement(state, entry):
         "volume": ({row["target"]: tuple(float(row[axis]) for axis in "xyzw")
                     for row in rows if row["kind"] == VOLUME}
                    if state.apply_volume else {}),
+        "post": datasets.grading_inputs(posted) if state.apply_post and posted else {},
         "prefabs": [row["seed"] for row in rows if row["kind"] == PREFAB] if state.import_art else [],
     }
 
@@ -137,6 +175,36 @@ def _refresh(context, arguments):
     return None
 
 
+def _read_stack(context, arguments):
+    """Read the selected stage's volume stack into the list, every volume as its prefab authors it."""
+    state = state_of(context)
+    entry = BOUND.picked(state)
+    if entry is None:
+        state.status = "Nothing selected."
+        return {"CANCELLED"}
+    try:
+        rows = datasets.ui_stage(entry.key)
+    except Exception as exc:
+        state.status = "{0}: {1}".format(type(exc).__name__, exc)
+        return {"CANCELLED"}
+    state.layers.clear()
+    for row in rows:
+        if row["kind"] not in (ENVIRONMENT_LAYER, POST_LAYER):
+            continue
+        layer = state.layers.add()
+        layer.key = row["target"]
+        layer.label = row["seed"]
+        layer.asset = row["detail"]
+        layer.kind = "env" if row["kind"] == ENVIRONMENT_LAYER else "post"
+        layer.priority = float(row["x"])
+        layer.weight = float(row["y"])
+        layer.authored = float(row["z"]) > 0.5
+        layer.enabled = float(row["w"]) > 0.5
+    state.layers_stage = entry.key
+    state.status = "{0}: {1} volume(s) in the stack.".format(entry.label, len(state.layers))
+    return None
+
+
 def _load(context, arguments):
     """Put the selected display stage into the document."""
     state = state_of(context)
@@ -158,6 +226,10 @@ REFRESH = command.COMMANDS.define(
     "ruri.ui_scene_refresh", "Refresh", _refresh,
     description="Read the game's UI display stages",
     icon="FILE_REFRESH", internal=True, poll=_loaded)
+READ_STACK = command.COMMANDS.define(
+    "ruri.ui_scene_stack", "Read Stack", _read_stack,
+    description="Read the volumes the selected stage's prefab stacks, to switch them on and off before loading",
+    icon="OUTLINER", internal=True, poll=_has_selection)
 LOAD = command.COMMANDS.define(
     "ruri.ui_scene_load", "Load Stage", _load,
     description="Put the selected display stage into the scene",
@@ -167,6 +239,13 @@ LOAD = command.COMMANDS.define(
 
 _COLUMNS = (BOUND.column("", icon="LIGHT_AREA"),)
 _GROUP_COLUMN = BOUND.column("", icon="FILE_FOLDER")
+
+_LAYER_COLUMNS = (
+    app_layout.ListColumn("", width=0.08, prop="enabled"),
+    app_layout.ListColumn(lambda layer: "{0}  {1}".format(layer.kind.upper(), layer.label), width=0.5),
+    app_layout.ListColumn("asset", width=0.7),
+    app_layout.ListColumn(lambda layer: "{0:g}".format(layer.priority), align=app_layout.RIGHT),
+)
 
 
 def draw_ui_scene_tab(layout, context):
@@ -188,6 +267,13 @@ def draw_ui_scene_tab(layout, context):
     if state.status:
         layout.label(text=state.status, icon="INFO")
 
+    stack = layout.column(align=True)
+    stack.enabled = BOUND.picked(state) is not None
+    stack.operator(READ_STACK.id, icon="OUTLINER")
+    picked = BOUND.picked(state)
+    if picked is not None and state.layers_stage == picked.key and len(state.layers):
+        stack.list(state, "layers", "layers_index", _LAYER_COLUMNS, rows=6, identifier="endfield_ui_stack")
+
     options = layout.column(align=True)
     options.enabled = BOUND.picked(state) is not None
     # 与 Scene/World 同一份导入选项 —— 画在按 Load 的地方。
@@ -198,6 +284,7 @@ def draw_ui_scene_tab(layout, context):
     exposure.enabled = state.apply_environment
     exposure.prop(state, "exposure_ev")
     options.prop(state, "apply_volume")
+    options.prop(state, "apply_post")
     options.prop(state, "import_art")
     options.prop(state, "reset_scene")
     options.operator(LOAD.id, icon="IMPORT")

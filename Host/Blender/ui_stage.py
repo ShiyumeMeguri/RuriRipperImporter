@@ -1,6 +1,6 @@
 """Put one of the game's UI display stages into the Blender scene.
 
-Three things arrive, each straight out of the stage's own assets and none of them
+Four things arrive, each straight out of the stage's own assets and none of them
 invented here:
 
 ``HGEnvironmentPhase``   the sun -- direction, colour temperature, and the
@@ -12,6 +12,11 @@ invented here:
                          packed the way the game's render pipeline packs them --
                          written onto the scene's world the way a level's are, so
                          the shading stacks read them live.
+``post``                 the post-processing the stage's camera renders under --
+                         the grading and the exposure of its phase, the bloom and
+                         the screen-space reflection its volumes blend to -- as
+                         the post chain's own inputs, written the way a level's
+                         grading is.
 ``stage prefab``         the stage itself, loaded through the kernel's one load:
                          floor, sky sphere, cameras, hierarchy 1:1.
 """
@@ -165,7 +170,7 @@ def adopt_camera(context, cameras):
 def load(context, stage, options):
     """Write one stated display stage into this scene, and say what was written.
 
-    The four halves are independent on purpose: a stage whose art is not wanted
+    The halves are independent on purpose: a stage whose art is not wanted
     still lights the character, and a stage the install ships no prefab for still
     has a sun. What each of them IS came off the statement; none of it is read
     here."""
@@ -178,6 +183,8 @@ def load(context, stage, options):
         written, unclaimed = material_builder.apply_level_resources(context.scene, stage["volume"], [])
         done.append("{0} volume global(s){1}".format(
             len(written), " ({0} no stack reads)".format(len(unclaimed)) if unclaimed else ""))
+    if stage["post"]:
+        done.append("{0} post input(s)".format(material_builder.apply_post_inputs(context.scene, stage["post"])))
     if stage["prefabs"]:
         done.extend(_load_art(context, stage["prefabs"], options))
     return done

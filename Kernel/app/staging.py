@@ -2,8 +2,9 @@
 
 An interface stands a model on a little lit stage -- a character screen, a weapon
 screen -- and the game authors that stage: a directional light, an ambient level,
-the volumes its camera renders under, and the stage's own art. Loading one means
-writing all four somewhere, and where is the host's business.
+the volumes its camera renders under, the post-processing that camera applies, and
+the stage's own art. Loading one means writing all of them somewhere, and where is
+the host's business.
 
 So a game RESOLVES its own assets into the targets below and the host WRITES them.
 The target names are not invented here: the decoder publishes them beside each
@@ -21,6 +22,10 @@ The statement is plain data, every value a number or a tuple of numbers::
                          volumes blend to, keyed by the engine's own names and
                          already packed the way the game packs them, for the host
                          to write the way it writes a level's globals,
+     "post":             {input name: value} -- the post chain's own inputs, each
+                         the difference from identity the chain reads, for the
+                         host to drive its display chain with; empty when the
+                         stage states none,
      "prefabs":          the container paths of the stage's own art, or ()}
 
 A host writes whichever parts it has somewhere to put and reports what it did.
