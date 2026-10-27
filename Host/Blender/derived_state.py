@@ -61,7 +61,7 @@ import traceback
 
 import bpy
 
-from . import material_builder, shadow_casting, world_sun
+from . import material_builder, shadow_casting
 
 
 # ---- 事实 ----
@@ -69,12 +69,11 @@ OBJECTS = "objects"            # 有新对象进场
 MATERIALS = "materials"        # 有新材质进场
 CAMERA = "camera"              # 活动相机的身份/位姿/投影/输出分辨率
 WORLD = "world"                # 世界被换或被改(环境采样是建组时快照,只有这件事还要重接兑现面)
-SUNS = "suns"                  # 灯物体里有没有太阳:加、删、改灯型(挪灯转灯换色强度都不算),决定世界太阳让不让位
 RIG = "rig"                    # 骨架的骨骼名册变了(顶点腿的骨骼基座按名字接进几何节点)
 LOADED = "loaded"              # 插件数据一样都不在:开了一个文件,或着色栈刚载入(插件数据从不写进 .blend)
 APPENDED = "appended"          # 材质/对象不经导入进场(从别的文件 append):它们引用的插件数据是死的
 
-ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, WORLD, SUNS, RIG, LOADED, APPENDED))
+ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, WORLD, RIG, LOADED, APPENDED))
 
 # 去抖窗口:批量导入的几百次 announce、相机拖动的每帧变更,都收敛成末尾的一次落地。
 DEBOUNCE_SECONDS = 0.1
@@ -131,9 +130,8 @@ def _run_plugin_data(change):
 def _run_capabilities(change):
     """材质的环境查询兑现面重接。唯一的触发者是**世界被换或被改**:环境采样是建组时快照。
 
-    灯**一概不进这条路**:材质树读的是宿主自己的原生灯节点(主光身份是原生
-    is_sun),加灯/删灯/挪灯/转灯/换色由宿主的光循环当场吃掉,插件一个字节都不写
-    (唯一的例外是 world-sun 阶段,只认「有没有太阳灯物体」,管的是世界太阳建不建,见 world_sun)。
+    灯**一概不进这条路**,也不进任何一条:材质树读的是宿主自己的原生灯节点(主光身份是原生
+    is_sun),加灯/删灯/挪灯/转灯/换色由宿主的光循环当场吃掉,插件一个字节都不写。
     这条纪律的理由是量出来的:重接是 O(材质 × 树),单张 NPR 角色材质 ~0.8s、24 张 20 秒。
     摆灯是美术每秒都在做的事,绝不能和它挂钩。
 
@@ -141,12 +139,6 @@ def _run_capabilities(change):
     紧跟着的这一次重接原本是把刚建好的兑现面整场重做一遍。「重建派生态」强制,不看记号。"""
     scope = None if change.whole_scene else change.materials
     return material_builder.rewire_capabilities(scope, force=change.force)
-
-
-def _run_world_sun(change):
-    """世界太阳让位:场景里有太阳灯物体,世界(HDRI)抽出来的那盏原生太阳不当角色的方向光;没有了就还原(见 world_sun)。
-    这是灯进派生态的唯一一处,而且只认「有没有太阳灯物体」这件成员变化,灯的位姿、颜色、强度不触发任何东西。"""
-    return world_sun.apply(change.scene)
 
 
 def _run_medium(change):
@@ -204,7 +196,6 @@ STAGES = (
     # 插件数据不在文件里:先按记录把材质编出来,后面各阶段才有东西可接。
     Stage("plugin-data", (LOADED, APPENDED), _run_plugin_data),
     Stage("capabilities", (WORLD,), _run_capabilities),
-    Stage("world-sun", (OBJECTS, LOADED, WORLD, SUNS), _run_world_sun),
     Stage("medium", (LOADED,), _run_medium),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
     Stage("vertex", (OBJECTS,), _run_vertex),
@@ -370,14 +361,12 @@ def refresh_after_replacement(objects):
 
 # ---- 监视器:没有生产者的那半边 ----
 # 加载器造东西会 announce;用户拖相机、换世界、改输出分辨率、改骨名没有生产者,只能看依赖图。
-# 灯不在这里:着色读的是宿主自己的光循环,挪灯/加灯没有任何派生态要重算 —— 只有「有没有太阳灯物体」这一件成员变化
-# (加、删、改灯型)要看,它只决定世界太阳让不让位(SUNS),灯的位姿、颜色、强度仍然一概不看。
+# 灯不在这里:着色读的是宿主自己的光循环,挪灯/加灯没有任何派生态要重算。
 
 _camera = None
 _world = None
 _rig = None
 _counts = None
-_suns = None
 
 
 def _world_signature(scene):
@@ -441,18 +430,6 @@ def _rig_touched(depsgraph):
     return False
 
 
-def _sun_signature():
-    """灯数据块里哪些是太阳。只在这一拍有灯数据块被改时才算(挪灯是物体变更,不进这里),几盏灯的事。"""
-    return tuple(sorted(light.name_full for light in bpy.data.lights if light.type == "SUN"))
-
-
-def _light_touched(depsgraph):
-    for update in depsgraph.updates:
-        if isinstance(update.id, bpy.types.Light):
-            return True
-    return False
-
-
 def _camera_touched(depsgraph):
     for update in depsgraph.updates:
         block = update.id
@@ -470,9 +447,8 @@ def _datablock_counts():
 
 
 def _resnapshot(scene):
-    global _camera, _world, _rig, _counts, _suns
+    global _camera, _world, _rig, _counts
     _counts = _datablock_counts()
-    _suns = _sun_signature()
     _camera = _camera_signature(scene)
     _world = _world_signature(scene)
     _rig = _rig_signature(scene)
@@ -480,20 +456,13 @@ def _resnapshot(scene):
 
 @bpy.app.handlers.persistent
 def _on_depsgraph_update(scene, depsgraph):
-    global _camera, _world, _rig, _counts, _suns
+    global _camera, _world, _rig, _counts
     if _flushing:
         return
     counts = _datablock_counts()
     if _counts is not None and (counts[0] > _counts[0] or counts[1] > _counts[1]):
         _mark((APPENDED,), whole_scene=True)
-    if _counts is not None and counts[1] != _counts[1]:
-        _mark((SUNS,))
     _counts = counts
-    if _light_touched(depsgraph):
-        suns = _sun_signature()
-        if suns != _suns:
-            _suns = suns
-            _mark((SUNS,))
     if _rig_touched(depsgraph):
         rig = _rig_signature(scene)
         if rig != _rig:
