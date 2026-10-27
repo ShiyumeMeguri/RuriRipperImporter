@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(7250007d607359e1):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(2ced642380c75845):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -448,11 +448,11 @@ class G:
         nd.attribute_name = name
         return nd
 
-    def _tbn_axis(self, x, y, z):
+    def _tbn_axis(self, x, y, z, strength=1.0):
         nd = self._nd('ShaderNodeNormalMap')
         nd.space = 'TANGENT'
         nd.uv_map = ''
-        self._set(nd.inputs['Strength'], 1.0)
+        self._set(nd.inputs['Strength'], strength)
         self._set(nd.inputs['Color'], (x * 0.5 + 0.5, y * 0.5 + 0.5, z * 0.5 + 0.5))
         return nd.outputs['Normal']
 
@@ -1581,12 +1581,50 @@ def _local_group(name):
     return group if group is not None and group.library is None else None
 
 
+def _nested_groups(roots):
+    """这几张组连同一层层嵌套进来的本地组(去重)。"""
+    found = {}
+    pending = list(roots)
+    while pending:
+        group = pending.pop()
+        if group.as_pointer() in found:
+            continue
+        found[group.as_pointer()] = group
+        pending.extend(node.node_tree for node in group.nodes
+                       if node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
+                       and node.node_tree.library is None)
+    return list(found.values())
+
+
+def _make_room(held):
+    """请求的模板组名被不带 stamp 的本地组占着(旧版打包进文件时抹了 stamp 的、用户自己做的同名组):它们不是哪一代,是别的数据块
+    占了产物的名字 —— 连同嵌套进来的组改名让位并烙上 ruri_displaced,新取的才叫得上这个名字。谁在用它们不碰:用到它们的材质
+    没有本栈的 stamp 组,是图不完整的材质,由 compile_all 照记录重编、旧的一起退役(见 _drop_displaced)。"""
+    for group in _nested_groups([group for group in held.values() if group is not None]):
+        group['ruri_displaced'] = 1
+        group.name = group.name + ' (displaced)'
+
+
+def _drop_displaced():
+    """让位的旧组:用到它们的材质被换走之后没人用的整批删(上层先删,下层的用户数随之归零),仍有人用的留着。"""
+    pending = [group for group in bpy.data.node_groups
+               if group.library is None and group.get('ruri_displaced') is not None]
+    progress = True
+    while progress:
+        progress = False
+        for group in list(pending):
+            if group.users == 0:
+                pending.remove(group)
+                bpy.data.node_groups.remove(group)
+                progress = True
+
+
 def _kept_group(blend_path, stamp, wanted, name, adopt, owner):
     """材质栈的模板组:住在本文件里的普通数据块,随文件存盘 —— 材质树的组实例、顶点腿修改器、用户在它们口上拧过的值
     都指着这些组,文件换一台电脑打开也是整套的。文件里已有本栈这一代(stamp 对得上)的整套组就直接用;一个都没有,
     首次真用才从产物 append 一整套进来(register() 期 bpy.data 还是 _RestrictData,不能早取),嵌套组与图一次带进来、
     一律打上 stamp 与栈键 ruri_stack(换代时凭栈键整批清,不碰别的栈)。文件里是别代的、或缺了几个,响亮拒绝:换代是显式的更新(shader_version.update:
-    先把口上的值记回记录,清掉这一代,再照记录重编),取组的路上不偷换。这一次带进来的数据块交给 adopt 认领一次。"""
+    先把口上的值记回记录,清掉这一代,再照记录重编),取组的路上不偷换;没有 stamp 的同名本地组不是哪一代(旧版打包进文件时抹了 stamp 的、用户自己做的),不拒绝,见 _make_room。这一次带进来的数据块交给 adopt 认领一次。"""
     table = _LINKED.get(blend_path)
     if table is not None and all(_alive(group) for group in table.values()):
         got = table.get(name)
@@ -1594,7 +1632,7 @@ def _kept_group(blend_path, stamp, wanted, name, adopt, owner):
             return got
     requested = list(dict.fromkeys(wanted))
     held = {wanted_name: _local_group(wanted_name) for wanted_name in requested}
-    if any(group is not None for group in held.values()):
+    if any(group is not None and group.get('ruri_stamp') is not None for group in held.values()):
         other = sorted(wanted_name for wanted_name, group in held.items()
                        if group is not None and group.get('ruri_stamp') != stamp)
         absent = sorted(wanted_name for wanted_name, group in held.items() if group is None)
@@ -1607,6 +1645,7 @@ def _kept_group(blend_path, stamp, wanted, name, adopt, owner):
         if got is None:
             raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
         return got
+    _make_room(held)
     before = _pointers()
     # 🔴 `dst.node_groups = <list>` 之后 Blender **就地把那个列表的内容换成数据块**:名字先快照,
     # 给 Blender 一份独立的列表,按位次配对。
@@ -2269,10 +2308,8 @@ class Stack:
         tc = g.texco()
         tan_ws, tan_w = g.tbn()
         col = g.attr('Color')
-        uv1 = g._nd('ShaderNodeUVMap')
-        uv1.uv_map = 'UV1'
-        uv2 = g._nd('ShaderNodeUVMap')
-        uv2.uv_map = 'UV2'
+        uv1 = self._texcoord_node(g, 'input_texcoord1')
+        uv2 = self._texcoord_node(g, 'input_texcoord2')
         stmap = g._nd('ShaderNodeMapping')
         stmap.label = self.ST_NODE
         g._set(stmap.inputs['Vector'], tc.outputs['UV'])
@@ -2397,6 +2434,23 @@ class Stack:
     OUTLINE_INPUTS = ('input_positionOS', 'input_normalOS', 'input_tangentOS', 'input_tangentOS_w', 'input_texcoord',
                       'input_texcoord1', 'input_texcoord2', 'input_color', 'input_color_w')
 
+    # 顶点入口的 UV 通道 → 网格 UV 层名;空名 = 默认 UV(活动渲染层),与 Blender 节点的空名同一约定,不依赖网格怎么命名。
+    TEXCOORD_LAYERS = {'input_texcoord': '', 'input_texcoord1': 'UV1', 'input_texcoord2': 'UV2'}
+
+    def _texcoord_node(self, g, input_name):
+        node = g._nd('ShaderNodeUVMap')
+        node.uv_map = self.TEXCOORD_LAYERS[input_name]
+        return node
+
+    def _texcoord_layer_name(self, obj, input_name):
+        layer_name = self.TEXCOORD_LAYERS[input_name]
+        if layer_name:
+            return layer_name
+        for layer in obj.data.uv_layers:
+            if layer.active_render:
+                return layer.name
+        return ''
+
     def _wire_outline(self, g, mat, part, spec, images, shell, output):
         """描边视图段:真源描边趟的顶点入口落在材质的位移出口上,宿主在顶点着色阶段逐视图求值 —— 视矩阵是正在画的那个
         视图的,投影与像素数是宿主陈述在这个物体上的那个视图的。转视角只动 GPU,几何树一次都不重算。
@@ -2454,11 +2508,9 @@ class Stack:
             raw['normal'] = (g.geo().outputs['Normal'], True)
         if {'input_tangentOS', 'input_tangentOS_w'} & set(wanted):
             raw['unit'] = (1.0, False)
-        for name, layer in (('input_texcoord', 'UVMap'), ('input_texcoord1', 'UV1'), ('input_texcoord2', 'UV2')):
+        for name in self.TEXCOORD_LAYERS:
             if name in wanted:
-                node = g._nd('ShaderNodeUVMap')
-                node.uv_map = layer
-                raw[name] = (node.outputs['UV'], True)
+                raw[name] = (self._texcoord_node(g, name).outputs['UV'], True)
         if {'input_color', 'input_color_w'} & set(wanted):
             color = g.attr('Color')
             raw['color'] = (color.outputs['Color'], True)
@@ -2474,19 +2526,12 @@ class Stack:
         if 'input_normalOS' in wanted:
             out['input_normalOS'] = g.vmath('NORMALIZE', g.vtrans(reads['normal'], 'WORLD', 'OBJECT', 'NORMAL'))
         if {'input_tangentOS', 'input_tangentOS_w'} & set(wanted):
-            axes = []
-            for x, y in ((1.0, 0.0), (0.0, 1.0)):
-                nd = g._nd('ShaderNodeNormalMap')
-                nd.space = 'TANGENT'
-                nd.uv_map = 'UVMap'
-                g._set(nd.inputs['Strength'], reads['unit'])
-                g._set(nd.inputs['Color'], (x * 0.5 + 0.5, y * 0.5 + 0.5, 0.5))
-                axes.append(nd.outputs['Normal'])
-            tangent, bitangent = axes
+            tangent = g._tbn_axis(1.0, 0.0, 0.0, reads['unit'])
+            bitangent = g._tbn_axis(0.0, 1.0, 0.0, reads['unit'])
             out['input_tangentOS'] = g.vmath('NORMALIZE', g.vtrans(tangent, 'WORLD', 'OBJECT', 'VECTOR'))
             out['input_tangentOS_w'] = g.math('SIGN', g.vmath(
                 'DOT_PRODUCT', g.vmath('CROSS_PRODUCT', tangent, reads['normal']), bitangent))
-        for name in ('input_texcoord', 'input_texcoord1', 'input_texcoord2'):
+        for name in self.TEXCOORD_LAYERS:
             if name in wanted:
                 out[name] = reads[name]
         if 'input_color' in wanted:
@@ -3178,6 +3223,7 @@ class Stack:
         finally:
             probes, self._probes = self._probes, None
         _retire_materials(replaced, probes)
+        _drop_displaced()
         alive = {material.session_uid for material in bpy.data.materials}
         for retired in [key for key in self._mirrors if key not in alive]:
             del self._mirrors[retired]
@@ -4241,9 +4287,10 @@ class Stack:
 
             answers = {}
             tbn_cache = []
+            uv_names = {name: self._texcoord_layer_name(obj, name) for name in self.TEXCOORD_LAYERS}
 
             def uv_tangent(swap):
-                uv = nattr('UVMap', 'FLOAT_VECTOR')
+                uv = nattr(uv_names['input_texcoord'], 'FLOAT_VECTOR')
                 if swap:
                     sep = nd('ShaderNodeSeparateXYZ')
                     mt.links.new(uv, sep.inputs[0])
@@ -4306,9 +4353,9 @@ class Stack:
                         'input_normalOS': nd('GeometryNodeInputNormal').outputs['Normal'],
                         'input_tangentOS': tangent_basis()[0],
                         'input_tangentOS_w': tangent_basis()[1],
-                        'input_texcoord': nattr('UVMap', 'FLOAT_VECTOR'),
-                        'input_texcoord1': nattr('UV1', 'FLOAT_VECTOR'),
-                        'input_texcoord2': nattr('UV2', 'FLOAT_VECTOR'),
+                        'input_texcoord': nattr(uv_names['input_texcoord'], 'FLOAT_VECTOR'),
+                        'input_texcoord1': nattr(uv_names['input_texcoord1'], 'FLOAT_VECTOR'),
+                        'input_texcoord2': nattr(uv_names['input_texcoord2'], 'FLOAT_VECTOR'),
                         'input_color': vertex_color()[0],
                         'input_color_w': vertex_color()[1]})
                 return wire_cache
