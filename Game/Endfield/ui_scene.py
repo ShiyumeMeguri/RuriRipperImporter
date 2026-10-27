@@ -21,6 +21,8 @@ learns which. Nothing here imports a host.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ...Kernel import host as host_port
 from ...Kernel.app import browser as app_browser
 from ...Kernel.app import command
@@ -135,20 +137,29 @@ def _switches(state, key):
             for layer in state.layers if layer.enabled != layer.authored]
 
 
-def statement(state, entry):
+def asked(state, key):
+    """What a statement reads off the panel's state, taken where the state lives: the read that builds the
+    statement may run off that thread, and a host's own objects stay on theirs."""
+    return SimpleNamespace(
+        exposure_ev=float(state.exposure_ev), apply_environment=bool(state.apply_environment),
+        apply_volume=bool(state.apply_volume), apply_post=bool(state.apply_post),
+        import_art=bool(state.import_art), switches=_switches(state, key))
+
+
+def statement(wanted, entry):
     """One stage as the shared statement -- what the host is handed."""
-    rows = datasets.ui_stage(entry.key, _switches(state, entry.key))
+    rows = datasets.ui_stage(entry.key, wanted.switches)
     posted = {row["target"]: row["x"] for row in rows if row["kind"] == POST}
     return {
         "label": entry.label,
-        "exposure": float(state.exposure_ev) if state.apply_environment else 0.0,
+        "exposure": wanted.exposure_ev if wanted.apply_environment else 0.0,
         "environment": ([(row["target"], _value(row)) for row in rows if row["kind"] == ENVIRONMENT]
-                        if state.apply_environment else []),
+                        if wanted.apply_environment else []),
         "volume": ({row["target"]: tuple(float(row[axis]) for axis in "xyzw")
                     for row in rows if row["kind"] == VOLUME}
-                   if state.apply_volume else {}),
-        "post": datasets.grading_inputs(posted) if state.apply_post and posted else {},
-        "prefabs": [row["seed"] for row in rows if row["kind"] == PREFAB] if state.import_art else [],
+                   if wanted.apply_volume else {}),
+        "post": datasets.grading_inputs(posted) if wanted.apply_post and posted else {},
+        "prefabs": [row["seed"] for row in rows if row["kind"] == PREFAB] if wanted.import_art else [],
     }
 
 
@@ -216,7 +227,8 @@ def _load(context, arguments):
     if state.reset_scene and host_port.SceneGraph in host.capabilities:
         host.clear_scene(context)
     options = app_browser.as_options(app_browser.state_of(context))
-    stated = yield command.Read(lambda: statement(state, entry), 0.4)
+    wanted = asked(state, entry.key)
+    stated = yield command.Read(lambda: statement(wanted, entry), 0.4)
     yield command.Mark(0.6)
     lines = host.load_display_stage(context, stated, options)
     state.status = "{0}: {1}".format(stated["label"], "; ".join(lines) if lines else "nothing to apply")
