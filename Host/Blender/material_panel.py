@@ -156,9 +156,11 @@ def _annotations_of(stack):
     for row in _rows_of(stack):
         attribute = _value_attribute(row["name"])
         kind = row["kind"]
+        tip = row.get("tip", "")
         if kind == "TEXTURE":
             annotations[attribute] = bpy.props.PointerProperty(
-                type=bpy.types.Image, name=row["label"], update=_image_writer(stack, row))
+                type=bpy.types.Image, name=row["label"], description=tip,
+                update=_image_writer(stack, row))
             annotations[_tiling_attribute(row["name"])] = bpy.props.FloatVectorProperty(
                 name="平铺", size=2, default=(1.0, 1.0), update=_st_writer(stack, row))
             annotations[_offset_attribute(row["name"])] = bpy.props.FloatVectorProperty(
@@ -167,14 +169,15 @@ def _annotations_of(stack):
         default = list(row.get("default") or [])
         if kind == "SWITCH":
             annotations[attribute] = bpy.props.BoolProperty(
-                name=row["label"], default=bool(default and default[0] > 0.5),
+                name=row["label"], description=tip, default=bool(default and default[0] > 0.5),
                 update=_writer(stack, row))
         elif kind == "INT":
             annotations[attribute] = bpy.props.IntProperty(
-                name=row["label"], default=int(default[0]) if default else 0,
+                name=row["label"], description=tip, default=int(default[0]) if default else 0,
                 update=_writer(stack, row))
         elif kind in ("VALUE", "SLIDER"):
             keywords = {"name": row["label"],
+                        "description": tip,
                         "default": float(default[0]) if default else 0.0,
                         "update": _writer(stack, row)}
             if kind == "SLIDER":
@@ -184,7 +187,8 @@ def _annotations_of(stack):
         else:
             size = row["size"]
             fill = (default + [0.0] * 4)[:size]
-            keywords = {"name": row["label"], "size": size, "update": _writer(stack, row)}
+            keywords = {"name": row["label"], "description": tip, "size": size,
+                        "update": _writer(stack, row)}
             # 声明说这一格的值住 sRGB 空间(游戏 Properties 的 [Gamma];线性化在灌 uniform
             # 那步做,见生成栈的 srgb_params)。取色控件必须跟着说同一件事,否则色板画的
             # 是把 sRGB 数当线性看的另一个颜色 —— 面板与 Unity 检视面对不上。
