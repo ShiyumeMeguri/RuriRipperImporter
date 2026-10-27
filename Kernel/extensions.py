@@ -22,7 +22,7 @@ tab key, a command id, a section key -- and two modules claiming one of those is
 two owners of one name, which is an error rather than a last-one-wins. A caller
 that states none is identified by what it registered, and the qualified name of
 a plain function is module-local by construction: two generated shading stacks
-each own a ``purge_plugin_data``, and they are two entries rather than one
+each own a ``settle_inputs``, and they are two entries rather than one
 collision. So the check runs on the stated key and on nothing else.
 """
 

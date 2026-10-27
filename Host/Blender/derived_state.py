@@ -40,13 +40,15 @@ announce ⇒ 修改器只在从游戏导入时生成;相机动了、骨改名了
 / `register_post_stage`(那是生成器拥有的契约)。本模块
 只拥有**时机**:谁在什么变更下跑、跑在哪个范围上。
 
-## 插件数据从不写进 .blend(见 plugin_data)
+## 随文件存盘的,与每次现建的
 
-所以打开一个文件时派生态一样都不在:材质的树(模板组是插件数据)、顶点树、合成树、视点、体积雾介质(文件里只留世界上的陈述)。
-LOADED 这件事实由开文件与本调度器注册(着色栈刚载入)立起来,第一段阶段(plugin-data)先清光内存里的插件数据、
-再让各栈按材质记录把材质全部现编,其余阶段照常按整场景现建 —— **顶点树除外**:它只在导入那一刻生成,
-开文件不重填,修改器留空。存盘时文件里什么也不留,没有任何一份派生物会在文件里放旧。
-从别的文件 append 进来的材质与对象(APPENDED)带着的树同样是死的,只编那些材质。
+材质栈生成进文件里的东西是普通数据,存盘原样在:模板组、材质编出来的树、顶点腿的树与修改器、它们读的图 —— 开文件时这些
+一样不用重建,用户拧在口上、修改器面板上的值也原样在。LOADED 这件事实由开文件与本调度器注册(着色栈刚载入)立起来:
+第一段阶段(compile)只把图还不完整的材质照记录编出来(没把组存进文件的版本存的文件、库里的材质),图完整的一张不碰;
+环境兑现按材质上记着的世界答案判(没变的不重接)。每次现建的只有临时数据(见 scratch):体积雾介质(文件里只留世界上的
+陈述)、后处理级的合成树(按出图尺寸现建)、视点。顶点腿只在导入那一刻生成,树与修改器随文件存下;换代由
+shader_version.update 对挂着旧树的对象重新调一次。从别的文件 append 进来的材质与对象(APPENDED)同样只编图不完整的材质,
+环境兑现照当前世界重判。
 
 ## 时机是空闲态,不是操作符结束
 
@@ -70,8 +72,8 @@ MATERIALS = "materials"        # 有新材质进场
 CAMERA = "camera"              # 活动相机的身份/位姿/投影/输出分辨率
 WORLD = "world"                # 世界被换或被改(环境采样是建组时快照,只有这件事还要重接兑现面)
 RIG = "rig"                    # 骨架的骨骼名册变了(顶点腿的骨骼基座按名字接进几何节点)
-LOADED = "loaded"              # 插件数据一样都不在:开了一个文件,或着色栈刚载入(插件数据从不写进 .blend)
-APPENDED = "appended"          # 材质/对象不经导入进场(从别的文件 append):它们引用的插件数据是死的
+LOADED = "loaded"              # 开了一个文件,或着色栈刚载入:图不完整的材质要编,临时数据要现建
+APPENDED = "appended"          # 材质/对象不经导入进场(从别的文件 append):图不完整的要编,环境兑现按当前世界判
 
 ALL_FACTS = frozenset((OBJECTS, MATERIALS, CAMERA, WORLD, RIG, LOADED, APPENDED))
 
@@ -120,15 +122,15 @@ class Stage:
         return "<Stage {0} reads={1}>".format(self.name, ",".join(sorted(self.facts)))
 
 
-def _run_plugin_data(change):
-    """load pass。开了文件 / 着色栈刚载入:先清光内存里的插件数据(本会话的,或旧文件存下的上一版),再让各栈按
-    材质记录把本栈的材质全部现编;只是有东西从别的文件 append 进来:只编本会话还没编过的那些。"""
-    _dropped, compiled = material_builder.rebuild_plugin_data(purge=LOADED in change.facts)
-    return compiled
+def _run_compile(change):
+    """load pass。开了文件 / 着色栈刚载入 / 有东西从别的文件 append 进来:让各栈把图还不完整的材质照记录编出来;
+    图完整的材质(存盘时连组一起存下的)一张不碰,口上的值就是文件里的值。"""
+    return material_builder.compile_stacks()
 
 
 def _run_capabilities(change):
-    """材质的环境查询兑现面重接。唯一的触发者是**世界被换或被改**:环境采样是建组时快照。
+    """材质的环境查询兑现面重接。触发者是**世界被换或被改**(环境采样是建组时快照),以及开文件与 append 进材质:
+    存下的兑现面按存盘时的世界答的,材质上记着它的答案按哪一份世界内容建的,与当前世界一致的不重接。
 
     灯**一概不进这条路**,也不进任何一条:材质树读的是宿主自己的原生灯节点(主光身份是原生
     is_sun),加灯/删灯/挪灯/转灯/换色由宿主的光循环当场吃掉,插件一个字节都不写。
@@ -142,8 +144,8 @@ def _run_capabilities(change):
 
 
 def _run_medium(change):
-    """关卡世界上陈述的体积雾。介质是运行时数据(体积物体、灯的孪生),存盘一个字节都不写,文件里留下的只有世界上的陈述;
-    开文件与着色栈刚载入时照陈述现立,没有陈述就什么都不做。"""
+    """关卡世界上陈述的体积雾。介质是临时数据(体积物体、灯的孪生,见 scratch),存盘一个字节都不写,文件里留下的只有世界上的
+    陈述;开文件与着色栈刚载入时照陈述现立,没有陈述就什么都不做。"""
     from . import LEVEL_SUN, medium
     return len(medium.restore(change.scene, bpy.data.objects.get(LEVEL_SUN)))
 
@@ -159,8 +161,8 @@ def _run_vertex(change):
     """顶点腿的**拓扑**:壳层位移与反壳描边那棵几何节点树,以及挂着它的那个修改器。
 
     唯一的生成途径 = 导入从游戏读材质、造出对象的那一刻:范围永远是这批 announce 进来的对象,
-    从不扫整场景。开文件、append、「重建派生态」都不建也不重填 —— 树是插件数据不进 .blend,
-    重开文件后修改器是空的,要壳与描边就重新导入。相机与骨名各自只重灌已有树上那几格 uniform。"""
+    从不扫整场景。开文件、append、「重建派生态」都不建也不重填 —— 树与修改器随文件存盘,重开文件原样在;
+    换代由 shader_version.update 对挂着旧树的对象重新调一次。相机与骨名各自只重灌已有树上那几格 uniform。"""
     return material_builder.apply_vertex_stages(objects=change.objects)
 
 
@@ -193,9 +195,9 @@ def _run_post(change):
 # 后处理最后落在合成器上(三者互不读对方产物,顺序只为报告好读)。材质参数面板不在这里:
 # 它是按需回读的镜子,面板画到哪张才回读哪张(见 material_panel)。
 STAGES = (
-    # 插件数据不在文件里:先按记录把材质编出来,后面各阶段才有东西可接。
-    Stage("plugin-data", (LOADED, APPENDED), _run_plugin_data),
-    Stage("capabilities", (WORLD,), _run_capabilities),
+    # 先把图还不完整的材质照记录编出来,后面各阶段才有东西可接。
+    Stage("compile", (LOADED, APPENDED), _run_compile),
+    Stage("capabilities", (WORLD, LOADED, APPENDED), _run_capabilities),
     Stage("medium", (LOADED,), _run_medium),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
     Stage("vertex", (OBJECTS,), _run_vertex),
@@ -352,8 +354,8 @@ def pending():
 
 
 def refresh_after_replacement(objects):
-    """着色栈在会话里被新一代原地顶替、旧一代的插件数据已被清掉之后:只补编还没编的材质,再把依赖它们的派生态
-    按整场景补一遍,并让 ``objects`` 重新生成顶点腿(旧一代的树清掉后它们的修改器是空的)。其余插件数据
+    """着色栈在会话里被新一代原地顶替、旧一代存在文件里的组与树已被清掉之后:补编图不完整的材质,再把依赖它们的派生态
+    按整场景补一遍,并让 ``objects`` 重新生成顶点腿(旧一代的树清掉后它们的修改器是空的)。其余的
     (介质、关卡图、灯)一概不清不动 —— 这不是开文件那一遍。"""
     _mark((APPENDED, OBJECTS, MATERIALS), objects=objects, whole_scene=True)
     return flush()
@@ -481,8 +483,8 @@ def _on_depsgraph_update(scene, depsgraph):
 
 @bpy.app.handlers.persistent
 def _on_load_post(_path):
-    """开了一个文件:插件数据从不写进 .blend,此刻一样都不在 —— 整场景的派生态照内容现建。有界面时交给去抖
-    计时器;后台没有事件循环、计时器永远不响,求值一次当场落地。"""
+    """开了一个文件:图完整的材质、顶点腿的树随文件存着,临时数据此刻一样都不在 —— 整场景的派生态照内容判一遍、
+    该现建的现建。有界面时交给去抖计时器;后台没有事件循环、计时器永远不响,求值一次当场落地。"""
     global _pending_whole_scene
     _pending_facts.clear()
     del _pending_objects[:]
@@ -506,8 +508,8 @@ def register():
     scene = getattr(bpy.context, "scene", None)
     if scene is not None:
         _resnapshot(scene)
-    # 着色栈刚载入(启动、启用插件、重载脚本):会话里已经开着的文件同样一样插件数据都没有(或是上一次载入的那一份)。
-    # 后台跑的文件由 load_post 当场落地;脚本自己导入的东西已经是本次载入编的,不再清一遍重编。
+    # 着色栈刚载入(启动、启用插件、重载脚本):会话里已经开着的文件里,图不完整的材质要编、临时数据要现建。
+    # 后台跑的文件由 load_post 当场落地;脚本自己导入的东西已经是本次载入编的,不再重编。
     if not bpy.app.background:
         _mark((LOADED,), whole_scene=True)
 

@@ -1,15 +1,16 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(abbee52a68cbc6a0):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(7ab8e5e6d3f53a14):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_girlsfrontline 的包入口)—— 运行时。
 
-⛔ 插件数据零缓存,严禁写进 .blend。从产物取来的模板组、模板材质、参数表、中性图、合成树与它的图、顶点腿的树、
-兜底灯 —— 本运行时造的与带进来的每一个数据块都经宿主的 plugin_data() 出生(运行时数据,存盘一个字节都不写)。
-.blend 里只有内容:网格、贴图、关卡数据、材质记录(ruri_uber_*)、场景上记下的后处理输入、用户设置。
-开文件与本模块注册时宿主跑 load pass:先清掉插件数据(旧文件里上一版存下的、上一次注册留下的),再按记录把
-每张材质现编一遍(compile_all),其余派生态由各派生阶段现建。
+生成的材质栈是文件里的普通数据:从产物取来的模板节点组(连同嵌套组与图)、材质编出来的树、中性图、顶点腿的树与修改器,
+一律随 .blend 存盘 —— 用户在组实例口上、修改器面板上拧的值就存在节点里,文件换一台电脑打开也是整套的。模板组与随组
+带进来的数据块都带这一代的 stamp(ruri_stamp);材质记录(ruri_uber_*)是口的镜像,换代时新一代照它重编、口上的值按
+参数名原样留下,只换内部节点。换代是显式的更新(宿主 shader_version.update),开文件不重编、不覆盖任何口。
+只有拷贝源、预算探针、link 材质的替身与后处理级(合成树按出图尺寸每次现建)是本会话的临时数据,经宿主的 scratch() 出生,
+存盘不带。
 
 包清单是同目录的 json,导入时用普通文件读取载入:插件 register() 跑在 Blender 的**受限上下文**里
 (bpy.data 此刻是 _RestrictData),读不了 .blend 里的任何东西,但读磁盘上的 json 不受限,
@@ -176,8 +177,8 @@ def _import_host(relative):
 
 
 def _host():
-    """宿主模块(清单的 host.registry_module,全平台同一个)。插件数据的出生、清理与存盘守卫都住在那边:宿主自己
-    也造插件数据块(视点、关卡图占位),同一条规矩只许一处声明。"""
+    """宿主模块(清单的 host.registry_module,全平台同一个)。临时数据(scratch)的出生、清理与存盘守卫都住在那边:宿主自己
+    也造临时数据块(体积雾的物体、区域拾取的图),同一条规矩只许一处声明。"""
     return _import_host(MANIFESTS[0]['host']['registry_module'])
 
 
@@ -774,7 +775,7 @@ _NEUTRAL_IMAGES = {}
 
 def _neutral_image(rgb, alpha, non_color):
     """1x1 图,颜色 = 割点自己声明的 neutral(缺图时该采到什么;与占位图的槽语义中性不是一回事)。
-    插件数据:本会话一份,开文件时由 load pass 随材质重编现建。"""
+    文件里的普通图,材质树的取点指着它、随文件存盘:名字编了全部参数,文件里已有同名同色的就是它,没有才建。"""
     key = (tuple(round(float(c), 6) for c in rgb), round(float(alpha), 6), bool(non_color))
     img = _NEUTRAL_IMAGES.get(key)
     if img is not None:
@@ -785,15 +786,20 @@ def _neutral_image(rgb, alpha, non_color):
             pass
     name = 'RuriNeutral_{0:.3f}_{1:.3f}_{2:.3f}_{3:.3f}_{4}'.format(
         key[0][0], key[0][1], key[0][2], key[1], 'nc' if non_color else 'srgb')
-    img = _host().plugin_data(bpy.data.images.new(name, 1, 1, float_buffer=True, alpha=True))
+    # 平色用 generated_color(不写 pixels:写像素置 dirty 且不进 .blend);sRGB 图按显示空间反编码。
+    color = (key[0][0] if non_color else _linear_to_srgb(key[0][0]),
+             key[0][1] if non_color else _linear_to_srgb(key[0][1]),
+             key[0][2] if non_color else _linear_to_srgb(key[0][2]),
+             key[1])
+    img = bpy.data.images.get(name)
+    if img is not None and img.library is None and img.get('ruri_placeholder') \
+            and all(abs(float(have) - float(want)) <= 1e-6 for have, want in zip(img.generated_color, color)):
+        _NEUTRAL_IMAGES[key] = img
+        return img
+    img = bpy.data.images.new(name, 1, 1, float_buffer=True, alpha=True)
     _set_colorspace(img, 'Non-Color' if non_color else 'sRGB')
     img.alpha_mode = 'CHANNEL_PACKED'
-    # 平色用 generated_color(不写 pixels:写像素置 dirty 且不进 .blend);sRGB 图按显示空间反编码。
-    img.generated_color = (
-        key[0][0] if non_color else _linear_to_srgb(key[0][0]),
-        key[0][1] if non_color else _linear_to_srgb(key[0][1]),
-        key[0][2] if non_color else _linear_to_srgb(key[0][2]),
-        key[1])
+    img.generated_color = color
     img.update()
     img['ruri_placeholder'] = 1
     _NEUTRAL_IMAGES[key] = img
@@ -847,7 +853,7 @@ def node_tree_uniform_bytes(tree):
 
 
 def _zone_copy(group, zone_copies):
-    """组的「每个 repeat zone 砍成一圈」的拷贝;组里(连同它嵌套的组)没有 zone = None。拷贝是插件数据,
+    """组的「每个 repeat zone 砍成一圈」的拷贝;组里(连同它嵌套的组)没有 zone = None。拷贝是临时数据,
     按源组的 session_uid 记在 zone_copies 里:一个组一个会话只看一遍、只拷一次。"""
     uid = group.session_uid
     if uid not in zone_copies:
@@ -855,7 +861,7 @@ def _zone_copy(group, zone_copies):
                     or (node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
                         and _zone_copy(node.node_tree, zone_copies) is not None)
                     for node in group.nodes)
-        copy = _host().plugin_data(group.copy()) if zoned else None
+        copy = _host().scratch(group.copy()) if zoned else None
         zone_copies[uid] = copy
         if copy is not None:
             _one_iteration(copy, zone_copies)
@@ -881,7 +887,7 @@ def require_uniform_budget(mat, zone_copies, probes):
     保留成 GLSL 循环、体只编一份,Python 的内联器却把它整个展开 —— 所以量的是一份把每个 zone(材质树上的与组里的)
     都砍成一圈的拷贝(初态是常量的项展开一圈会多占几格,量得偏多,落在保守的一边)。量用的材质拷贝记进 probes,
     由调用方整批删:逐张删每张都要把整个文件的 ID 引用走一遍。"""
-    probe = _host().plugin_data(mat.copy())
+    probe = _host().scratch(mat.copy())
     probes.append(probe)
     _one_iteration(probe.node_tree, zone_copies)
     inlined = bpy.types.InlineShaderNodes.from_material(probe)
@@ -1570,9 +1576,87 @@ def _plain(value):
     return value
 
 
-def _linked_group(blend_path, stamp, wanted, name, adopt):
-    """本栈的模板组:从产物 append 进本会话 —— 连同这一次带进来的每个数据块一律是插件数据(运行时,存盘不带,
-    见模块头)。首次真用才取:register() 期 bpy.data 还是 _RestrictData。本模块这一生里取一次,开文件换了整个
+def _local_group(name):
+    group = bpy.data.node_groups.get(name)
+    return group if group is not None and group.library is None else None
+
+
+def _kept_group(blend_path, stamp, wanted, name, adopt, owner):
+    """材质栈的模板组:住在本文件里的普通数据块,随文件存盘 —— 材质树的组实例、顶点腿修改器、用户在它们口上拧过的值
+    都指着这些组,文件换一台电脑打开也是整套的。文件里已有本栈这一代(stamp 对得上)的整套组就直接用;一个都没有,
+    首次真用才从产物 append 一整套进来(register() 期 bpy.data 还是 _RestrictData,不能早取),嵌套组与图一次带进来、
+    一律打上 stamp 与栈键 ruri_stack(换代时凭栈键整批清,不碰别的栈)。文件里是别代的、或缺了几个,响亮拒绝:换代是显式的更新(shader_version.update:
+    先把口上的值记回记录,清掉这一代,再照记录重编),取组的路上不偷换。这一次带进来的数据块交给 adopt 认领一次。"""
+    table = _LINKED.get(blend_path)
+    if table is not None and all(_alive(group) for group in table.values()):
+        got = table.get(name)
+        if got is not None:
+            return got
+    requested = list(dict.fromkeys(wanted))
+    held = {wanted_name: _local_group(wanted_name) for wanted_name in requested}
+    if any(group is not None for group in held.values()):
+        other = sorted(wanted_name for wanted_name, group in held.items()
+                       if group is not None and group.get('ruri_stamp') != stamp)
+        absent = sorted(wanted_name for wanted_name, group in held.items() if group is None)
+        if other or absent:
+            raise RuntimeError(
+                '[ruri-uber] 文件里 {0} 的模板组不是整套当前这一代(stamp {1}):别代 {2},缺 {3} —— 先更新着色器'
+                '(更新保留每个口上的值,只换内部节点)'.format(blend_path, stamp, other, absent))
+        _LINKED[blend_path] = held
+        got = held.get(name)
+        if got is None:
+            raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
+        return got
+    before = _pointers()
+    # 🔴 `dst.node_groups = <list>` 之后 Blender **就地把那个列表的内容换成数据块**:名字先快照,
+    # 给 Blender 一份独立的列表,按位次配对。
+    with bpy.data.libraries.load(blend_path, link=False) as (source, target):
+        absent = [n for n in requested if n not in source.node_groups]
+        if absent:
+            raise RuntimeError('[ruri-uber] 产物 {0} 缺模板组 {1}:请重新 codegen(无现场重建退路)'.format(
+                blend_path, absent))
+        target.node_groups = list(requested)
+    loaded = list(target.node_groups)
+    if len(loaded) != len(requested):
+        raise RuntimeError('[ruri-uber] 产物 {0} append 回来 {1} 组,请求 {2} 组:配对不上,拒绝接线'.format(
+            blend_path, len(loaded), len(requested)))
+    appended = [block for kind in _APPENDED_KINDS for block in getattr(bpy.data, kind)
+                if block.as_pointer() not in before]
+    table = {}
+    for wanted_name, group in zip(requested, loaded):
+        if group is None:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} append 失败'.format(blend_path, wanted_name))
+        stamped = group.get('ruri_stamp')
+        if stamped != stamp:
+            raise RuntimeError(
+                '[ruri-uber] {0}: 组 {1} 的 stamp {2} ≠ 运行时 {3},产物不同批,请重新 codegen'.format(
+                    blend_path, wanted_name, stamped, stamp))
+        if group.name != wanted_name:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} 取回来叫 {2}:名字被 link 进来的同名组占着'.format(
+                blend_path, wanted_name, group.name))
+        table[wanted_name] = group
+    # append 在每个数据块上留一条指回产物文件的弱引用(带着本机的绝对路径存进用户的 .blend):清空,文件里不留来路。
+    for block in appended:
+        block['ruri_stamp'] = stamp
+        block['ruri_stack'] = owner
+        weak = block.library_weak_reference
+        if weak is not None:
+            weak.filepath = ''
+            weak.id_name = ''
+    for group in loaded:
+        group.use_fake_user = True
+    _LINKED[blend_path] = table
+    adopt(appended)
+    got = table.get(name)
+    if got is None:
+        raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
+    return got
+
+
+def _session_group(blend_path, stamp, wanted, name, adopt, owner):
+    """后处理级的模板组:从产物 append 进本会话,连同这一次带进来的每个数据块一律是本会话的临时数据(运行时,存盘
+    不带):它们的唯一用户是场景的合成树,合成树按出图尺寸与图链开关每次开文件现建,模板组随它现取。首次真用才取:
+    register() 期 bpy.data 还是 _RestrictData。本模块这一生里取一次,开文件换了整个
     Main、或取过的组有哪张没了(复位场景清掉没人用的图链组)就再取一次。同名的别的数据块让出名字,新取的才叫得上
     这个名字 —— 按名寻址的地方(合成树找主入口)撞上别的就是两代混建;还有人用的那张先把用户换到新取的这一份上
     再删(场景树上装着的主入口照样挂着,删了它就是一个没有组的节点)。这一次带进来的数据块交给 adopt 认领一次。"""
@@ -1604,12 +1688,13 @@ def _linked_group(blend_path, stamp, wanted, name, adopt):
     if len(loaded) != len(requested):
         raise RuntimeError('[ruri-uber] 产物 {0} append 回来 {1} 组,请求 {2} 组:配对不上,拒绝接线'.format(
             blend_path, len(loaded), len(requested)))
-    plugin_data = _host().plugin_data
+    scratch = _host().scratch
     appended = []
     for kind in _APPENDED_KINDS:
         for block in getattr(bpy.data, kind):
             if block.as_pointer() not in before:
-                plugin_data(block)
+                scratch(block)
+                block['ruri_stack'] = owner
                 appended.append(block)
     table = {}
     for wanted_name, group in zip(requested, loaded):
@@ -1700,7 +1785,8 @@ class Stack:
     # ---- 取模板面(产物即库;缺组响亮拒绝,零现场重建退路) ----
 
     def group(self, name):
-        return _linked_group(self.path, self.STAMP, self.group_names, name, self._adopt_level_images)
+        fetch = _kept_group if self.post is None else _session_group
+        return fetch(self.path, self.STAMP, self.group_names, name, self._adopt_level_images, self.PANEL_KEY)
 
     def _adopt_level_images(self, appended):
         """产物组里关卡图的取点绑的是物化时的占位图(一个槽一张):一次 user_remap 把它的全部用户换到宿主按关卡建的
@@ -1770,7 +1856,7 @@ class Stack:
 
     def _param_targets(self, node, part):
         """组实例的参数口在 inputs 平铺数组里的位置:(平铺长度, 目标下标, 值矩阵平铺下标, 目标所在的口序)。按 (组树, part)
-        算一次;组树是本会话取来的插件数据,session_uid 在一个会话里不复用。"""
+        算一次;session_uid 在一个会话里不复用。"""
         import numpy as np
         group = node.node_tree
         key = (group.session_uid, part)
@@ -1831,13 +1917,15 @@ class Stack:
 
     @staticmethod
     def _generated(node):
-        """材质树里本栈建的组实例(各段与循环体):指着本会话取来的模板组(插件数据)。用户自己拖进来的组不是。"""
-        return node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None and node.node_tree.is_runtime_data
+        """材质树里本栈建的组实例(各段与循环体):指着带 stamp 的模板组。用户自己拖进来的组不带 stamp,不是。"""
+        return node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None \
+            and node.node_tree.get('ruri_stamp') is not None
 
     def apply_params(self, mat):
         """材质记录 → 它图里的全部参数口(各段与循环体的组实例、显式 LOD 采样的纹素域尺寸),值写成常量:宿主内联
-        时只读参数的算式整块折掉,Switch 只留走到的那一支。只在编图的那一刻走这一条(导入,开文件、append 与换代时
-        照记录重建):此后口是真源,改哪一行只写哪一行(_publish),记录跟着口走(sync_material_inputs)。组实例的口
+        时只读参数的算式整块折掉,Switch 只留走到的那一支。只在编图的那一刻走这一条(导入、图不完整的材质、换代时
+        照记录重建;开文件不走,口上的值随文件存着):此后口是真源,改哪一行只写哪一行(_publish),记录跟着口走
+        (sync_material_inputs)。组实例的口
         一次写完(foreach_set 不逐口触发树更新)。写完记下镜像,量一次内联后的常量块(同一结构只量一次)。"""
         import numpy as np
         part = mat.get('ruri_uber_part', '')
@@ -2728,10 +2816,11 @@ class Stack:
         tpl = bpy.data.materials.get(name)
         if tpl is not None and tpl.get(self.STAMP_KEY) == self.STAMP and tpl.node_tree is not None:
             return tpl
-        # 模板是插件数据:本模块这一生建的那张认 stamp;同名的别的(上一次注册留下的)清掉重建。实例是拷贝,不是它的用户。
+        # 模板只是实例的拷贝源,本会话的临时数据:本模块这一生建的那张认 stamp;同名的别的(上一次注册留下的)清掉重建。
+        # 实例是拷贝,不是它的用户。
         if tpl is not None:
             bpy.data.materials.remove(tpl)
-        tpl = _host().plugin_data(bpy.data.materials.new(name))
+        tpl = _host().scratch(bpy.data.materials.new(name))
         if tpl.node_tree is None:
             tpl.use_nodes = True
         begun = time.perf_counter()
@@ -2766,7 +2855,7 @@ class Stack:
         """一张材质 = 模板拷贝 + 贴图指针 + 剔除值;参数由调用方写完记录后经 apply_params 写成常量。零建图。
         灯上的那一格(主光身份、朝向)不在这里烙:新材质进场是派生态调度器的一件事实,那一批落地时刷一次。"""
         tpl = self._template(part, opaque, blend)
-        # 模板是插件数据,拷出来的实例是内容:随文件走的是它的记录,它的树开文件时照记录重编。
+        # 模板是临时数据,拷出来的实例是文件里的材质:记录与编出来的树一并随文件存盘。
         mat = _host().content(tpl.copy())
         mat.name = name
         self._set_cull(mat, cull)
@@ -2797,8 +2886,8 @@ class Stack:
 
     # ==================== provider ====================
 
-    # 材质记录:导入时从游戏材质写下,此后是这张材质输入的镜像(口与图一改就记回,见 sync_material_inputs)—— 它们是
-    # 内容,随文件走;编出来的树不是(见 _compile)。
+    # 材质记录:导入时从游戏材质写下,此后是这张材质输入的镜像(口与图一改就记回,见 sync_material_inputs)—— 换代与
+    # 图不完整时照它重编(见 _compile),别的应用(拉回贴图与参数的插件)读写的也是这一份。
     RECORD_KEYS = ('ruri_uber_part', 'ruri_uber_images', 'ruri_uber_floats', 'ruri_uber_colors', 'ruri_uber_st',
                    'ruri_uber_disabled_passes', 'ruri_uber_shader_passes', 'ruri_uber_shader_guid', 'ruri_uber_shader')
     # 上一版产物写在实例上、如今不再由实例带着的键:照记录重编时不带过去。
@@ -2974,10 +3063,10 @@ class Stack:
         return mat
 
     def _compile(self, name, record):
-        """一张材质按它的记录编出来:模板拷贝 + 贴图 + 参数常量。导入与开文件走同一条 —— 记录是内容,编出来的
-        树不是:它引用的模板组是插件数据,开文件时不在(存下的组节点没有树、一个口都不剩),所以每次开都照记录重编;
-        记录是口的镜像,照它编出来的口就是存盘那一刻口上的值。混合、透明形态与剔除面都由记录里的材质值加当前产物的
-        声明现算,不另记。"""
+        """一张材质按它的记录编出来:模板拷贝 + 贴图 + 参数常量。导入、append 进来还没有图的材质、换代走同一条。
+        编出来的图连同它指着的模板组随文件存盘,口上的值就是用户拧的那一份 —— 记录是口的镜像:换代时先把口上的值记回
+        记录(settle_inputs),新一代照记录编出来,口上的值按参数名原样留下。混合、透明形态与剔除面都由记录里的材质值
+        加当前产物的声明现算,不另记。"""
         part = record['ruri_uber_part']
         meta = self.PART_META[part]
         floats = dict(record['ruri_uber_floats'])
@@ -3019,14 +3108,20 @@ class Stack:
         return mat
 
     def _compiled(self, mat):
-        """这张材质是本会话照记录编过的:树里的组实例都有树,本栈建的那些指着本会话取来的模板组(插件数据);用户自己
-        拖进来的组不算数。开文件后模板组一个都不在(组节点没有树、一个口都不剩),从别的文件 append 进来的、旧文件
-        存下的也都不是本会话的 —— 那些都要照记录重编。"""
+        """这张材质的图是完整的:树里有本栈建的组实例(指着带 stamp 的模板组),且没有一个组节点是空的(模板组被删了、
+        或这份文件是没把组存进去的版本存的,组节点没有树、一个口都不剩)。用户自己拖进来的组不带 stamp,不算数也不挡。
+        不完整的照记录编;完整的原样用,不论它是哪一代 —— 换代是显式的更新。"""
         tree = mat.node_tree
         if tree is None:
             return False
-        groups = [node.node_tree for node in tree.nodes if node.bl_idname == 'ShaderNodeGroup']
-        return all(group is not None for group in groups) and any(group.is_runtime_data for group in groups)
+        generated = False
+        for node in tree.nodes:
+            if node.bl_idname != 'ShaderNodeGroup':
+                continue
+            if node.node_tree is None:
+                return False
+            generated = generated or node.node_tree.get('ruri_stamp') is not None
+        return generated
 
     def recompile(self, mat):
         """照记录重编一张材质:新编一张,把别处写在旧材质上的内容(基座骨名、来源键……)带过去;
@@ -3044,15 +3139,17 @@ class Stack:
         return new
 
     def compile_all(self):
-        """宿主 load pass 的第二步(先清完插件数据再调),也收从别的文件 append 进来的材质:本栈认领、还没在本会话
-        编过的每张材质照记录重编,新编的顶替旧的(旧的全部用户换到新的上),旧的删掉、名字还给新的。link 进来的材质
-        记录是库文件的内容、本文件从不写它:照它编成本会话的替身(插件数据,不落盘),用户交宿主指到替身上,
-        存盘时宿主让文件照旧指着库里那张。返回新编的材质。"""
+        """宿主 load pass(开文件、着色栈刚载入、有材质从别的文件 append 进来):本栈认领、图还不完整的每张材质照记录
+        重编,新编的顶替旧的(旧的全部用户换到新的上),旧的删掉、名字还给新的。图完整的材质(存盘时连组一起存下的)
+        一张不碰 —— 口上的值就是文件里的值。link 进来的材质记录是库文件的内容、本文件从不写它:库里存的图是完整的就直接
+        用;库是没把组存进去的版本存的,就照它的记录编成本会话的替身(临时数据,不落盘),用户交宿主指到替身上,存盘时
+        宿主让文件照旧指着库里那张。返回新编的材质。"""
         claimed = [mat for mat in bpy.data.materials
                    if mat.get('ruri_uber_stack') == self.PANEL_KEY and mat.get('ruri_uber_part')
                    and mat.get(self.TEMPLATE_KEY) is None]
         pending = [mat for mat in claimed if mat.library is None and not self._compiled(mat)]
-        linked = [mat for mat in claimed if mat.library is not None and not _host().twinned(mat)]
+        linked = [mat for mat in claimed if mat.library is not None and not self._compiled(mat)
+                  and not _host().twinned(mat)]
         if not pending and not linked:
             return []
         # 旧材质的死树不在这里清空:清空会给它打依赖图更新标记,紧接着整批删掉,下一拍的依赖图更新里就留着一个
@@ -3073,7 +3170,7 @@ class Stack:
                 replaced[mat] = new
             for mat in linked:
                 try:
-                    twin = _host().plugin_data(self.recompile(mat))
+                    twin = _host().scratch(self.recompile(mat))
                 except Exception as exc:
                     failed.append('{0}: {1}'.format(mat.name_full, exc))
                     continue
@@ -3086,7 +3183,7 @@ class Stack:
             del self._mirrors[retired]
         _host().adopt_twins(twins)
         if twins:
-            print('[ruri-uber] {0} 张 link 进来的材质照库里的记录编成替身(插件数据,不落盘)'.format(len(twins)), flush=True)
+            print('[ruri-uber] {0} 张 link 进来的材质照库里的记录编成替身(临时数据,不落盘)'.format(len(twins)), flush=True)
         if failed:
             raise RuntimeError('[ruri-uber] {0} 张材质照记录编不出来:{1}'.format(len(failed), failed))
         return list(replaced.values()) + [twin for _mat, twin in twins]
@@ -3099,7 +3196,7 @@ class Stack:
         if mat.get('ruri_uber_stack') != self.PANEL_KEY:
             return False
         if not self._compiled(mat):
-            # 兑现面是编出来的图的一部分:本会话还没照记录编过的图(刚开的文件、刚 append 进来的)没有可重接的,编它时按当下的场景接。
+            # 兑现面是编出来的图的一部分:图还不完整的材质(模板组没存进文件)没有可重接的,编它时按当下的场景接。
             return False
         spec = self.part(part)
         nt = mat.node_tree
@@ -3635,11 +3732,10 @@ class Stack:
     def sync_material_inputs(_scene, depsgraph):
         """材质的输入这一拍被谁改了 → 落到同一份值的其余各面。
 
-        口是唯一真源:组实例的参数口、主贴图的平铺节点、贴图节点上的图。材质记录(ruri_uber_*)是它们的镜像:模板组是
-        插件数据,存盘不写,存下的组节点重开时没有树、一个口都不剩(实测),口上的值只有记进记录才随文件走,开文件照
-        记录重建出来的就是存盘那一刻口上的值;别的应用(拉回贴图与参数的插件、脚本)读写的也是这一份。所以两个方向
-        各认一次:记录被别处改了的行与槽落到口上,口在编辑器里被直接改了的记回记录、并推给同一行的其余各面(别的组
-        实例、顶点腿修改器口);同一拍两边改了同一行,记录那一边是明说要写的,它赢。Blender 改口只给材质的节点树发
+        口是唯一真源:组实例的参数口、主贴图的平铺节点、贴图节点上的图,它们连同模板组随文件存盘,开文件原样在。材质
+        记录(ruri_uber_*)是它们的镜像:换代与图不完整时照它重编,别的应用(拉回贴图与参数的插件、脚本)读写的也是这
+        一份。所以两个方向各认一次:记录被别处改了的行与槽落到口上,口在编辑器里被直接改了的记回记录、并推给同一行
+        的其余各面(别的组实例、顶点腿修改器口);同一拍两边改了同一行,记录那一边是明说要写的,它赢。Blender 改口只给材质的节点树发
         更新,不给材质;改记录的按约定给材质打 update_tag —— 两样各只在它那一种更新里比。每一拍都必须便宜:只看这一拍
         被更新、本栈认领的材质,与镜像相同就什么都不做。"""
         stated = {}
@@ -3665,19 +3761,33 @@ class Stack:
 
     def settle_inputs(self):
         """本栈认领的每一张材质跑一遍 sync_inputs:存盘前、换代前、本栈注销前,编辑器里改过而这一拍还没记回的口全部
-        记回 —— 记录是口唯一随文件走、也唯一跨代留下的样子。"""
+        记回 —— 记录是口的镜像,换代时新一代照它重编,口上的值按参数名原样留下。"""
         for material in [material for material in bpy.data.materials if self.panel_claims(material)]:
             self.sync_inputs(material)
 
+    def _baseline_from_record(self, material):
+        """第一次见到的材质(开了存着它的文件、插件刚重载)的镜像基线:取「照记录该有的口值」,不取此刻的口。口上的值是
+        用户存下的那一份,与它不同(存盘时本插件不在、文件在别处被改过)就当场被认作编辑记回记录 —— 口是真源。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        lanes = {}
+        if material.node_tree is not None and part in self.m['parts']:
+            values = self._record_matrix(material).ravel()
+            for node in material.node_tree.nodes:
+                if self._generated(node):
+                    _width, _destinations, sources, _sockets = self._param_targets(node, part)
+                    lanes[node.as_pointer()] = values[sources].astype(np.float32)
+        return {'record': self._record_values(material), 'lanes': lanes}
+
     def sync_inputs(self, material, record=True, nodes=True):
-        """见 sync_material_inputs:record 比记录与镜像,nodes 比口与镜像。库里的材质本文件写不了,模板材质是插件数据、
-        没有谁的输入;本会话还没编过的(刚开的文件)没有口可比;第一次见到的(插件刚重载)此刻的口就是它的值。"""
+        """见 sync_material_inputs:record 比记录与镜像,nodes 比口与镜像。库里的材质本文件写不了,模板材质没有谁的
+        输入;图不完整的(模板组没存进文件)没有口可比,由 compile_all 照记录重编;第一次见到的以记录为基线(见
+        _baseline_from_record)。"""
         if material.library is not None or material.get(self.TEMPLATE_KEY) is not None or not self._compiled(material):
             return
         mirror = self._mirrors.get(material.session_uid)
         if mirror is None:
-            self._remember_inputs(material)
-            return
+            mirror = self._mirrors[material.session_uid] = self._baseline_from_record(material)
         stated, restated = self._record_changes(material, mirror['record']) if record else (set(), set())
         edited, swapped = self._input_changes(material, mirror['lanes']) if nodes else ({}, {})
         for name in stated:
@@ -4035,7 +4145,8 @@ class Stack:
         """壳层位移 + 反壳描边的壳(同树虚拟几何;壳往外挪多少在材质的位移出口里逐视图算,见 _wire_outline)。
         **唯一的生成途径 = 从游戏读材质、造出这批对象的那一刻**:objects 只能是导入刚造出来的对象,没有「整场景」、
         没有开文件重填、没有手动重建 —— 拓扑的判据(这张材质有没有描边 pass、宽度是不是 0)说的是导入那一刻的游戏真值,
-        之后任何时候按材质现值重判都是凭空长修改器。树是插件数据不进 .blend,所以重开文件后修改器是空的,要壳与描边就重新导入。
+        之后任何时候按材质现值重判都是凭空长修改器。树与修改器随文件存盘,重开文件原样在,修改器面板上拧的值也在;换代时
+        由 shader_version.update 对挂着旧树的对象重新调一次。
 
         读相机的壳层位移在树里现读活动相机,输出像素数变了只重灌那两格(push_screen_size),骨改名了只重接基座
         (apply_rig_basis),两条都不进这里。camera 是宿主契约里的参数,树里读的是场景的活动相机。"""
@@ -4094,7 +4205,7 @@ class Stack:
             panels = {}
             if old is not None:
                 bpy.data.node_groups.remove(old)
-            mt = _host().plugin_data(bpy.data.node_groups.new(tree_name, 'GeometryNodeTree'))
+            mt = bpy.data.node_groups.new(tree_name, 'GeometryNodeTree')
             mt.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
             mt.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
             gin = mt.nodes.new('NodeGroupInput')
@@ -4596,7 +4707,7 @@ class Stack:
         }
 
     def installed(self, scene):
-        """本会话装在这个场景上的本级:场景的合成树就是本级建的那棵(插件数据,存盘不带,开文件时由派生阶段现装)。"""
+        """本会话装在这个场景上的本级:场景的合成树就是本级建的那棵(临时数据,存盘不带,开文件时由派生阶段现装)。"""
         tree = bpy.data.node_groups.get(self.post['scene_tree'])
         return tree is not None and tree.is_runtime_data and scene.compositing_node_group is tree
 
@@ -4635,7 +4746,7 @@ class Stack:
 
     def set_images(self, scene, images):
         """按 extra_images() 往本级组的图像口接图。images[口名] = (宽, 高, 逐纹素 RGBA 浮点平铺)。纹素是关卡的
-        数据,记在关卡的世界上随文件走;图是插件数据,每次建树时按记下的纹素现建(_wire_images)。模板组不烙任何图。
+        数据,记在关卡的世界上随文件走;图是临时数据,每次建树时按记下的纹素现建(_wire_images)。模板组不烙任何图。
         缺一口就拒绝,理由同 set_extra。"""
         names = self.extra_images()
         missing = [name for name in names if name not in images]
@@ -4655,7 +4766,7 @@ class Stack:
         return len(names)
 
     def _wire_images(self, scene):
-        """按场景记下的纹素现建本级的图像口图(逐场景一张,Non-Color 浮点,插件数据)接到主入口上;没记过的口留着
+        """按场景记下的纹素现建本级的图像口图(逐场景一张,Non-Color 浮点,临时数据)接到主入口上;没记过的口留着
         模板组自己的缺省。"""
         node = self.stage_node(scene)
         tree = scene.compositing_node_group
@@ -4669,8 +4780,8 @@ class Stack:
             image = bpy.data.images.get(image_name)
             if image is not None:
                 bpy.data.images.remove(image)
-            image = _host().plugin_data(bpy.data.images.new(image_name, width, height, alpha=True, float_buffer=True,
-                                                            is_data=True))
+            image = _host().scratch(bpy.data.images.new(image_name, width, height, alpha=True, float_buffer=True,
+                                                        is_data=True))
             image.colorspace_settings.name = 'Non-Color'
             image.pixels.foreach_set([float(texel) for texel in entry['texels']])
             # 改了像素不 update,合成器读到的还是旧缓冲(实测全 0)。打成浮点包只为撤销与关文件不喊「图像未保存」。
@@ -4691,7 +4802,7 @@ class Stack:
     POST_CHAIN_KEY = 'ruri_post_chain'
     # 渲染结果拆三通道再拼成向量的那一枚:没有替换场景色的链时主入口的颜色口接它。
     POST_PACK_KEY = 'ruri_post_scene_color'
-    # 记下的本级输入(内容,随文件走;合成树是插件数据,每次按它们现建),各按本级的组名分格:
+    # 记下的本级输入(内容,随文件走;合成树是临时数据,每次按它们现建),各按本级的组名分格:
     # 关卡写的宿主输入 {输入名: 分量}、关卡给的图像口纹素 —— 关卡的数据,住在关卡的世界上(与关卡全局量同处,
     # 用着关卡世界的场景看到的是同一份);面板上拧得与关卡不一样的主入口口 {口名: 分量} 是这个场景自己的。
     POST_VALUES_KEY = 'ruri_post_values'
@@ -4978,7 +5089,7 @@ class Stack:
         """一级金字塔的出图域:按该级尺寸建一张生成图,取它的坐标场。合成器的 Scale 只改变换、共享源像素、推迟到
         实化才重采样,拿它当域每一级都还在全分辨率网格上跑;生成图是恒等变换的真 w×h 网格,MapUV 只实化图像的
         变换、在图自己的归一化空间取样,跨级取样因此成立。"""
-        image = _host().plugin_data(bpy.data.images.new(
+        image = _host().scratch(bpy.data.images.new(
             '{0} {1} level {2} {3}'.format(self.post['group'], label, level, scene.name),
             size[0], size[1], alpha=False, float_buffer=False, is_data=True))
         image[self.POST_LEVEL_KEY] = scene.name
@@ -5602,7 +5713,7 @@ class Stack:
     @staticmethod
     @bpy.app.handlers.persistent
     def sync_post_chains(scene, depsgraph):
-        """场景合成树被改过 → 把面板上拧过的旋钮记回场景(合成树是插件数据、存盘不带,旋钮只有记在场景上才随文件走),
+        """场景合成树被改过 → 把面板上拧过的旋钮记回场景(合成树是临时数据、存盘不带,旋钮只有记在场景上才随文件走),
         旋钮变了就让图链各趟上的同名口跟上主入口(_derive_passes),各后处理级的图链重判排到下一拍。面板拧的是主入口
         上的口,Blender 不给回调,只能依赖图落定后看这一拍更新的数据块里有没有这棵树;没被改就一行都不多付。
 
@@ -5644,7 +5755,7 @@ class Stack:
         stale = bpy.data.node_groups.get(self.post['scene_tree'])
         if stale is not None:
             bpy.data.node_groups.remove(stale)
-        tree = _host().plugin_data(bpy.data.node_groups.new(self.post['scene_tree'], 'CompositorNodeTree'))
+        tree = _host().scratch(bpy.data.node_groups.new(self.post['scene_tree'], 'CompositorNodeTree'))
         tree.interface.new_socket(name='Image', in_out='OUTPUT', socket_type='NodeSocketColor')
         render = tree.nodes.new('CompositorNodeRLayers')
         split = tree.nodes.new('CompositorNodeSeparateColor')
@@ -5859,31 +5970,45 @@ def _build_stacks():
     return stacks
 
 
-def purge_plugin_data():
-    """宿主 load pass 的第一步(随后按记录重编):清掉本平台各栈留在 Main 里、不带宿主插件记号的插件数据块 ——
-    上一版产物存进旧文件的那一份:产物组(带 stamp 键)、模板材质、中性图、顶点腿的树、
-    合成树与它的图。认人只用本平台自己的词汇(键名与清单里的名字),不猜。本运行时出生的都带宿主的插件
-    记号,由宿主那一步清。进程态随 Main 一起作废。返回清掉几个。"""
+def retire_generation():
+    """换代:清掉本平台各栈这一代留在文件里的东西,随后由 compile_all 照记录重编材质、顶点阶段对挂着旧树的对象重生成顶点腿。
+    认人只用本平台自己的词汇:带本平台各栈栈键(ruri_stack)的数据块(模板组与随组带进来的图、材质、物体……;换代前的
+    各代都按栈键认,不论 stamp)、点着本平台组名的带 stamp 的组、顶点腿的树名前缀、后处理级的合成树名与图名前缀、
+    模板材质的键。别的平台的组一个不碰。材质的记录与口上的值一概不碰(调用方先 settle_inputs 把口上的值记回记录)。
+    进程态随之作废。返回清掉几个。"""
     RIG_DRIVEN.clear()
     RIG_SCANNED[0] = False
     vertex_prefixes = tuple(stack.VTX_TREE_PREFIX for stack in STACKS if stack.post is None)
     scene_trees = {stack.post['scene_tree'] for stack in STACKS if stack.post is not None}
     post_prefixes = tuple(stack.post['group'] + ' ' for stack in STACKS if stack.post is not None)
-    doomed = [group for group in bpy.data.node_groups if group.library is None and (
-        group.get('ruri_stamp') is not None or group.name in scene_trees or group.name.startswith(vertex_prefixes))]
-    doomed += [material for material in bpy.data.materials
-               if material.library is None and material.get(Stack.TEMPLATE_KEY) is not None]
-    doomed += [image for image in bpy.data.images if image.library is None and (
-        image.get('ruri_placeholder') or image.name.startswith(post_prefixes))]
+    owners = {stack.PANEL_KEY for stack in STACKS}
+    group_names = {name for stack in STACKS for name in stack.group_names}
+    doomed = {}
+    for kind in _APPENDED_KINDS:
+        for block in getattr(bpy.data, kind):
+            if block.library is None and block.get('ruri_stack') in owners:
+                doomed[block.as_pointer()] = block
+    for group in bpy.data.node_groups:
+        if group.library is None and group.name in group_names and group.get('ruri_stamp') is not None:
+            doomed[group.as_pointer()] = group
+    for group in bpy.data.node_groups:
+        if group.library is None and (group.name in scene_trees or group.name.startswith(vertex_prefixes)):
+            doomed[group.as_pointer()] = group
+    for material in bpy.data.materials:
+        if material.library is None and material.get(Stack.TEMPLATE_KEY) is not None:
+            doomed[material.as_pointer()] = material
+    for image in bpy.data.images:
+        if image.library is None and image.name.startswith(post_prefixes):
+            doomed[image.as_pointer()] = image
     if doomed:
-        bpy.data.batch_remove(doomed)
+        bpy.data.batch_remove(list(doomed.values()))
     return len(doomed)
 
 
 @bpy.app.handlers.persistent
 def settle_inputs(*_args):
     """存盘前(save_pre)、宿主换代前、本平台注销前:各材质栈把编辑器里改过、这一拍还没记回记录的口与图记回去
-    (Stack.settle_inputs)—— 记录是口唯一随文件走、也唯一跨代留下的样子。"""
+    (Stack.settle_inputs)—— 记录是口的镜像,换代时新一代照它重编、口上的值按参数名原样留下。"""
     for stack in STACKS:
         if stack.post is None:
             stack.settle_inputs()
@@ -5895,7 +6020,6 @@ def register():
     hosts = {manifest['host']['registry_module'] for manifest in MANIFESTS}
     if len(hosts) != 1:
         raise RuntimeError('[ruri-uber] 本平台各栈清单声明的宿主不止一个:{0}'.format(sorted(hosts)))
-    _host().register_plugin_purge(purge_plugin_data)
     for stack in STACKS:
         stack.register_host()
     if settle_inputs not in bpy.app.handlers.save_pre:
@@ -5910,10 +6034,6 @@ def unregister():
             settle_inputs()
     except Exception as exc:
         print('[ruri-uber] 注销前记回材质输入失败: {0}'.format(exc), flush=True)
-    try:
-        _host().unregister_plugin_purge(purge_plugin_data)
-    except Exception as exc:
-        print('[ruri-uber] 注销失败: {0}'.format(exc), flush=True)
     for stack in reversed(STACKS):
         try:
             stack.unregister_host()

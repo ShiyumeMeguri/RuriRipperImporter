@@ -1,9 +1,11 @@
-"""A material a file links from a library is drawn through a twin compiled in this session.
+"""A material a file links from a library is drawn through a twin compiled in this session when the library
+did not keep its graph whole.
 
-A library's material carries its record, and the record is content of the library file. The graph a stack
-compiles from a record is plugin data (see :mod:`plugin_data`), and a linked material can hold nothing this
-session writes: a file never writes the data it links. So a stack compiles the linked record into a twin that
-is runtime data, and every user the session draws through is pointed at it:
+A library saved by this plugin holds the material's whole graph, template groups included, and a file that links
+it draws that as it is. A library saved by a build that kept the graph out of the file holds the material's
+record and group nodes with no tree in them, and a linked material can hold nothing this session writes: a file
+never writes the data it links. So a stack compiles that record into a twin that is scratch (see :mod:`scratch`),
+and every user the session draws through is pointed at it:
 
 - users inside linked data (the meshes of a level linked into a shot) take the twin directly; linked data is
   never written, so nothing more is owed;
@@ -11,9 +13,8 @@ is runtime data, and every user the session draws through is pointed at it:
   so for the length of every save they go back to the library's material and come forward again after it:
   the file keeps saying what it links, never a twin that is not in it.
 
-The load pass hands every user back before it drops plugin data (the twins with it), so reloading the stacks
-finds the file as saved and compiles the twins anew. A file being opened frees the previous one whole; its
-pairs are simply forgotten.
+A stack replaced in place hands the users of its twins back and compiles them anew (:func:`release_matching`).
+A file being opened frees the previous one whole; its pairs are simply forgotten (:func:`forget_freed`).
 
 A twin can still leave its session: ``bpy.data.libraries.write`` -- the copy buffer behind copy and paste --
 writes runtime data like any other, and a save made without this plugin has no guard at all. Every twin
@@ -21,7 +22,7 @@ therefore names the material it stands for (:data:`ORIGIN`: the library's absolu
 name). A stray twin -- one carrying that name that no pair of this session holds -- is handed back to its
 material wherever it turns up: before a save (a material in this very file takes its users for good, a
 library's material is paired with the stray so the session keeps drawing it), and in the load pass before
-plugin data is dropped (every user goes back for good, and a stray a library carries is removed). A stray
+anything is compiled (every user goes back for good, and a stray a library carries is removed). A stray
 whose material cannot be found is named, never silently dropped with its users' slots left empty."""
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import os
 
 import bpy
 
-from . import plugin_data
+from . import scratch
 
 ORIGIN = "ruri_twin_origin"
 
@@ -112,7 +113,7 @@ def adopt(pairs):
 def _strays():
     held = {pair[1] for pair in _PAIRS if _alive(pair)}
     return [material for material in bpy.data.materials
-            if material.get(plugin_data.MARK) and material.get(ORIGIN) is not None and material not in held]
+            if material.get(ORIGIN) is not None and material not in held]
 
 
 def _original_of(stray):
@@ -144,7 +145,7 @@ def _unfound(stray):
 
 
 def return_strays():
-    """The load pass, before plugin data is dropped or anything is compiled: every stray twin's users go back
+    """The load pass, before anything is compiled: every stray twin's users go back
     to the material it stands for and the stray is removed (the stacks then compile a twin of their own).
     Returns the strays whose material cannot be found, named."""
     unfound = []
@@ -168,14 +169,11 @@ def _hand_back(pairs):
         twin.user_remap(original)
 
 
-def release():
-    """Hand every user back to its linked material and forget the twins. The load pass calls this before it
-    drops plugin data; pairs whose datablocks are already freed (a file was opened) are only forgotten."""
-    live = [pair for pair in _PAIRS if _alive(pair)]
-    if live:
-        _hand_back(live)
-    del _PAIRS[:]
-    del _HELD[:]
+def forget_freed():
+    """Forget the pairs whose datablocks a file being opened freed. The load pass calls this before anything
+    is compiled; the pairs still alive keep drawing."""
+    _PAIRS[:] = [pair for pair in _PAIRS if _alive(pair)]
+    _HELD[:] = [pair for pair in _HELD if _alive(pair)]
 
 
 def release_matching(selected):
@@ -202,7 +200,7 @@ def _settle_strays():
             print("[linked-twins] stray twin {0} handed back to {1} for good".format(
                 stray.name_full, original.name_full), flush=True)
         else:
-            plugin_data.born(stray)
+            scratch.mark(stray)
             adopt([(original, stray)])
             print("[linked-twins] stray twin {0} adopted as the twin of {1}".format(
                 stray.name_full, original.name_full), flush=True)

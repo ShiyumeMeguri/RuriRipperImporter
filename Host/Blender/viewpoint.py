@@ -6,7 +6,7 @@ reconstructs positions from the depth it is handed, so solved against the scene 
 every viewport not looked through that camera.
 
 The viewpoint stands in the viewer's place: an empty linked into no scene, so nothing draws, selects or renders it,
-while every tree that names it still evaluates it. It is the plugin's own data (:mod:`plugin_data`): never written to
+while every tree that names it still evaluates it. It is scratch (:mod:`scratch`): never written to
 a .blend, made again in each session that asks for it. Its object transform is the view's camera-to-world transform; the
 view's projection is kept as a custom property on it, sixteen values row by row, which a tree reads through drivers.
 A final render is drawn for the scene camera rather than for any viewport -- the trees tell the two apart with Is
@@ -225,14 +225,14 @@ def _alive():
 
 
 def _rescan():
-    from . import plugin_data
-    _objects[:] = [plugin_data.born(obj) for obj in bpy.data.objects if obj.get(MARKER)]
+    from . import scratch
+    _objects[:] = [scratch.mark(obj) for obj in bpy.data.objects if obj.get(MARKER)]
     _written[0] = None
 
 
 def _make():
-    from . import plugin_data
-    obj = plugin_data.born(bpy.data.objects.new(NAME, None))
+    from . import scratch
+    obj = scratch.mark(bpy.data.objects.new(NAME, None))
     obj[MARKER] = 1
     _written[0] = None
     return obj

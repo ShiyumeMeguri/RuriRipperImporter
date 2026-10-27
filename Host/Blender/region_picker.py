@@ -16,7 +16,7 @@ import numpy as np
 from gpu_extras.batch import batch_for_shader
 
 from ...Kernel.app import picture as app_picture
-from . import plugin_data
+from . import scratch
 from .picture_view import interface_scale
 
 BACKDROP = (0.02, 0.025, 0.03, 0.92)
@@ -121,7 +121,7 @@ class Levels:
 
 def _texture(picture):
     image = bpy.data.images.new("Ruri Region Picker", picture.width, picture.height, alpha=True, float_buffer=False)
-    plugin_data.born(image)
+    scratch.mark(image)
     image.colorspace_settings.name = "Non-Color"
     image.alpha_mode = "STRAIGHT"
     image.pixels.foreach_set(picture.pixels.astype(np.float32).ravel() * np.float32(1.0 / 255.0))

@@ -334,7 +334,7 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
 HOST = host_port.bind(BlenderHost())
 
 from ... import Game                                                    # noqa: E402
-from . import (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder,  # noqa: E402
+from . import (rna, render, coordinate, rig_identity, scratch, linked_twins, material_builder,  # noqa: E402
                material_panel, derived_state, allocator, animation_builder, step_loader, browser_panel,
                shader_inputs, shader_version, shader_update_panel, post_panel, viewpoint, picture_view,
                region_picker, bin_update)
@@ -361,7 +361,7 @@ def _holds_process_state(module):
 #: not the module. Anything under this driver that is NOT listed is still
 #: reloaded, just after these, so forgetting one costs ordering rather than
 #: correctness.
-_DRIVER_ORDER = (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder, material_panel,
+_DRIVER_ORDER = (rna, render, coordinate, rig_identity, scratch, linked_twins, material_builder, material_panel,
                  derived_state, animation_builder, step_loader, browser_panel, shader_inputs, shader_version,
                  shader_update_panel, post_panel, picture_view, region_picker, bin_update)
 
@@ -482,8 +482,8 @@ def register():
     bin_update.register()
     # The records every panel state shares, before the first state that contains one.
     rna.register_shared()
-    # ⛔ 插件自己的数据严禁写进 .blend:存盘前的守卫。
-    plugin_data.register()
+    # 临时数据严禁写进 .blend:存盘前的守卫。
+    scratch.register()
     # link 进来的材质画的是本会话编的替身;存盘那一刻本地用户指回库里的材质。
     linked_twins.register()
     browser_panel.register()
@@ -540,7 +540,7 @@ def unregister():
     derived_state.unregister()
     browser_panel.unregister()
     linked_twins.unregister()
-    plugin_data.unregister()
+    scratch.unregister()
     rna.unregister_shared()
     bin_update.unregister()
     bpy.utils.unregister_class(RuriRipperImporterPreferences)

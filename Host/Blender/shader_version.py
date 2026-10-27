@@ -1,18 +1,18 @@
-"""Which generated shaders this session draws with are an older generation than the products installed beside the
-add-on, and the update that brings them current while every input stays as the file keeps it.
+"""Which generated shaders a file keeps are an older generation than the products installed beside the add-on, and
+the update that brings them current while every input stays as the file keeps it.
 
 A generated stack is a package of products (node-group libraries and a manifest) plus the runtime script that turns
-a material's record into a node graph. The record is the file's content; the graph, the vertex stack and the
-post chain are derived from it and are never written to a .blend (see :mod:`plugin_data`). So a shader can only be
-an older generation than the products in this session: the products were replaced on disk after the package
-loaded, or graphs were compiled by a generation that has since been replaced.
+a material's record into a node graph. The file keeps the result as ordinary data -- the template node groups, the
+trees compiled from them, the vertex stage's trees, each stamped with the generation that made it. So a file can
+hold a generation older than the products in this session: the products were replaced on disk after the file was
+saved, or after the package loaded.
 
-An update replaces the package's generation in place and compiles again only what the package made, the way the
-load pass does after a file opens, but without dropping what is not the package's: the level's medium, its
-images, the lights. A material's inputs live on its nodes and its record is what they leave behind, so the package
-first settles every input edited on the nodes into its record; the new generation compiles from the records, which
-keeps every input's value by name, starts an input it adds at its default and reads nothing for one it dropped.
-No record is written otherwise, except by a rename the user chose (see :mod:`shader_inputs`).
+An update replaces the package's generation in place and compiles again only what the package made, without
+touching what is not the package's: the level's medium, its images, the lights. A material's inputs live on its
+nodes and its record is the mirror they leave behind, so the package first settles every input edited on the nodes
+into its record; the new generation compiles from the records, which keeps every input's value by name, starts an
+input it adds at its default and reads nothing for one it dropped, and only what is inside the groups and trees is
+replaced. No record is written otherwise, except by a rename the user chose (see :mod:`shader_inputs`).
 """
 
 from __future__ import annotations
@@ -315,7 +315,7 @@ def update(renames=()):
     for state in targets:
         if state.replaced:
             Game.reload_stack(state.package)
-        state.package.purge_plugin_data()
+        state.package.retire_generation()
         result.packages.append(state.label)
     fresh = {stack.PANEL_KEY: stack for state in targets for stack in state.package.STACKS}
     _rename_vertex_modifiers(vertex, fresh)

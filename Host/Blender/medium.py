@@ -67,7 +67,7 @@ import math
 import bpy
 from mathutils import Vector
 
-from . import material_builder, plugin_data
+from . import material_builder, scratch
 
 #: The custom property on a level's world that keeps the medium's statement as JSON: the level's content, like its
 #: globals and its texel blocks, so a file that holds the world holds the fog. The volume, the lamps' copies and
@@ -111,7 +111,7 @@ def apply(context, medium, sun):
 
 def restore(scene, sun):
     """Stand the medium the scene's world states up again. After a file opens none of it is in memory (the volume
-    and the lamps' copies are runtime data); the world's statement is what is left. A world that states none
+    and the lamps' copies are scratch); the world's statement is what is left. A world that states none
     leaves the scene as it is. Returns the lines to report."""
     world = scene.world
     stated = world.get(STATEMENT_PROPERTY) if world is not None else None
@@ -129,7 +129,7 @@ def _stand_up(scene, medium, sun):
         return ["medium {0} not stood up: {1}".format(medium["label"], unbuildable)]
     tint = _sun_share(sun, medium)
     domain = _domain(scene, medium, tint)
-    receivers = plugin_data.born(bpy.data.collections.new(RECEIVERS))
+    receivers = scratch.mark(bpy.data.collections.new(RECEIVERS))
     receivers.objects.link(domain)
     copies = _lamp_copies(scene, medium, receivers, tint)
     _integration(scene, medium)
@@ -180,7 +180,7 @@ def _domain(scene, medium, tint):
         high = Vector([max(c[i] for c in corners) + reach for i in range(3)])
     else:
         low, high = Vector((-reach,) * 3), Vector((reach,) * 3)
-    domain = plugin_data.born(bpy.data.objects.new(MEDIUM, plugin_data.born(bpy.data.meshes.new(MEDIUM))))
+    domain = scratch.mark(bpy.data.objects.new(MEDIUM, scratch.mark(bpy.data.meshes.new(MEDIUM))))
     modifier = domain.modifiers.new(MEDIUM, "NODES")
     modifier.node_group = _grid_tree(low, high, _material(medium, tint))
     domain.display_type = "BOUNDS"
@@ -195,7 +195,7 @@ def _grid_tree(low, high, material):
     tree = bpy.data.node_groups.get(MEDIUM)
     if tree is not None:
         bpy.data.node_groups.remove(tree)
-    tree = plugin_data.born(bpy.data.node_groups.new(MEDIUM, "GeometryNodeTree"))
+    tree = scratch.mark(bpy.data.node_groups.new(MEDIUM, "GeometryNodeTree"))
     tree.is_modifier = True
     tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
     cube = tree.nodes.new("GeometryNodeVolumeCube")
@@ -214,7 +214,7 @@ def _grid_tree(low, high, material):
 
 
 def _material(medium, tint):
-    material = bpy.data.materials.get(MEDIUM) or plugin_data.born(bpy.data.materials.new(MEDIUM))
+    material = bpy.data.materials.get(MEDIUM) or scratch.mark(bpy.data.materials.new(MEDIUM))
     material.use_nodes = True
     tree = material.node_tree
     tree.nodes.clear()
@@ -330,7 +330,7 @@ def _lamp_copies(scene, medium, receivers, tint):
         if obj.type != "LIGHT" or obj.data.type == "SUN" or TWIN_OF in obj or obj.data.volume_factor <= 0.0:
             continue
         share = obj.data.volume_factor
-        data = plugin_data.born(obj.data.copy())
+        data = scratch.mark(obj.data.copy())
         data.name = obj.data.name + TWIN_SUFFIX
         data.volume_factor = share
         data.diffuse_factor = 0.0
@@ -342,7 +342,7 @@ def _lamp_copies(scene, medium, receivers, tint):
         brightest = max(max(untinted), 1.0)
         data.color = tuple(component / brightest for component in untinted)
         data.energy = obj.data.energy * brightest
-        copy = plugin_data.born(bpy.data.objects.new(obj.name + TWIN_SUFFIX, data))
+        copy = scratch.mark(bpy.data.objects.new(obj.name + TWIN_SUFFIX, data))
         copy.matrix_world = obj.matrix_world.copy()
         copy[TWIN_OF] = obj.name
         copy.light_linking.receiver_collection = receivers
