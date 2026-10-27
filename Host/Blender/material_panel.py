@@ -453,6 +453,17 @@ def forget():
     _drop_caches()
 
 
+def forget_material(material):
+    """Read this one material back again on the next draw: its inputs changed some other way than this panel, and a
+    mirror still holding the old values would write them back over the new ones the moment one widget is touched
+    (a colour row writes all its channels)."""
+    _SYNCED.discard(material.session_uid)
+    _ROWS.pop(material.name_full, None)
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            area.tag_redraw()
+
+
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)

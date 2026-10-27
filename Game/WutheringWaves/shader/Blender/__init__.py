@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(a4eccfc83f8bfa48):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(2562bc3b57f81ab1):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_wutheringwaves 的包入口)—— 运行时。
@@ -1509,6 +1509,9 @@ SIZE_ROW_PREFIX = '__size'
 # 组实例上参数口的类型 → 它在 inputs 平铺数组(foreach_get/foreach_set 的那一份)里占几个数。
 PARAM_SOCKET_WIDTHS = {'VALUE': 1, 'VECTOR': 3}
 
+# 宿主给节点输入口的动画与驱动写的路径:nodes["节点名"].inputs[口序].default_value(节点名按 RNA 转义)。
+ANIMATED_SOCKET_PATH = r'nodes\["((?:[^"\\]|\\.)*)"\]\.inputs\[(\d+)\]\.default_value'
+
 
 def _image_row_slot(row_name):
     if row_name.startswith(SIZE_ROW_PREFIX):
@@ -1639,11 +1642,13 @@ class Stack:
         self.group_names = manifest['group_names']
         self.m = manifest
         self._vtx_seen = {}
-        self._applied_values = {}
+        self._mirrors = {}
         names = manifest['names']
         self.PANEL_KEY = names['panel_key']
         self.PANEL_TITLE = names['panel_title']
         self.INTERFACE = manifest.get('interface') or []
+        self.TEXTURE_ROWS = {row['name']: row for group in self.INTERFACE for row in group['rows']
+                             if row['kind'] == 'TEXTURE'}
         self.PART_META = manifest.get('part_meta') or {}
         self.NON_SHADING = set(manifest.get('non_shading') or [])
         self.HOST_SHADOW_CASTERS = manifest['host_shadow_casters']
@@ -1756,14 +1761,16 @@ class Stack:
 
     @staticmethod
     def _record_values(mat):
-        """材质记录里的值行(作者值),可比形态:apply_params 落树时记一份,依赖图那一拍拿它判断记录是不是被别处改过。"""
+        """材质记录里的值行(作者值)与图槽(图按会话身份),可比形态:镜像里记一份,依赖图那一拍拿它判断记录是不是被别处改过。"""
         return {'floats': {k: _plain(v) for k, v in dict(mat.get('ruri_uber_floats') or {}).items()},
                 'colors': _mixed(mat.get('ruri_uber_colors')),
-                'st': _mixed(mat.get('ruri_uber_st'))}
+                'st': _mixed(mat.get('ruri_uber_st')),
+                'images': {slot: getattr(image, 'session_uid', None)
+                           for slot, image in dict(mat.get('ruri_uber_images') or {}).items()}}
 
     def _param_targets(self, node, part):
-        """组实例的参数口在 inputs 平铺数组里的位置:(平铺长度, 目标下标, 值矩阵平铺下标)。按 (组树, part) 算一次;
-        组树是本会话取来的插件数据,session_uid 在一个会话里不复用。"""
+        """组实例的参数口在 inputs 平铺数组里的位置:(平铺长度, 目标下标, 值矩阵平铺下标, 目标所在的口序)。按 (组树, part)
+        算一次;组树是本会话取来的插件数据,session_uid 在一个会话里不复用。"""
         import numpy as np
         group = node.node_tree
         key = (group.session_uid, part)
@@ -1774,8 +1781,9 @@ class Stack:
         kinds = {row[0]: row[1] for row in self.part(part)['params']}
         destinations = []
         sources = []
+        sockets = []
         width = 0
-        for socket in node.inputs:
+        for at, socket in enumerate(node.inputs):
             size = PARAM_SOCKET_WIDTHS.get(socket.type)
             if size is None:
                 raise RuntimeError('[ruri-uber] 组 {0} 的输入 {1} 是 {2} 口:参数一次写完只认数值口'.format(
@@ -1791,15 +1799,46 @@ class Stack:
             for offset, lane in enumerate(lanes):
                 destinations.append(width + offset)
                 sources.append(row * 4 + lane)
+                sockets.append(at)
             width += size
-        targets = (width, np.array(destinations, dtype=np.int64), np.array(sources, dtype=np.int64))
+        targets = (width, np.array(destinations, dtype=np.int64), np.array(sources, dtype=np.int64),
+                   np.array(sockets, dtype=np.int64))
         self._param_slots[key] = targets
         return targets
 
+    @staticmethod
+    def _animated_sockets(tree):
+        """树上被动画或驱动接管的输入口 {(节点名, 口序)}:它们的值归动画,播放时每一帧都在变,不是谁拧的。"""
+        from bpy_extras import anim_utils
+        data = tree.animation_data
+        if data is None:
+            return set()
+        curves = list(data.drivers)
+        bound = [(data.action, data.action_slot)] + [(strip.action, strip.action_slot) for track in data.nla_tracks
+                                                     for strip in track.strips]
+        for action, slot in bound:
+            if action is not None and slot is not None:
+                bag = anim_utils.action_get_channelbag_for_slot(action, slot)
+                if bag is not None:
+                    curves.extend(bag.fcurves)
+        import re
+        taken = set()
+        for curve in curves:
+            found = re.match(ANIMATED_SOCKET_PATH, curve.data_path)
+            if found is not None:
+                taken.add((bpy.utils.unescape_identifier(found.group(1)), int(found.group(2))))
+        return taken
+
+    @staticmethod
+    def _generated(node):
+        """材质树里本栈建的组实例(各段与循环体):指着本会话取来的模板组(插件数据)。用户自己拖进来的组不是。"""
+        return node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None and node.node_tree.is_runtime_data
+
     def apply_params(self, mat):
         """材质记录 → 它图里的全部参数口(各段与循环体的组实例、显式 LOD 采样的纹素域尺寸),值写成常量:宿主内联
-        时只读参数的算式整块折掉,Switch 只留走到的那一支。导入、开文件重编、面板与关卡推值都走这一条;组实例的口
-        一次写完(foreach_set 不逐口触发树更新)。写完量一次内联后的常量块(同一结构只量一次)。"""
+        时只读参数的算式整块折掉,Switch 只留走到的那一支。只在编图的那一刻走这一条(导入,开文件、append 与换代时
+        照记录重建):此后口是真源,改哪一行只写哪一行(_publish),记录跟着口走(sync_material_inputs)。组实例的口
+        一次写完(foreach_set 不逐口触发树更新)。写完记下镜像,量一次内联后的常量块(同一结构只量一次)。"""
         import numpy as np
         part = mat.get('ruri_uber_part', '')
         tree = mat.node_tree
@@ -1809,8 +1848,8 @@ class Stack:
         values = matrix.ravel()
         index = self._param_index(part)
         for node in tree.nodes:
-            if node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None:
-                width, destinations, sources = self._param_targets(node, part)
+            if self._generated(node):
+                width, destinations, sources, _sockets = self._param_targets(node, part)
                 if not len(destinations):
                     continue
                 flat = np.empty(width, dtype=np.float32)
@@ -1825,7 +1864,7 @@ class Stack:
                         node.inputs[axis].default_value = float(extent[axis])
         tree.update_tag()
         mat.update_tag()
-        self._applied_values[mat.session_uid] = self._record_values(mat)
+        self._remember_inputs(mat)
         self._require_budget(mat, matrix)
 
     def _require_budget(self, mat, matrix=None):
@@ -2758,7 +2797,8 @@ class Stack:
 
     # ==================== provider ====================
 
-    # 材质记录:导入时从游戏材质写下、面板改的就是这几格 —— 它们是内容,随文件走;编出来的树不是(见 _compile)。
+    # 材质记录:导入时从游戏材质写下,此后是这张材质输入的镜像(口与图一改就记回,见 sync_material_inputs)—— 它们是
+    # 内容,随文件走;编出来的树不是(见 _compile)。
     RECORD_KEYS = ('ruri_uber_part', 'ruri_uber_images', 'ruri_uber_floats', 'ruri_uber_colors', 'ruri_uber_st',
                    'ruri_uber_disabled_passes', 'ruri_uber_shader_passes', 'ruri_uber_shader_guid', 'ruri_uber_shader')
     # 上一版产物写在实例上、如今不再由实例带着的键:照记录重编时不带过去。
@@ -2935,8 +2975,9 @@ class Stack:
 
     def _compile(self, name, record):
         """一张材质按它的记录编出来:模板拷贝 + 贴图 + 参数常量。导入与开文件走同一条 —— 记录是内容,编出来的
-        树不是:它引用的模板组是插件数据,开文件时不在,所以每次开都照记录重编。混合、透明形态与剔除面都由记录里的
-        材质值加当前产物的声明现算,不另记。"""
+        树不是:它引用的模板组是插件数据,开文件时不在(存下的组节点没有树、一个口都不剩),所以每次开都照记录重编;
+        记录是口的镜像,照它编出来的口就是存盘那一刻口上的值。混合、透明形态与剔除面都由记录里的材质值加当前产物的
+        声明现算,不另记。"""
         part = record['ruri_uber_part']
         meta = self.PART_META[part]
         floats = dict(record['ruri_uber_floats'])
@@ -2964,10 +3005,10 @@ class Stack:
                     node.inputs['Scale'].default_value = scale
                 if tuple(node.inputs['Location'].default_value) != location:
                     node.inputs['Location'].default_value = location
-        # 随绑定真图走的表列按这次绑上的图算(instantiate),压过记录里的旧值;其余颜色行照记录。
-        colors = {key: [float(x) for x in value] for key, value in _mixed(record['ruri_uber_colors']).items()
-                  if _image_row_slot(key) is None}
-        colors.update(_mixed(mat.get('ruri_uber_colors')))
+        # 颜色行照记录,随绑定真图走的表列也一样(记录是口的镜像,口上的值只认口自己);记录里没有的那几列(导入那一刻,
+        # 或新一代多读了一列)才按这次绑上的图算(instantiate),换图时它们跟着新图重算(panel_write_image)。
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        colors.update({key: [float(x) for x in value] for key, value in _mixed(record['ruri_uber_colors']).items()})
         for key, value in record.items():
             mat[key] = value
         mat['ruri_uber_colors'] = colors
@@ -2978,13 +3019,14 @@ class Stack:
         return mat
 
     def _compiled(self, mat):
-        """这张材质是本会话照记录编过的:树里的模板组全是本会话取来的插件数据。开文件后它们一个都不在(组口是空的),
-        从别的文件 append 进来的、旧文件存下的也都不是 —— 那些都要照记录重编。"""
+        """这张材质是本会话照记录编过的:树里的组实例都有树,本栈建的那些指着本会话取来的模板组(插件数据);用户自己
+        拖进来的组不算数。开文件后模板组一个都不在(组节点没有树、一个口都不剩),从别的文件 append 进来的、旧文件
+        存下的也都不是本会话的 —— 那些都要照记录重编。"""
         tree = mat.node_tree
         if tree is None:
             return False
         groups = [node.node_tree for node in tree.nodes if node.bl_idname == 'ShaderNodeGroup']
-        return bool(groups) and all(group is not None and group.is_runtime_data for group in groups)
+        return all(group is not None for group in groups) and any(group.is_runtime_data for group in groups)
 
     def recompile(self, mat):
         """照记录重编一张材质:新编一张,把别处写在旧材质上的内容(基座骨名、来源键……)带过去;
@@ -3039,6 +3081,9 @@ class Stack:
         finally:
             probes, self._probes = self._probes, None
         _retire_materials(replaced, probes)
+        alive = {material.session_uid for material in bpy.data.materials}
+        for retired in [key for key in self._mirrors if key not in alive]:
+            del self._mirrors[retired]
         _host().adopt_twins(twins)
         if twins:
             print('[ruri-uber] {0} 张 link 进来的材质照库里的记录编成替身(插件数据,不落盘)'.format(len(twins)), flush=True)
@@ -3440,12 +3485,14 @@ class Stack:
             if wire is not None:
                 tree.links.new(wire, sock)
 
-    def _vtx_panel_write(self, mat, name, value):
-        """材质改了一个 uniform → 推到全部修改器上那一格。旋钮抬到接口之后,写组实例的 socket
+    def _vtx_panel_write(self, mat, values):
+        """材质改了几个 uniform({口名: 值})→ 推到全部修改器上那几格。旋钮抬到接口之后,写组实例的 socket
         缺省是**无效**的(那一格被组输入占线),值住在修改器实例上。
-        推给**所有**对象:同一张材质挂在几个对象上时,它们说的必须是同一件事。
+        推给**所有**对象:同一张材质挂在几个对象上时,它们说的必须是同一件事。对象整场只走一遍。
         值没变就不写 —— 脚本写端口要 update_tag,无条件写会在 depsgraph handler 里自激。"""
-        key = mat.name + '|' + name
+        if not values:
+            return
+        keyed = {mat.name + '|' + name: value for name, value in values.items()}
         for obj in bpy.data.objects:
             mod = obj.modifiers.get(self.VTX_MODIFIER)
             tree = getattr(mod, 'node_group', None) if mod is not None else None
@@ -3453,8 +3500,9 @@ class Stack:
                 continue
             written = False
             for identifier, mapped in dict(tree.get('ruri_vtx_keys') or {}).items():
-                if str(mapped) != key:
+                if str(mapped) not in keyed:
                     continue
+                value = keyed[str(mapped)]
                 port = getattr(mod.properties.inputs, str(identifier), None)
                 if port is None or self._vtx_same(port.value, value):
                     continue
@@ -3537,6 +3585,7 @@ class Stack:
                         mat, templates.get(key), prop, images_of[mat_name])):
                     continue
                 self._vtx_commit(mat, rows, prop, port_of)
+                _host().material_inputs_changed(mat)
 
     def _vtx_commit(self, mat, rows, prop, port_of):
         """一格被拧动 → 经材质面板那三条写路落回材质。走 panel_write* 而不是自己写快照:
@@ -3553,8 +3602,8 @@ class Stack:
             if row is None or vector is None:
                 return
             tail = value_of(slot + '_ST_w')
-            self.panel_write_st(mat, row, (float(vector[0]), float(vector[1])),
-                                (float(vector[2]), 0.0 if tail is None else float(tail)))
+            offset_y = self._author_row(mat, slot + '_ST')[3] if tail is None else float(tail)
+            self.panel_write_st(mat, row, (float(vector[0]), float(vector[1])), (float(vector[2]), offset_y))
             return
         row = rows.get(prop)
         if row is not None and row['kind'] == 'TEXTURE':
@@ -3578,98 +3627,288 @@ class Stack:
         if vector is None:
             return
         tail = value_of(base + '_w')
-        self.panel_write(mat, row, [authored(vector[0]), authored(vector[1]), authored(vector[2]),
-                                    1.0 if tail is None else float(tail)])
+        self.panel_write(mat, row, [authored(vector[0]), authored(vector[1]), authored(vector[2])]
+                         + ([] if tail is None else [float(tail)]))
 
     @staticmethod
     @bpy.app.handlers.persistent
-    def follow_material_records(_scene, depsgraph):
-        """材质记录里换了图、改了值 → 编好的树与顶点腿跟上。
+    def sync_material_inputs(_scene, depsgraph):
+        """材质的输入这一拍被谁改了 → 落到同一份值的其余各面。
 
-        记录是内容,树照记录编:开文件时照记录重编,会话中途改记录的(别的插件把拉回来的贴图换进
-        槽里、把别处调的参数写回来,脚本)只要给材质打 update_tag,依赖图那一拍就带着它。不跟上的代价
-        是画面停在旧图旧值上、存盘重开才突然变 —— 两边说的不是同一张材质,而且一声不响。"""
+        口是唯一真源:组实例的参数口、主贴图的平铺节点、贴图节点上的图。材质记录(ruri_uber_*)是它们的镜像:模板组是
+        插件数据,存盘不写,存下的组节点重开时没有树、一个口都不剩(实测),口上的值只有记进记录才随文件走,开文件照
+        记录重建出来的就是存盘那一刻口上的值;别的应用(拉回贴图与参数的插件、脚本)读写的也是这一份。所以两个方向
+        各认一次:记录被别处改了的行与槽落到口上,口在编辑器里被直接改了的记回记录、并推给同一行的其余各面(别的组
+        实例、顶点腿修改器口);同一拍两边改了同一行,记录那一边是明说要写的,它赢。Blender 改口只给材质的节点树发
+        更新,不给材质;改记录的按约定给材质打 update_tag —— 两样各只在它那一种更新里比。每一拍都必须便宜:只看这一拍
+        被更新、本栈认领的材质,与镜像相同就什么都不做。"""
+        stated = {}
+        trees = set()
+        for update in depsgraph.updates:
+            block = update.id
+            if isinstance(block, bpy.types.Material):
+                stated[block.original.session_uid] = block.original
+            elif isinstance(block, bpy.types.ShaderNodeTree):
+                trees.add(block.original.session_uid)
+        edited = {}
+        if trees:
+            for material in bpy.data.materials:
+                if material.node_tree is not None and material.node_tree.session_uid in trees:
+                    edited[material.session_uid] = material
+        touched = dict(edited)
+        touched.update(stated)
         for stack in STACKS:
             if stack.post is None:
-                stack.follow_record_images(depsgraph)
-                stack.follow_record_values(depsgraph)
+                for key, material in touched.items():
+                    if stack.panel_claims(material):
+                        stack.sync_inputs(material, record=key in stated, nodes=key in edited)
 
-    def follow_record_values(self, depsgraph):
-        # 每一拍都必须便宜:只看这一拍被更新、本栈认领的材质;记录与上次落树的那一份相同就什么都不做。
-        # 没有那一份 = 这个运行时没给它落过树(插件重载),此刻的树就是照记录编的,记下即可。
-        for update in depsgraph.updates:
-            if not isinstance(update.id, bpy.types.Material):
-                continue
-            mat = update.id.original
-            if mat.node_tree is None or not self.panel_claims(mat):
-                continue
-            applied = self._applied_values.get(mat.session_uid)
-            recorded = self._record_values(mat)
-            if applied is None:
-                self._applied_values[mat.session_uid] = recorded
-            elif applied != recorded:
-                self.apply_record_values(mat, applied, recorded)
+    def settle_inputs(self):
+        """本栈认领的每一张材质跑一遍 sync_inputs:存盘前、换代前、本栈注销前,编辑器里改过而这一拍还没记回的口全部
+        记回 —— 记录是口唯一随文件走、也唯一跨代留下的样子。"""
+        for material in [material for material in bpy.data.materials if self.panel_claims(material)]:
+            self.sync_inputs(material)
 
-    def apply_record_values(self, mat, applied, recorded):
-        """记录里被整行改写的值 → 顶点腿修改器口 + 平铺节点 + 组实例常量,只推变了的那些,与 panel_write*
-        同一套线性化。面板逐格拧走 panel_write*;别的插件或脚本整行改写记录时走这一条。"""
-        rows = {row['name']: row for row in self._panel_rows()}
-        for name, value in recorded['floats'].items():
-            if applied['floats'].get(name) == value:
-                continue
-            scalar = float(value)
-            self._vtx_panel_write(mat, name, _srgb_to_linear(scalar) if name in self.SRGB_PARAMS else scalar)
-        for name, value in recorded['colors'].items():
-            if applied['colors'].get(name) == value:
-                continue
-            vec4 = ([float(v) for v in value] + [0.0] * 4)[:4]
-            xyz = ((_srgb_to_linear(vec4[0]), _srgb_to_linear(vec4[1]), _srgb_to_linear(vec4[2]))
-                   if name in self.SRGB_PARAMS else (vec4[0], vec4[1], vec4[2]))
-            self._vtx_panel_write(mat, name, xyz)
-            row = rows.get(name)
-            if row is not None and row['size'] >= 4:
-                self._vtx_panel_write(mat, name + '_w', vec4[3])
-        for name, value in recorded['st'].items():
-            if applied['st'].get(name) == value:
-                continue
-            st_value = ([float(v) for v in value] + [0.0] * 4)[:4]
-            self._vtx_panel_write(mat, name + '_ST', (st_value[0], st_value[1], st_value[2]))
-            self._vtx_panel_write(mat, name + '_ST_w', st_value[3])
-            row = rows.get(name)
-            if row is not None and row.get('st_node') and mat.node_tree is not None:
-                for node in mat.node_tree.nodes:
-                    if node.label == row['st_node']:
-                        node.inputs['Scale'].default_value = (st_value[0], st_value[1], 1.0)
-                        node.inputs['Location'].default_value = (st_value[2], st_value[3], 0.0)
-        self.apply_params(mat)
+    def sync_inputs(self, material, record=True, nodes=True):
+        """见 sync_material_inputs:record 比记录与镜像,nodes 比口与镜像。库里的材质本文件写不了,模板材质是插件数据、
+        没有谁的输入;本会话还没编过的(刚开的文件)没有口可比;第一次见到的(插件刚重载)此刻的口就是它的值。"""
+        if material.library is not None or material.get(self.TEMPLATE_KEY) is not None or not self._compiled(material):
+            return
+        mirror = self._mirrors.get(material.session_uid)
+        if mirror is None:
+            self._remember_inputs(material)
+            return
+        stated, restated = self._record_changes(material, mirror['record']) if record else (set(), set())
+        edited, swapped = self._input_changes(material, mirror['lanes']) if nodes else ({}, {})
+        for name in stated:
+            edited.pop(name, None)
+        for slot in restated:
+            swapped.pop(slot, None)
+        if not (stated or restated or edited or swapped):
+            return
+        bound = dict(material.get('ruri_uber_images') or {})
+        for slot in restated:
+            self.panel_write_image(material, self.TEXTURE_ROWS[slot], bound.get(slot))
+        for slot, image in swapped.items():
+            self.panel_write_image(material, self.TEXTURE_ROWS[slot], image)
+        if edited:
+            self._write_record(material, edited)
+        if stated or edited:
+            self._publish(material, set(stated) | set(edited))
+        _host().material_inputs_changed(material)
 
-    def follow_record_images(self, depsgraph):
-        # 每一拍都必须便宜:只看这一拍被更新的材质。只比树里已有图节点的槽 —— 这一形态不采的槽写了也接
-        # 不上,拿它比就是每拍都「不等」、每拍都写、自激;相等不写,换图本身会打脏标记。
-        rows = None
-        for update in depsgraph.updates:
-            if not isinstance(update.id, bpy.types.Material):
-                continue
-            mat = update.id.original
-            if mat.node_tree is None or not self.panel_claims(mat):
-                continue
-            recorded = dict(mat.get('ruri_uber_images') or {})
-            if not recorded:
-                continue
-            wired = {}
-            for node in mat.node_tree.nodes:
-                if node.type == 'TEX_IMAGE':
-                    wired.setdefault(_slot_of(node.label or ''), node.image)
-            stale = [slot for slot, image in recorded.items()
-                     if isinstance(image, bpy.types.Image) and slot in wired and wired[slot] != image]
-            if not stale:
-                continue
-            if rows is None:
-                rows = {row['name']: row for row in self._panel_rows()}
-            for slot in stale:
-                row = rows.get(slot)
-                if row is not None and row['kind'] == 'TEXTURE':
-                    self.panel_write_image(mat, row, recorded[slot])
+    def _remember_inputs(self, material):
+        """镜像:这张材质此刻的记录(值行与图槽)与各组实例上参数口的值 —— 下一拍拿它们判断是哪一边被改了。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        lanes = {}
+        if material.node_tree is not None and part in self.m['parts']:
+            for node in material.node_tree.nodes:
+                if self._generated(node):
+                    width, destinations, _sources, _sockets = self._param_targets(node, part)
+                    flat = np.empty(width, dtype=np.float32)
+                    node.inputs.foreach_get('default_value', flat)
+                    lanes[node.as_pointer()] = flat[destinations]
+        self._mirrors[material.session_uid] = {'record': self._record_values(material), 'lanes': lanes}
+
+    def _record_changes(self, material, remembered):
+        """记录里与镜像不同的值行(行名)与图槽:别处(别的应用、脚本)改写了记录。"""
+        recorded = self._record_values(material)
+        if recorded == remembered:
+            return set(), set()
+        names = set()
+        for bucket, spelling in (('floats', '{0}'), ('colors', '{0}'), ('st', '{0}_ST')):
+            old, new = remembered[bucket], recorded[bucket]
+            names.update(spelling.format(key) for key in set(old) | set(new) if old.get(key) != new.get(key))
+        old, new = remembered['images'], recorded['images']
+        slots = {slot for slot in set(old) | set(new) if old.get(slot) != new.get(slot) and slot in self.TEXTURE_ROWS}
+        return names, slots
+
+    def _input_changes(self, material, lanes):
+        """口上与镜像不同的那几格,树只走一遍:组实例的参数口(按行拼回作者值,这一实例没带的分量取记录)、主贴图平铺
+        节点的缩放与偏移(同一行组实例上也改了的,组实例的赢)、贴图节点上的图(中性占位图 = 没绑)。被动画或驱动接管的
+        口不算:它们的值归动画,每一帧都在变,记回去就是每帧改记录、每帧重编着色器。
+        返回 ({行名: 作者值}, {槽: 图})。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        values = {}
+        swapped = {}
+        if part not in self.m['parts']:
+            return values, swapped
+        rows = self.part(part)['params']
+        bound = dict(material.get('ruri_uber_images') or {})
+        animated = self._animated_sockets(material.node_tree)
+        linear = None
+        stmap = None
+        for node in material.node_tree.nodes:
+            if self._generated(node):
+                seen = lanes.get(node.as_pointer())
+                if seen is None:
+                    continue
+                width, destinations, sources, sockets = self._param_targets(node, part)
+                flat = np.empty(width, dtype=np.float32)
+                node.inputs.foreach_get('default_value', flat)
+                held = flat[destinations]
+                if len(held) != len(seen):
+                    continue
+                moved = (held != seen) & ~(np.isnan(held) & np.isnan(seen))
+                frozen = [at for name, at in animated if name == node.name]
+                free = ~np.isin(sockets, frozen) if frozen else np.ones(len(sockets), dtype=bool)
+                moved &= free
+                if not moved.any():
+                    continue
+                if linear is None:
+                    linear = self._record_matrix(material)
+                for row in sorted(set((sources[moved] // 4).tolist())):
+                    name, kind = rows[row][0], rows[row][1]
+                    if name in values:
+                        continue
+                    vector = [float(component) for component in linear[row]]
+                    carried = (sources // 4 == row) & free
+                    for lane, value in zip((sources[carried] % 4).tolist(), held[carried].tolist()):
+                        vector[lane] = value
+                    values[name] = self._authored(name, kind, vector)
+            elif node.label == self.ST_NODE:
+                stmap = node
+            elif node.type == 'TEX_IMAGE':
+                slot = _slot_of(node.label or '')
+                if slot not in self.TEXTURE_ROWS or slot in swapped or slot in self.level_images:
+                    continue
+                shown = node.image
+                if shown is not None and shown.get('ruri_placeholder'):
+                    shown = None
+                if shown != bound.get(slot):
+                    swapped[slot] = shown
+        if stmap is not None and not any((stmap.name, at) in animated for at, socket in enumerate(stmap.inputs)
+                                         if socket.name in ('Scale', 'Location')):
+            stated = _mixed(material.get('ruri_uber_st')).get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
+            scale = stmap.inputs['Scale'].default_value
+            location = stmap.inputs['Location'].default_value
+            mapped = [float(scale[0]), float(scale[1]), float(location[0]), float(location[1])]
+            if np.any(np.array(mapped, dtype=np.float32) != np.array(stated, dtype=np.float32)):
+                values.setdefault(self.ST_SLOT + '_ST', mapped)
+        return values, swapped
+
+    def _authored(self, name, kind, vector):
+        """一行口上的值(线性)→ 作者值:_param_matrix 那一次 sRGB→linear 的逆,alpha 不参与。"""
+        srgb = name in self.SRGB_PARAMS
+        if kind == 'F':
+            return _linear_to_srgb(vector[0]) if srgb else vector[0]
+        return [_linear_to_srgb(component) if srgb else component for component in vector[:3]] + [vector[3]]
+
+    def _author_row(self, mat, name):
+        """一个四分量行此刻的作者值:记录说了取记录(颜色桶先于平铺桶,与 _param_matrix 同序),没说取声明缺省。"""
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        value = colors.get(name)
+        if value is None and name.endswith('_ST'):
+            value = _mixed(mat.get('ruri_uber_st')).get(name[:-3])
+        if value is None:
+            value = self._param_declared(mat.get('ruri_uber_part', '')).get(name) or []
+        return ([float(component) for component in value] + [0.0] * 4)[:4]
+
+    @staticmethod
+    def _write_record(mat, values):
+        """{行名: 作者值} 记进记录的值桶:标量进 floats,四分量进 colors;平铺行(<槽>_ST)记在 st 的槽名下,颜色桶里
+        已有同名行的除外(_param_matrix 先认颜色桶)。"""
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        st = _mixed(mat.get('ruri_uber_st'))
+        for name, value in values.items():
+            if not hasattr(value, '__len__'):
+                floats[name] = float(value)
+            elif name.endswith('_ST') and name not in colors:
+                st[name[:-3]] = [float(component) for component in value]
+            else:
+                colors[name] = [float(component) for component in value]
+        mat['ruri_uber_floats'] = floats
+        mat['ruri_uber_colors'] = colors
+        mat['ruri_uber_st'] = st
+
+    def _land(self, mat, values):
+        """{参数行名: 作者值} → 记进记录(口的镜像),再写到读这几行的每一个面(_publish)。面板、顶点腿旋钮、编辑器里
+        直接改的口都落在这一条上,只写给出的这几行。"""
+        self._write_record(mat, values)
+        self._publish(mat, values)
+
+    def _publish(self, mat, names):
+        """记录里这几行 → 读它们的每一个面,只写这几行:各段与循环体组实例上的参数口、纹素域尺寸节点、主贴图平铺节点、
+        剔除值节点、顶点腿修改器口;随后材质自述、常量块预算与镜像跟上。"""
+        import numpy as np
+        names = set(names)
+        part = mat.get('ruri_uber_part', '')
+        tree = mat.node_tree
+        if names and tree is not None and part in self.m['parts']:
+            matrix = self._record_matrix(mat)
+            values = matrix.ravel()
+            index = self._param_index(part)
+            wanted = np.array(sorted(index[name] for name in names if name in index), dtype=np.int64)
+            st_row = self.ST_SLOT + '_ST'
+            for node in tree.nodes:
+                if self._generated(node):
+                    width, destinations, sources, _sockets = self._param_targets(node, part)
+                    chosen = np.isin(sources // 4, wanted)
+                    if not chosen.any():
+                        continue
+                    flat = np.empty(width, dtype=np.float32)
+                    node.inputs.foreach_get('default_value', flat)
+                    flat[destinations[chosen]] = values[sources[chosen]]
+                    node.inputs.foreach_set('default_value', flat)
+                elif (node.bl_idname == 'ShaderNodeCombineXYZ' and node.label.startswith(SIZE_ROW_PREFIX)
+                      and node.label in names and node.label in index):
+                    extent = matrix[index[node.label]]
+                    for axis in range(3):
+                        if node.inputs[axis].default_value != float(extent[axis]):
+                            node.inputs[axis].default_value = float(extent[axis])
+                elif node.label == self.ST_NODE and st_row in names:
+                    stated = _mixed(mat.get('ruri_uber_st')).get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
+                    scale = (float(stated[0]), float(stated[1]), 1.0)
+                    location = (float(stated[2]), float(stated[3]), 0.0)
+                    if tuple(node.inputs['Scale'].default_value) != scale:
+                        node.inputs['Scale'].default_value = scale
+                    if tuple(node.inputs['Location'].default_value) != location:
+                        node.inputs['Location'].default_value = location
+            if names & self._cull_names(part):
+                self._set_cull(mat, self._record_cull(self.PART_META[part], dict(mat.get('ruri_uber_floats') or {}),
+                                                      mat.name))
+            tree.update_tag()
+            mat.update_tag()
+        self._vtx_panel_write(mat, self._vertex_values(mat, names))
+        self._remember_inputs(mat)
+        self._declare_shading(mat)
+        self._require_budget(mat)
+
+    def _vertex_values(self, mat, names):
+        """这几行推给顶点腿修改器口的值,与 _param_matrix 同一套线性化:四分量行是向量口加 _w 口,标量行一个口;记录没说的
+        行不推。"""
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        st = _mixed(mat.get('ruri_uber_st'))
+        ports = {}
+        for name in names:
+            srgb = name in self.SRGB_PARAMS
+            vector = colors.get(name)
+            if vector is None and name.endswith('_ST'):
+                vector = st.get(name[:-3])
+            if vector is not None:
+                spread = ([float(component) for component in vector] + [0.0] * 4)[:4]
+                ports[name] = tuple(_srgb_to_linear(component) if srgb else component for component in spread[:3])
+                ports[name + '_w'] = spread[3]
+            elif name in floats:
+                scalar = float(floats[name])
+                ports[name] = _srgb_to_linear(scalar) if srgb else scalar
+        return ports
+
+    def _cull_names(self, part):
+        """剔除值节点读的记录键(图的词汇):part 照抄的真源 Cull 状态词里的属性、家族的双面开关、家族的剔除属性。"""
+        stated = set()
+        declared = self.PART_META.get(part, {}).get('cull')
+        if declared and declared[0] != 'fixed':
+            stated.add(declared[1])
+        if self.CULL_TWO_SIDED:
+            stated.add(self.CULL_TWO_SIDED['property'])
+        if self.CULL_PROPERTY:
+            stated.add(self.CULL_PROPERTY)
+        return {self.SOURCE_NAMES.get(name, name) for name in stated}
 
     def _stack_slots(self, obj):
         """这个对象上属于本栈的材质槽 (槽号, 材质),按槽上**实际生效**的材质认:挂在对象层的材质(库覆盖的
@@ -4136,28 +4375,15 @@ class Stack:
             bone_name, unity, len(users))
 
     def panel_write(self, mat, row, value):
-        """面板值 → 材质记录(真源)→ 组实例上的参数常量 + 顶点腿修改器口。面板里拧的是作者值(与 Unity 检视面
-        同一个数),记录存作者值;推给顶点腿的那一份与 apply_params 同样线性化。"""
+        """面板值 → 这一行(作者值,与 Unity 检视面同一个数)经 _land 落进记录与读它的每一个面,别的行一格不碰。
+        向量行只写给出的分量:没给的(三分量颜色的 alpha、顶点腿上没有 _w 口的那一格)照这张材质此刻的值。"""
         name = row['name']
         kind = row['kind']
-        srgb = name in self.SRGB_PARAMS
         if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
-            scalar = (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)
-            self._vtx_panel_write(mat, name, _srgb_to_linear(scalar) if srgb else scalar)
-            floats = dict(mat.get('ruri_uber_floats') or {})
-            floats[name] = scalar
-            mat['ruri_uber_floats'] = floats
-        else:
-            vec4 = ([float(v) for v in value] + [0.0] * 4)[:4]
-            xyz = ((_srgb_to_linear(vec4[0]), _srgb_to_linear(vec4[1]), _srgb_to_linear(vec4[2]))
-                   if srgb else (vec4[0], vec4[1], vec4[2]))
-            self._vtx_panel_write(mat, name, xyz)
-            if row['size'] >= 4:
-                self._vtx_panel_write(mat, name + '_w', vec4[3])
-            colors = _mixed(mat.get('ruri_uber_colors'))
-            colors[name] = vec4
-            mat['ruri_uber_colors'] = colors
-        self.apply_params(mat)
+            self._land(mat, {name: (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)})
+            return
+        given = [float(component) for component in value][:4]
+        self._land(mat, {name: given + self._author_row(mat, name)[len(given):]})
 
     def panel_write_image(self, mat, row, image):
         """贴图槽换图;清空 = 回落中性占位。没绑图的槽走导入期同一条 _wire_fetch/_sample 建线链。"""
@@ -4246,24 +4472,13 @@ class Stack:
                 _set_colorspace(target, 'Non-Color' if non_color else 'sRGB')
                 if non_color:
                     _fix_two_channel_layout(target)
-        self._vtx_panel_write(mat, name, target)
-        self.apply_params(mat)
+        self._vtx_panel_write(mat, {name: target})
+        self._publish(mat, slot_rows)
 
     def panel_write_st(self, mat, row, tiling, offset):
-        """平铺/偏移 → 材质记录 → 着色组的 _ST 参数常量 + 顶点期 uv 变换节点 + 顶点树修改器口(同一真值三消费面)。"""
-        name = row['name']
-        st_value = [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]
-        st = _mixed(mat.get('ruri_uber_st'))
-        st[name] = st_value
-        mat['ruri_uber_st'] = st
-        self._vtx_panel_write(mat, name + '_ST', (st_value[0], st_value[1], st_value[2]))
-        self._vtx_panel_write(mat, name + '_ST_w', st_value[3])
-        if row.get('st_node') and mat.node_tree is not None:
-            for node in mat.node_tree.nodes:
-                if node.label == row['st_node']:
-                    node.inputs['Scale'].default_value = (st_value[0], st_value[1], 1.0)
-                    node.inputs['Location'].default_value = (st_value[2], st_value[3], 0.0)
-        self.apply_params(mat)
+        """平铺/偏移 → 这一槽的 <槽>_ST 行经 _land 落进记录与它的三个消费面(着色组的 _ST 参数口、顶点期 uv 变换节点、
+        顶点树修改器口)。"""
+        self._land(mat, {row['name'] + '_ST': [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]})
 
     @staticmethod
     def _panel_bound_images(mat):
@@ -4566,7 +4781,8 @@ class Stack:
     @staticmethod
     def _write_input(node, name, value, size):
         """往一个组实例写一个数值口。四维形参由向量口加 _w 口承载、二维由 z 恒 0 的向量口承载(生成器的载体约定);
-        分量数照清单声明校验,对不上就拒绝。组上没有这个口(或四维口没有 _w)= 生成器把没人读的那部分剪掉了。"""
+        分量数照清单声明校验,对不上就拒绝。组上没有这个口(或四维口没有 _w)= 生成器把没人读的那部分剪掉了。
+        值没变不写:这一条也跑在依赖图处理器里(_derive_passes),无条件写会自激。"""
         components = tuple(float(component) for component in value) if hasattr(value, '__len__') else (float(value),)
         if len(components) != size:
             raise ValueError('[ruri-post] {0} 声明 {1} 个分量,给了 {2} 个'.format(name, size, len(components)))
@@ -4575,12 +4791,20 @@ class Stack:
             return False
         if socket.type == 'VECTOR':
             fourth = node.inputs.get(name + '_w')
-            if size == 4 and fourth is not None:
+            if size == 4 and fourth is not None and not Stack._same_components([fourth.default_value], components[3:4]):
                 fourth.default_value = components[3]
-            socket.default_value = (components[:3] + (0.0,) * 3)[:3]
-        else:
+            vector = (components[:3] + (0.0,) * 3)[:3]
+            if not Stack._same_components(socket.default_value, vector):
+                socket.default_value = vector
+        elif not Stack._same_components([socket.default_value], components[:1]):
             socket.default_value = components[0]
         return True
+
+    @staticmethod
+    def _same_components(have, want):
+        """口上的分量(单精度)与要写的值是不是同一个数:与 _capture_knobs 同一把尺。"""
+        return len(have) == len(want) and all(abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+                                              for a, b in zip(have, want))
 
     def _chain_inputs(self):
         """只由图链读、不进任何内核的宿主输入(各链的分辨率档)。"""
@@ -4600,7 +4824,8 @@ class Stack:
         return names
 
     def _write_values(self, tree, values):
-        """把 {名: 分量} 写进本级各组实例上的同名口(主入口与图链各趟一并写)。"""
+        """把 {名: 分量} 写进本级各组实例上的同名口(主入口与图链各趟一并写)。只有关卡陈述它的调色那一刻(set_extra)
+        与建树时写回场景记下的值(_apply_stored)走这一条。"""
         nodes = self._stage_nodes(tree)
         unplaced = self._chain_inputs() | self._unbuilt_inputs(tree)
         sizes = self.post['sizes']
@@ -4608,10 +4833,45 @@ class Stack:
             if not any([self._write_input(node, name, value, sizes[name]) for node in nodes]) and name not in unplaced:
                 raise KeyError('[ruri-post] 本级各组上都没有输入口 {0}'.format(name))
 
+    def _derive_passes(self, scene, tree):
+        """图链各趟上的宿主输入:主入口上有同名口的取主入口此刻的值(面板拧过的就是拧过的那个),主入口上没有的取关卡
+        记下的值。主入口自己一格不写 —— 它的口是用户拧的那一面,关卡的值只在关卡陈述它的那一刻(set_extra)写上去,
+        建树、图链重建、开文件都不许拿记下的关卡值盖掉拧过的口。"""
+        stage = self._stage_in(tree)
+        passes = [node for node in self._stage_nodes(tree) if stage is None or node.name != stage.name]
+        if not passes:
+            return
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        sizes = self.post['sizes']
+        for name in self.extra_inputs():
+            value = self._entry_value(stage, name, sizes[name], remembered.get(name))
+            if value is None:
+                continue
+            for node in passes:
+                self._write_input(node, name, value, sizes[name])
+
+    @staticmethod
+    def _entry_value(stage, name, size, remembered):
+        """主入口上这一个宿主输入此刻的分量,按 _write_input 的载体约定读回(四维是向量口加 _w 口,没有 _w 口取记下的
+        第四分量);主入口没有这一口取关卡记下的值;口被图链接着(算值的链驱动它)就不归这里写。"""
+        socket = stage.inputs.get(name) if stage is not None else None
+        if socket is None:
+            return remembered
+        if socket.is_linked:
+            return None
+        components = [float(component) for component in socket.default_value] \
+            if hasattr(socket.default_value, '__len__') else [float(socket.default_value)]
+        if size == 4:
+            fourth = stage.inputs.get(name + '_w')
+            if fourth is not None:
+                return components[:3] + [float(fourth.default_value)]
+            return components[:3] + [float(remembered[3]) if remembered else 0.0]
+        return components[:size]
+
     def set_extra(self, scene, values):
         """按 extra_inputs() 的顺序写宿主驱动的输入口:同名口在主入口与图链各趟上是同一个值,一并写;写下的值记在
-        关卡的世界上(内容,随文件走),建树与图链按新尺寸或新分辨率档重建时照原样写回。缺一口就拒绝 —— 半份参数比不接更坏
-        (0 是恒等,漏掉的那一口会悄悄回到恒等,画面差一点点而没人知道)。"""
+        关卡的世界上(内容,随文件走),建树时照原样写回主入口(面板拧过的旋钮再盖上),图链各趟按主入口此刻的值取。
+        缺一口就拒绝 —— 半份参数比不接更坏(0 是恒等,漏掉的那一口会悄悄回到恒等,画面差一点点而没人知道)。"""
         names = self.extra_inputs()
         if len(values) != len(names):
             raise ValueError('[ruri-post] 本级要 {0} 个宿主输入 {1},收到 {2} 个'.format(
@@ -4623,7 +4883,7 @@ class Stack:
         remembered = {name: [float(component) for component in value] if hasattr(value, '__len__') else [float(value)]
                       for name, value in zip(names, values)}
         self._store(scene, self.POST_VALUES_KEY, remembered)
-        # 先写后判:开关口长在主入口上的链按主入口此刻的值开关,判之前值得已经在口上;重建时记下的值照原样写回各趟。
+        # 先写后判:开关口长在主入口上的链按主入口此刻的值开关,判之前值得已经在口上;重建出来的各趟照主入口取值。
         self._write_values(tree, remembered)
         self.refresh_chains(scene)
         # 关卡刚写的这几格从此就是主入口「该有」的值,面板旋钮的记账跟着换基准。
@@ -5320,7 +5580,8 @@ class Stack:
         return resolved.outputs[resolve['out']]
 
     def refresh_chains(self, scene):
-        """出图尺寸、分辨率档或哪条链该开变了就重建图链(级数与各级尺寸都随它们);主入口不动,记下的值照原样写回各组。"""
+        """出图尺寸、分辨率档或哪条链该开变了就重建图链(级数与各级尺寸都随它们);主入口不动,新建的各趟照主入口此刻的值
+        取它们的宿主输入(_derive_passes)。"""
         if not self.post.get('chains') or not self.installed(scene):
             return False
         tree = scene.compositing_node_group
@@ -5334,9 +5595,7 @@ class Stack:
             tree.nodes.remove(node)
         render = next(node for node in tree.nodes if node.bl_idname == 'CompositorNodeRLayers')
         self._build_chains(scene, tree, render, stage)
-        remembered = self._stored(scene, self.POST_VALUES_KEY)
-        if remembered:
-            self._write_values(tree, remembered)
+        self._derive_passes(scene, tree)
         _frame_generated(tree)
         return True
 
@@ -5344,8 +5603,8 @@ class Stack:
     @bpy.app.handlers.persistent
     def sync_post_chains(scene, depsgraph):
         """场景合成树被改过 → 把面板上拧过的旋钮记回场景(合成树是插件数据、存盘不带,旋钮只有记在场景上才随文件走),
-        各后处理级的图链重判排到下一拍。面板拧的是主入口上的口,Blender 不给回调,只能依赖图落定后看这一拍更新的
-        数据块里有没有这棵树;没被改就一行都不多付。
+        旋钮变了就让图链各趟上的同名口跟上主入口(_derive_passes),各后处理级的图链重判排到下一拍。面板拧的是主入口
+        上的口,Blender 不给回调,只能依赖图落定后看这一拍更新的数据块里有没有这棵树;没被改就一行都不多付。
 
         图链不在这里重建:重建会删掉级域图,而同一轮依赖图更新里排在后面的处理器还在逐条读这一轮的更新,读到的
         是已释放的原件(实测开文件后第一拍当场崩)。交给计时器,落在依赖图更新之外;后台没有事件循环,改图链的
@@ -5355,8 +5614,8 @@ class Stack:
                                    for update in depsgraph.updates):
             return
         for stack in STACKS:
-            if stack.post is not None and stack.installed(scene):
-                stack._capture_knobs(scene)
+            if stack.post is not None and stack.installed(scene) and stack._capture_knobs(scene):
+                stack._derive_passes(scene, tree)
         if not bpy.app.background and not bpy.app.timers.is_registered(Stack._refresh_post_chains):
             bpy.app.timers.register(Stack._refresh_post_chains, first_interval=0.0)
 
@@ -5415,9 +5674,7 @@ class Stack:
         # 下一拍依赖图更新里签名一变又整条重建 —— 那一遍删掉的级域图,同一轮后面的处理器还在读(读已释放的原件,崩)。
         self._apply_stored(scene)
         self._build_chains(scene, tree, render, stage)
-        remembered = self._stored(scene, self.POST_VALUES_KEY)
-        if remembered:
-            self._write_values(tree, remembered)
+        self._derive_passes(scene, tree)
         _frame_generated(tree)
         scene.render.use_compositing = True
         scene.view_settings.view_transform = 'Standard'
@@ -5541,9 +5798,9 @@ class Stack:
         # 修改器面板是这批 uniform 的第二个编辑面;Blender 不给它改动回调,只能依赖图落定后比对。
         if self.sync_vertex_knobs not in bpy.app.handlers.depsgraph_update_post:
             bpy.app.handlers.depsgraph_update_post.append(self.sync_vertex_knobs)
-        # 材质记录是图的第二个写入口(别的插件换槽里的图),同样只能依赖图落定后比对。
-        if self.follow_material_records not in bpy.app.handlers.depsgraph_update_post:
-            bpy.app.handlers.depsgraph_update_post.append(self.follow_material_records)
+        # 材质的输入有两个写入口:编辑器里直接改口与图,别的插件改记录。Blender 两样都不给回调,只能依赖图落定后与镜像比对。
+        if self.sync_material_inputs not in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.append(self.sync_material_inputs)
 
     def unregister_host(self):
         host = self._host_module()
@@ -5564,8 +5821,8 @@ class Stack:
                 handlers.remove(self.push_rig_basis)
         if self.sync_vertex_knobs in bpy.app.handlers.depsgraph_update_post:
             bpy.app.handlers.depsgraph_update_post.remove(self.sync_vertex_knobs)
-        if self.follow_material_records in bpy.app.handlers.depsgraph_update_post:
-            bpy.app.handlers.depsgraph_update_post.remove(self.follow_material_records)
+        if self.sync_material_inputs in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.remove(self.sync_material_inputs)
         host.unregister_material_panel(self)
         getattr(host, self.host['unregister_fn'])(self.provider)
         host.unregister_material_compile(self.compile_all)
@@ -5623,6 +5880,15 @@ def purge_plugin_data():
     return len(doomed)
 
 
+@bpy.app.handlers.persistent
+def settle_inputs(*_args):
+    """存盘前(save_pre)、宿主换代前、本平台注销前:各材质栈把编辑器里改过、这一拍还没记回记录的口与图记回去
+    (Stack.settle_inputs)—— 记录是口唯一随文件走、也唯一跨代留下的样子。"""
+    for stack in STACKS:
+        if stack.post is None:
+            stack.settle_inputs()
+
+
 def register():
     STACKS.clear()
     STACKS.extend(_build_stacks())
@@ -5632,9 +5898,18 @@ def register():
     _host().register_plugin_purge(purge_plugin_data)
     for stack in STACKS:
         stack.register_host()
+    if settle_inputs not in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.append(settle_inputs)
 
 
 def unregister():
+    if settle_inputs in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(settle_inputs)
+    try:
+        if isinstance(bpy.data, bpy.types.BlendData):
+            settle_inputs()
+    except Exception as exc:
+        print('[ruri-uber] 注销前记回材质输入失败: {0}'.format(exc), flush=True)
     try:
         _host().unregister_plugin_purge(purge_plugin_data)
     except Exception as exc:

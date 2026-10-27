@@ -9,7 +9,10 @@ loaded, or graphs were compiled by a generation that has since been replaced.
 
 An update replaces the package's generation in place and compiles again only what the package made, the way the
 load pass does after a file opens, but without dropping what is not the package's: the level's medium, its
-images, the lights. No record is written except by a rename the user chose (see :mod:`shader_inputs`).
+images, the lights. A material's inputs live on its nodes and its record is what they leave behind, so the package
+first settles every input edited on the nodes into its record; the new generation compiles from the records, which
+keeps every input's value by name, starts an input it adds at its default and reads nothing for one it dropped.
+No record is written otherwise, except by a rename the user chose (see :mod:`shader_inputs`).
 """
 
 from __future__ import annotations
@@ -303,6 +306,8 @@ def update(renames=()):
     if refused:
         raise RuntimeError("; ".join(refused))
     stacks = {stack.PANEL_KEY: stack for state in targets for stack in state.package.STACKS}
+    for state in targets:
+        state.package.settle_inputs()
     owned = _owned_materials(stacks)
     before = _records(owned, stacks)
     vertex = _vertex_objects(stacks)

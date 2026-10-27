@@ -458,6 +458,15 @@ def adopt_twins(pairs):
     return _linked_twins.adopt(pairs)
 
 
+def material_inputs_changed(material):
+    """The door a generated stack says through that a material's inputs changed some other way
+    than the material panel -- an edit made straight on its nodes, another add-on writing its
+    record, a knob turned on its vertex stack: the panel reads that material back again rather
+    than keep drawing what it read before (see :mod:`material_panel`)."""
+    from . import material_panel
+    material_panel.forget_material(material)
+
+
 def register_material_panel(panel):
     """A stack hands over its INTERFACE and its own read/write paths, not a panel:
     a session holds several stacks, and one panel each would stack N property
