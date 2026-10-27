@@ -2,7 +2,7 @@
   "host": "Substance",
   "family": "Endfield",
   "stack": "ruri_character_uber_endfield",
-  "identity": "d40e1d66c34c4c54",
+  "identity": "09ae60ecc2b9a826",
   "shader": "Ruri_Endfield_Uber.glsl",
   "generated": "Ruri.RenderPipelines.Generator — 勿手改;改真源后重跑 codegen",
   "operations": [
@@ -926,6 +926,12 @@
         "name": "_RuriCharacterLightFollow",
         "type": "vec4",
         "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_RuriHairHighlightSunOnly",
+        "type": "bool",
+        "widget": "Toggle",
         "srgb": false
       },
       {

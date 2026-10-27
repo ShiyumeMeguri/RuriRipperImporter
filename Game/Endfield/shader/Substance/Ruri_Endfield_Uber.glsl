@@ -453,6 +453,8 @@ uniform vec4 _RuriCharacterEnvironmentEffect;
 uniform vec4 _RuriCharacterEnvironmentWater;
 //: param custom { "default": [0, 32, 10, 0], "label": "主光跟随相机 (.x=开 .y=俯仰下限 .z=偏航偏置)", "group": "引擎全局 CP" }
 uniform vec4 _RuriCharacterLightFollow;
+//: param custom { "default": false, "label": "头发高光只跟太阳", "description": "关(默认)与游戏一致:高光方向里始终混着一份偏向镜头的补光,背光的漫反射阴影处也留着淡淡的高光;开:高光只出现在太阳照亮的漫反射亮部,方向只由太阳与视线决定。", "group": "头发高光/描线" }
+uniform bool _RuriHairHighlightSunOnly;
 //: param custom { "default": false, "label": "_RuriOutlineShellGate", "group": "R 引擎态" }
 uniform bool _RuriOutlineShellGate;
 //: param custom { "default": [1, 1, 1, 1], "label": "Skin Rim Color", "widget": "color", "srgb": true, "group": "脸部 SDF/表情" }
@@ -2116,7 +2118,8 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     float ambDiffInt;
     float castBlend;
     vec3 nprDiff = ComputeNPRDiffuse(N, _CharacterParams2.xyz, ruriData.ambInt, blendedLightCol, blendedLightInt, shadowA, shadowB, castShadow, ramp.a, albScaled, diffColor, ramp.rgb, rampChroma, 1.0 - rampChroma, fullDiff, ambDiffInt, castBlend);
-    float specAmbInt = ambDiffInt * (castBlend * 0.5 + 0.5);
+    // Ruri 增补开关:开 = 高光强度只取主光受光量(castShadow × shadowB,即漫反射亮部),背光面不留底光;关 = 逐位等于真源。
+    float specAmbInt = (_RuriHairHighlightSunOnly ? castShadow * shadowB : ambDiffInt * (castBlend * 0.5 + 0.5));
     float anisoShift1;
     float anisoShift2;
     if (_StrokeOn)
@@ -2133,7 +2136,10 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     }
     // 真源 b100 `_2313 = lerp(0.5, L.y, 阴影)`、`_2318 = L × 阴影`:影里的发丝高光只跟视角走。
     vec3 worldContrib = otwCol0 * vDotC0 + otwCol1 * lerp(0.5, ruriData.adjustedLightDir.y, castShadow) + otwCol2 * vDotC2;
-    vec3 H = ruriNormalize(ruriNormalize(ruriData.adjustedLightDir * castShadow + worldContrib * 2.0) + ruriData.V);
+    // Ruri 增补开关:开 = 去掉视角补光与阴影对光向的衰减,H 只由主光与视线决定;关 = 逐位等于真源(强度侧见 specAmbInt)。
+    float lightWeight = (_RuriHairHighlightSunOnly ? 1.0 : castShadow);
+    float frontalWeight = (_RuriHairHighlightSunOnly ? 0.0 : 2.0);
+    vec3 H = ruriNormalize(ruriNormalize(ruriData.adjustedLightDir * lightWeight + worldContrib * frontalWeight) + ruriData.V);
     vec3 shiftedT1 = ruriNormalize(specN * anisoShift1 + modBitan);
     float TdotH1 = dot(shiftedT1, H);
     float sinTH1 = max(sqrt(1.0 - TdotH1 * TdotH1), 0.0001);
