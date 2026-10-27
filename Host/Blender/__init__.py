@@ -335,7 +335,7 @@ HOST = host_port.bind(BlenderHost())
 
 from ... import Game                                                    # noqa: E402
 from . import (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder,  # noqa: E402
-               material_panel, derived_state, allocator, animation_builder, step_loader, browser_panel,
+               material_panel, world_sun, derived_state, allocator, animation_builder, step_loader, browser_panel,
                shader_inputs, shader_version, shader_update_panel, post_panel, viewpoint, picture_view,
                region_picker, bin_update)
 
@@ -362,7 +362,7 @@ def _holds_process_state(module):
 #: reloaded, just after these, so forgetting one costs ordering rather than
 #: correctness.
 _DRIVER_ORDER = (rna, render, coordinate, rig_identity, plugin_data, linked_twins, material_builder, material_panel,
-                 derived_state, animation_builder, step_loader, browser_panel, shader_inputs, shader_version,
+                 world_sun, derived_state, animation_builder, step_loader, browser_panel, shader_inputs, shader_version,
                  shader_update_panel, post_panel, picture_view, region_picker, bin_update)
 
 
@@ -486,6 +486,8 @@ def register():
     plugin_data.register()
     # link 进来的材质画的是本会话编的替身;存盘那一刻本地用户指回库里的材质。
     linked_twins.register()
+    # 世界太阳让位是会话里的策略不是文档的内容:存盘前还原用户自己的阈值,存盘后再让位。
+    world_sun.register()
     browser_panel.register()
     # 派生态调度器:导入产物、灯、相机的变更从这里统一收敛成一次重建。装在游戏之前,
     # 这样一个游戏的着色栈注册进来的阶段第一次被用到时,调度器已经在监听了。
@@ -539,6 +541,7 @@ def unregister():
     allocator.unregister()
     derived_state.unregister()
     browser_panel.unregister()
+    world_sun.unregister()
     linked_twins.unregister()
     plugin_data.unregister()
     rna.unregister_shared()
