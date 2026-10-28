@@ -32,13 +32,13 @@ def offset_attribute(name):
 
 def annotations(kit, stack):
     a = {}
-    a['p_AlphaClipThreshold'] = bpy.props.FloatProperty(name='\'Clip Threshold\' {}', description='_AlphaClipThreshold', default=0.5, min=0.0, max=1.0, update=kit.writer(stack, '_AlphaClipThreshold'))
-    a['p_UseAlphaTest'] = bpy.props.BoolProperty(name='Use Alpha Test', description='_UseAlphaTest', default=False, update=kit.writer(stack, '_UseAlphaTest'))
-    a['p_ShadowColor'] = bpy.props.FloatVectorProperty(name='Shadow Color', description='_ShadowColor', size=4, subtype='COLOR_GAMMA', min=0.0, max=1.0, default=(0.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_ShadowColor'))
-    a['p_CircleFade'] = bpy.props.BoolProperty(name='Circle Fade', description='_CircleFade', default=False, update=kit.writer(stack, '_CircleFade'))
-    a['p_CircleFadeDistance'] = bpy.props.FloatProperty(name='Circle Fade Distance', description='_CircleFadeDistance', default=1.0, update=kit.writer(stack, '_CircleFadeDistance'))
-    a['p_CircleFadeSmoothness'] = bpy.props.FloatProperty(name='Circle Fade Smoothness', description='_CircleFadeSmoothness', default=0.2, update=kit.writer(stack, '_CircleFadeSmoothness'))
-    a['p_DisableSceneShadow'] = bpy.props.BoolProperty(name='Disable Scene Shadow', description='_DisableSceneShadow', default=False, update=kit.writer(stack, '_DisableSceneShadow'))
+    a['p_AlphaClipThreshold'] = bpy.props.FloatProperty(name='\'Clip Threshold\' {}', description='透明度裁切阈值(0 – 1):打开「Use Alpha Test」后,阴影强度低于它的像素直接丢弃,不再画。\n_AlphaClipThreshold', default=0.5, min=0.0, max=1.0, update=kit.writer(stack, '_AlphaClipThreshold'))
+    a['p_UseAlphaTest'] = bpy.props.BoolProperty(name='Use Alpha Test', description='使用透明度裁切:打开后阴影强度低于「Clip Threshold」的像素被丢弃,阴影边缘变成硬边。\n_UseAlphaTest', default=False, update=kit.writer(stack, '_UseAlphaTest'))
+    a['p_ShadowColor'] = bpy.props.FloatVectorProperty(name='Shadow Color', description='阴影颜色:RGB 是接收面上阴影处的染色,A 是阴影的最大浓度(乘进阴影强度,A = 0 则这个面完全不显示阴影)。\n_ShadowColor', size=4, subtype='COLOR_GAMMA', min=0.0, max=1.0, default=(0.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_ShadowColor'))
+    a['p_CircleFade'] = bpy.props.BoolProperty(name='Circle Fade', description='圆形淡出:打开后阴影只在以物体原点为圆心的圆内显示,圆外按「Circle Fade Smoothness」渐变到没有。\n_CircleFade', default=False, update=kit.writer(stack, '_CircleFade'))
+    a['p_CircleFadeDistance'] = bpy.props.FloatProperty(name='Circle Fade Distance', description='圆形淡出的半径(世界单位):到物体原点的距离小于它时阴影完整显示。\n_CircleFadeDistance', default=1.0, update=kit.writer(stack, '_CircleFadeDistance'))
+    a['p_CircleFadeSmoothness'] = bpy.props.FloatProperty(name='Circle Fade Smoothness', description='圆形淡出的过渡带宽度(世界单位):从半径向外这么宽的范围阴影渐变到没有。\n_CircleFadeSmoothness', default=0.2, update=kit.writer(stack, '_CircleFadeSmoothness'))
+    a['p_DisableSceneShadow'] = bpy.props.BoolProperty(name='Disable Scene Shadow', description='忽略场景阴影:打开后主光的阴影遮挡不再参与,这个面按完全没被遮挡处理;只剩圆形淡出等其他控制。\n_DisableSceneShadow', default=False, update=kit.writer(stack, '_DisableSceneShadow'))
     return a
 
 

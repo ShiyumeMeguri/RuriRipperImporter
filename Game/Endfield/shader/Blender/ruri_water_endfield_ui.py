@@ -26,7 +26,7 @@ def offset_attribute(name):
 
 def annotations(kit, stack):
     a = {}
-    a['p_VFXParams0'] = bpy.props.FloatVectorProperty(name='VFX Params0 (xyz = 角色位, w = 时间)', description='_VFXParams0', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_VFXParams0'))
+    a['p_VFXParams0'] = bpy.props.FloatVectorProperty(name='VFX Params0 (xyz = 角色位, w = 时间)', description='特效全局参数:水面只用 W(动画时间),它驱动泡沫和浪的相位滚动;XYZ 在水面里不起作用。\nX: 水面里没有用到(其他特效里是角色位置 X)。\nY: 水面里没有用到(其他特效里是角色位置 Y)。\nZ: 水面里没有用到(其他特效里是角色位置 Z)。\nW: 动画时间(秒):泡沫与浪的相位 = W × 各自的速度,改它等于拨动水面动画的进度。\n_VFXParams0', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_VFXParams0'))
     return a
 
 
