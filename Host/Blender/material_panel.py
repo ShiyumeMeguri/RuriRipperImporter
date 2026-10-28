@@ -25,13 +25,22 @@
 
 面板第一次画到一张本会话还没回读过的材质时,下一拍回读它这一张。开文件与导入不再把全场材质都回读一遍 ——
 九千对象的关卡上那一遍要一分钟,而面板一次只画一张。
+
+## 槽位(拓展点)
+
+材质布局数据里可以写 `{"slot": "名字"}`,生成物在那个位置调 `kit.slot`,宿主把注册在这个名字下的逻辑画进去。
+注册表就是 Kernel 的 `material panel slots` 拓展点:任何模块(别的插件也一样)往里放 `draw(layout, context, slot)`,
+不改生成器也不改这里。带标题的条目由宿主包成分组,默认折叠,折叠状态与分组一样住在材质的面板镜子上。
 """
 
 from __future__ import annotations
 
 import sys
+import traceback
 
 import bpy
+
+from ...Kernel import extensions
 
 # PANEL_KEY -> {'stack': 生成物模块, 'property': Material 上的属性名, 'group': PropertyGroup 类, 'ui': 界面模块}
 _STACKS = {}
@@ -161,6 +170,79 @@ def separator(column):
 
 def notice(layout, text):
     layout.label(text=text, icon="ERROR")
+
+
+# ======================= 槽位(拓展点) =======================
+
+SLOTS = extensions.point(
+    "material panel slots", "Layout slot name -> logic drawn at that place of a generated material panel.")
+
+# 炸过的条目只在控制台报一次回溯,否则每次重绘刷一屏;画面上的红字每次都在。
+_REPORTED = set()
+
+
+class SlotContext:
+    """被插入的逻辑画在哪:栈、槽位名、材质的部件、材质本身、面板镜子(参数的当前值)。"""
+
+    __slots__ = ("stack", "slot", "part", "material", "properties")
+
+    def __init__(self, stack, slot, material, properties):
+        self.stack = stack
+        self.slot = slot
+        self.part = material.get("ruri_uber_part", "")
+        self.material = material
+        self.properties = properties
+
+
+class SlotEntry:
+    __slots__ = ("slot", "key", "title", "draw", "poll")
+
+    def __init__(self, slot, key, title, draw, poll):
+        self.slot = slot
+        self.key = key
+        self.title = title
+        self.draw = draw
+        self.poll = poll
+
+
+def register_slot(slot_id, key, draw, title="", poll=None):
+    """把 ``draw(layout, context, slot)`` 插进布局里名为 slot_id 的槽位。key 在同一槽位内标识这条注册
+    (同一模块重复注册 = 开发重载,覆盖旧的)。title 非空时宿主把它包成默认折叠的分组;poll(slot) 返回假就不画。"""
+    return SLOTS.add(SlotEntry(slot_id, key, title, draw, poll), key=slot_id + "/" + key, module=draw.__module__)
+
+
+def drop_slot(slot_id, key):
+    SLOTS.discard(slot_id + "/" + key)
+
+
+def slot(stack_key, column, material, properties, slot_id):
+    """生成的界面代码在布局槽位处调它:画注册在这个名字下的每一条逻辑,没有注册就什么也不画。"""
+    place = SlotContext(stack_key, slot_id, material, properties)
+    for entry in SLOTS:
+        if entry.slot != slot_id:
+            continue
+        if entry.poll is not None and not entry.poll(place):
+            continue
+        _draw_slot_entry(column, properties, entry, place)
+
+
+def _draw_slot_entry(column, properties, entry, place):
+    target = column
+    if entry.title:
+        target = group(column, properties, "slot." + entry.slot + "." + entry.key, entry.title, 0, None, False)
+        if target is None:
+            return
+    try:
+        entry.draw(target, bpy.context, place)
+    except Exception as error:
+        # 外来逻辑炸了不许带走整个材质面板,但也不许静默:画面上喊出来。
+        alert = target.row()
+        alert.alert = True
+        alert.label(text="{0}/{1}: {2}".format(entry.slot, entry.key, error), icon="ERROR")
+        identity = (entry.slot, entry.key, type(error).__name__, str(error))
+        if identity not in _REPORTED:
+            _REPORTED.add(identity)
+            traceback.print_exc()
 
 
 # ======================= 基座骨绑定 =======================
