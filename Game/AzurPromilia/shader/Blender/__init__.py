@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(51a4fe23284855fb):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(5fcb77b06e48abea):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_azurpromilia 的包入口)—— 运行时。
@@ -643,6 +643,13 @@ def _swap_image(node, real, images):
         _fix_two_channel_layout(real)
     if node.get(OWN_SAMPLER_KEY):
         _apply_own_sampler(node, _sampler_image(node, real, images))
+
+
+def _set_neutral_image(node, neutral, images):
+    # 清空一格 = 回落到割点自己声明的中性图;色彩空间已随中性图的键定死,采样状态按它(没有陈述 = 缺省)。
+    node.image = neutral
+    if node.get(OWN_SAMPLER_KEY):
+        _apply_own_sampler(node, _sampler_image(node, neutral, images))
 
 
 def _retire_materials(replaced, doomed=()):
@@ -3638,6 +3645,39 @@ class Stack:
             if wire is not None:
                 tree.links.new(wire, sock)
 
+    def _outline_switch_of(self, part):
+        return str(self.PART_META.get(part, {}).get('outline_switch') or '')
+
+    def _vtx_switch(self, tree, group_input, mat, name, enabled, panels, state):
+        """描边壳在这个材质这一格上的开关口:修改器接口上一个布尔,值住在修改器上、材质记录是它的真源(与旋钮同一套键)。"""
+        panel = panels.get(mat.name)
+        if panel is None:
+            panel = tree.interface.new_panel(mat.name)
+            panels[mat.name] = panel
+        item = tree.interface.new_socket(name=name, in_out='INPUT', socket_type='NodeSocketBool', parent=panel)
+        row = self.PROPERTIES.get(name)
+        item.description = row['label'] if row else name
+        item.default_value = bool(enabled)
+        key = mat.name + '|' + name
+        state['keys'][item.identifier] = key
+        state['templates'][key] = ''
+        state['values'][item.identifier] = bool(enabled)
+        state['switches'].append(item.identifier)
+        return next(o for o in group_input.outputs if o.identifier == item.identifier)
+
+    @staticmethod
+    def _vtx_outline_flags(mod, tree):
+        """只做描边壳的树:开关口全关时修改器整个关掉(视口与渲染),任何一个开着就开 —— 描边开关在修改器栈上看得见,
+        关着的描边也不付几何求值。还管着位移的树不碰:关了它位移就没了。"""
+        if mod is None or not tree.get('ruri_outline_only'):
+            return
+        ports = [getattr(mod.properties.inputs, str(identifier), None) for identifier in (tree.get('ruri_outline_ports') or [])]
+        on = any(bool(port.value) for port in ports if port is not None)
+        if mod.show_viewport != on:
+            mod.show_viewport = on
+        if mod.show_render != on:
+            mod.show_render = on
+
     def _vtx_panel_write(self, mat, values):
         """材质改了几个 uniform({口名: 值})→ 推到全部修改器上那几格。旋钮抬到接口之后,写组实例的 socket
         缺省是**无效**的(那一格被组输入占线),值住在修改器实例上。
@@ -3657,6 +3697,8 @@ class Stack:
                     continue
                 value = keyed[str(mapped)]
                 port = getattr(mod.properties.inputs, str(identifier), None)
+                if port is not None and isinstance(port.value, bool):
+                    value = bool(value)
                 if port is None or self._vtx_same(port.value, value):
                     continue
                 try:
@@ -3665,6 +3707,7 @@ class Stack:
                     continue
                 written = True
             if written:
+                self._vtx_outline_flags(mod, tree)
                 obj.update_tag()
 
     @staticmethod
@@ -3738,6 +3781,7 @@ class Stack:
                         mat, templates.get(key), prop, images_of[mat_name])):
                     continue
                 self._vtx_commit(mat, rows, prop, port_of)
+                self._vtx_outline_flags(mod, tree)
                 _host().material_inputs_changed(mat)
 
     def _vtx_commit(self, mat, rows, prop, port_of):
@@ -4233,23 +4277,36 @@ class Stack:
                 if asking:
                     prepare(obj, asking, [slot for slot, _mat in slots if slot not in asking])
 
-            def _outline_on(mat):
-                # 真判据四连:①材质**自己的 shader**(导入陈述里的 pass 表)有一趟,标签在该 part 声明的描边标签之列;
-                # ②材质没按这个标签把它关掉;③宽度>0;④_BaseColor.a>0。相机在否不参与判据。
-                # 标签按 part 声明而不是按字样猜:同一 part 认领的几份 shader 把同一趟描边挂在不同标签下,
-                # 标签也不一定带 outline 字样。①不能省:disabledShaderPasses 只记材质**主动关掉**的 pass,
-                # shader 本就没有描边 pass 的部件(CharacterNPR_VFX)不在里面,而它的 _OutlineWidth
-                # 是换 shader 时留下的历史键 —— 只看②③④就会给它凭空长一圈壳。
-                declared = {str(t).lower() for t in (self.PART_META[mat['ruri_uber_part']].get('outline') or [])}
+            def _outline_state(mat):
+                # 拓扑判据三连:①材质**自己的 shader**(导入陈述里的 pass 表)有一趟,标签在该 part 声明的描边标签之列;
+                # ②宽度>0;③_BaseColor.a>0。标签按 part 声明而不是按字样猜:同一 part 认领的几份 shader 把同一趟描边挂在
+                # 不同标签下。①不能省:disabledShaderPasses 只记材质**主动关掉**的 pass,shader 本就没有描边 pass 的部件
+                # (CharacterNPR_VFX)不在里面,而它的 _OutlineWidth 是换 shader 时留下的历史键。
+                # 材质把这趟关掉与否:part 声明了开关属性 = 只定开关口的初值(关着的描边也留着壳的拓扑,面板上一勾才有东西可开);
+                # 没声明 = 关掉就没有壳。返回 None = 没有壳,否则是开关初值。
+                part = mat['ruri_uber_part']
+                declared = {str(t).lower() for t in (self.PART_META[part].get('outline') or [])}
                 present = {str(t).lower() for t in (mat.get('ruri_uber_shader_passes') or [])}
-                disabled = {str(p).lower() for p in (mat.get('ruri_uber_disabled_passes') or [])}
-                if not (declared & present) - disabled:
-                    return False
+                if not declared & present:
+                    return None
                 floats, _s, colors = self._mat_meta(mat)
                 base_a = colors.get('_BaseColor', [1, 1, 1, 1])[3]
-                return float(floats.get('_OutlineWidth', 0.0)) > 0.0 and float(base_a) > 0.0
+                if not (float(floats.get('_OutlineWidth', 0.0)) > 0.0 and float(base_a) > 0.0):
+                    return None
+                disabled = {str(p).lower() for p in (mat.get('ruri_uber_disabled_passes') or [])}
+                enabled = bool((declared & present) - disabled)
+                switch = self._outline_switch_of(part)
+                if switch and switch in floats:
+                    enabled = float(floats[switch]) > 0.5
+                if switch and switch not in floats:
+                    self._write_record(mat, {switch: 1.0 if enabled else 0.0})
+                return enabled if switch or enabled else None
 
-            outline_slots = [(i, m) for i, m in slots if _outline_on(m)]
+            outline_slots = []
+            for slot_index, slot_material in slots:
+                outline = _outline_state(slot_material)
+                if outline is not None:
+                    outline_slots.append((slot_index, slot_material, outline))
             # 顶点腿**只为几何而存在**。没有壳位移也没有描边 ⇒ 这个对象根本不该有修改器。
             if not vert_slots and not outline_slots:
                 continue
@@ -4257,7 +4314,7 @@ class Stack:
             old = bpy.data.node_groups.get(tree_name)
             mod = obj.modifiers.get(self.VTX_MODIFIER)
             knobs = self._vtx_knob_rows()
-            state = {'keys': {}, 'templates': {}, 'values': {}}
+            state = {'keys': {}, 'templates': {}, 'values': {}, 'switches': []}
             panels = {}
             if old is not None:
                 bpy.data.node_groups.remove(old)
@@ -4407,8 +4464,15 @@ class Stack:
             #    宿主在顶点着色阶段逐视图求值 —— 这棵树不读相机,转视角一次都不重算。
             if outline_slots:
                 keep = None
-                for slot, _mat in outline_slots:
+                for slot, slot_material, enabled in outline_slots:
                     sel = slot_sel(slot)
+                    switch = self._outline_switch_of(slot_material['ruri_uber_part'])
+                    if switch:
+                        gate = nd('ShaderNodeMath')
+                        gate.operation = 'MULTIPLY'
+                        mt.links.new(sel, gate.inputs[0])
+                        mt.links.new(self._vtx_switch(mt, gin, slot_material, switch, enabled, panels, state), gate.inputs[1])
+                        sel = gate.outputs[0]
                     if keep is None:
                         keep = sel
                     else:
@@ -4441,6 +4505,8 @@ class Stack:
             _frame_generated(mt)
             mt['ruri_vtx_keys'] = state['keys']
             mt['ruri_vtx_templates'] = state['templates']
+            mt['ruri_outline_only'] = 0 if vert_slots else 1
+            mt['ruri_outline_ports'] = list(state['switches'])
             if outline_slots:
                 mt[self.VIEW_READER_KEY] = 1
             if mod is None:
@@ -4459,6 +4525,7 @@ class Stack:
                     port.value = value
                 except (TypeError, ValueError):
                     pass
+            self._vtx_outline_flags(mod, mt)
             # 脚本写修改器输入**不打依赖图标记**(实测 5.2.1:连 view_layer.update() 都刷不出来,
             # 只有 update_tag 才让求值副本跟上)。UI 拖滑块走的是另一条,不受影响。
             obj.update_tag()
@@ -4551,6 +4618,15 @@ class Stack:
         given = [float(component) for component in value][:4]
         self._land(mat, {name: given + self._author_row(mat, name)[len(given):]})
 
+    def _slot_neutral(self, part, slot):
+        """这一槽没绑图时该采到什么:割点自己声明的中性图(与建材质时缺图的槽逐位等价)。"""
+        if part not in self.m['parts']:
+            return None
+        for fetch in self._part_fetches(self.part(part)):
+            if fetch['slot'] == slot and not fetch['env']:
+                return _neutral_image(fetch['neutral'], fetch['neutral_alpha'], fetch['non_color'])
+        return None
+
     def panel_write_image(self, mat, row, image):
         """贴图槽换图;清空 = 回落中性占位。没绑图的槽走导入期同一条 _wire_fetch/_sample 建线链。"""
         name = row['name']
@@ -4563,6 +4639,7 @@ class Stack:
             imgs[name] = image
         mat['ruri_uber_images'] = imgs
         bound = dict(imgs)
+        neutral = self._slot_neutral(part, name) if target is None else None
         slot_rows = ([r[0] for r in self.part(part)['params'] if _image_row_slot(r[0]) == name]
                      if part in self.m['parts'] else [])
         if slot_rows:
@@ -4582,6 +4659,8 @@ class Stack:
                 if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
                     if target is not None:
                         _swap_image(node, target, bound)
+                    elif neutral is not None:
+                        _set_neutral_image(node, neutral, bound)
                 elif node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) == name:
                     # 别的槽借这一槽的采样器:借出的图换了,借用方的寻址与过滤跟着换。
                     _apply_own_sampler(node, target)
@@ -4595,6 +4674,8 @@ class Stack:
                     if target is not None:
                         _swap_image(node, target, bound)
                         swapped[0] += 1
+                    elif neutral is not None:
+                        _set_neutral_image(node, neutral, bound)
                 elif node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) == name:
                     _apply_own_sampler(node, target)
                 elif node.type == 'GROUP':

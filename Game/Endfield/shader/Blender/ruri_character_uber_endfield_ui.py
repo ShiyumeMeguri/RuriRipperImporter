@@ -1131,6 +1131,7 @@ def draw_Face(kit, layout, material, p):
             kit.prop(g7, p, 'p_HighlightMapVector', 'HighlightMap Vector')
     g8 = kit.group(root, p, 'Outline', 'Outline', 6, None, True)
     if g8 is not None:
+        kit.prop(g8, p, 'p_EnableOutline', 'Enable Outline')
         if not (not p.p_EnableOutline):
             kit.prop(g8, p, 'p_OutlineWidth', 'Outline Width')
         if not (not p.p_EnableOutline):
@@ -1194,7 +1195,6 @@ def draw_Face(kit, layout, material, p):
         kit.prop(u10, p, 'p_DebugVATFrameIndex', 'DebugVATFrame')
         kit.prop(u10, p, 'p_VATFrameIndex', 'VAT Frame Index')
         kit.label(u10, 'Outline')
-        kit.prop(u10, p, 'p_EnableOutline', 'Enable Outline')
         if not (p.p_SurfaceType == 0.0 or not p.p_EnableOutline):
             kit.prop(u10, p, 'p_OutlineTransparent', 'Outline Transparent')
         kit.label(u10, 'Use Puppet Effect')
@@ -1373,6 +1373,7 @@ def draw_Fur(kit, layout, material, p):
             kit.prop(g5, p, 'p_FurNoise', '皮毛叠加噪声')
     g6 = kit.group(root, p, 'Outline', 'Outline', 6, None, True)
     if g6 is not None:
+        kit.prop(g6, p, 'p_EnableOutline', 'Enable Outline')
         if not (not p.p_EnableOutline):
             kit.prop(g6, p, 'p_OutlineWidth', 'Outline Width')
         if not (not p.p_EnableOutline):
@@ -1571,7 +1572,6 @@ def draw_Fur(kit, layout, material, p):
         kit.label(u9, 'Disable Self Shadow')
         kit.prop(u9, p, 'p_DisableSelfShadow', 'Disable Self Shadow')
         kit.label(u9, 'Outline')
-        kit.prop(u9, p, 'p_EnableOutline', 'Enable Outline')
         if not (p.p_SurfaceType == 0.0 or not p.p_EnableOutline):
             kit.prop(u9, p, 'p_OutlineTransparent', 'Outline Transparent')
         kit.label(u9, 'NPR Option')
@@ -1741,6 +1741,7 @@ def draw_Hair(kit, layout, material, p):
             kit.prop(g7, p, 'p_LineSaturation', 'Line Saturation')
     g8 = kit.group(root, p, 'Outline', 'Outline', 6, None, True)
     if g8 is not None:
+        kit.prop(g8, p, 'p_EnableOutline', 'Enable Outline')
         if not (not p.p_EnableOutline):
             kit.prop(g8, p, 'p_OutlineWidth', 'Outline Width')
         if not (not p.p_EnableOutline):
@@ -1788,7 +1789,6 @@ def draw_Hair(kit, layout, material, p):
         kit.texture(u11, p, 'p_MatcapTex', 'Matcap', None, None)
         kit.prop(u11, p, 'p_MatcapColor', 'Matcap Color')
         kit.label(u11, 'Outline')
-        kit.prop(u11, p, 'p_EnableOutline', 'Enable Outline')
         if not (p.p_SurfaceType == 0.0 or not p.p_EnableOutline):
             kit.prop(u11, p, 'p_OutlineTransparent', 'Outline Transparent')
         kit.label(u11, 'Character VFX')
@@ -1920,6 +1920,7 @@ def draw_LiquidAg(kit, layout, material, p):
             kit.prop(g4, p, 'p_SpecialDissolveScheduleOffset', 'Dissolve Schedule Offset')
     g5 = kit.group(root, p, 'Outline', 'Outline', 6, None, True)
     if g5 is not None:
+        kit.prop(g5, p, 'p_EnableOutline', 'Enable Outline')
         if not (not p.p_EnableOutline):
             kit.prop(g5, p, 'p_OutlineWidth', 'Outline Width')
         if not (not p.p_EnableOutline):
@@ -1959,7 +1960,6 @@ def draw_LiquidAg(kit, layout, material, p):
         kit.label(u7, 'Character VFX')
         kit.prop(u7, p, 'c_VFXMainUVSet', 'Main UV Set')
         kit.label(u7, 'Outline')
-        kit.prop(u7, p, 'p_EnableOutline', 'Enable Outline')
         if not (p.p_SurfaceType == 0.0 or not p.p_EnableOutline):
             kit.prop(u7, p, 'p_OutlineTransparent', 'Outline Transparent')
         if not (not p.p_EnableOutline):
@@ -2086,6 +2086,7 @@ def draw_Standard(kit, layout, material, p):
             kit.prop(g7, p, 'p_SilkStockingsSpecularValue', '丝袜高光位置偏移')
     g8 = kit.group(root, p, 'Outline', 'Outline', 6, None, True)
     if g8 is not None:
+        kit.prop(g8, p, 'p_EnableOutline', 'Enable Outline')
         if not (not p.p_EnableOutline):
             kit.prop(g8, p, 'p_OutlineWidth', 'Outline Width')
         if not (not p.p_EnableOutline):
@@ -2259,7 +2260,6 @@ def draw_Standard(kit, layout, material, p):
         kit.label(u11, 'Disable Self Shadow')
         kit.prop(u11, p, 'p_DisableSelfShadow', 'Disable Self Shadow')
         kit.label(u11, 'Outline')
-        kit.prop(u11, p, 'p_EnableOutline', 'Enable Outline')
         if not (p.p_SurfaceType == 0.0 or not p.p_EnableOutline):
             kit.prop(u11, p, 'p_OutlineTransparent', 'Outline Transparent')
         kit.label(u11, 'NPR Option')
