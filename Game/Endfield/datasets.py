@@ -486,12 +486,12 @@ def scene_grading(map_name, anchor, states):
     the post stage's own inputs.
 
     ``inputs`` is keyed by the post stage's own input names and holds the DIFFERENCE from
-    identity, which is what those sockets take: an entry parameter's socket default in
-    Blender is always zero, so only a difference makes "nothing drives it" mean "no
-    grading" -- a session with a character and no scene has to land on identity, not on
-    contrast 0. The identity differs per component, which is why the subtraction is
-    spelled out rather than applied in bulk: hue is an offset (identity 0) while
-    saturation, contrast and the colour filter are multipliers (identity 1).
+    identity, which is what those sockets take. The sockets' own defaults are the character
+    info stage's solved volume stack (declared on the stage's kernel parameters), so a
+    session with a character and no scene lands on the game's display look; a statement
+    replaces them wholesale. The identity differs per component, which is why the
+    subtraction is spelled out rather than applied in bulk: hue is an offset (identity 0)
+    while saturation, contrast and the colour filter are multipliers (identity 1).
 
     ``exposureStops`` is the phase's manual exposure compensation, in stops -- zero is
     identity as it stands, since the multiplier is two to that power. ``exposureAuto``
@@ -517,6 +517,28 @@ def scene_grading(map_name, anchor, states):
     """
     row = _rows(SCENE_ENVIRONMENT, **_viewer(map_name, anchor, states))[0]
     return {"tonemap": float(row.get("tonemap") or 0), "inputs": grading_inputs(row)}
+
+
+IDENTITY_POST = {
+    "exposureAuto": 0.0, "exposureStops": 0.0, "exposureAutoCompensation": 0.0,
+    "exposureRangeX": 0.0, "exposureRangeY": 0.0, "exposureHistogramX": 0.0, "exposureHistogramY": 0.0,
+    "exposurePixelX": 0.0, "exposurePixelY": 0.0, "exposureClampX": 0.0, "exposureClampY": 0.0, "exposureMetering": 0.0,
+    "gradeBalanceL": 1.0, "gradeBalanceM": 1.0, "gradeBalanceS": 1.0,
+    "gradeFilterR": 1.0, "gradeFilterG": 1.0, "gradeFilterB": 1.0,
+    "gradeHue": 0.0, "gradeSaturation": 1.0, "gradeContrast": 1.0,
+    "bloomParamsX": 0.0, "bloomParamsY": 0.0, "bloomParamsZ": 0.0, "bloomParamsW": 0.0,
+    "bloomThresholdX": 0.0, "bloomThresholdY": 0.0, "bloomThresholdZ": 0.0, "bloomThresholdW": 0.0,
+    "bloomTintR": 0.0, "bloomTintG": 0.0, "bloomTintB": 0.0,
+    "bloomScatter": 0.0, "bloomResolution": 2.0,
+    "ssrEnable": 0.0, "ssrScreenFade": 0.0, "ssrMirrorMultiply": 0.0, "ssrMirrorAdd": 0.0,
+}
+
+
+def identity_grading():
+    """The post inputs of a display stage whose volumes state no post-processing: every
+    difference zero, bloom and reflection off. Switching the stage's post volumes off must
+    land here -- the sockets' defaults are the stage's own look, not "nothing"."""
+    return grading_inputs(IDENTITY_POST)
 
 
 def grading_inputs(values):

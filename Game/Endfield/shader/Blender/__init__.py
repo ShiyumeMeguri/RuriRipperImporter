@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(1138f231abf86ab0):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(3d0ab5448daac90e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -174,6 +174,15 @@ def _import_host(relative):
     import importlib
     root = __package__.partition('.Game.')[0]
     return importlib.import_module(root + '.' + relative)
+
+
+def _load_interface(folder, name):
+    """生成物自己的面板模块(同目录 <栈键>_ui.py):属性组注解与逐 part 的绘制代码都是生成的,宿主只提供控件库。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, os.path.join(folder, name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _host():
@@ -1770,9 +1779,10 @@ class Stack:
         names = manifest['names']
         self.PANEL_KEY = names['panel_key']
         self.PANEL_TITLE = names['panel_title']
-        self.INTERFACE = manifest.get('interface') or []
-        self.TEXTURE_ROWS = {row['name']: row for group in self.INTERFACE for row in group['rows']
-                             if row['kind'] == 'TEXTURE'}
+        self.PROPERTIES = {row['name']: row for row in manifest.get('properties') or []}
+        self.TEXTURE_ROWS = {name: row for name, row in self.PROPERTIES.items() if row['kind'] == 'TEXTURE'}
+        self.SCHEMA_DEFAULTS = manifest.get('schema_defaults') or {}
+        self.UI = _load_interface(folder, manifest['ui']) if manifest.get('ui') else None
         self.PART_META = manifest.get('part_meta') or {}
         self.NON_SHADING = set(manifest.get('non_shading') or [])
         self.HOST_SHADOW_CASTERS = manifest['host_shadow_casters']
@@ -3761,7 +3771,7 @@ class Stack:
         def authored(v):
             return _linear_to_srgb(float(v)) if srgb else float(v)
 
-        if row['kind'] in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+        if row['kind'] in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
             scalar = value_of(base)
             if scalar is not None:
                 self.panel_write(mat, row, authored(scalar))
@@ -4465,9 +4475,7 @@ class Stack:
     # ==================== 材质参数面板(读写路径;面板本体由宿主统一画) ====================
 
     def _panel_rows(self):
-        for group in self.INTERFACE:
-            for row in group['rows']:
-                yield row
+        return self.PROPERTIES.values()
 
     def _panel_insts(self, mat):
         nt = mat.node_tree
@@ -4537,7 +4545,7 @@ class Stack:
         向量行只写给出的分量:没给的(三分量颜色的 alpha、顶点腿上没有 _w 口的那一格)照这张材质此刻的值。"""
         name = row['name']
         kind = row['kind']
-        if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+        if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
             self._land(mat, {name: (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)})
             return
         given = [float(component) for component in value][:4]
@@ -4661,18 +4669,21 @@ class Stack:
                 for name, _kind, declared, declared_w in self.part(part)['params']}
 
     def panel_read(self, mat):
-        """面板上每一格的当前值:记录说了取记录,没说取声明缺省 —— 都是作者值。"""
+        """面板上每一格的当前值:记录说了取记录,没说取图上声明的缺省,再没有取这个 part 的材质模式缺省 —— 都是作者值。"""
         values, images, st_out = {}, {}, {}
-        if not self._panel_insts(mat):
+        if not self._panel_insts(mat) or self.UI is None:
             return {'values': values, 'images': images, 'st': st_out}
-        declared = self._param_declared(mat.get('ruri_uber_part', ''))
+        part = mat.get('ruri_uber_part', '')
+        declared = self._param_declared(part)
+        schema = self.SCHEMA_DEFAULTS.get(part) or {}
         floats = dict(mat.get('ruri_uber_floats') or {})
         st = _mixed(mat.get('ruri_uber_st'))
         colors = _mixed(mat.get('ruri_uber_colors'))
         bound = dict(mat.get('ruri_uber_images') or {})
+        transformed = set(self.UI.TRANSFORMED)
         in_tree = None
-        for row in self._panel_rows():
-            name = row['name']
+        for name in self.UI.NAMES:
+            row = self.PROPERTIES[name]
             kind = row['kind']
             if kind == 'TEXTURE':
                 img = bound.get(name)
@@ -4681,61 +4692,28 @@ class Stack:
                         in_tree = self._panel_bound_images(mat)
                     img = in_tree.get(name)
                 images[name] = img
-                value = st.get(name) or declared.get(name + '_ST')
-                if value is not None:
-                    st_out[name] = (value[0], value[1], value[2], value[3])
+                if name in transformed:
+                    value = st.get(name) or declared.get(name + '_ST')
+                    if value is not None:
+                        st_out[name] = (value[0], value[1], value[2], value[3])
                 continue
-            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT'):
+            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
                 value = floats.get(name)
                 if value is None and name in declared:
                     value = declared[name][0]
+                if value is None and name in schema:
+                    value = schema[name][0]
                 if value is None:
                     continue
                 values[name] = (bool(value > 0.5) if kind == 'SWITCH'
                                 else int(value) if kind == 'INT' else float(value))
             else:
-                value = colors.get(name) or declared.get(name)
+                value = colors.get(name) or declared.get(name) or schema.get(name)
                 if value is None:
                     continue
-                spread = (list(value) + [0.0] * 4)[:row['size']]
+                spread = (list(value) + [0.0] * 4)[:row.get('display', row['size'])]
                 values[name] = tuple(float(x) for x in spread)
         return {'values': values, 'images': images, 'st': st_out}
-
-    def _panel_slots(self, mat):
-        part = mat.get('ruri_uber_part', '')
-        slots = set(dict(mat.get('ruri_uber_images') or {}).keys())
-        if part in self.m['parts']:
-            for fetch in self._part_fetches(self.part(part)):
-                slots.add(fetch['slot'])
-        for group_node in self._panel_vertex_nodes(mat):
-            sub = group_node.node_tree
-            if sub is None:
-                continue
-            for node in sub.nodes:
-                if node.bl_idname == 'GeometryNodeImageTexture' and node.label:
-                    slots.add(_slot_of(node.label))
-        return slots
-
-    def panel_rows(self, mat):
-        """这张材质真正有的行(判据 = 图自己:变体折叠的死支参数没有 socket)。"""
-        insts = self._panel_insts(mat)
-        slots = self._panel_slots(mat)
-        out = []
-        for group in self.INTERFACE:
-            rows = []
-            for row in group['rows']:
-                if row['kind'] == 'TEXTURE':
-                    if row['name'] not in slots:
-                        continue
-                    has_st = bool(row.get('st_node')) or any(
-                        grp.inputs.get(row['name'] + '_ST') is not None for grp in insts)
-                    row = dict(row, has_st=has_st)
-                elif not any(grp.inputs.get(row['name']) is not None for grp in insts):
-                    continue
-                rows.append(row)
-            if rows:
-                out.append({'name': group['name'], 'gate': group['gate'], 'rows': rows})
-        return out
     # ==================== 合成器后处理级(kind = post 的栈) ====================
     # Blender 5.2 契约(真渲染实测,写错是静默全黑):渲染结果只能由组内 CompositorNodeRLayers 取,
     # 出口走 NodeGroupOutput;喂组输入 socket 拿到的是全 0。
@@ -5029,7 +5007,7 @@ class Stack:
     def set_extra(self, scene, values):
         """按 extra_inputs() 的顺序写宿主驱动的输入口:同名口在主入口与图链各趟上是同一个值,一并写;写下的值记在
         关卡的世界上(内容,随文件走),建树时照原样写回主入口(面板拧过的旋钮再盖上),图链各趟按主入口此刻的值取。
-        缺一口就拒绝 —— 半份参数比不接更坏(0 是恒等,漏掉的那一口会悄悄回到恒等,画面差一点点而没人知道)。"""
+        缺一口就拒绝 —— 半份参数比不接更坏(漏掉的那一口会悄悄回到缺省,画面差一点点而没人知道)。"""
         names = self.extra_inputs()
         if len(values) != len(names):
             raise ValueError('[ruri-post] 本级要 {0} 个宿主输入 {1},收到 {2} 个'.format(

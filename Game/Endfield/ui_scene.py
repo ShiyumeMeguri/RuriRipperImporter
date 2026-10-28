@@ -158,7 +158,8 @@ def statement(wanted, entry):
         "volume": ({row["target"]: tuple(float(row[axis]) for axis in "xyzw")
                     for row in rows if row["kind"] == VOLUME}
                    if wanted.apply_volume else {}),
-        "post": datasets.grading_inputs(posted) if wanted.apply_post and posted else {},
+        "post": ((datasets.grading_inputs(posted) if posted else datasets.identity_grading())
+                 if wanted.apply_post else {}),
         "prefabs": [row["seed"] for row in rows if row["kind"] == PREFAB] if wanted.import_art else [],
     }
 

@@ -638,10 +638,10 @@ def apply_post_inputs(scene, values):
     """Drive the host-side inputs of the post stage they belong to.
 
     ``values`` is keyed by the stage's own input names; each is the DIFFERENCE from
-    identity, because an entry parameter's socket default is always zero and only a
-    difference makes "nothing drives it" mean "no change" -- a session with a character
-    and no scene has to land on identity. A value input's entry is its components; an
-    image input's entry is its texels, one row of them, which the stage turns into the
+    identity, the encoding the stage's kernels read. The sockets' defaults are declared
+    on the kernel parameters (the character info stage's solved volume stack), so this is
+    only called when a statement replaces them. A value input's entry is its components;
+    an image input's entry is its texels, one row of them, which the stage turns into the
     image its group samples.
 
     The stage is the one whose declared inputs are exactly the names supplied: a set that
