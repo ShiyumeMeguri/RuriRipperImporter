@@ -2,7 +2,7 @@
   "host": "Substance",
   "family": "Endfield",
   "stack": "ruri_character_uber_endfield",
-  "identity": "09ae60ecc2b9a826",
+  "identity": "d40e1d66c34c4c54",
   "shader": "Ruri_Endfield_Uber.glsl",
   "generated": "Ruri.RenderPipelines.Generator — 勿手改;改真源后重跑 codegen",
   "operations": [
@@ -926,12 +926,6 @@
         "name": "_RuriCharacterLightFollow",
         "type": "vec4",
         "widget": "Vector",
-        "srgb": false
-      },
-      {
-        "name": "_RuriHairHighlightSunOnly",
-        "type": "bool",
-        "widget": "Toggle",
         "srgb": false
       },
       {
@@ -3273,6 +3267,7 @@
     "能力 MainLight(GetMainLight/0):@body 兑现(镜像体 + 引擎态)",
     "能力 ShadowAttenuation(MainLightRealtimeShadow/1):宿主无兑现 → 缺席值 1.0(Identity)",
     "能力 ScreenSpaceShadowMask(LoadScreenSpaceShadowMask/2):宿主无兑现 → 缺席值 float2(1.0, 1.0)(Identity)",
+    "能力 HairStylizedFill(Endfield_HairStylizedFill/0):宿主无兑现 → 缺席值 0.0(Identity)",
     "能力 ScreenDepth(SampleSceneDepth/1):宿主无兑现 → 缺席值 0.0(Declared)",
     "能力 ScreenSurfaceClass(LoadScreenSurfaceClass/1):宿主无兑现 → 缺席值 0.0(Declared)",
     "能力 MultiplyFrame(WriteMultiplyFrame/2):宿主兑现 = ruriTransparentFrame(factor, coverage)",
