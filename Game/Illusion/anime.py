@@ -281,7 +281,8 @@ def _draw_sex(layout, state):
         caption = column.box()
         caption.enabled = row is not None
         caption.label(text=(str(row["name"]) if row is not None else "(nothing selected)"))
-        caption.label(text=("clip: {0}".format(row["clip"]) if row is not None else " "))
+        caption.label(text=("clip: {0}".format(row["clip"] or "(every clip in the controller)")
+                            if row is not None else " "))
         button = column.row(align=True)
         button.enabled = row is not None
         button.operator(IMPORT_SIDE.id, text="Import " + title,
