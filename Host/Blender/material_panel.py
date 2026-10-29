@@ -62,6 +62,8 @@ _RIG_ATTRIBUTE = "ruri_rig_basis_bone"
 
 _TOGGLE_OPERATOR = "ruri.material_panel_toggle"
 
+_OPEN_IMAGE_OPERATOR = "ruri.material_panel_open_image"
+
 
 def _valid_icons():
     return {item.identifier for item in
@@ -151,9 +153,11 @@ def prop(column, properties, attribute, label):
 
 
 def texture(column, properties, attribute, label, tiling, offset):
-    split = column.split(factor=0.4)
-    split.label(text=label)
-    split.template_ID(properties, attribute, open="image.open")
+    """贴图槽:标签与图片框都是这条属性自己的控件,悬停显示的就是生成物写在属性上的说明(各通道干什么)。
+    不用 template_ID —— 它的悬停永远是「图片数据块」的通用文字,属性上的说明一个字也出不来。"""
+    row = column.row(align=True)
+    row.prop(properties, attribute, text=label)
+    row.operator(_OPEN_IMAGE_OPERATOR, text="", icon="FILEBROWSER").attribute = attribute
     if tiling is not None:
         sub = column.column(align=True)
         sub.prop(properties, tiling, text="平铺")
@@ -433,6 +437,36 @@ class RURI_OT_material_panel_toggle(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_material_panel_open_image(bpy.types.Operator):
+    bl_idname = _OPEN_IMAGE_OPERATOR
+    bl_label = "打开图片"
+    bl_description = "从磁盘选一张图片装进这个贴图槽"
+    bl_options = {"INTERNAL", "UNDO"}
+
+    attribute: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})
+    filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})
+
+    def invoke(self, context, _event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        material = context.object.active_material if context.object else None
+        entry = stack_of(material)
+        if entry is None:
+            self.report({"WARNING"}, "这张材质不是 Ruri 生成栈建的。")
+            return {"CANCELLED"}
+        try:
+            image = bpy.data.images.load(self.filepath, check_existing=True)
+        except RuntimeError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        setattr(getattr(material, entry["property"]), self.attribute, image)
+        return {"FINISHED"}
+
+
 class RURI_OT_material_panel_sync(bpy.types.Operator):
     bl_idname = "ruri.material_panel_sync"
     bl_label = "从图同步参数"
@@ -497,7 +531,7 @@ def draw_materials(layout, context):
     entry["ui"].draw(sys.modules[__name__], body, material, properties)
 
 
-_CLASSES = (RURI_OT_material_panel_toggle, RURI_OT_material_panel_sync)
+_CLASSES = (RURI_OT_material_panel_toggle, RURI_OT_material_panel_open_image, RURI_OT_material_panel_sync)
 
 # 缓存的键都是**材质名**,而换文件 / 撤销 / 重做会整个换掉数据库:同一个名字之后指着
 # 另一张材质,缓存却照旧答上一副骨架 —— 不报错,只是画错。所以这三拍全丢。
