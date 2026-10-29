@@ -80,13 +80,38 @@ def _accent_icon(accent):
 
 # ======================= 控件库(生成的界面代码调用) =======================
 
+def _outline_switch(stack, material):
+    """这张材质的 part 声明的描边开关属性名(清单里的 outline_switch),没声明就是空串。"""
+    return str(stack.PART_META.get(material.get("ruri_uber_part", ""), {}).get("outline_switch") or "")
+
+
+def _ensure_outline_stage(stack, material, name, value):
+    """描边开关勾上时,当前网格要是还没有描边的几何节点修改器,就当场给它建一个。
+
+    建树走导入时同一条路径(stack.apply_vertex_stage),按材质记录此刻的值判断有没有壳、开关口初值取记录里刚写进去的
+    这个开——所以必须在 panel_write 之后调。别的东西一概不动:它顺手会把不进宿主阴影图的家族对象的
+    visible_shadow 关掉,那是导入时的约定,不该跟着一个描边开关悄悄改用户的网格,所以调完照原样放回去。"""
+    if not value or name != _outline_switch(stack, material):
+        return
+    obj = bpy.context.object
+    if obj is None or obj.type != "MESH" or obj.modifiers.get(stack.VTX_MODIFIER) is not None:
+        return
+    if not any(slot.material is material for slot in obj.material_slots):
+        return
+    shadow = obj.visible_shadow
+    stack.apply_vertex_stage([obj])
+    obj.visible_shadow = shadow
+
+
 def writer(stack, name):
     row = stack.PROPERTIES[name]
     attribute = stack.UI.value_attribute(name)
 
     def update(self, _context):
         if not _GUARD[0]:
-            stack.panel_write(self.id_data, row, getattr(self, attribute))
+            value = getattr(self, attribute)
+            stack.panel_write(self.id_data, row, value)
+            _ensure_outline_stage(stack, self.id_data, name, value)
     return update
 
 
@@ -333,6 +358,19 @@ def _draw_rig(box, stack, material, properties):
         rig_box.label(text=str(note), icon="INFO")
 
 
+def _draw_outline_gap(box, stack, material, properties):
+    """描边开关是开着的、当前网格却没有描边几何节点 = 勾上那一下没建成(或开关本来就是开着导进来的):明说,
+    不留一个勾着却什么也不画的开关。"""
+    switch = _outline_switch(stack, material)
+    obj = bpy.context.object
+    if not switch or obj is None or obj.type != "MESH" or obj.modifiers.get(stack.VTX_MODIFIER) is not None:
+        return
+    if not getattr(properties, stack.UI.value_attribute(switch), False):
+        return
+    box.label(text="当前网格没有描边几何节点:关掉再勾上描边开关会现建。", icon="ERROR")
+    box.label(text="建不出来 = 着色器没有描边那一趟,或描边宽度、颜色透明度为 0。")
+
+
 # ======================= 注册与镜子 =======================
 
 def register_stack(stack):
@@ -512,6 +550,7 @@ def draw_materials(layout, context):
         _sync_soon(material)
         box.label(text="正在回读这张材质的参数……", icon="INFO")
     _draw_rig(box, stack, material, properties)
+    _draw_outline_gap(box, stack, material, properties)
 
     body = box.column()
     body.use_property_split = True
