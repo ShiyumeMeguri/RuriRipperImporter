@@ -525,7 +525,7 @@ def compile_stacks():
 
 def _state_value(value):
     if isinstance(value, bpy.types.ID):
-        return value.name_full
+        return value.name
     if isinstance(value, bpy.types.bpy_struct):
         return None
     if isinstance(value, float):
@@ -540,9 +540,11 @@ def _state_value(value):
 def _world_state(world):
     """The world as the environment answers sample it: each node's own settings and
     input values, and the links. A node's generic editor state (location, selection)
-    is not read by any answer, so nudging the world in the editor rebuilds nothing."""
+    is not read by any answer, so nudging the world in the editor rebuilds nothing; nor is
+    the file the world or its images came through, so a level's materials and its world linked
+    into another file still answer the same."""
     if world is None or world.node_tree is None:
-        return world.name_full if world is not None else None
+        return world.name if world is not None else None
     generic = set(bpy.types.Node.bl_rna.properties.keys()) - {"mute"}
     nodes = []
     for node in world.node_tree.nodes:
@@ -553,7 +555,7 @@ def _world_state(world):
         nodes.append((node.name, node.bl_idname, settings, inputs))
     links = [(link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier)
              for link in world.node_tree.links]
-    return world.name_full, tuple(sorted(nodes, key=repr)), tuple(sorted(links))
+    return tuple(sorted(nodes, key=repr)), tuple(sorted(links))
 
 
 def capability_state(scene):
