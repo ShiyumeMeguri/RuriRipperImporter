@@ -127,6 +127,8 @@ uniform sampler2D _DiffRampMap;
 uniform sampler2D _DisturbTex1;
 //: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Emotion Map", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _EmotionMap;
+//: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "Face Decal Map", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _FaceDecalMap;
 //: param custom { "default": "", "default_color": [0.5, 0.5, 1.0, 1.0], "label": "毛发方向(RG)疏密(B)长短(A)", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _FurDirMap;
 //: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "皮毛染色", "usage": "texture", "group": "2 贴图" }
@@ -159,6 +161,8 @@ uniform sampler2D _SpecRampMap;
 uniform sampler2D _SplitNormalMap;
 //: param custom { "default": "", "default_color": [0.5, 0.5, 0.5, 0.5], "label": "Stroke Map(R:anisotropy G:specular offset)", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _StrokeMap;
+//: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "Noise Tex", "usage": "texture", "group": "2 贴图" }
+uniform sampler2D _StylizedFresnelNoiseMap;
 //: param custom { "default": "", "default_color": [0.0, 0.0, 0.0, 0.0], "label": "VFX Special Blend Tex", "usage": "texture", "group": "2 贴图" }
 uniform sampler2D _VFXSpecialBlendTex;
 //: param custom { "default": "", "default_color": [1.0, 1.0, 1.0, 1.0], "label": "VFX Special Main Tex", "usage": "texture", "group": "2 贴图" }
@@ -272,6 +276,12 @@ uniform float _ColorAdjustmentRimIntensity;
 uniform float _ColorAdjustmentRimWidth;
 //: param custom { "default": 1, "label": "Color Adjustment Saturation", "min": 0, "max": 2, "group": "特效调色" }
 uniform float _ColorAdjustmentSaturation;
+//: param custom { "default": [1, 1, 1, 1], "label": "Customize Add Tint Color", "widget": "color", "srgb": true, "group": "捏人染色" }
+uniform vec4 _CustomizeAddTintColor;
+//: param custom { "default": [1, 1, 1, 1], "label": "Customize Base Color", "widget": "color", "srgb": true, "group": "捏人染色" }
+uniform vec4 _CustomizeBaseColor;
+//: param custom { "default": [1, 1, 1, 1], "label": "Customize Base Tint Color", "widget": "color", "srgb": true, "group": "捏人染色" }
+uniform vec4 _CustomizeBaseTintColor;
 //: param custom { "default": [1, 0, 0, 0], "label": "_DirectionalShadowParams", "group": "R 引擎态" }
 uniform vec4 _DirectionalShadowParams;
 //: param custom { "default": 0, "label": "Disable VertColor", "group": "特效贴图/流动" }
@@ -302,6 +312,8 @@ uniform float _EmotionIndex;
 uniform bool _EnableCharacterVFX;
 //: param custom { "default": 0, "label": "Normal Map", "group": "特效贴图/流动" }
 uniform float _EnableNormalMap;
+//: param custom { "default": false, "label": "Stylized Fresnel", "group": "风格化菲涅尔" }
+uniform bool _EnableStylizedFresnel;
 //: param custom { "default": 0, "label": "VFX Color Adjustment", "group": "特效调色" }
 uniform float _EnableVFXColorAdjustment;
 //: param custom { "default": [1, 1, 1, 0], "label": "EnvGlobalParams0 (.x=环境光 .y=反射)", "group": "引擎全局 CP" }
@@ -318,6 +330,26 @@ uniform vec4 _EyeScatteringColor;
 uniform vec4 _EyeTintColor;
 //: param custom { "default": 0, "label": "FBX -90 Z Rotation Fix (OTW col0/col1 swap)", "group": "参数" }
 uniform float _FBXRotationFix;
+//: param custom { "default": 0.7, "label": "Face Decal Brightness Mask", "min": 0, "max": 1, "group": "脸部贴花" }
+uniform float _FaceDecalBrightnessMask;
+//: param custom { "default": 0, "label": "Face Decal Center X", "min": -0.5, "max": 0.5, "group": "脸部贴花" }
+uniform float _FaceDecalCenterX;
+//: param custom { "default": 0, "label": "Face Decal Center Y", "min": -0.5, "max": 0.5, "group": "脸部贴花" }
+uniform float _FaceDecalCenterY;
+//: param custom { "default": 0, "label": "Face Decal Invert X", "group": "脸部贴花" }
+uniform float _FaceDecalInvertX;
+//: param custom { "default": 0, "label": "Face Decal Invert Y", "group": "脸部贴花" }
+uniform float _FaceDecalInvertY;
+//: param custom { "default": 0, "label": "Face Decal Mirror Mode", "group": "脸部贴花" }
+uniform float _FaceDecalMirrorMode;
+//: param custom { "default": 0.5, "label": "Face Decal Mirror Split", "min": 0, "max": 1, "group": "脸部贴花" }
+uniform float _FaceDecalMirrorSplit;
+//: param custom { "default": 0, "label": "Face Decal Rotation", "min": 0, "max": 1, "group": "脸部贴花" }
+uniform float _FaceDecalRotation;
+//: param custom { "default": 0.2, "label": "Face Decal Size", "min": 0.05, "max": 2, "group": "脸部贴花" }
+uniform float _FaceDecalSize;
+//: param custom { "default": [1, 1, 1, 1], "label": "Face Decal Tint Color", "widget": "color", "srgb": true, "group": "脸部贴花" }
+uniform vec4 _FaceDecalTintColor;
 //: param custom { "default": false, "label": "Use Face Highlight Map", "group": "脸部 SDF/表情" }
 uniform bool _FaceHighlightMap;
 //: param custom { "default": 1, "label": "Face Rim Scale (SDF Area)", "min": 0, "max": 1.5, "group": "脸部 SDF/表情" }
@@ -362,6 +394,10 @@ uniform float _FurNoise;
 uniform float _FurSharpen;
 //: param custom { "default": 0.5, "label": "直射光透光强度", "min": 0, "max": 1, "group": "皮毛" }
 uniform float _FurTTIntensity;
+//: param custom { "default": [1, 1, 1, 1], "label": "Hair Add Tint Color", "widget": "color", "srgb": true, "group": "头发高光/描线" }
+uniform vec4 _HairAddTintColor;
+//: param custom { "default": [1, 1, 1, 1], "label": "Hair Base Tint Color", "widget": "color", "srgb": true, "group": "头发高光/描线" }
+uniform vec4 _HairBaseTintColor;
 //: param custom { "default": [0.04, -0.01, 0, 0], "label": "HighlightMap Vector", "group": "脸部 SDF/表情" }
 uniform vec4 _HighlightMapVector;
 //: param custom { "default": 1, "label": "Ignore Post Exposure", "group": "特效贴图/流动" }
@@ -445,6 +481,8 @@ uniform float _ParallaxMarchNum;
 uniform float _ParallaxScale;
 //: param custom { "default": [1, 1, 0, 0], "label": "_ParallaxTex_ST", "group": "R 引擎态" }
 uniform vec4 _ParallaxTex_ST;
+//: param custom { "default": 0, "label": "Parallax Use Normal Map", "group": "视差" }
+uniform float _ParallaxUseNormal;
 //: param custom { "default": 1, "label": "Roughness Intensity", "group": "参数" }
 uniform float _RoughnessIntensity;
 //: param custom { "default": [0, 0, 0, 0], "label": "环境效果量 (.x=雨 .y=水位量 .z=浸润 .w=雪)", "group": "引擎全局 CP" }
@@ -507,6 +545,34 @@ uniform vec4 _StrokeMap_ST;
 uniform bool _StrokeOn;
 //: param custom { "default": 1, "label": "Stroke Scale", "group": "头发高光/描线" }
 uniform float _StrokeScale;
+//: param custom { "default": 2, "label": "Amount", "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelAmount;
+//: param custom { "default": 0, "label": "Bias", "min": -1, "max": 1, "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelBias;
+//: param custom { "default": [0, 0, 0, 0], "label": "Color(A = Emission)", "widget": "color", "srgb": true, "group": "风格化菲涅尔" }
+uniform vec4 _StylizedFresnelColor;
+//: param custom { "default": 0, "label": "Hardness", "min": 0, "max": 1, "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelHardness;
+//: param custom { "default": false, "label": "Invert", "group": "风格化菲涅尔" }
+uniform bool _StylizedFresnelInvert;
+//: param custom { "default": [1, 1, 0, 0], "label": "_StylizedFresnelNoiseMap_ST", "group": "R 引擎态" }
+uniform vec4 _StylizedFresnelNoiseMap_ST;
+//: param custom { "default": 0, "label": "Noise Speed", "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelNoiseSpeed;
+//: param custom { "default": false, "label": "Noise Use RGB(Color), A(Mask)", "group": "风格化菲涅尔" }
+uniform bool _StylizedFresnelNoiseUseColor;
+//: param custom { "default": 2, "label": "Pow", "min": 0, "max": 10, "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelPow;
+//: param custom { "default": 1, "label": "Shadow Intensity", "min": 0, "max": 1, "group": "风格化菲涅尔" }
+uniform float _StylizedFresnelShadow;
+//: param custom { "default": false, "label": "Use Normal Map", "group": "风格化菲涅尔" }
+uniform bool _StylizedFresnelUseNormalMap;
+//: param custom { "default": 0, "label": "Noise 色块扩展", "min": 0, "max": 1, "group": "风格化菲涅尔" }
+uniform float _StylizedNoiseBiasScale;
+//: param custom { "default": 1, "label": "Noise Contrast", "min": 0, "max": 10, "group": "风格化菲涅尔" }
+uniform float _StylizedNoiseContrast;
+//: param custom { "default": 0, "label": "Stylized UV Set", "group": "风格化菲涅尔" }
+uniform float _StylizedUVSet;
 //: param custom { "default": 0, "label": "Surface Type", "min": 0, "max": 1, "group": "参数" }
 uniform int _SurfaceType;
 //: param custom { "default": [0, 0, 0, 0], "label": "_TaaFrameInfo", "group": "R 引擎态" }
@@ -579,6 +645,8 @@ uniform vec4 _VFXFresnelColor;
 uniform float _VFXFresnelFlip;
 //: param custom { "default": 1, "label": "Fresnel Power(Default:1)", "min": 1, "max": 100, "group": "VFX 合成" }
 uniform float _VFXFresnelPower;
+//: param custom { "default": [0, 0, 0, 0], "label": "_VFXParams0", "group": "R 引擎态" }
+uniform vec4 _VFXParams0;
 //: param custom { "default": 1, "label": "Use Blend Tex R For Disturb", "min": 0, "max": 1, "group": "VFX 合成" }
 uniform float _VFXSpecialBlendTexRForDisturb;
 //: param custom { "default": [1, 1, 0, 0], "label": "_VFXSpecialBlendTex_ST", "group": "R 引擎态" }
@@ -1362,6 +1430,54 @@ void ApplyEndfieldOutlineAlbedo(inout vec3 albedo)
     }
 }
 
+// 捏人染色的底色(真源 characternpr_hair b183:446 与 characternpr b1095:432)。
+// 头发:底图颜色乘 lerp(附加染色, 基础染色, 底图 A × 基础色 A)。
+// 本体:底图当遮罩图 —— R 是明度、G 在附加染色与基础染色间选、B 在上一步与捏人底色间选。
+// 眼睛的染色住在眼睛自己的分支里(虹膜遮罩内乘眼色),脸的贴花另算。
+void ApplyAvatarCustomize(inout RuriData ruriData)
+{
+    if (_AvatarCustomizeEnable)
+    {
+        if (_CharaPartID == 3)
+        {
+            ruriData.albedo = ruriData.albedo * lerp(_HairAddTintColor.rgb, _HairBaseTintColor.rgb, ruriData.baseAlpha * _BaseColor.a);
+        }
+        else
+            if (_CharaPartID == 0)
+            {
+                vec3 mask = ruriData.albedo;
+                ruriData.albedo = mask.x * lerp(lerp(_CustomizeAddTintColor.rgb, _CustomizeBaseTintColor.rgb, mask.y), _CustomizeBaseColor.rgb, mask.z);
+            }
+    }
+}
+
+// 脸部贴花(真源 characternpr_skin b144:461-482):贴花图按中心、大小、旋转、翻转摆在脸的 UV 上,
+// 可沿水平或垂直方向对称复制;只盖在底色不比「亮度遮罩」亮的地方(留出眼白、高光等亮处),按贴花 A 与染色 A 混入。
+vec3 ApplyFaceDecal(vec3 albedo, vec2 uv)
+{
+    vec2 centre = float2(_FaceDecalCenterX, _FaceDecalCenterY);
+    vec2 placedUv = uv;
+    vec2 placedCentre = centre;
+    if (_FaceDecalMirrorMode > 0.5)
+    {
+        vec2 halvedCentre = centre * 0.5 - float2(0.25, 0.25);
+        float axis = clamp(_FaceDecalMirrorMode - 1.0, 0.0, 1.0);
+        vec2 folded = float2(0.5, 0.5) - abs(uv - float2(_FaceDecalMirrorSplit, _FaceDecalMirrorSplit));
+        placedUv = lerp(float2(folded.x, uv.y), float2(uv.x, folded.y), axis);
+        placedCentre = lerp(float2(halvedCentre.x, _FaceDecalCenterY), float2(_FaceDecalCenterX, halvedCentre.y), axis);
+    }
+    float scale = 1.0 / _FaceDecalSize;
+    float angle = _FaceDecalRotation * 6.283185482025146484375;
+    float sine = sin(angle);
+    float cosine = cos(angle);
+    vec2 offset = (placedUv - placedCentre) - float2(0.5, 0.5);
+    vec2 scaled = float2(offset.x * lerp(scale, -scale, _FaceDecalInvertX), offset.y * lerp(scale, -scale, _FaceDecalInvertY));
+    vec2 rotated = float2(scaled.x * cosine + scaled.y * sine, scaled.x * (-sine) + scaled.y * cosine);
+    vec4 decal = ruriSampleSrgb(_FaceDecalMap, clamp(rotated + float2(0.5, 0.5), float2(0.0, 0.0), float2(1.0, 1.0)));
+    float weight = decal.a * step(min(min(albedo.x, albedo.y), albedo.z), _FaceDecalBrightnessMask) * _FaceDecalTintColor.a;
+    return lerp(albedo, decal.rgb * _FaceDecalTintColor.rgb, weight);
+}
+
 vec3 SampleNormalMap(vec2 uv, vec3 normalWS_raw, vec4 tangentWS, float faceSign)
 {
     if (_UseBumpMap)
@@ -1384,6 +1500,25 @@ vec3 GetObjectFlatDir(vec3 positionWS)
     float fZ = positionWS.z - UNITY_MATRIX_M[3].z;
     float fLen = rsqrt(fX * fX + HALF_MIN * HALF_MIN + fZ * fZ);
     return float3(fX * fLen, HALF_MIN * fLen, fZ * fLen);
+}
+
+// 风格化菲涅尔的遮罩与颜色(真源 characternpr / _hair / _skin 三族同一段数学,
+// 如 hair b166:508-521、characternpr b1043:496、skin b146:501)。
+// 噪声图按所选 UV 取并随时间漂移;遮罩 = 噪声明暗 × 菲涅尔项,颜色 = (噪声色)× 菲涅尔色。
+// PolarUV 要网格里额外的局部方向流,本宿主的网格没有这条流,选它时按 UV0 取。
+float StylizedFresnelMask(vec2 uv0, vec2 uv1, vec3 viewDirection, vec3 surfaceNormal, out vec3 fresnelColour)
+{
+    vec2 sourceUv = ((_StylizedUVSet < 1.5) ? lerp(uv0, uv1, _StylizedUVSet) : uv0);
+    float drift = _StylizedFresnelNoiseSpeed * _VFXParams0.w;
+    vec2 noiseUv = (sourceUv + float2(drift, drift)) * _StylizedFresnelNoiseMap_ST.xy + _StylizedFresnelNoiseMap_ST.zw;
+    vec4 noise = ruriSampleSrgb(_StylizedFresnelNoiseMap, noiseUv);
+    float noiseMask = clamp((((_StylizedFresnelNoiseUseColor ? noise.w : noise.x)) - 0.5) * _StylizedNoiseContrast + 0.5, 0.0, 1.0);
+    vec3 noiseColour = (_StylizedFresnelNoiseUseColor ? noise.rgb * noiseMask : float3(1.0, 1.0, 1.0));
+    fresnelColour = noiseColour * _StylizedFresnelColor.rgb;
+    float facing = dot(viewDirection, surfaceNormal);
+    float rim = ((_StylizedFresnelInvert ? facing : 1.0 - facing)) + _StylizedFresnelBias + noiseMask * _StylizedNoiseBiasScale;
+    float shaped = (pow(clamp(rim, 9.9999997473787516355514526367188e-05, 1.0), _StylizedFresnelPow) - _StylizedFresnelHardness) * (1.0 / max(0.001, 1.0 - _StylizedFresnelHardness));
+    return noiseMask * clamp(shaped * _StylizedFresnelAmount, 0.0, 1.0);
 }
 
 vec3 SampleShadowLut(vec3 albedo)
@@ -1617,6 +1752,8 @@ void Endfield_Face(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     {
         albedo = baseSample.rgb * _BaseColor.rgb;
     }
+    if (_AvatarCustomizeEnable)
+        albedo = ApplyFaceDecal(albedo, uv);
     // 🔴 脸部基**取自对象/骨骼矩阵**,不是两个 uniform —— 真源逐字:
     //   `_495 = float3x3(row0, row1, row2)`,行来自 `_VertexSkinMatrices`(蒙皮时取头骨那份)
     //   或 `UnityPerDraw` 的 objectToWorld;随后 `mul(向量, _495)` 即「向量 · 各列」。
@@ -1635,6 +1772,16 @@ void Endfield_Face(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     }
     vec3 N = SampleNormalMap(uv, input_.normalWS, input_.tangentWS, faceSign);
     vec3 flatDir = GetObjectFlatDir(input_.positionWS);
+    vec3 fresnelEmission = float3(0.0, 0.0, 0.0);
+    vec3 shadowAlbedo = albedo;
+    if (_EnableStylizedFresnel)
+    {
+        vec3 fresnelColour;
+        float fresnelMask = StylizedFresnelMask(uv, input_.uv1.xy, ruriData.V, (_StylizedFresnelUseNormalMap ? N : faceSign * ruriNormalize(input_.normalWS)), fresnelColour);
+        shadowAlbedo = lerp(albedo, fresnelColour, fresnelMask * _StylizedFresnelShadow);
+        albedo = lerp(albedo, fresnelColour, fresnelMask);
+        fresnelEmission = fresnelColour * (fresnelMask * _StylizedFresnelColor.a);
+    }
     vec4 sdfMask = (_UseSDFLightmap ? texture(_SDFMask, ruriUvClamp(_SDFMask, uv)) : float4(1, 1, 0, 0));
     vec3 camFwdObj = float3(dot(ruriData.camFwd, faceRight), dot(ruriData.camFwd, faceUp), dot(ruriData.camFwd, faceForward));
     camFwdObj *= rsqrt(max(dot(camFwdObj, camFwdObj), 1.175494e-38));
@@ -1652,7 +1799,7 @@ void Endfield_Face(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     float oneMinusRefl = (1.0 - _Metallic) * 0.96;
     vec3 diffColor = oneMinusRefl * rimAlbedo;
     vec3 specColor = _Metallic * (rimAlbedo - specScale * 0.04) + specScale * 0.04;
-    vec3 shadowLut = oneMinusRefl * ComputeShadowColor(albedo);
+    vec3 shadowLut = oneMinusRefl * ComputeShadowColor(shadowAlbedo);
     Light mainLight = ruriData.mainLight;
     vec2 ssShadowMask = LoadScreenSpaceShadowMask(ruriData.normalizedScreenSpaceUV, ruriData.positionWS);
     vec3 blendedLightCol;
@@ -1777,6 +1924,9 @@ void Endfield_Face(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
         cp14Term = diffColor * cp14Spec * _CharacterParams14.xyz * _CharacterParams14.w;
     }
     vec3 litColor = DesaturateAroundLuma(mainLit, mainLitLum, desatAmt) + skinTerm + subsurfSpec + cp14Term;
+    litColor += fresnelEmission;
+    if (_UseEmission)
+        litColor += ruriRead_EmissionMap(uv).rgb * _EmissionColor.rgb * _EmissionBrightness;
     litColor = Endfield_SkinPunctualLights(litColor, ruriData.positionWS, ruriData.normalizedScreenSpaceUV, sdfBlendedN, N, faceSign * ruriNormalize(input_.normalWS), flatDir, ruriData.V, ruriData.camFwd, nprDiff, diffColor, shadowLut, specColor, roughnessRaw, float(_Metallic), roughness, castShadow, sdfMask, sdfLightmapW, camGate, _UseSDFLightmap);
     if (_EnableVFXColorAdjustment > 0.5)
         litColor = VFXColorAdjust(litColor, NdotV_sat, rimModifier);
@@ -2032,7 +2182,6 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     float specScale = ruriData.specScale;
     float shadowMask = ruriData.occlusion;
     float roughness = ruriData.roughness;
-    vec3 shadowColor = ComputeShadowColor(albedo);
     vec3 nrmWS = ruriNormalize(input_.normalWS);
     vec3 tanWS = ruriNormalize(input_.tangentWS.xyz);
     vec3 bitWS = cross(nrmWS, tanWS) * input_.tangentWS.w;
@@ -2065,6 +2214,17 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
             N = faceSign * nrmWS;
             specN = N;
         }
+    vec3 fresnelEmission = float3(0.0, 0.0, 0.0);
+    vec3 shadowAlbedo = albedo;
+    if (_EnableStylizedFresnel)
+    {
+        vec3 fresnelColour;
+        float fresnelMask = StylizedFresnelMask(uv, input_.uv1.xy, ruriData.V, (_StylizedFresnelUseNormalMap ? N : faceSign * nrmWS), fresnelColour);
+        shadowAlbedo = lerp(albedo, fresnelColour, fresnelMask * _StylizedFresnelShadow);
+        albedo = lerp(albedo, fresnelColour, fresnelMask);
+        fresnelEmission = fresnelColour * (fresnelMask * _StylizedFresnelColor.a);
+    }
+    vec3 shadowColor = ComputeShadowColor(shadowAlbedo);
     vec3 flatDir = GetObjectFlatDir(input_.positionWS);
     vec3 otwCol0 = float3(UNITY_MATRIX_M[0].x, UNITY_MATRIX_M[0].y, UNITY_MATRIX_M[0].z);
     vec3 otwCol1 = float3(UNITY_MATRIX_M[1].x, UNITY_MATRIX_M[1].y, UNITY_MATRIX_M[1].z);
@@ -2194,6 +2354,7 @@ void Endfield_Hair(inout RuriData ruriData, CharaVaryings input_, inout RuriGBuf
     vec3 litColor = DesaturateAroundLuma(combined, combinedLum, desatAmt) + skinSpec + subsurfSpec;
     if (_UseEmission)
         litColor += ruriRead_EmissionMap(uv).rgb * _EmissionColor.rgb * _EmissionBrightness * alphaPremul;
+    litColor += fresnelEmission * alphaPremul;
     litColor = Endfield_HairPunctualLights(litColor, ruriData.positionWS, ruriData.normalizedScreenSpaceUV, N, faceSign * nrmWS, flatDir, ruriData.V, ruriData.camFwd, nprDiff, diffColor, shadowDiff, float3(dielSpec, dielSpec, dielSpec), shiftedT1, specScale, edgeFade, darkenedScale, alphaPremul, castShadow, screenUV, viewNDir * float2(aspect, 1.0), input_.positionNDC.w);
     if (_EnableVFXColorAdjustment > 0.5)
         litColor = VFXColorAdjust(litColor, saturate(dot(N, ruriData.V)), 1.0);
@@ -2928,8 +3089,18 @@ void Endfield_LiquidAg(inout RuriData ruriData, CharaVaryings input_, inout Ruri
 
 void Endfield_Standard(inout RuriData ruriData, CharaVaryings input_, inout RuriGBufferData outputData, float faceSign)
 {
-    vec3 shadowColor = ComputeShadowColor(ruriData.albedo);
     vec3 N = SampleNormalMap(input_.uv, input_.normalWS, input_.tangentWS, faceSign);
+    vec3 fresnelEmission = float3(0.0, 0.0, 0.0);
+    vec3 shadowAlbedo = ruriData.albedo;
+    if (_EnableStylizedFresnel)
+    {
+        vec3 fresnelColour;
+        float fresnelMask = StylizedFresnelMask(input_.uv, input_.uv1.xy, ruriData.V, (_StylizedFresnelUseNormalMap ? N : faceSign * ruriNormalize(input_.normalWS)), fresnelColour);
+        shadowAlbedo = lerp(ruriData.albedo, fresnelColour, fresnelMask * _StylizedFresnelShadow);
+        ruriData.albedo = lerp(ruriData.albedo, fresnelColour, fresnelMask);
+        fresnelEmission = fresnelColour * (fresnelMask * _StylizedFresnelColor.a);
+    }
+    vec3 shadowColor = ComputeShadowColor(shadowAlbedo);
     float ccMask = 0.0;
     vec3 ccN = N;
     float ccPercRough = 1.0;
@@ -2958,7 +3129,7 @@ void Endfield_Standard(inout RuriData ruriData, CharaVaryings input_, inout Ruri
     float parallaxSample = 0.0;
     if (_UseParallax)
     {
-        parallaxSample = POM_Tatarchuk(input_.uv, ruriData.V, input_.normalWS, input_.tangentWS.xyz, input_.tangentWS.w);
+        parallaxSample = POM_Tatarchuk(input_.uv, ruriData.V, (_ParallaxUseNormal > 0.5 ? N : input_.normalWS), input_.tangentWS.xyz, input_.tangentWS.w);
     }
     vec3 flatDir = GetObjectFlatDir(ruriData.positionWS);
     vec3 ambCol = _CharacterParams2.xyz;
@@ -3033,7 +3204,18 @@ void Endfield_Standard(inout RuriData ruriData, CharaVaryings input_, inout Ruri
     vec3 envNormal = faceSign * ruriNormalize(input_.normalWS);
     float envNdotV = saturate(dot(envNormal, ruriData.V));
     float envAlpha = roughnessF * roughnessF;
-    vec3 cubemapContrib = IBL_SpecularSplitSum_Endfield(ruriData.V, envNormal, envNdotV, envAlpha, roughnessF, specRampEnv, cubeAmbInt, ambCol);
+    vec3 cubemapContrib;
+    if (_UseMatcap)
+    {
+        // 真源 characternpr b1126:995 —— Matcap 变体把环境立方体的取样换成「视图空间法线 xy 取 Matcap 图」,其余系数链不变。
+        vec2 matcapUv = ruriNormalize(mul(mat3(UNITY_MATRIX_V), N)).xy * 0.5 + float2(0.5, 0.5);
+        vec3 matcapSample = ruriSampleSrgb(_MatcapTex, ruriUvClamp(_MatcapTex, matcapUv)).rgb * _MatcapColor.rgb;
+        cubemapContrib = IBL_SplitSumCombine(matcapSample, envNdotV, envAlpha, specRampEnv, cubeAmbInt, ambCol);
+    }
+    else
+    {
+        cubemapContrib = IBL_SpecularSplitSum_Endfield(ruriData.V, envNormal, envNdotV, envAlpha, roughnessF, specRampEnv, cubeAmbInt, ambCol);
+    }
     if (_ClearCoat)
     {
         if (ccActive)
@@ -3046,6 +3228,7 @@ void Endfield_Standard(inout RuriData ruriData, CharaVaryings input_, inout Ruri
         emissionContrib = emissionTex * _EmissionColor.rgb * _EmissionBrightness * alphaPremul;
     if (_UseParallax)
         emissionContrib += ruriData.baseAlpha * parallaxSample * _ParallaxColor.rgb * alphaPremul;
+    emissionContrib += fresnelEmission * alphaPremul;
     float desatAmt = clamp(mainLitLum - 0.5, 0.0, 0.5);
     vec3 desatMainLit = DesaturateAroundLuma(mainLit, mainLitLum, desatAmt);
     vec3 litColor = desatMainLit + skinSpec + subsurfSpec + emissionContrib + cubemapContrib;
@@ -3075,6 +3258,8 @@ void Fragment_Endfield(inout RuriData ruriData, CharaVaryings input_, inout Ruri
     Endfield_Setup(ruriData, input_);
     if (_RuriOutlineShellGate)
         ApplyEndfieldOutlineAlbedo(ruriData.albedo);
+    else
+        ApplyAvatarCustomize(ruriData);
     if (_CharaPartID == 1)
         Endfield_Face(ruriData, input_, outputData, faceSign);
     else

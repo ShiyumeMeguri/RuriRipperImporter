@@ -2,7 +2,7 @@
   "host": "Substance",
   "family": "Endfield",
   "stack": "ruri_character_uber_endfield",
-  "identity": "d40e1d66c34c4c54",
+  "identity": "08cc9581c4c53089",
   "shader": "Ruri_Endfield_Uber.glsl",
   "generated": "Ruri.RenderPipelines.Generator — 勿手改;改真源后重跑 codegen",
   "operations": [
@@ -389,6 +389,24 @@
         "srgb": false
       },
       {
+        "name": "_CustomizeAddTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_CustomizeBaseColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_CustomizeBaseTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
         "name": "_DirectionalShadowParams",
         "type": "vec4",
         "widget": "Vector",
@@ -479,6 +497,12 @@
         "srgb": false
       },
       {
+        "name": "_EnableStylizedFresnel",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
         "name": "_EnableVFXColorAdjustment",
         "type": "float",
         "widget": "ToggleUI",
@@ -525,6 +549,66 @@
         "type": "float",
         "widget": "Toggle",
         "srgb": false
+      },
+      {
+        "name": "_FaceDecalBrightnessMask",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalCenterX",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalCenterY",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalInvertX",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalInvertY",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalMirrorMode",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalMirrorSplit",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalRotation",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalSize",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_FaceDecalTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
       },
       {
         "name": "_FaceHighlightMap",
@@ -657,6 +741,18 @@
         "type": "float",
         "widget": "Range",
         "srgb": false
+      },
+      {
+        "name": "_HairAddTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_HairBaseTintColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
       },
       {
         "name": "_HighlightMapVector",
@@ -905,6 +1001,12 @@
         "srgb": false
       },
       {
+        "name": "_ParallaxUseNormal",
+        "type": "float",
+        "widget": "ToggleUI",
+        "srgb": false
+      },
+      {
         "name": "_RoughnessIntensity",
         "type": "float",
         "widget": "Float",
@@ -1086,6 +1188,90 @@
       },
       {
         "name": "_StrokeScale",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelAmount",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelBias",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelColor",
+        "type": "vec4",
+        "widget": "Color",
+        "srgb": true
+      },
+      {
+        "name": "_StylizedFresnelHardness",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelInvert",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelNoiseMap_ST",
+        "type": "vec4",
+        "widget": "Vector",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelNoiseSpeed",
+        "type": "float",
+        "widget": "Float",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelNoiseUseColor",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelPow",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelShadow",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedFresnelUseNormalMap",
+        "type": "bool",
+        "widget": "Toggle",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedNoiseBiasScale",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedNoiseContrast",
+        "type": "float",
+        "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_StylizedUVSet",
         "type": "float",
         "widget": "Float",
         "srgb": false
@@ -1304,6 +1490,12 @@
         "name": "_VFXFresnelPower",
         "type": "float",
         "widget": "Range",
+        "srgb": false
+      },
+      {
+        "name": "_VFXParams0",
+        "type": "vec4",
+        "widget": "Vector",
         "srgb": false
       },
       {
@@ -1557,6 +1749,31 @@
       "Sources": [
         {
           "Source": "_EmotionMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
+      "Id": "_FaceDecalMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "Label": "Face Decal Map",
+      "Declaration": "",
+      "Getter": "",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_FaceDecalMap",
           "Channels": "rgba",
           "Operation": ""
         }
@@ -2144,6 +2361,31 @@
     },
     {
       "Kind": "RawTexture",
+      "Id": "_StylizedFresnelNoiseMap",
+      "Semantic": "",
+      "Components": 4,
+      "Encoding": "",
+      "Format": "",
+      "Absent": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "Label": "Noise Tex",
+      "Declaration": "",
+      "Getter": "",
+      "MeshMap": "",
+      "Sources": [
+        {
+          "Source": "_StylizedFresnelNoiseMap",
+          "Channels": "rgba",
+          "Operation": ""
+        }
+      ]
+    },
+    {
+      "Kind": "RawTexture",
       "Id": "_VFXSpecialBlendTex",
       "Semantic": "",
       "Components": 4,
@@ -2529,6 +2771,40 @@
         },
         {
           "Input": "_EmotionMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0
+        }
+      ],
+      "Reshaped": false
+    },
+    {
+      "Source": "_FaceDecalMap",
+      "Lanes": [
+        {
+          "Input": "_FaceDecalMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0
+        },
+        {
+          "Input": "_FaceDecalMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0
+        },
+        {
+          "Input": "_FaceDecalMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 0
+        },
+        {
+          "Input": "_FaceDecalMap",
           "Component": 3,
           "Operation": "",
           "Constant": 0,
@@ -3184,6 +3460,40 @@
       "Reshaped": false
     },
     {
+      "Source": "_StylizedFresnelNoiseMap",
+      "Lanes": [
+        {
+          "Input": "_StylizedFresnelNoiseMap",
+          "Component": 0,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 1
+        },
+        {
+          "Input": "_StylizedFresnelNoiseMap",
+          "Component": 1,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 1
+        },
+        {
+          "Input": "_StylizedFresnelNoiseMap",
+          "Component": 2,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 1
+        },
+        {
+          "Input": "_StylizedFresnelNoiseMap",
+          "Component": 3,
+          "Operation": "",
+          "Constant": 0,
+          "Absent": 1
+        }
+      ],
+      "Reshaped": false
+    },
+    {
       "Source": "_VFXSpecialBlendTex",
       "Lanes": [
         {
@@ -3286,7 +3596,9 @@
     "uniform _ParallaxTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform _RuriOutlineShellGate:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform _StrokeMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _StylizedFresnelNoiseMap_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform _TaaFrameInfo:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
+    "uniform _VFXParams0:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform _VFXSpecialBlendTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform _VFXSpecialMainTex_ST:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)",
     "uniform unity_SpecCube0_HDR:无标签但有初始化器缺省 → 注解参数(组 R 引擎态,缺省同 Blender 腿)"

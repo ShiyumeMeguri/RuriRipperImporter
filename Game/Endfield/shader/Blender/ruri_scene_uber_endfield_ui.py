@@ -229,6 +229,7 @@ NAMES = (
     '_ExposureWithMiscParams',
     '_IgnorePostExposure',
     '_VFXParams1',
+    '_ShadowAlphaClipThreshold',
     '_SubsurfaceColor',
     '_ThinFilmWeight',
     '_ThinFilmThickness',
@@ -623,6 +624,7 @@ def annotations(kit, stack):
     a['p_ExposureWithMiscParams'] = bpy.props.FloatVectorProperty(name='ExposureWithMiscParams (.y=后曝光)', description='引擎全局曝光参数,由场景自动写入,一般不用手调。\nX: 没有用到。\nY: 后曝光倍率:「不受自动曝光影响」的发光会乘它。\nZ: 没有用到。\nW: 没有用到。\n_ExposureWithMiscParams', size=4, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_ExposureWithMiscParams'))
     a['p_IgnorePostExposure'] = bpy.props.BoolProperty(name='不受自动曝光影响', description='自发光不受自动曝光影响:打开后发光亮度不随画面曝光变化(发光看起来永远一样亮)。\n_IgnorePostExposure', default=True, update=kit.writer(stack, '_IgnorePostExposure'))
     a['p_VFXParams1'] = bpy.props.FloatVectorProperty(name='VFX Grade (rgb = tint, w = saturation)', description='引擎全局的最终调色参数,由场景自动写入,一般不用手调。\nX: 整体染色的红分量(1 = 不变)。\nY: 整体染色的绿分量(1 = 不变)。\nZ: 整体染色的蓝分量(1 = 不变)。\nW: 整体饱和度:1 = 不变,0 = 灰度。\n_VFXParams1', size=4, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_VFXParams1'))
+    a['p_ShadowAlphaClipThreshold'] = bpy.props.FloatProperty(name='Shadow Clip', description='树叶投影的镂空阈值:只管往阴影图里画的那一趟,低于它的像素不投影。通常比显示用的阈值小,树影因此比叶子看上去更密。\n_ShadowAlphaClipThreshold', default=0.2, min=0.0, max=1.001, update=kit.writer(stack, '_ShadowAlphaClipThreshold'))
     a['p_SubsurfaceColor'] = bpy.props.FloatVectorProperty(name='Subsurface Color', description='次表面的颜色:透出来的光是什么颜色(蜡烛偏黄、肉偏红);再按「SSS Mode」决定是否乘上固有色。\n_SubsurfaceColor', size=4, subtype='COLOR_GAMMA', min=0.0, max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_SubsurfaceColor'))
     a['p_ThinFilmWeight'] = bpy.props.FloatProperty(name='Thin Film Weight', description='薄膜干涉的权重(0 – 1):0 = 没有彩虹光泽,1 = 完全使用薄膜算出的反射色。\n_ThinFilmWeight', default=0.0, min=0.0, max=1.0, update=kit.writer(stack, '_ThinFilmWeight'))
     a['p_ThinFilmThickness'] = bpy.props.FloatProperty(name='Thin Film Thickness (um)', description='薄膜的厚度(微米):厚度不同干涉出的颜色不同,在 0 – 2 之间慢慢拖,颜色会循环变化。\n_ThinFilmThickness', default=0.5, min=0.0, max=2.0, update=kit.writer(stack, '_ThinFilmThickness'))
@@ -1007,6 +1009,7 @@ def draw_Leaf(kit, layout, material, p):
         kit.prop(g0, p, 'p_ExposureWithMiscParams', 'ExposureWithMiscParams (.y=后曝光)')
         kit.prop(g0, p, 'p_IgnorePostExposure', '不受自动曝光影响')
         kit.prop(g0, p, 'p_VFXParams1', 'VFX Grade (rgb = tint, w = saturation)')
+        kit.prop(g0, p, 'p_ShadowAlphaClipThreshold', 'Shadow Clip')
         kit.prop(g0, p, 'p_SubsurfaceColor', 'Subsurface Color')
         kit.prop(g0, p, 'p_ThinFilmWeight', 'Thin Film Weight')
         kit.prop(g0, p, 'p_ThinFilmThickness', 'Thin Film Thickness (um)')

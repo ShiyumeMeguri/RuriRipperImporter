@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(bd6e2d2e9f4bfdf4):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(543ecb58cfb232dc):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1278,6 +1278,12 @@ def _cap_screen_space_occlusion(g, query, ctx):
     return {'': answer}
 
 
+def _cap_shadow_caster_pass(g, query, ctx):
+    """这一片元是不是在往阴影图里画:EEVEE 的阴影趟跑的就是这张材质图,Light Path 的 Is Shadow Ray 在那一趟答 1。"""
+    _ = (query, ctx)
+    return {'': g._nd('ShaderNodeLightPath').outputs['Is Shadow Ray']}
+
+
 def _cap_additional_light_count(g, query, ctx):
     """附加光盏数:恒 1。宿主的光循环已经在逐灯转圈,内核的附加光循环因此只需要
     在**每一圈**里跑一次体 —— 那一圈的灯就是这一盏。盏数不接灯节点,循环结构才与灯无关。"""
@@ -1496,6 +1502,7 @@ CAP_BUILDERS = {
     'SpecularRadiance': _cap_specular_radiance,
     'MainLight': _cap_main_light,
     'ShadowAttenuation': _cap_shadow_attenuation,
+    'ShadowCasterPass': _cap_shadow_caster_pass,
     'AdditionalLightCount': _cap_additional_light_count,
     'AdditionalLight': _cap_additional_light,
     'PunctualLight': _cap_punctual_light,
@@ -2271,6 +2278,7 @@ class Stack:
     ANCHOR_SLOTS = ('_BaseMap', '_BaseColorMap', '_MainTex')
 
     CULL_LABEL = 'RuriCull'
+    SHADOW_CULL_LABEL = 'RuriShadowCull'
 
     def _cull_transparency(self, g, cull, outline_fac):
         """剔除面的透明度(1 = 这一面整个不画)。它直接乘进 alpha,不再另起一级 MixShader:
@@ -2282,26 +2290,43 @@ class Stack:
 
         剔除哪一面(Unity CullMode:0 不剔、1 剔正面、2 剔背面)是逐材质的渲染状态,住在一枚 RuriCull 值节点上、
         实例化时照材质写:模板不按它分叉 —— 同一 part 的正反剔除共用一份模板,开文件少建一半模板图。三种各算一支,
-        按值取一支;因子恒为 0 或 1、三支都有限,插值逐位等于被取的那一支。"""
+        按值取一支;因子恒为 0 或 1、三支都有限,插值逐位等于被取的那一支。
+
+        阴影图拿这张图再跑一遍的家族:真源的 ShadowCaster 趟有自己的 Cull 词,阴影趟取 RuriShadowCull 那一份;渲染器声明
+        两面都投影(物体属性 SHADOW_TWO_SIDED_PROPERTY)时不剔除。Backfacing 在宿主的阴影趟按灯的视角答。"""
         cgeo = g._nd('ShaderNodeNewGeometry')
         bf = cgeo.outputs['Backfacing']
         mode = g._nd('ShaderNodeValue')
         mode.label = self.CULL_LABEL
         mode.outputs[0].default_value = float(cull)
+        culled = mode.outputs[0]
+        if self.HOST_SHADOW_CASTERS:
+            shadow_mode = g._nd('ShaderNodeValue')
+            shadow_mode.label = self.SHADOW_CULL_LABEL
+            shadow_mode.outputs[0].default_value = float(cull)
+            two_sided = g._nd('ShaderNodeAttribute')
+            two_sided.attribute_type = 'OBJECT'
+            two_sided.attribute_name = _host().SHADOW_TWO_SIDED_PROPERTY
+            casting = g.math('MULTIPLY', shadow_mode.outputs[0], g.math('SUBTRACT', 1.0, two_sided.outputs['Fac']))
+            culled = g.mixf(g._nd('ShaderNodeLightPath').outputs['Is Shadow Ray'], culled, casting)
         front = g.math('SUBTRACT', 1.0, bf)
         back = g.math('ABSOLUTE', g.math('SUBTRACT', bf, outline_fac))
         neither = g.math('MULTIPLY', outline_fac, front)
-        culls_front = g.math('COMPARE', mode.outputs[0], 1.0, 0.25)
-        culls_back = g.math('COMPARE', mode.outputs[0], 2.0, 0.25)
+        culls_front = g.math('COMPARE', culled, 1.0, 0.25)
+        culls_back = g.math('COMPARE', culled, 2.0, 0.25)
         return g.mixf(culls_front, g.mixf(culls_back, neither, back), front)
 
-    def _set_cull(self, mat, cull):
-        """实例照自己的剔除写那枚 RuriCull(见 _cull_transparency);与模板里那份相同就不写。"""
-        node = next((one for one in mat.node_tree.nodes if one.label == self.CULL_LABEL), None)
-        if node is None:
-            raise RuntimeError('[ruri-uber] 材质 {0} 的图里没有剔除值节点 {1}'.format(mat.name, self.CULL_LABEL))
-        if node.outputs[0].default_value != float(cull):
-            node.outputs[0].default_value = float(cull)
+    def _set_cull(self, mat, cull, shadow_cull):
+        """实例照自己的剔除写那几枚值节点(见 _cull_transparency);与模板里那份相同就不写。"""
+        wanted = {self.CULL_LABEL: cull}
+        if self.HOST_SHADOW_CASTERS:
+            wanted[self.SHADOW_CULL_LABEL] = shadow_cull
+        for label, value in wanted.items():
+            node = next((one for one in mat.node_tree.nodes if one.label == label), None)
+            if node is None:
+                raise RuntimeError('[ruri-uber] 材质 {0} 的图里没有剔除值节点 {1}'.format(mat.name, label))
+            if node.outputs[0].default_value != float(value):
+                node.outputs[0].default_value = float(value)
 
     def build_material(self, mat, part=None, opaque=True, blend=None, cull=2.0, images=None):
         part = part or self.DEFAULT_PART
@@ -2913,14 +2938,14 @@ class Stack:
             return 'DITHERED'
         return 'DITHERED' if (opaque and (blend is None or blend in OVER_BLENDS)) else 'BLENDED'
 
-    def instantiate(self, name, part, images=None, opaque=True, blend=None, cull=2.0):
+    def instantiate(self, name, part, images=None, opaque=True, blend=None, cull=2.0, shadow_cull=2.0):
         """一张材质 = 模板拷贝 + 贴图指针 + 剔除值;参数由调用方写完记录后经 apply_params 写成常量。零建图。
         灯上的那一格(主光身份、朝向)不在这里烙:新材质进场是派生态调度器的一件事实,那一批落地时刷一次。"""
         tpl = self._template(part, opaque, blend)
         # 模板是临时数据,拷出来的实例是文件里的材质:记录与编出来的树一并随文件存盘。
         mat = _host().content(tpl.copy())
         mat.name = name
-        self._set_cull(mat, cull)
+        self._set_cull(mat, cull, shadow_cull)
         for key in (self.TEMPLATE_KEY, self.STAMP_KEY):
             if key in mat:
                 del mat[key]
@@ -2997,6 +3022,13 @@ class Stack:
                 material, self.CULL_PROPERTY), flush=True)
             return 0.0
         return float(value)
+
+    def _record_shadow_cull(self, meta, floats, material):
+        """真源 ShadowCaster 趟的剔除;part 没照抄那一趟的 Cull 行 = 与上屏的趟同一份。"""
+        declared = meta.get('shadow_cull')
+        if declared:
+            return float(self._pass_word(declared, floats, 'ShadowCull', material))
+        return self._record_cull(meta, floats, material)
 
     @staticmethod
     def _shader_name(builder, props):
@@ -3145,7 +3177,8 @@ class Stack:
         else:
             opaque = blend == (BLEND_ONE, BLEND_ZERO)
         mat, swapped = self.instantiate(name, part, images=images, opaque=opaque, blend=blend,
-                                        cull=self._record_cull(meta, floats, name))
+                                        cull=self._record_cull(meta, floats, name),
+                                        shadow_cull=self._record_shadow_cull(meta, floats, name))
         bst = record['ruri_uber_st'].get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
         for node in mat.node_tree.nodes:
             if node.label == self.ST_NODE:
@@ -4078,8 +4111,9 @@ class Stack:
                     if tuple(node.inputs['Location'].default_value) != location:
                         node.inputs['Location'].default_value = location
             if names & self._cull_names(part):
-                self._set_cull(mat, self._record_cull(self.PART_META[part], dict(mat.get('ruri_uber_floats') or {}),
-                                                      mat.name))
+                floats = dict(mat.get('ruri_uber_floats') or {})
+                self._set_cull(mat, self._record_cull(self.PART_META[part], floats, mat.name),
+                               self._record_shadow_cull(self.PART_META[part], floats, mat.name))
             tree.update_tag()
             mat.update_tag()
         self._vtx_panel_write(mat, self._vertex_values(mat, names))
@@ -4111,9 +4145,10 @@ class Stack:
     def _cull_names(self, part):
         """剔除值节点读的记录键(图的词汇):part 照抄的真源 Cull 状态词里的属性、家族的双面开关、家族的剔除属性。"""
         stated = set()
-        declared = self.PART_META.get(part, {}).get('cull')
-        if declared and declared[0] != 'fixed':
-            stated.add(declared[1])
+        for word in ('cull', 'shadow_cull'):
+            declared = self.PART_META.get(part, {}).get(word)
+            if declared and declared[0] != 'fixed':
+                stated.add(declared[1])
         if self.CULL_TWO_SIDED:
             stated.add(self.CULL_TWO_SIDED['property'])
         if self.CULL_PROPERTY:
@@ -5439,10 +5474,16 @@ class Stack:
             source.image = self._level_image(slot)
             tree.links.new(source.outputs['Image'], socket)
 
+    WATER_REFLECT_HISTORY = 0.7
+    WATER_REFLECT_CYCLE = 8
+
     def _water_lighting(self, tree, scene, render, chain, width, height, beneath):
         """水面(HG 的水面屏幕空间反射与 WaterLighting 读屏幕的后半段):没有水面物体时这条链不建,返回 None。场景层的
         深度与颜色是不含水的那份;水面层按同一台相机再画一遍,读它的深度、各通道与覆盖询问。两份深度各转设备深度,
-        场景那份降成半分辨率低深度,反射在半分辨率上追踪,合成在出图分辨率上,返回合成后的场景色。"""
+        场景那份降成半分辨率低深度,反射在半分辨率上追踪,合成在出图分辨率上,返回合成后的场景色。
+
+        反射的时间性:真源本帧 = lerp(追踪, 上一帧, 0.7),抖动八帧一周期,可信度只取本帧。一张静帧没有上一帧,就直接求
+        它的不动点:第 j 帧之前的那次追踪权重 0.3·0.7^j / (1 − 0.7^8);可信度在真源的画面上由 TAA 按周期摊平,取八次的均值。"""
         objects = self._water_objects(scene, chain)
         if not objects:
             return None
@@ -5477,7 +5518,7 @@ class Stack:
         def extent(size):
             return (float(size[0]), float(size[1]), 1.0 / size[0], 1.0 / size[1])
 
-        def run(role, coordinate, images, values=None):
+        def run(role, coordinate, images, values=None, frames_back=0):
             entry = roles[role]
             node = tree.nodes.new('CompositorNodeGroup')
             node.node_tree = self.group(entry['group'])
@@ -5497,7 +5538,7 @@ class Stack:
                 self._link_answer(tree, node, name, answer)
             if 'ssrFrameIndex' in entry['sizes'] and node.inputs.get('ssrFrameIndex') is not None:
                 curve = node.inputs['ssrFrameIndex'].driver_add('default_value')
-                curve.driver.expression = 'frame'
+                curve.driver.expression = 'frame + {0}'.format(self.WATER_REFLECT_CYCLE - frames_back)
             self._wire_level_inputs(tree, scene, node, label)
             return node
 
@@ -5508,11 +5549,32 @@ class Stack:
         water_depth = only(run('device_depth', full_field, {'sceneDepth': water.outputs['Depth']}), 'device_depth')
         low = only(run('low_depth', half_field, {'sceneDeviceDepth': scene_depth},
                        {'previousSize': extent((width, height))}), 'low_depth')
-        reflect = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': beneath},
-                      {'levelSize': extent(half)})
+
+        def computed(kind, operation, first, second):
+            node = tree.nodes.new(kind)
+            node[self.POST_CHAIN_KEY] = label
+            node.operation = operation
+            tree.links.new(first, node.inputs[0])
+            if isinstance(second, float):
+                node.inputs['Scale' if operation == 'SCALE' else 1].default_value = second
+            else:
+                tree.links.new(second, node.inputs[1])
+            return node.outputs[0]
+
+        history, cycle = self.WATER_REFLECT_HISTORY, self.WATER_REFLECT_CYCLE
+        reflect_lighting = reflect_fade = None
+        for frames_back in range(cycle):
+            traced = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': beneath},
+                         {'levelSize': extent(half)}, frames_back)
+            lighting = computed('ShaderNodeVectorMath', 'SCALE', traced.outputs['ret_lighting'],
+                                (1.0 - history) * history ** frames_back / (1.0 - history ** cycle))
+            fade = computed('ShaderNodeMath', 'MULTIPLY', traced.outputs['ret_fade'], 1.0 / cycle)
+            reflect_lighting = lighting if reflect_lighting is None else computed(
+                'ShaderNodeVectorMath', 'ADD', reflect_lighting, lighting)
+            reflect_fade = fade if reflect_fade is None else computed('ShaderNodeMath', 'ADD', reflect_fade, fade)
         composite = run('composite', full_field, {
             'sceneColor': beneath, 'sceneDeviceDepth': scene_depth, 'waterDeviceDepth': water_depth,
-            'reflectLighting': reflect.outputs['ret_lighting'], 'reflectFade': reflect.outputs['ret_fade']})
+            'reflectLighting': reflect_lighting, 'reflectFade': reflect_fade})
         return only(composite, 'composite')
 
     @staticmethod
@@ -5818,14 +5880,23 @@ class Stack:
 
     @staticmethod
     @bpy.app.handlers.persistent
+    def refresh_chains_for_render(scene, *_arguments):
+        """后台会话没有计时器:脚本改了出图尺寸,图链的各级尺寸就还是旧的,渲出来静默地错。开渲这一刻宿主还没读合成树,
+        重判一次(签名没变就是一次比较)。"""
+        for stack in STACKS:
+            if stack.post is not None:
+                stack.refresh_chains(scene)
+
+    @staticmethod
+    @bpy.app.handlers.persistent
     def sync_post_chains(scene, depsgraph):
         """场景合成树被改过 → 把面板上拧过的旋钮记回场景(合成树是临时数据、存盘不带,旋钮只有记在场景上才随文件走),
         旋钮变了就让图链各趟上的同名口跟上主入口(_derive_passes),各后处理级的图链重判排到下一拍。面板拧的是主入口
         上的口,Blender 不给回调,只能依赖图落定后看这一拍更新的数据块里有没有这棵树;没被改就一行都不多付。
 
         图链不在这里重建:重建会删掉级域图,而同一轮依赖图更新里排在后面的处理器还在逐条读这一轮的更新,读到的
-        是已释放的原件(实测开文件后第一拍当场崩)。交给计时器,落在依赖图更新之外;后台没有事件循环,改图链的
-        脚本走 set_extra / set_viewport_preview / refresh_chains,它们自己重判。"""
+        是已释放的原件(实测开文件后第一拍当场崩)。交给计时器,落在依赖图更新之外;后台没有事件循环,由
+        refresh_chains_for_render 在开渲时重判。"""
         tree = scene.compositing_node_group
         if tree is None or not any(isinstance(update.id, bpy.types.CompositorNodeTree) and update.id.original == tree
                                    for update in depsgraph.updates):
@@ -5987,6 +6058,8 @@ class Stack:
                 getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
             if self.sync_post_chains not in bpy.app.handlers.depsgraph_update_post:
                 bpy.app.handlers.depsgraph_update_post.append(self.sync_post_chains)
+            if bpy.app.background and self.refresh_chains_for_render not in bpy.app.handlers.render_init:
+                bpy.app.handlers.render_init.append(self.refresh_chains_for_render)
             return
         getattr(host, self.host['register_fn'])(self.provider)
         host.register_material_compile(self.compile_all)
@@ -6024,6 +6097,8 @@ class Stack:
         if self.post is not None:
             if self.sync_post_chains in bpy.app.handlers.depsgraph_update_post:
                 bpy.app.handlers.depsgraph_update_post.remove(self.sync_post_chains)
+            if self.refresh_chains_for_render in bpy.app.handlers.render_init:
+                bpy.app.handlers.render_init.remove(self.refresh_chains_for_render)
             fn = self.host.get('unregister_post_stage_fn')
             if fn:
                 getattr(host, fn)(self)
