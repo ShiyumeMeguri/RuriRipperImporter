@@ -23,8 +23,6 @@ invented here:
 
 from __future__ import annotations
 
-import math
-
 import bpy
 import numpy
 from mathutils import Vector
@@ -39,7 +37,6 @@ MAIN_CAMERA_TAG = "MainCamera"
 #: the game's answer and never reaches here.
 LIGHT_DIRECTION = staging.LIGHT_DIRECTION
 LIGHT_ENERGY = staging.LIGHT_ENERGY
-LIGHT_ANGLE = staging.LIGHT_ANGLE
 LIGHT_COLOR = staging.LIGHT_COLOR
 LIGHT_SHADOWS = staging.LIGHT_SHADOWS
 LIGHT_VOLUME = staging.LIGHT_VOLUME
@@ -71,11 +68,14 @@ def apply_environment(context, pairs, name="Endfield Sun", exposure_ev=0.0):
 
 
 def _sun(context, name):
-    """The stage's directional light, built once and reused."""
+    """The stage's directional light, built once and reused. A point source: the game's shadow is a filter of
+    one fixed radius over its shadow map, and an angular size here would widen it with every metre to the
+    occluder, a canopy's shadow gone to noise where the game's stays a leaf."""
     data = bpy.data.lights.get(name)
     if data is None or data.type != "SUN":
         data = bpy.data.lights.new(name, type="SUN")
         data.name = name
+    data.angle = 0.0
     obj = bpy.data.objects.get(name)
     if obj is None or obj.data is not data:
         obj = bpy.data.objects.new(name, data)
@@ -116,8 +116,6 @@ def _write_light(obj, target, value, scale):
             obj.rotation_quaternion = direction.to_track_quat("-Z", "Y")
     elif target == LIGHT_ENERGY:
         data.energy = value * scale
-    elif target == LIGHT_ANGLE:
-        data.angle = math.radians(2.0 * value)
     elif target == LIGHT_COLOR:
         data.color = value
     elif target == LIGHT_SHADOWS:

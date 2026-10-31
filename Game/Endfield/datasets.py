@@ -318,7 +318,6 @@ def scene_environment(map_name, anchor, states):
             (staging.LIGHT_DIRECTION, (number("lightX"), number("lightY"), number("lightZ"))),
             (staging.LIGHT_COLOR, (number("lightR"), number("lightG"), number("lightB"))),
             (staging.LIGHT_ENERGY, number("lightIntensity")),
-            (staging.LIGHT_ANGLE, number("lightRadius")),
             (staging.LIGHT_SHADOWS, number("lightShadows")),
             (staging.LIGHT_VOLUME, number("lightVolume")),
         ],

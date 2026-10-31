@@ -36,7 +36,6 @@ from __future__ import annotations
 #: The direction the light TRAVELS, as the game resolved it from its own pitch/yaw.
 LIGHT_DIRECTION = "light.direction"
 LIGHT_ENERGY = "light.energy"
-LIGHT_ANGLE = "light.angle"
 #: The colour the light emits per unit of its energy, linear -- any colour
 #: temperature already folded in by the game's own rule.
 LIGHT_COLOR = "light.color"
