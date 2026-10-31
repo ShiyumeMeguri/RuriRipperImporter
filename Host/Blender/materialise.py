@@ -24,7 +24,7 @@ import bpy
 from mathutils import Matrix, Quaternion, Vector
 
 from ...Kernel import statement as kernel_statement
-from . import derived_state, light_parameters, material_builder, rig_identity, shadow_casting
+from . import derived_state, light_parameters, material_builder, renderer, rig_identity, shadow_casting
 
 #: The custom property a placed object carries its stated tag under, so a camera
 #: the game tagged is found again by what the game called it.
@@ -182,19 +182,9 @@ class _Materialisation:
             light_parameters.stamp_frame(obj, world)
 
     def _fit_shadow_pool(self):
-        """EEVEE's virtual shadow maps draw their pages from one pool shared by every light,
-        512 MB (2048 pages) by default. A level states dozens of shadow-casting lights and asks
-        for more pages than that (2419 at 960x540 on the first one measured); EEVEE then drops
-        shadows and says so only in the viewport. How many pages a frame needs follows the
-        render size and the view, which this host cannot know here, so a statement that brings
-        shadow-casting lights gets the largest pool the engine offers."""
-        if not any(obj.type == "LIGHT" and obj.data.use_shadow for obj in self.objects):
-            return
-        eevee = self.context.scene.eevee
-        sizes = [item.identifier for item in eevee.bl_rna.properties["shadow_pool_size"].enum_items]
-        largest = max(sizes, key=int)
-        if eevee.shadow_pool_size != largest:
-            eevee.shadow_pool_size = largest
+        """A statement that brings shadow-casting lights fits the pool they draw from."""
+        if any(obj.type == "LIGHT" and obj.data.use_shadow for obj in self.objects):
+            renderer.fit_shadow_pool(self.context.scene)
 
     def _skeleton_keys(self):
         """The skeletons something SKINNED actually draws with.
@@ -396,6 +386,8 @@ class _Materialisation:
             shadow_casting.shadow_only(made)
         if node.shadows > kernel_statement.SHADOWS_OFF and not node.main_light_shadows:
             shadow_casting.exclude_from_main_light(made)
+        if node.two_sided_shadows:
+            made[material_builder.SHADOW_TWO_SIDED_PROPERTY] = 1.0
 
     def _collection_of(self, node):
         """Where a node's object goes: the collection the import runs in, or the child of it the

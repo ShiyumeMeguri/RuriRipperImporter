@@ -145,6 +145,8 @@ LIGHT_PARAMETERS = extensions.point(
 #: reads zeros, no fade. Declared on this registry module because every stack reaches the
 #: host through it.
 LIGHT_FADE_PROPERTY = "ruri_light_fade"
+#: On an object whose renderer casts with both faces whatever its material's shadow culling says; the stacks' cull read it.
+SHADOW_TWO_SIDED_PROPERTY = "ruri_shadow_two_sided"
 
 #: The LIGHT attribute every stack's light template reads a light's world orientation
 #: through -- the one thing about a light the host's light loop does not hand over: the

@@ -30,6 +30,19 @@ def apply(scene):
     scene.render.compositor_device = COMPOSITOR_DEVICE
 
 
+def fit_shadow_pool(scene):
+    """EEVEE's virtual shadow maps draw their pages from one pool shared by every light, 512 MB (2048 pages) by
+    default. A level asks for more pages than that (2419 at 960x540 on the first one measured, 3490 at 1280x720 under a
+    single sun in a courtyard); EEVEE then drops shadows and says so only in its log. How many pages a frame needs follows
+    the render size and the view, which this host cannot know here, so whatever brings shadow-casting lights gets the
+    largest pool the engine offers."""
+    eevee = scene.eevee
+    sizes = [item.identifier for item in eevee.bl_rna.properties["shadow_pool_size"].enum_items]
+    largest = max(sizes, key=int)
+    if eevee.shadow_pool_size != largest:
+        eevee.shadow_pool_size = largest
+
+
 def _to_defaults(struct):
     """Every writable setting of ``struct`` and of the settings structs it holds, at its RNA default."""
     for prop in struct.bl_rna.properties:

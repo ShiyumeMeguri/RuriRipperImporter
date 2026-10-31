@@ -59,6 +59,12 @@ BOUND = app_view.Bound(TAB_KEY)
 _machine_memory_gb = []
 
 
+#: What an import of a level answers for itself. The trees of a level throw no shadow of their own: their visible
+#: renderers cast nothing and the shadow is a separate renderer that draws only into the shadow map (HGRenderFlags
+#: ShadowOnly), the level's light blockers the same. A level without them stands in full sun under its own canopy.
+LEVEL_ANSWERS = {"import_shadow_proxies": True}
+
+
 def state_of(context):
     return host_port.current().panel_state(context, STATE)
 
@@ -333,7 +339,7 @@ def _import(context, arguments):
     selection has moved on since."""
     state = state_of(context)
     browser = app_browser.state_of(context)
-    options = app_browser.as_options(browser)
+    options = dict(app_browser.as_options(browser), **LEVEL_ANSWERS)
     rect, map_name = _rect(state), _map_name(state)
     if rect is None or not map_name:
         state.status = "Nothing selected."
@@ -600,8 +606,8 @@ def _draw_actions(layout, context, state, enabled):
     options = layout.column(align=True)
     options.enabled = enabled
     options.prop(state, "scene_state_id")
-    # 与浏览器同一份导入选项 —— 场景导入读的也是它。
-    app_browser.draw_import_options(options, context)
+    # 与浏览器同一份导入选项 —— 场景导入读的也是它,除了关卡自己答了的那几条。
+    app_browser.draw_import_options(options, context, answered=LEVEL_ANSWERS)
     options.operator(DISCOVER.id, icon="VIEWZOOM")
     _draw_estimate(layout, state)
     tail = layout.column(align=True)

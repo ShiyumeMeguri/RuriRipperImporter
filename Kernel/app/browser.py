@@ -2241,9 +2241,9 @@ _OPTION_ASKS_GAME = {"retarget_face": lambda name: Game.face_retarget_of(name),
                      "import_shadow_proxies": lambda name: Game.shadow_proxies_of(name)}
 
 
-def draw_import_options(layout, context, state=None):
+def draw_import_options(layout, context, state=None, answered=()):
     """Every import option this host honours, in the order the table declares
-    them.
+    them, less the ones the caller ``answered`` itself and so does not ask.
 
     Generated rather than typed out: a widget that has drifted from the key the
     pipeline reads is a switch the user flips for nothing, and that is exactly
@@ -2259,7 +2259,7 @@ def draw_import_options(layout, context, state=None):
     has_rig = host_port.selected_rig(context) is not None
     for entry in kernel_options.schema():
         asks = _OPTION_ASKS_GAME.get(entry.key)
-        if asks is not None and not asks(game_name):
+        if entry.key in answered or (asks is not None and not asks(game_name)):
             continue
         row = layout.row(align=True)
         if entry.key in _OPTION_NEEDS_RIG:

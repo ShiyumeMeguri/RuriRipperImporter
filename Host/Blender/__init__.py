@@ -163,10 +163,12 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         renderer.apply(context.scene)
 
     def apply_environment(self, context, environment):
-        from . import ui_stage, world_builder
+        from . import renderer, ui_stage, world_builder
         ambient = environment["ambient"]
         answered = world_builder.build(context, ambient["coefficients"], ambient["label"])
-        ui_stage.apply_environment(context, environment["light"], LEVEL_SUN)
+        sun = ui_stage.apply_environment(context, environment["light"], LEVEL_SUN)
+        if sun is not None and sun.data.use_shadow:
+            renderer.fit_shadow_pool(context.scene)
         return answered
 
     def apply_post_inputs(self, context, values):
