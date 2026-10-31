@@ -68,7 +68,7 @@ def _conversion():
         kernel_statement.basis(kernel_statement.BLENDER)["matrix"].tolist())
 
 
-PRESET_FOLDER = "AnimationRetarget"
+PRESET_FOLDER = "RuriActionRetarget"
 
 #: Shared role -> where a config keeps the bones that play it.
 _ROLE_COLLECTIONS = {

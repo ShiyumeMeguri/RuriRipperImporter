@@ -1,4 +1,4 @@
-"""Carrying performances from one skeleton to another with the AnimationRetarget add-on's tables and maths."""
+"""Carrying performances from one skeleton to another with the RuriActionRetarget add-on's tables and maths."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ def discard(rig):
 def carry(context, source_rig, rig, source_name, performances, activate):
     """Returns (landed, lines) for the performances keyed on ``source_rig`` (``{clip key: (action,
     slot)}``), carried onto ``rig`` through the table joining ``source_name`` to its skeleton family."""
-    compose = importlib.import_module("AnimationRetarget.compose")
-    api = importlib.import_module("AnimationRetarget.api")
+    compose = importlib.import_module("RuriActionRetarget.compose")
+    api = importlib.import_module("RuriActionRetarget.api")
     edges = compose.load_edges()
     family = rig_identity.skeleton_of(rig)
     route = compose.route_for(source_name, family, edges, dest_bones=[bone.name for bone in rig.data.bones])
