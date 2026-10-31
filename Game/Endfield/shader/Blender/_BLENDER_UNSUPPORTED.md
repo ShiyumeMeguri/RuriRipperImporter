@@ -73,7 +73,6 @@
 
 | 函数 | 原因 |
 |---|---|
-| texture3D | _NoiseTex3D:宿主无 3D 纹理节点,按槽中性值直通 |
 | EffectMixedPassVertex[VFXBaseV2] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
 | EffectMixedPassVertex[VFXDsWrite] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
 | EffectMixedPassVertex[VFXDistanceField] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |

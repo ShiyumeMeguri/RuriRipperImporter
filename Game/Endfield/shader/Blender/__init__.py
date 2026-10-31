@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(543ecb58cfb232dc):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(c229d42e4c9eff1a):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -5414,11 +5414,12 @@ class Stack:
     def _water_view_layer(self, scene, chain, collections, beneath):
         """水面层画全部内容 —— 水面像素上的深度、各通道与覆盖询问就是水面自己的,别的像素不读 —— 另开这条链读的
         通道与覆盖询问的 AOV;其余视图层一律排除水面的集合,它们的颜色与深度就是真源不含水的场景色与深度,
-        链读的那一层(beneath)因此也要出深度。"""
+        链读的那一层(beneath)因此也要出深度,和把混合物体单独交出来的透明通道。"""
         water = scene.view_layers.get(self.WATER_LAYER)
         if water is None:
             water = scene.view_layers.new(self.WATER_LAYER)
         scene.view_layers[beneath].use_pass_z = True
+        scene.view_layers[beneath].eevee.use_pass_transparent = True
         for layer in scene.view_layers:
             for collection in collections:
                 entry = self._layer_entry(layer.layer_collection, collection)
@@ -5476,6 +5477,8 @@ class Stack:
 
     WATER_REFLECT_HISTORY = 0.7
     WATER_REFLECT_CYCLE = 8
+    # 透射率低到看不见身后时,拆不透明色只是在放大噪声;这个像素盖回去也只剩混合物体自己。
+    WATER_TRANSMITTANCE_FLOOR = 1e-4
 
     def _water_lighting(self, tree, scene, render, chain, width, height, beneath):
         """水面(HG 的水面屏幕空间反射与 WaterLighting 读屏幕的后半段):没有水面物体时这条链不建,返回 None。场景层的
@@ -5483,7 +5486,11 @@ class Stack:
         场景那份降成半分辨率低深度,反射在半分辨率上追踪,合成在出图分辨率上,返回合成后的场景色。
 
         反射的时间性:真源本帧 = lerp(追踪, 上一帧, 0.7),抖动八帧一周期,可信度只取本帧。一张静帧没有上一帧,就直接求
-        它的不动点:第 j 帧之前的那次追踪权重 0.3·0.7^j / (1 − 0.7^8);可信度在真源的画面上由 TAA 按周期摊平,取八次的均值。"""
+        它的不动点:第 j 帧之前的那次追踪权重 0.3·0.7^j / (1 − 0.7^8);可信度在真源的画面上由 TAA 按周期摊平,取八次的均值。
+
+        先后:真源先合水面再画透明物体,宿主把混合物体直接画进了场景层的颜色。场景层的透明通道交出它们(预乘的颜色,
+        α 是透射率),从场景色里拆出不透明的那份给水面读,合成之后再盖回去:水面外的像素原样还原,水面上的雾与特效留在
+        水面之上。"""
         objects = self._water_objects(scene, chain)
         if not objects:
             return None
@@ -5561,10 +5568,31 @@ class Stack:
                 tree.links.new(second, node.inputs[1])
             return node.outputs[0]
 
+        def scaled(vector, factor):
+            node = tree.nodes.new('ShaderNodeVectorMath')
+            node[self.POST_CHAIN_KEY] = label
+            node.operation = 'SCALE'
+            tree.links.new(vector, node.inputs[0])
+            tree.links.new(factor, node.inputs['Scale'])
+            return node.outputs[0]
+
+        blended = output(render, 'Transparent', '通道')
+        blended_parts = tree.nodes.new('CompositorNodeSeparateColor')
+        blended_parts[self.POST_CHAIN_KEY] = label
+        tree.links.new(blended, blended_parts.inputs['Image'])
+        transmittance = blended_parts.outputs['Alpha']
+        uncovered = tree.nodes.new('ShaderNodeVectorMath')
+        uncovered[self.POST_CHAIN_KEY] = label
+        uncovered.operation = 'MAXIMUM'
+        tree.links.new(computed('ShaderNodeVectorMath', 'SUBTRACT', beneath, blended), uncovered.inputs[0])
+        opaque = scaled(uncovered.outputs[0],
+                        computed('ShaderNodeMath', 'POWER',
+                                 computed('ShaderNodeMath', 'MAXIMUM', transmittance, self.WATER_TRANSMITTANCE_FLOOR), -1.0))
+
         history, cycle = self.WATER_REFLECT_HISTORY, self.WATER_REFLECT_CYCLE
         reflect_lighting = reflect_fade = None
         for frames_back in range(cycle):
-            traced = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': beneath},
+            traced = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': opaque},
                          {'levelSize': extent(half)}, frames_back)
             lighting = computed('ShaderNodeVectorMath', 'SCALE', traced.outputs['ret_lighting'],
                                 (1.0 - history) * history ** frames_back / (1.0 - history ** cycle))
@@ -5573,9 +5601,9 @@ class Stack:
                 'ShaderNodeVectorMath', 'ADD', reflect_lighting, lighting)
             reflect_fade = fade if reflect_fade is None else computed('ShaderNodeMath', 'ADD', reflect_fade, fade)
         composite = run('composite', full_field, {
-            'sceneColor': beneath, 'sceneDeviceDepth': scene_depth, 'waterDeviceDepth': water_depth,
+            'sceneColor': opaque, 'sceneDeviceDepth': scene_depth, 'waterDeviceDepth': water_depth,
             'reflectLighting': reflect_lighting, 'reflectFade': reflect_fade})
-        return only(composite, 'composite')
+        return computed('ShaderNodeVectorMath', 'ADD', blended, scaled(only(composite, 'composite'), transmittance))
 
     @staticmethod
     def _ssr_view_layers(scene, chain):

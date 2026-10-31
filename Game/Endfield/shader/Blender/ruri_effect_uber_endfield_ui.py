@@ -55,12 +55,19 @@ NAMES = (
     '_FogColor',
     '_FogDensity',
     '_FogExponent',
-    '_FogIntensity',
     '_CubEdgeFade',
     '_HeightOffset',
     '_HeightFalloff',
     '_VerticalFalloffMin',
     '_VerticalFalloffMax',
+    '_NearFadeDistance',
+    '_FogIntensityFadeUseCenter',
+    '_FogIntensityFadeDistance',
+    '_canWalkIn',
+    '_nearDisplay',
+    '_NearDisplayDistance',
+    '_FogDepthStart',
+    '_FogDepthEnd',
     '_MaskTexUVWeights',
     '_MaskTexUVRotateMat',
     '_BlendTexUVWeights',
@@ -442,6 +449,7 @@ NAMES = (
     '_WaterAbsorption2',
     '_WaterScatter',
     '_UseFog',
+    '_FogIntensity',
     '_HoudiniVATInParticle',
     '_frameCount',
     '_boundMaxX',
@@ -594,15 +602,22 @@ def annotations(kit, stack):
     a['p_HeightFadeOffset'] = bpy.props.FloatProperty(name='Decal Height Fade Offset', description='贴花盒高度淡出的偏移(占盒高比例):把上下淡出的位置沿高度方向整体平移。\n_HeightFadeOffset', default=0.0, update=kit.writer(stack, '_HeightFadeOffset'))
     a['p_MainCustomData'] = bpy.props.FloatProperty(name='Decal Main Custom Data', description='主图自定义数据:乘上「Main Tex UV Speed」的后两个数让主图随它滚动,通常由粒子自定义数据驱动。\n_MainCustomData', default=0.0, update=kit.writer(stack, '_MainCustomData'))
     a['p_MaskCustomData'] = bpy.props.FloatProperty(name='Decal Mask Custom Data', description='遮罩自定义数据:乘上「Mask Tex UV Speed」的后两个数让遮罩随它滚动,通常由粒子自定义数据驱动。\n_MaskCustomData', default=0.0, update=kit.writer(stack, '_MaskCustomData'))
-    a['p_FogColor'] = bpy.props.FloatVectorProperty(name='Fog Color', description='雾色(HDR):RGB 再乘「Fog Intensity」就是雾的颜色,A 乘进雾的浓度。\n_FogColor', size=4, subtype='COLOR_GAMMA', min=0.0, soft_max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_FogColor'))
+    a['p_FogColor'] = bpy.props.FloatVectorProperty(name='Fog Color', description='雾色(HDR):RGB 是雾的颜色,A 乘进雾的浓度。\n_FogColor', size=4, subtype='COLOR_GAMMA', min=0.0, soft_max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_FogColor'))
     a['p_FogDensity'] = bpy.props.FloatProperty(name='Fog Density', description='雾密度:整体浓度倍率,0 = 没有雾。\n_FogDensity', default=1.0, update=kit.writer(stack, '_FogDensity'))
-    a['p_FogExponent'] = bpy.props.FloatProperty(name='Fog Exponent', description='雾随距离变浓的速度:越大雾随到相机的距离积累得越快,近处就变浓。\n_FogExponent', default=1.0, update=kit.writer(stack, '_FogExponent'))
-    a['p_FogIntensity'] = bpy.props.FloatProperty(name='Fog Intensity', description='雾对特效的影响强度:0 = 特效不吃雾,1 = 像场景物体一样随距离被雾染色,需要先打开「Use Fog」。\n_FogIntensity', default=1.0, update=kit.writer(stack, '_FogIntensity'))
-    a['p_CubEdgeFade'] = bpy.props.FloatProperty(name='Fog Cube Edge Fade', description='雾体边缘淡出的半径(物体空间):从雾盒中心到这个距离,雾由原样渐变到消失,越大边缘越柔。\n_CubEdgeFade', default=1.0, update=kit.writer(stack, '_CubEdgeFade'))
-    a['p_HeightOffset'] = bpy.props.FloatProperty(name='Fog Height Offset', description='雾的高度起点(世界高度):低于它的地方雾不衰减,高于它开始按「Fog Height Falloff」变淡。\n_HeightOffset', default=0.0, update=kit.writer(stack, '_HeightOffset'))
-    a['p_HeightFalloff'] = bpy.props.FloatProperty(name='Fog Height Falloff', description='雾的高度衰减速度:高过起点每升高 1 个单位,雾减少这么多(到 1 就完全消失);0 = 不随高度衰减。\n_HeightFalloff', default=0.0, update=kit.writer(stack, '_HeightFalloff'))
-    a['p_VerticalFalloffMin'] = bpy.props.FloatProperty(name='Fog Vertical Falloff Min', description='纵向淡出的起点(世界高度):实际从(这个值 − 0.5)高度开始往上变淡;必须让「Max」大于它才生效。\n_VerticalFalloffMin', default=0.0, update=kit.writer(stack, '_VerticalFalloffMin'))
-    a['p_VerticalFalloffMax'] = bpy.props.FloatProperty(name='Fog Vertical Falloff Max', description='纵向淡出的终点(世界高度):实际在(这个值 − 0.5)高度雾完全消失;必须大于「Min」才生效。\n_VerticalFalloffMax', default=0.0, update=kit.writer(stack, '_VerticalFalloffMax'))
+    a['p_FogExponent'] = bpy.props.FloatProperty(name='Fog Exponent', description='雾随穿过的路程变浓的速度:视线在雾盒里走得越长雾越浓,这个值越大积累得越快。\n_FogExponent', default=0.005, update=kit.writer(stack, '_FogExponent'))
+    a['p_CubEdgeFade'] = bpy.props.FloatProperty(name='Fog Cube Edge Fade', description='雾盒边缘硬度:视线离雾盒中心的距离(物体空间)除以它就是淡出量,到这个距离完全消失;越大边缘越硬。\n_CubEdgeFade', default=0.5, update=kit.writer(stack, '_CubEdgeFade'))
+    a['p_HeightOffset'] = bpy.props.FloatProperty(name='Fog Height Offset', description='雾的高度起点(物体空间,雾盒上下是 −0.5 到 0.5):低于它的地方雾不衰减,高于它开始按「Fog Height Falloff」变淡。\n_HeightOffset', default=0.5, update=kit.writer(stack, '_HeightOffset'))
+    a['p_HeightFalloff'] = bpy.props.FloatProperty(name='Fog Height Falloff', description='雾的高度衰减速度:高过起点每升高 1 个单位,雾减少这么多(到 1 就完全消失);0 = 不随高度衰减。\n_HeightFalloff', default=1.0, update=kit.writer(stack, '_HeightFalloff'))
+    a['p_VerticalFalloffMin'] = bpy.props.FloatProperty(name='Fog Vertical Falloff Min', description='纵向淡出的起点(物体空间):实际从(这个值 − 0.5)高度开始往上变淡;必须让「Max」大于它才生效。\n_VerticalFalloffMin', default=1.0, update=kit.writer(stack, '_VerticalFalloffMin'))
+    a['p_VerticalFalloffMax'] = bpy.props.FloatProperty(name='Fog Vertical Falloff Max', description='纵向淡出的终点(物体空间):实际在(这个值 − 0.5)高度雾完全消失;必须大于「Min」才生效。\n_VerticalFalloffMax', default=1.0, update=kit.writer(stack, '_VerticalFalloffMax'))
+    a['p_NearFadeDistance'] = bpy.props.FloatProperty(name='Fog Near Fade Distance', description='贴近淡出:视线在雾盒里走过的路程短于这个距离(米)时雾变淡,「能不能进入」打开时不起作用。\n_NearFadeDistance', default=0.001, min=0.001, max=10.0, update=kit.writer(stack, '_NearFadeDistance'))
+    a['p_FogIntensityFadeUseCenter'] = bpy.props.BoolProperty(name='Fog Fade Uses Centre', description='整体随距离消失:打开后按雾盒中心到镜头的距离淡出(小雾团用),关闭则逐点按到镜头的距离淡出。\n_FogIntensityFadeUseCenter', default=False, update=kit.writer(stack, '_FogIntensityFadeUseCenter'))
+    a['p_FogIntensityFadeDistance'] = bpy.props.FloatProperty(name='Fog Fade Distance', description='远处融合距离(米):离镜头到这个距离雾线性淡到完全透明。\n_FogIntensityFadeDistance', default=1000.0, min=10.0, max=10000.0, update=kit.writer(stack, '_FogIntensityFadeDistance'))
+    a['p_canWalkIn'] = bpy.props.FloatProperty(name='Fog Can Walk In', description='能不能进入:打开后不乘顶点色,贴近淡出也不起作用,镜头走进雾盒里雾照常显示。\n_canWalkIn', default=0.0, update=kit.writer(stack, '_canWalkIn'))
+    a['p_nearDisplay'] = bpy.props.FloatProperty(name='Fog Near Display', description='靠近才显示:打开后雾只在雾盒中心离镜头「靠近显示距离」以内才出现,越近越浓。\n_nearDisplay', default=0.0, update=kit.writer(stack, '_nearDisplay'))
+    a['p_NearDisplayDistance'] = bpy.props.FloatProperty(name='Fog Near Display Distance', description='靠近显示距离(米):配合「靠近才显示」,雾盒中心离镜头到这个距离雾完全消失。\n_NearDisplayDistance', default=10.0, update=kit.writer(stack, '_NearDisplayDistance'))
+    a['p_FogDepthStart'] = bpy.props.FloatProperty(name='Fog Depth Start', description='起始距离(米):离镜头近于它的地方雾开始淡出,配合「起始区域过度」决定淡出多快。\n_FogDepthStart', default=0.0, min=0.0, max=200.0, update=kit.writer(stack, '_FogDepthStart'))
+    a['p_FogDepthEnd'] = bpy.props.FloatProperty(name='Fog Depth End', description='起始区域过度(0 – 1):从(起始距离 × 这个值)到起始距离之间雾由透明过渡到原样。\n_FogDepthEnd', default=0.0, min=0.0, max=1.0, update=kit.writer(stack, '_FogDepthEnd'))
     a['p_MaskTexUVWeights'] = bpy.props.FloatVectorProperty(name='MaskTex UV Weights', description='遮罩图用哪一套 UV:最终 UV = 第一套 UV × X + 第二套(粒子)UV × Y + 屏幕 UV × W。默认 (1, 0, 0, 0) = 只用第一套。\nX: 第一套 UV(UV0)的权重。\nY: 第二套 UV(粒子 UV)的权重。\nZ: 没有用到。\nW: 屏幕 UV 的权重(需要打开「Use Screen UV」)。\n_MaskTexUVWeights', size=4, default=(1.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_MaskTexUVWeights'))
     a['p_MaskTexUVRotateMat'] = bpy.props.FloatVectorProperty(name='MaskTex UV Rotate Mat', description='遮罩图的 UV 旋转(绕图的中心):四个数是 2×2 旋转矩阵,不是角度。要转 θ 度就填 (cosθ, sinθ, −sinθ, cosθ);默认 (1, 0, 0, 1) = 不旋转。\nX: 新 U 里 U 的系数(旋转时 = cosθ)。\nY: 新 V 里 U 的系数(旋转时 = sinθ)。\nZ: 新 U 里 V 的系数(旋转时 = −sinθ)。\nW: 新 V 里 V 的系数(旋转时 = cosθ)。\n_MaskTexUVRotateMat', size=4, default=(1.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_MaskTexUVRotateMat'))
     a['p_BlendTexUVWeights'] = bpy.props.FloatVectorProperty(name='BlendTex UV Weights', description='混合图用哪一套 UV:最终 UV = 第一套 UV × X + 第二套(粒子)UV × Y + 屏幕 UV × W。默认 (1, 0, 0, 0) = 只用第一套 UV。\nX: 第一套 UV(UV0)的权重。\nY: 第二套 UV(粒子 UV)的权重。\nZ: 没有用到。\nW: 屏幕 UV 的权重(需要打开「Use Screen UV」)。\n_BlendTexUVWeights', size=4, default=(1.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_BlendTexUVWeights'))
@@ -967,13 +982,13 @@ def annotations(kit, stack):
     a['p_CharacterInteractiveColor'] = bpy.props.FloatVectorProperty(name='Character Interactive Color', description='受击高亮的颜色(HDR):受击点周围一圈亮起来的颜色。\n_CharacterInteractiveColor', size=4, subtype='COLOR', min=0.0, soft_max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_CharacterInteractiveColor'))
     a['p_CharacterInteractiveParam'] = bpy.props.FloatVectorProperty(name='Character Interactive Param (xyz 受击点, w 相位)', description='受击点的位置与相位:由游戏逻辑每次受击时写入,一般不用手调。\nX: 受击点的世界 X。\nY: 受击点的世界 Y。\nZ: 受击点的世界 Z。\nW: 高亮波的相位(0 – 1),决定波传到哪一圈。\n_CharacterInteractiveParam', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_CharacterInteractiveParam'))
     a['p_UseNoise3D'] = bpy.props.BoolProperty(name='Use Noise 3D', description='三维噪声开关:雾的浓度由一张三维噪声图给,按世界(或局部)坐标取样并随时间漂移,做出翻滚、浓淡不均的雾。\n_UseNoise3D', default=False, update=kit.writer(stack, '_UseNoise3D'))
-    a['p_NoiseIntensity'] = bpy.props.FloatProperty(name='扰动图强度', description='噪声对雾浓度的影响强度:0 = 均匀的雾,越大浓淡对比越强。\n_NoiseIntensity', default=1.0, min=0.0, max=1.0, update=kit.writer(stack, '_NoiseIntensity'))
+    a['p_NoiseIntensity'] = bpy.props.FloatProperty(name='扰动图强度', description='近处的噪声强度:雾的浓度乘(1 − 噪声 + 强度 × 噪声)。1 = 噪声不起作用,0 与负值让噪声大的地方雾变薄。\n_NoiseIntensity', default=1.0, min=0.0, max=1.0, update=kit.writer(stack, '_NoiseIntensity'))
     a['p_NoiseTexUseWorldUVW'] = bpy.props.BoolProperty(name='使用世界坐标做UVW', description='噪声按世界坐标取样:打开后噪声固定在世界里(不随物体移动),关闭则跟着物体的局部坐标走。\n_NoiseTexUseWorldUVW', default=True, update=kit.writer(stack, '_NoiseTexUseWorldUVW'))
     a['p_NoiseTexTilling1'] = bpy.props.FloatVectorProperty(name='扰动图UV密度缩放1', description='噪声的平铺密度(三个方向)。\nX: 沿 X 方向的密度。\nY: 沿 Y 方向的密度。\nZ: 沿 Z 方向的密度。\nW: 没有用到。\n_NoiseTexTilling1', size=4, default=(1.0, 1.0, 1.0, 0.0,), update=kit.writer(stack, '_NoiseTexTilling1'))
     a['p_NoiseUVWDir1'] = bpy.props.FloatVectorProperty(name='扰动图UVW移动方向1', description='噪声的漂移方向(世界方向)。\nX: 漂移方向的 X 分量。\nY: 漂移方向的 Y 分量。\nZ: 漂移方向的 Z 分量。\nW: 没有用到。\n_NoiseUVWDir1', size=4, default=(1.0, 1.0, 1.0, 0.0,), update=kit.writer(stack, '_NoiseUVWDir1'))
     a['p_NoiseUVWSpeed1'] = bpy.props.FloatProperty(name='扰动图UVW移动速度1', description='噪声的漂移速度:越大噪声(和雾的翻滚)移动得越快,正负决定沿漂移方向还是反方向。\n_NoiseUVWSpeed1', default=0.0, update=kit.writer(stack, '_NoiseUVWSpeed1'))
-    a['p_NoiseFar'] = bpy.props.FloatProperty(name='远近分割线', description='远近分界距离(米):离镜头近于它用「扰动图强度」,远于它用「远处扰动强度」。\n_NoiseFar', default=1.0, update=kit.writer(stack, '_NoiseFar'))
-    a['p_NoiseFarIntensity'] = bpy.props.FloatProperty(name='远处扰动强度', description='远处的噪声强度:超过「远近分割线」的位置噪声对雾的影响,通常调小让远处雾更均匀。\n_NoiseFarIntensity', default=1.0, update=kit.writer(stack, '_NoiseFarIntensity'))
+    a['p_NoiseFar'] = bpy.props.FloatProperty(name='远近分割线', description='远近过渡的尺度:从镜头处的「扰动图强度」,到这个值十倍米数处的「远处扰动强度」,线性过渡。\n_NoiseFar', default=1.0, update=kit.writer(stack, '_NoiseFar'))
+    a['p_NoiseFarIntensity'] = bpy.props.FloatProperty(name='远处扰动强度', description='远处的噪声强度:算法同「扰动图强度」,负值让噪声大的地方雾消失得更干净。\n_NoiseFarIntensity', default=1.0, update=kit.writer(stack, '_NoiseFarIntensity'))
     a['p_UseTrail'] = bpy.props.BoolProperty(name='Use Trail', description='拖尾开关:打开后不透明度沿粒子拖尾的方向衰减(粒子系统把拖尾坐标写进第一套 UV 的 Z、W 里),做出由实到虚的拖尾。\n_UseTrail', default=False, update=kit.writer(stack, '_UseTrail'))
     a['p_TrailEffect'] = bpy.props.BoolProperty(name='Trail Effect', description='拖尾特效开关(用于 VFXAdvance 那一类着色器):作用同「Use Trail」,打开任何一个都会启用拖尾。\n_TrailEffect', default=False, update=kit.writer(stack, '_TrailEffect'))
     a['p_UseBlend'] = bpy.props.BoolProperty(name='Use Blend', description='混合层开关:打开后在特效上再叠一层「混合图」的颜色。\n_UseBlend', default=False, update=kit.writer(stack, '_UseBlend'))
@@ -984,6 +999,7 @@ def annotations(kit, stack):
     a['p_WaterAbsorption2'] = bpy.props.FloatVectorProperty(name='Water Absorption2', description='水的浅处吸收色(HDR):在水较浅时用这个吸收色,随深度慢慢过渡到「Water Absorption」。\n_WaterAbsorption2', size=4, subtype='COLOR', min=0.0, soft_max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_WaterAbsorption2'))
     a['p_WaterScatter'] = bpy.props.FloatVectorProperty(name='Water Scatter', description='水的散射色(HDR):水里走得越远,越多地加上这个颜色,做出水下的雾蒙蒙的色调。\n_WaterScatter', size=4, subtype='COLOR', min=0.0, soft_max=1.0, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_WaterScatter'))
     a['p_UseFog'] = bpy.props.BoolProperty(name='Use Fog', description='吃雾开关:打开后特效随距离被场景的雾染色(雾的颜色与浓度由引擎给),远处特效会淡进雾里。\n_UseFog', default=False, update=kit.writer(stack, '_UseFog'))
+    a['p_FogIntensity'] = bpy.props.FloatProperty(name='Fog Intensity', description='雾对特效的影响强度:0 = 特效不吃雾,1 = 像场景物体一样随距离被雾染色,需要先打开「Use Fog」。\n_FogIntensity', default=1.0, min=0.0, max=1.0, update=kit.writer(stack, '_FogIntensity'))
     a['p_HoudiniVATInParticle'] = bpy.props.BoolProperty(name='VAT 在粒子里', description='VAT 在粒子系统里使用:打开后 VAT 的取样坐标和起播帧改读粒子系统传来的数据(粒子 UV 与自定义数据),关闭则读网格自带的 UV。\n_HoudiniVATInParticle', default=False, update=kit.writer(stack, '_HoudiniVATInParticle'))
     a['p_frameCount'] = bpy.props.FloatProperty(name='Frame Count', description='VAT 总帧数:动画一共多少帧(Houdini 导出时记下的数)。必须与贴图一致,否则动画错位。\n_frameCount', default=0.0, update=kit.writer(stack, '_frameCount'))
     a['p_boundMaxX'] = bpy.props.FloatProperty(name='Bound Max X', description='VAT 位置包围盒上限 X:Houdini 导出时记下的数,请原样填;LDR 贴图靠它还原位置,取样坐标计算也用到它。\n_boundMaxX', default=0.0, update=kit.writer(stack, '_boundMaxX'))
@@ -1179,12 +1195,19 @@ def draw_CutsceneEffect(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -1506,6 +1529,7 @@ def draw_CutsceneEffect(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_FogSimple(kit, layout, material, p):
     root = layout
@@ -1600,12 +1624,19 @@ def draw_FogSimple(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -1987,6 +2018,7 @@ def draw_FogSimple(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_HoudiniVATInParticle', 'VAT 在粒子里')
         kit.prop(g0, p, 'p_frameCount', 'Frame Count')
         kit.prop(g0, p, 'p_boundMaxX', 'Bound Max X')
@@ -2096,12 +2128,19 @@ def draw_SceneEffectRain(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -2423,6 +2462,7 @@ def draw_SceneEffectRain(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_UiFrameEffect(kit, layout, material, p):
     root = layout
@@ -2514,12 +2554,19 @@ def draw_UiFrameEffect(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -2841,6 +2888,7 @@ def draw_UiFrameEffect(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXAdvance(kit, layout, material, p):
     root = layout
@@ -2883,7 +2931,6 @@ def draw_VFXAdvance(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -3083,14 +3130,6 @@ def draw_VFXAdvance(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -3101,6 +3140,7 @@ def draw_VFXAdvance(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXBaseV2(kit, layout, material, p):
     root = layout
@@ -3132,7 +3172,6 @@ def draw_VFXBaseV2(kit, layout, material, p):
         kit.prop(g0, p, 'p_UseMainTexAsAlpha', 'Use MainTex As Alpha')
         kit.prop(g0, p, 'p_MainTexUVSpeed', 'MainTex UV Speed')
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
         kit.prop(g0, p, 'p_BlendTexUVSpeed', 'BlendTex UV Speed')
         kit.prop(g0, p, 'p_BlendTexUVRotateMat', 'BlendTex UV Rotate Mat')
@@ -3260,14 +3299,6 @@ def draw_VFXBaseV2(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -3278,6 +3309,7 @@ def draw_VFXBaseV2(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXCaptureMesh(kit, layout, material, p):
     root = layout
@@ -3323,7 +3355,6 @@ def draw_VFXCaptureMesh(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -3544,14 +3575,6 @@ def draw_VFXCaptureMesh(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -3562,6 +3585,7 @@ def draw_VFXCaptureMesh(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXCharacterGrowing(kit, layout, material, p):
     root = layout
@@ -3608,7 +3632,6 @@ def draw_VFXCharacterGrowing(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -3835,14 +3858,6 @@ def draw_VFXCharacterGrowing(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -3853,6 +3868,7 @@ def draw_VFXCharacterGrowing(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXCharacterOutline(kit, layout, material, p):
     root = layout
@@ -3898,7 +3914,6 @@ def draw_VFXCharacterOutline(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -4123,14 +4138,6 @@ def draw_VFXCharacterOutline(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -4141,6 +4148,7 @@ def draw_VFXCharacterOutline(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXCharacterWallhack(kit, layout, material, p):
     root = layout
@@ -4186,7 +4194,6 @@ def draw_VFXCharacterWallhack(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -4413,14 +4420,6 @@ def draw_VFXCharacterWallhack(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -4431,6 +4430,7 @@ def draw_VFXCharacterWallhack(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXDecal(kit, layout, material, p):
     root = layout
@@ -4499,7 +4499,6 @@ def draw_VFXDecal(kit, layout, material, p):
         kit.prop(g0, p, 'p_HeightFadeOffset', 'Decal Height Fade Offset')
         kit.prop(g0, p, 'p_MainCustomData', 'Decal Main Custom Data')
         kit.prop(g0, p, 'p_MaskCustomData', 'Decal Mask Custom Data')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -4803,14 +4802,6 @@ def draw_VFXDecal(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -4821,6 +4812,7 @@ def draw_VFXDecal(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXDitherAlpha(kit, layout, material, p):
     root = layout
@@ -4858,7 +4850,6 @@ def draw_VFXDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
         kit.prop(g0, p, 'p_BlendTexUVSpeed', 'BlendTex UV Speed')
         kit.prop(g0, p, 'p_BlendTexUVRotateMat', 'BlendTex UV Rotate Mat')
@@ -5011,14 +5002,6 @@ def draw_VFXDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -5029,6 +5012,7 @@ def draw_VFXDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXElectricWire(kit, layout, material, p):
     root = layout
@@ -5073,7 +5057,6 @@ def draw_VFXElectricWire(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -5290,14 +5273,6 @@ def draw_VFXElectricWire(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -5308,6 +5283,7 @@ def draw_VFXElectricWire(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXFakeVolumeFog(kit, layout, material, p):
     root = layout
@@ -5379,12 +5355,19 @@ def draw_VFXFakeVolumeFog(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -5706,6 +5689,7 @@ def draw_VFXFakeVolumeFog(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXIce(kit, layout, material, p):
     root = layout
@@ -5749,7 +5733,6 @@ def draw_VFXIce(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -5963,14 +5946,6 @@ def draw_VFXIce(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -5981,6 +5956,7 @@ def draw_VFXIce(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXLine(kit, layout, material, p):
     root = layout
@@ -6025,7 +6001,6 @@ def draw_VFXLine(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -6246,14 +6221,6 @@ def draw_VFXLine(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -6264,6 +6231,7 @@ def draw_VFXLine(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXRadialBlur(kit, layout, material, p):
     root = layout
@@ -6316,7 +6284,6 @@ def draw_VFXRadialBlur(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -6575,14 +6542,6 @@ def draw_VFXRadialBlur(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -6593,6 +6552,7 @@ def draw_VFXRadialBlur(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXRefract(kit, layout, material, p):
     root = layout
@@ -6643,7 +6603,6 @@ def draw_VFXRefract(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -6896,14 +6855,6 @@ def draw_VFXRefract(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -6914,6 +6865,7 @@ def draw_VFXRefract(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXSmokeSixWay(kit, layout, material, p):
     root = layout
@@ -6971,7 +6923,6 @@ def draw_VFXSmokeSixWay(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -7244,14 +7195,6 @@ def draw_VFXSmokeSixWay(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -7262,6 +7205,7 @@ def draw_VFXSmokeSixWay(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXSmokeVat(kit, layout, material, p):
     root = layout
@@ -7307,7 +7251,6 @@ def draw_VFXSmokeVat(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -7530,14 +7473,6 @@ def draw_VFXSmokeVat(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -7548,6 +7483,7 @@ def draw_VFXSmokeVat(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXWater(kit, layout, material, p):
     root = layout
@@ -7609,7 +7545,6 @@ def draw_VFXWater(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -7913,14 +7848,6 @@ def draw_VFXWater(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -7931,6 +7858,7 @@ def draw_VFXWater(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VFXWaterDitherAlpha(kit, layout, material, p):
     root = layout
@@ -7978,7 +7906,6 @@ def draw_VFXWaterDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_MainTexUseDisturb', 'MainTex Use Disturb')
         kit.prop(g0, p, 'p_MainTexUVRotateMat', 'MainTex UV Rotate Mat')
         kit.prop(g0, p, 'p_InParticle', 'In Particle')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -8208,14 +8135,6 @@ def draw_VFXWaterDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_CharacterInteractiveRange', 'Character Interactive Range')
         kit.prop(g0, p, 'p_CharacterInteractiveColor', 'Character Interactive Color')
         kit.prop(g0, p, 'p_CharacterInteractiveParam', 'Character Interactive Param (xyz 受击点, w 相位)')
-        kit.prop(g0, p, 'p_UseNoise3D', 'Use Noise 3D')
-        kit.prop(g0, p, 'p_NoiseIntensity', '扰动图强度')
-        kit.prop(g0, p, 'p_NoiseTexUseWorldUVW', '使用世界坐标做UVW')
-        kit.prop(g0, p, 'p_NoiseTexTilling1', '扰动图UV密度缩放1')
-        kit.prop(g0, p, 'p_NoiseUVWDir1', '扰动图UVW移动方向1')
-        kit.prop(g0, p, 'p_NoiseUVWSpeed1', '扰动图UVW移动速度1')
-        kit.prop(g0, p, 'p_NoiseFar', '远近分割线')
-        kit.prop(g0, p, 'p_NoiseFarIntensity', '远处扰动强度')
         kit.prop(g0, p, 'p_UseTrail', 'Use Trail')
         kit.prop(g0, p, 'p_TrailEffect', 'Trail Effect')
         kit.prop(g0, p, 'p_UseBlend', 'Use Blend')
@@ -8226,6 +8145,7 @@ def draw_VFXWaterDitherAlpha(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
 
 def draw_VolumetricLightBeam(kit, layout, material, p):
     root = layout
@@ -8317,12 +8237,19 @@ def draw_VolumetricLightBeam(kit, layout, material, p):
         kit.prop(g0, p, 'p_FogColor', 'Fog Color')
         kit.prop(g0, p, 'p_FogDensity', 'Fog Density')
         kit.prop(g0, p, 'p_FogExponent', 'Fog Exponent')
-        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_CubEdgeFade', 'Fog Cube Edge Fade')
         kit.prop(g0, p, 'p_HeightOffset', 'Fog Height Offset')
         kit.prop(g0, p, 'p_HeightFalloff', 'Fog Height Falloff')
         kit.prop(g0, p, 'p_VerticalFalloffMin', 'Fog Vertical Falloff Min')
         kit.prop(g0, p, 'p_VerticalFalloffMax', 'Fog Vertical Falloff Max')
+        kit.prop(g0, p, 'p_NearFadeDistance', 'Fog Near Fade Distance')
+        kit.prop(g0, p, 'p_FogIntensityFadeUseCenter', 'Fog Fade Uses Centre')
+        kit.prop(g0, p, 'p_FogIntensityFadeDistance', 'Fog Fade Distance')
+        kit.prop(g0, p, 'p_canWalkIn', 'Fog Can Walk In')
+        kit.prop(g0, p, 'p_nearDisplay', 'Fog Near Display')
+        kit.prop(g0, p, 'p_NearDisplayDistance', 'Fog Near Display Distance')
+        kit.prop(g0, p, 'p_FogDepthStart', 'Fog Depth Start')
+        kit.prop(g0, p, 'p_FogDepthEnd', 'Fog Depth End')
         kit.prop(g0, p, 'p_MaskTexUVWeights', 'MaskTex UV Weights')
         kit.prop(g0, p, 'p_MaskTexUVRotateMat', 'MaskTex UV Rotate Mat')
         kit.prop(g0, p, 'p_BlendTexUVWeights', 'BlendTex UV Weights')
@@ -8681,6 +8608,7 @@ def draw_VolumetricLightBeam(kit, layout, material, p):
         kit.prop(g0, p, 'p_WaterAbsorption2', 'Water Absorption2')
         kit.prop(g0, p, 'p_WaterScatter', 'Water Scatter')
         kit.prop(g0, p, 'p_UseFog', 'Use Fog')
+        kit.prop(g0, p, 'p_FogIntensity', 'Fog Intensity')
         kit.prop(g0, p, 'p_HoudiniVATInParticle', 'VAT 在粒子里')
         kit.prop(g0, p, 'p_frameCount', 'Frame Count')
         kit.prop(g0, p, 'p_boundMaxX', 'Bound Max X')
