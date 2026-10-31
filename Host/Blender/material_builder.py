@@ -112,6 +112,13 @@ LEVEL_IMAGES = extensions.point(
     "blender.level_images",
     "Images a shading stack reads level state through, which the host fills.")
 
+#: ``scene_time_scales() -> {name: [4 floats]}``. Engine globals the game's engine advances every
+#: frame (its clocks): each component is the scene's time in seconds times its scale. The host
+#: states them as driven properties of the scene (:func:`apply_scene_time`).
+SCENE_TIME = extensions.point(
+    "blender.scene_time",
+    "Clock globals a shading stack reads as the scene's time.")
+
 #: ``object_attribute_bases() -> {name: [default, ...]}``. Engine globals a stack reads
 #: PER OBJECT from the object's own custom properties -- which of a level's decals reach
 #: that object, say -- each with the default its recipe declares. The graph reads
@@ -275,6 +282,49 @@ def register_volume_textures(layouts):
 
 def unregister_volume_textures(layouts):
     LEVEL_IMAGES.remove(layouts)
+
+
+def register_scene_time(scales):
+    SCENE_TIME.add(scales)
+
+
+def unregister_scene_time(scales):
+    SCENE_TIME.remove(scales)
+
+
+def apply_scene_time(scene):
+    """The clocks the registered stacks read, as properties of ``scene`` driven by its frame: the shading tree
+    reads them through a View Layer attribute and the compositor through a driver of its own, so playing or
+    rendering the frame range moves them with nothing else written. A stated clock stays as it is; two stacks
+    scaling one clock differently are refused. Returns how many drivers were added."""
+    wanted = {}
+    for provider in SCENE_TIME:
+        for name, scales in provider().items():
+            if wanted.setdefault(name, list(scales)) != list(scales):
+                raise ValueError("[material] clock {0} has two scales: {1} and {2}".format(
+                    name, wanted[name], list(scales)))
+    added = 0
+    for name, scales in wanted.items():
+        if name not in scene:
+            scene[name] = [0.0, 0.0, 0.0, 0.0]
+        path = '["{0}"]'.format(name)
+        drivers = scene.animation_data.drivers if scene.animation_data else ()
+        for index, scale in enumerate(scales):
+            if scale == 0.0 or any(curve.data_path == path and curve.array_index == index for curve in drivers):
+                continue
+            driver = scene.driver_add(path, index).driver
+            driver.type = "SCRIPTED"
+            for variable_name, data_path in (("fps", "render.fps"), ("fps_base", "render.fps_base")):
+                variable = driver.variables.new()
+                variable.name = variable_name
+                variable.type = "SINGLE_PROP"
+                variable.targets[0].id_type = "SCENE"
+                variable.targets[0].id = scene
+                variable.targets[0].data_path = data_path
+            driver.expression = "frame * fps_base / fps * {0}".format(scale)
+            added += 1
+            drivers = scene.animation_data.drivers
+    return added
 
 
 def register_object_attributes(bases):

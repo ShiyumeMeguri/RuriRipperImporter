@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(c229d42e4c9eff1a):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(c18cec9b0a626956):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1828,6 +1828,7 @@ class Stack:
         declare_world_basis(self.host.get('world_basis'))
         self.post = manifest.get('post')
         self.engine_global_sources = manifest.get('engine_global_sources') or {}
+        self.scene_time = manifest.get('scene_time') or {}
         self.object_attributes = manifest.get('object_attributes') or {}
         self.texel_sizes = manifest.get('texel_sizes') or {}
         self.level_images = manifest.get('level_images') or {}
@@ -2206,6 +2207,10 @@ class Stack:
         读回再加缺省。"""
         return {name: (spec['src'], [float(value) for value in spec['base']])
                 for name, spec in (self.engine_global_sources or {}).items()}
+
+    def scene_time_scales(self):
+        """本栈读的时钟全局:名 → 四个分量各是场景秒数的几倍。宿主写成场景属性,读回不用再加缺省。"""
+        return {name: [float(value) for value in scales] for name, scales in self.scene_time.items()}
 
     def object_attribute_bases(self):
         """本栈逐物体读的引擎全局及各自缺省:宿主按物体写「值 - 缺省」的自定义属性,组里读回再加缺省。"""
@@ -5451,7 +5456,9 @@ class Stack:
         —— 组里再加缺省,与着色树读视图层属性同一条编码,没写过的全局读 0 落在缺省本身;场景没有世界就是没有关卡,口停在 0。
         关卡图的口(取点落成的组图口,口名 = 槽名)接宿主按关卡建的那一张。"""
         world = scene.world
-        for name in (self.level_global_bases() if world is not None else ()):
+        holders = [(name, 'WORLD', world) for name in (self.level_global_bases() if world is not None else ())]
+        holders.extend((name, 'SCENE', scene) for name in self.scene_time)
+        for name, holder_type, holder in holders:
             for socket, components in ((node.inputs.get(name), (0, 1, 2)), (node.inputs.get(name + '_w'), (3,))):
                 if socket is None:
                     continue
@@ -5463,8 +5470,8 @@ class Stack:
                     variable = driver.variables.new()
                     variable.type = 'SINGLE_PROP'
                     target = variable.targets[0]
-                    target.id_type = 'WORLD'
-                    target.id = world
+                    target.id_type = holder_type
+                    target.id = holder
                     target.data_path = '["{0}"][{1}]'.format(name, component)
         for slot in self.level_images:
             socket = node.inputs.get(slot)
@@ -6082,6 +6089,8 @@ class Stack:
                 getattr(host, fn)(self)
             if self.engine_global_sources:
                 getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.register_scene_time(self.scene_time_scales)
             if self.level_images:
                 getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
             if self.sync_post_chains not in bpy.app.handlers.depsgraph_update_post:
@@ -6099,6 +6108,7 @@ class Stack:
         host.register_capability_rewire(self.rewire_capabilities)
         getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
         getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
+        host.register_scene_time(self.scene_time_scales)
         host.register_object_attributes(self.object_attribute_bases)
         host.register_texel_sizes(self.texel_size_bases)
         host.register_light_parameters(self.light_parameter_attributes)
@@ -6132,6 +6142,8 @@ class Stack:
                 getattr(host, fn)(self)
             if self.engine_global_sources:
                 getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.unregister_scene_time(self.scene_time_scales)
             if self.level_images:
                 getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
             return
@@ -6152,6 +6164,7 @@ class Stack:
         host.unregister_capability_rewire(self.rewire_capabilities)
         getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
         getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
+        host.unregister_scene_time(self.scene_time_scales)
         host.unregister_object_attributes(self.object_attribute_bases)
         host.unregister_texel_sizes(self.texel_size_bases)
         host.unregister_light_parameters(self.light_parameter_attributes)

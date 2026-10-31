@@ -335,7 +335,6 @@ NAMES = (
     '_VoxelEmissionScale',
     '_AlphaClipThreshold',
     '_CullMode',
-    '_VFXParams0',
     '_Metallic',
     '_ParallaxMarchNum',
     '_NormalScale',
@@ -730,7 +729,6 @@ def annotations(kit, stack):
     a['p_VoxelEmissionScale'] = bpy.props.FloatProperty(name='Voxel Emission Scale', description='体素方块的发光倍率:只对体素方块材质有效,越大方块自发光越亮。\n_VoxelEmissionScale', default=4.0, update=kit.writer(stack, '_VoxelEmissionScale'))
     a['p_AlphaClipThreshold'] = bpy.props.FloatProperty(name='Alpha Clip Threshold', description='镂空阈值(深度趟与投影用的那一份):低于它的像素不写深度、不投影;和「Alpha Cutoff」含义一样,通常保持一致。\n_AlphaClipThreshold', default=0.5, min=0.0, max=1.0, update=kit.writer(stack, '_AlphaClipThreshold'))
     a['p_CullMode'] = bpy.props.FloatProperty(name='Cull Mode', description='渲染模型的哪一面:0 双面,1 只画背面,2 只画正面(数值同引擎的剔除模式)。\n_CullMode', default=2.0, update=kit.writer(stack, '_CullMode'))
-    a['p_VFXParams0'] = bpy.props.FloatVectorProperty(name='VFX Params0 (xyz = 角色位, w = 时间)', description='引擎全局的特效参数,由场景自动写入,一般不用手调。\nX: 角色的世界位置 X。\nY: 角色的世界位置 Y。\nZ: 角色的世界位置 Z。\nW: 时间(秒)。\n_VFXParams0', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_VFXParams0'))
     a['p_Metallic'] = bpy.props.FloatProperty(name='Metallic', description='金属度:0 非金属,1 纯金属。只在「Base Texture Map Count」选了不含金属度的方式(值为 2)时才起作用。\n_Metallic', default=0.0, min=0.0, max=1.0, update=kit.writer(stack, '_Metallic'))
     a['p_ParallaxMarchNum'] = bpy.props.FloatProperty(name='Parallax March Num', description='视差的步进次数:越多越准确、越少穿帮,越耗性能;一般 3 够用。\n_ParallaxMarchNum', default=3.0, min=1.0, max=5.0, update=kit.writer(stack, '_ParallaxMarchNum'))
     a['p_NormalScale'] = bpy.props.FloatProperty(name='Normal Scale', description='法线强度:1 原样,0 当作平面,越大凹凸越强。\n_NormalScale', default=1.0, min=0.0, max=2.0, update=kit.writer(stack, '_NormalScale'))
@@ -899,7 +897,6 @@ def draw_ContainerWater(kit, layout, material, p):
         kit.prop(g0, p, 'p_VoxelEmissionScale', 'Voxel Emission Scale')
         kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_CullMode', 'Cull Mode')
-        kit.prop(g0, p, 'p_VFXParams0', 'VFX Params0 (xyz = 角色位, w = 时间)')
         kit.prop(g0, p, 'p_NormalScale', 'Normal Scale')
     g1 = kit.group(root, p, '视差', '视差', 0, None, True)
     if g1 is not None:
@@ -965,7 +962,6 @@ def draw_Grass(kit, layout, material, p):
         kit.prop(g0, p, 'p_VoxelEmissionScale', 'Voxel Emission Scale')
         kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_CullMode', 'Cull Mode')
-        kit.prop(g0, p, 'p_VFXParams0', 'VFX Params0 (xyz = 角色位, w = 时间)')
         kit.prop(g0, p, 'p_NormalScale', 'Normal Scale')
 
 def draw_Leaf(kit, layout, material, p):
@@ -1064,7 +1060,6 @@ def draw_Leaf(kit, layout, material, p):
         kit.prop(g0, p, 'p_VoxelEmissionScale', 'Voxel Emission Scale')
         kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_CullMode', 'Cull Mode')
-        kit.prop(g0, p, 'p_VFXParams0', 'VFX Params0 (xyz = 角色位, w = 时间)')
         kit.prop(g0, p, 'p_NormalScale', 'Normal Scale')
 
 def draw_Lit(kit, layout, material, p):
@@ -1304,7 +1299,6 @@ def draw_Lit(kit, layout, material, p):
         kit.prop(g0, p, 'p_VoxelEmissionScale', 'Voxel Emission Scale')
         kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_CullMode', 'Cull Mode')
-        kit.prop(g0, p, 'p_VFXParams0', 'VFX Params0 (xyz = 角色位, w = 时间)')
         kit.prop(g0, p, 'p_NormalScale', 'Normal Scale')
     g1 = kit.group(root, p, 'PBR 基础', 'PBR 基础', 0, None, True)
     if g1 is not None:

@@ -187,6 +187,12 @@ def _run_rig_basis(change):
     return material_builder.apply_rig_stages(objects=scope)
 
 
+def _run_scene_time(change):
+    """引擎逐帧写的时钟全局(水面的波相、特效的滚动、自发光的扫光都按它走)。场景上一条带驱动的属性,随文件存盘,
+    放动画时依赖图自己走,不碰任何材质;已经陈述过的不再动。"""
+    return material_builder.apply_scene_time(change.scene)
+
+
 def _run_post(change):
     return len(material_builder.apply_post_stages(change.scene))
 
@@ -203,6 +209,8 @@ STAGES = (
     Stage("vertex", (OBJECTS,), _run_vertex),
     Stage("camera-basis", (CAMERA, LOADED, APPENDED), _run_camera_basis),
     Stage("rig-basis", (OBJECTS, MATERIALS, RIG, LOADED, APPENDED), _run_rig_basis),
+    # 合成器的时钟口读这条属性,所以排在后处理之前。
+    Stage("scene-time", (OBJECTS, MATERIALS, LOADED), _run_scene_time),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
     # 装过就跳过,所以反复触发也只是一次 installed() 判断;相机事实含出图尺寸,
