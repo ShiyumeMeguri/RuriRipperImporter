@@ -5484,8 +5484,8 @@ class Stack:
 
     WATER_REFLECT_HISTORY = 0.7
     WATER_REFLECT_CYCLE = 8
-    # 透射率低到看不见身后时,拆不透明色只是在放大噪声;这个像素盖回去也只剩混合物体自己。
-    WATER_TRANSMITTANCE_FLOOR = 1e-4
+    # 透射率低到看不见身后时,拆不透明色只是在放大噪声:这个像素的不透明色只有水面的反射与折射读,不许放大到盖过场景。
+    WATER_TRANSMITTANCE_FLOOR = 0.0625
 
     def _water_lighting(self, tree, scene, render, chain, width, height, beneath):
         """水面(HG 的水面屏幕空间反射与 WaterLighting 读屏幕的后半段):没有水面物体时这条链不建,返回 None。场景层的
@@ -5496,8 +5496,8 @@ class Stack:
         它的不动点:第 j 帧之前的那次追踪权重 0.3·0.7^j / (1 − 0.7^8);可信度在真源的画面上由 TAA 按周期摊平,取八次的均值。
 
         先后:真源先合水面再画透明物体,宿主把混合物体直接画进了场景层的颜色。场景层的透明通道交出它们(预乘的颜色,
-        α 是透射率),从场景色里拆出不透明的那份给水面读,合成之后再盖回去:水面外的像素原样还原,水面上的雾与特效留在
-        水面之上。"""
+        α 是不透明度,没盖到的像素是 0):场景色 = 通道色 + (1 − α) · 不透明色。从场景色里拆出不透明的那份给水面读,水面改了
+        多少再按 (1 − α) 加回场景色:水面外的像素一个字节不变,水面上的雾与特效留在水面之上。"""
         objects = self._water_objects(scene, chain)
         if not objects:
             return None
@@ -5587,7 +5587,12 @@ class Stack:
         blended_parts = tree.nodes.new('CompositorNodeSeparateColor')
         blended_parts[self.POST_CHAIN_KEY] = label
         tree.links.new(blended, blended_parts.inputs['Image'])
-        transmittance = blended_parts.outputs['Alpha']
+        passing = tree.nodes.new('ShaderNodeMath')
+        passing[self.POST_CHAIN_KEY] = label
+        passing.operation = 'SUBTRACT'
+        passing.inputs[0].default_value = 1.0
+        tree.links.new(blended_parts.outputs['Alpha'], passing.inputs[1])
+        transmittance = passing.outputs[0]
         uncovered = tree.nodes.new('ShaderNodeVectorMath')
         uncovered[self.POST_CHAIN_KEY] = label
         uncovered.operation = 'MAXIMUM'
@@ -5610,7 +5615,8 @@ class Stack:
         composite = run('composite', full_field, {
             'sceneColor': opaque, 'sceneDeviceDepth': scene_depth, 'waterDeviceDepth': water_depth,
             'reflectLighting': reflect_lighting, 'reflectFade': reflect_fade})
-        return computed('ShaderNodeVectorMath', 'ADD', blended, scaled(only(composite, 'composite'), transmittance))
+        changed = computed('ShaderNodeVectorMath', 'SUBTRACT', only(composite, 'composite'), opaque)
+        return computed('ShaderNodeVectorMath', 'ADD', beneath, scaled(changed, transmittance))
 
     @staticmethod
     def _ssr_view_layers(scene, chain):
