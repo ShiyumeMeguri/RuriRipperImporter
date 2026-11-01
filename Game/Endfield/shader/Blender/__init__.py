@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(57ac023f30b2026e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(d432c25af0615952):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -2335,9 +2335,14 @@ class Stack:
         """真源 ShadowCaster 趟落到宿主的原生状态。那一趟只有一个 Cull 状态和材质开着的裁切,一个裁切都没开的材质没有片元要算:
         use_backface_culling_shadow 就是它的 Cull Back;use_transparent_shadow 一关,宿主拿缺省深度着色器画(eevee_shader.cc:1513),
         最终渲染也不用每采样重画它盖到的阴影页(eevee_shadow.cc:769)。还要跑图的只有:开了裁切的,混合的(透射是连续值),
-        剔正面的(原生只能剔背面),被两面投影的渲染器用着的(逐物体的判断只有图里读得到,见 _cull_transparency)。"""
+        剔正面的(原生只能剔背面),被两面投影的渲染器用着的(逐物体的判断只有图里读得到,见 _cull_transparency)。
+        家族不进宿主阴影图时这一趟缺省没人画;用户打开了对象的投影开关(见 apply_vertex_stage)也只要轮廓,不跑图。"""
+        if not self.HOST_SHADOW_CASTERS:
+            if mat.use_transparent_shadow:
+                mat.use_transparent_shadow = False
+            return
         part = mat.get('ruri_uber_part', '')
-        if not self.HOST_SHADOW_CASTERS or self.SHADOW_CLIP_SWITCHES is None or part not in self.PART_META:
+        if self.SHADOW_CLIP_SWITCHES is None or part not in self.PART_META:
             return
         floats = dict(mat.get('ruri_uber_floats') or {})
         shadow_cull = self._record_shadow_cull(self.PART_META[part], floats, mat.name)
@@ -3803,6 +3808,9 @@ class Stack:
             if not isinstance(update.id, bpy.types.Object):
                 continue
             obj = update.id.original
+            # 库里的对象只读:修改器面板拧不动、材质也写不回去,比对只会为它把本栈整套模板组拉进本文件。
+            if obj.library is not None:
+                continue
             mod = obj.modifiers.get(self.VTX_MODIFIER)
             tree = getattr(mod, 'node_group', None) if mod is not None else None
             if tree is None:
@@ -4377,9 +4385,10 @@ class Stack:
                     linked.append(obj.name_full)
                 continue
             slots = self._stack_slots(obj)
-            # 家族声明本栈的对象不进宿主阴影图(卡通着色经 ShadowAttenuation 自己求遮蔽)才关;
+            # 家族声明本栈的对象不进宿主阴影图(卡通着色经 ShadowAttenuation 自己求遮蔽)才关,且只在导入造出对象时定:
+            # 已经挂着顶点树的是换代重调,原生的投影开关此后是用户的(忽略主光阴影的片子要她投到地上),不许关回去。
             # 其余家族投不投影由导入时的游戏数据定(shader 有没有启用的 ShadowCaster 趟),这里不碰。
-            if slots and not self.HOST_SHADOW_CASTERS and obj.visible_shadow:
+            if slots and not self.HOST_SHADOW_CASTERS and obj.visible_shadow and obj.modifiers.get(self.VTX_MODIFIER) is None:
                 obj.visible_shadow = False
             # 只进阴影图的渲染器(导入时按游戏的 ShadowsOnly 关掉了全部非阴影可见性)一个像素都画不出:
             # 真源只给它跑投影趟,壳与描边建出来也没人看得见,只是白付每一次几何重算。
