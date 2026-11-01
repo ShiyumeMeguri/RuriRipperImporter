@@ -344,45 +344,32 @@ class Rig(abc.ABC):
 
 
 class RigAttachment(abc.ABC):
-    """A host that can attach a loaded selection to an existing rig bone.
+    """A host that mounts what a statement placed onto a bone of a rig already in the document.
 
-    A binding contains an opaque key, source bone_path, host-basis row-major
-    offset matrix and visibility. The game supplies those facts; the host only
-    validates the live target and realizes them. Normal materialise is reused.
-    """
-
-    @abc.abstractmethod
-    def validate_attachment(self, context, rig, binding):
-        """Return a reason to stop, or an empty string. Never mutate the target."""
-
-
-class AttachmentChains(abc.ABC):
-    """Optional transactional composition of ordinary rig attachments.
-
-    The context manager returns a session with target(part), reuse(part, final)
-    and accept(part, built). It resolves opaque parent keys, validates reusable
-    scene objects and rolls back only newly placed objects on failure.
-    """
+    A part states an opaque key, the key of the part it hangs from ("" for the owner rig), its seed, the seed of the
+    rig it hangs on, that rig's bone path, a host-basis row-major offset matrix, whether its meshes show and a label.
+    The game states those facts; the host checks them against the live document and realizes them on what
+    :func:`Kernel.app.loading.place` built. A direct mount is one part."""
 
     @abc.abstractmethod
-    def attachment_chain(self, context, owner):
-        """Open a synchronous attachment transaction against this owner rig."""
-
-
-class AttachmentAnimationTarget(abc.ABC):
-    """Resolve an already mounted rig from an opaque binding, never from clip names."""
+    def attachment_refusal(self, context, owner, parts):
+        """Why these parts cannot go onto ``owner`` now, or "". Never changes the document."""
 
     @abc.abstractmethod
-    def attachment_animation_target(self, context, binding):
-        """Return one editable mounted rig, or raise before loading animation data."""
-
-
-class CompanionAnimations(abc.ABC):
-    """Optional synchronized activation of two independently loaded rig actions."""
+    def attachment_transaction(self, context, owner):
+        """A context manager for one synchronous batch of parts. Its session answers ``reuse(part, final)``, True when
+        the part already hangs there and the batch goes on from it, and ``accept(part, stated, built)``, which mounts
+        what was just placed. Leaving by an exception takes everything the batch made back out."""
 
     @abc.abstractmethod
-    def companion_animations(self, context, rig, binding):
-        """Transaction exposing owner, can_pair, capture(rig), synchronize(primary, companion)."""
+    def mounted_rig(self, context, row):
+        """The one rig a binding row's resource brought under the selected owner, or raise."""
+
+    @abc.abstractmethod
+    def paired_performance(self, context, rig, row):
+        """A context manager for keying clips onto a mounted rig and its owner together. Its session has ``owner``,
+        ``can_pair``, ``capture()`` for the performances built since the last capture, and
+        ``synchronize(primary, companion)`` to play them in step. Leaving by an exception restores what was playing."""
 
 
 class Timeline(abc.ABC):
@@ -525,7 +512,7 @@ class RegionPicking(abc.ABC):
 
 
 #: Every protocol a driver can answer, in the order a diagnostics surface lists them.
-PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, AttachmentChains, AttachmentAnimationTarget, CompanionAnimations, Timeline, Retarget, MorphTargets, NodeMaterials,
+PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, Timeline, Retarget, MorphTargets, NodeMaterials,
              TextureCache, TextureSets, DisplaySettings, RegionPicking)
 
 _BOUND = []

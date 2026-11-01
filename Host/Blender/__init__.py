@@ -47,8 +47,8 @@ def _preferences():
     return entry.preferences if entry is not None else None
 
 
-class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, host_port.Rig, host_port.RigAttachment, host_port.AttachmentChains,
-                  host_port.AttachmentAnimationTarget, host_port.CompanionAnimations, host_port.Timeline, host_port.Retarget, host_port.MorphTargets, host_port.NodeMaterials,
+class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, host_port.Rig, host_port.RigAttachment,
+                  host_port.Timeline, host_port.Retarget, host_port.MorphTargets, host_port.NodeMaterials,
                   host_port.RegionPicking):
     """What Blender can do, and where Blender keeps the one path that differs
     per machine. A skeleton, an animation surface and morph targets, a scene of
@@ -335,21 +335,21 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         from . import materialise as materialiser
         return materialiser.materialise(context, statement, options, report)
 
-    def validate_attachment(self, context, rig, binding):
+    def attachment_refusal(self, context, owner, parts):
         from . import attachments
-        return attachments.validate(context, rig, binding)
+        return attachments.refusal(context, owner, parts)
 
-    def attachment_chain(self, context, owner):
-        from . import attachment_chain
-        return attachment_chain.transaction(context, owner)
+    def attachment_transaction(self, context, owner):
+        from . import attachments
+        return attachments.transaction(context, owner)
 
-    def attachment_animation_target(self, context, binding):
-        from . import attachment_chain
-        return attachment_chain.animation_target(context, binding, self.selected_rig(context))
+    def mounted_rig(self, context, row):
+        from . import attachments
+        return attachments.mounted_rig(context, row, self.selected_rig(context))
 
-    def companion_animations(self, context, rig, binding):
+    def paired_performance(self, context, rig, row):
         from . import companion_animations
-        return companion_animations.transaction(context, rig, binding)
+        return companion_animations.transaction(context, rig, row)
 
 
 #: Bound BEFORE this driver's own modules are imported, and long before

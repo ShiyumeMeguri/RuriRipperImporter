@@ -12,6 +12,7 @@ RuriRipperImporter 项目特化铁律:通用铁律继承 skill ruri-engineering-
 2.3 Kernel/bridge/ 是读取器的唯一入口,公开面只有四个动词(表、字节、视图、搜索)加会话控制;Kernel/statement.py 是唯一把字节变成数组的地方(唯一的 frombuffer)。
 2.4 坐标约定一个数字都不许写在 py 里:基变换 matrix、顶层一次性转身 root、相机或灯自己朝哪个轴的那一下 aim 全部从 core.bases 读(Kernel/statement.py 的 basis);aim 只落在相机或灯这一个变换上、它的子物体要乘逆才不会被带着转;宿主里出现 Matrix.Rotation(pi/2, 4, "X") 这种写法即违规(那是内核的陈述不是宿主的意见)。
 2.5 骨架是谁问骨架自己:动画重定向用 Rig.rig_paths(骨骼的变换路径)与 Rig.rig_avatar(建骨时烙上的 avatar 陈述),都由读取器原样带回读取器;别拿骨骼名单冒充路径,别从名字反推身份。
+0.7 挂载只有一条路:一行绑定永远带 parts(父在前,直挂就是一段),每段的种子走 loading.read 与 loading.place,落地后交 Kernel/host.py 的 RigAttachment 事务挂到骨上;materialise 不认识挂载,没有第二条直挂路径、没有版本协商、也没有把武器合进角色骨架的第二种种子。
 2.6 片段写给别的骨架时(绑定落在目标上的不到 5%)只走 loading.perform 的替身通路:读取器按绑定量出它写给哪副骨架并给出该骨架预制体的种子(core.clip.source_skeleton),宿主立替身骨架、把片段键上去、交 RuriActionRetarget 的表搬到目标再拆掉替身;选哪张表与重定向数学只在 RuriActionRetarget,这边不重复。
 3. 一个包两个宿主、入口不许分叉:根 __init__.py 只做宿主检测加分派(Blender 走 register 与 unregister,Painter 走 start_plugin、close_plugin、reload_plugin,两边都落到 Host/{宿主}/);Painter 侧的插件目录是指向本仓的目录联接({Painter user resources}\python\plugins\RuriRipperImporter 指向 D:\Ruri\00.Model\Tools\BlenderProfile\RuriConfig\scripts\addons\RuriRipperImporter),看到两条路径指向看起来一样的东西先假设是同一个目录(Get-Item -Force | Select LinkType, Target)。
 3.5 一行的 Payload 必须就是种子:名册给角色 id、场景表给地图名、卡片表给文件路径都是把拼种子推给了宿主,而宿主不知道这个游戏的前缀,按钮按下去只会得到「这个种子没人认领」;判据是每个会被导入的数据集的 payload 列的值拿去 core.statement.nodes --data-arg seed={它} 要出行,种子的拼法写在认领它的那个 StatementSource 旁边(XxxStatementSource.XxxSeed(...)),任何一张表都不许自己拼前缀(拼两处就是两份真源,漂移只会在按钮上现形)。

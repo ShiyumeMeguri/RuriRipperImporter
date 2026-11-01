@@ -23,7 +23,6 @@ import json
 import os
 import re
 import time
-from contextlib import closing
 
 from .. import host as host_port
 from .. import options as kernel_options
@@ -1750,17 +1749,6 @@ def _import_selected(context, arguments):
     if refused:
         _announce(context, refused, host_port.ERROR)
         return
-    if arguments.get("attach_to_target"):
-        if arguments["reset_scene"]:
-            raise ValueError("Equipping preserves the existing scene; Reset Scene is a separate operation.")
-        answer, binding, target = yield from attachments.prepare(context, {row["cab"] for row in rows})
-        if binding.get("chain"):
-            placed, reused = yield from attachments.load_chain(context, answer, binding, target, as_options(state))
-            _announce(context, "{0} object(s) placed; {1} parent attachment(s) reused.".format(placed, reused), host_port.INFO)
-            _redraw()
-            return
-        yield from _load_steps(context, state, [binding["seed"]], (), False, attachment=(answer, binding, target))
-        return
     host = host_port.current()
     things = [row["cab"] for row in rows if not _row_is_clip_only(row)]
     clips = [row["cab"] for row in rows if _row_is_clip_only(row)]
@@ -1775,6 +1763,20 @@ def _import_selected(context, arguments):
                            "resetting so the rig survives.", host_port.ERROR)
         return
     yield from _load_steps(context, state, things, clips, arguments["reset_scene"])
+
+
+def _attach_selected(context, arguments):
+    """Mount the one selected row onto the rig in front of the user, as the answer a panel opened over this listing
+    states it. The parts load the way anything loads; only mounting them is the host's."""
+    state = state_of(context)
+    config = _ensure_active_config(state)
+    rows, refused = _importable_rows(context, state, config)
+    if refused:
+        _announce(context, refused, host_port.ERROR)
+        return
+    placed, reused = yield from attachments.attach(context, {row["cab"] for row in rows}, as_options(state))
+    _announce(context, "{0} object(s) placed; {1} parent attachment(s) reused.".format(placed, reused), host_port.INFO)
+    _redraw()
 
 
 def _load(context, arguments):
@@ -1877,7 +1879,7 @@ def show_rules(context, rules):
     _reapply_and_refresh(context)
 
 
-def _load_steps(context, state, seeds, clips, reset_scene, panel="", attachment=None):
+def _load_steps(context, state, seeds, clips, reset_scene, panel=""):
     """Read the statement off the main thread, place it, then play the performances."""
     host = host_port.current()
     options = as_options(state)
@@ -1892,16 +1894,6 @@ def _load_steps(context, state, seeds, clips, reset_scene, panel="", attachment=
     rig = None
     if stated is not None:
         with stated:
-            if attachment is not None:
-                answer, binding, target = attachment
-                if attachments.current() is not answer:
-                    raise ValueError("The install or equipment target changed during import.")
-                if answer.map is not cabmap_state.ROWS or answer.bridge is not cabmap_state.BRIDGE:
-                    raise ValueError("The loaded map changed during import.")
-                reason = host.validate_attachment(context, target, binding)
-                if reason:
-                    raise ValueError(reason)
-                options["attachment"] = (target, binding)
             built = loading.place(context, stated, options, lines)
         placed = built.imported
         rig = built.rig
@@ -2050,36 +2042,18 @@ READ_ALL_SHADERS = app_command.COMMANDS.define(
     icon="SHADERFX", poll=_map_ready, steps=True, status_state=STATE,
     failure="Reading this install's shaders failed")
 
-def _add_animations(context, arguments):
-    state = state_of(context)
-    rows, reason = _importable_rows(context, state, _ensure_active_config(state))
-    if reason:
-        raise ValueError(reason)
-    if not rows or any(not _row_is_clip_only(row) for row in rows):
-        raise ValueError("Select animation-only rows to add actions without placing objects.")
-    rig = host_port.selected_rig(context)
-    if rig is None:
-        raise ValueError("Select the target rig first.")
-    played, lines = loading.perform(context, [row["cab"] for row in rows], rig=rig,
-                                   options=as_options(state), activate=False)
-    _announce(context, "{0} animation(s) added; current action retained. {1}".format(
-        played, " ".join(lines[:3])), host_port.INFO if played else host_port.WARNING)
-    _redraw()
-
-
-ADD_ANIMATIONS = app_command.COMMANDS.define(
-    "ruri.add_animations", "Add Animations", _add_animations,
-    description="Add selected animation clips as new actions without replacing the active action",
-    icon="ACTION", poll=_can_import, requires=host_port.Timeline, failure="Adding animations failed")
-
-
 IMPORT_SELECTED = app_command.COMMANDS.define(
     "ruri.import_selected", "Import Selected", _import_selected,
     description="Import every selected row as one selection",
     icon="IMPORT", poll=_can_import, steps=True, status_state=STATE,
     failure="Import failed",
-    arguments=(app_state.Field("reset_scene", app_state.BOOL, False),
-               app_state.Field("attach_to_target", app_state.BOOL, False),))
+    arguments=(app_state.Field("reset_scene", app_state.BOOL, False),))
+
+ATTACH_SELECTED = app_command.COMMANDS.define(
+    "ruri.attach_selected", "Append to Character", _attach_selected,
+    description="Mount the selected resource onto the rig in front of you, as the panel's answer states it",
+    icon="CONSTRAINT_BONE", poll=_can_import, requires=host_port.RigAttachment, steps=True, status_state=STATE,
+    failure="Equipping failed")
 
 REVEAL = app_command.COMMANDS.define(
     "ruri.reveal", "Open Containing Folder", _reveal,
@@ -2189,20 +2163,15 @@ def _discover_animations(context, arguments):
     state = state_of(context)
     rows = _selected_target_rows(state)
     seeds = [row["cab"] for row in rows]
-    state.animation_companions = ""
-    answer = attachments.current()
-    binding = answer.picked(set(seeds)) if answer is not None else None
-    if binding is not None and answer.animations is not None:
-        with closing(answer.animations(binding)) as table:
-            plan = [table.row(i) for i in range(len(table))]
+    planned = attachments.plan_clips(set(seeds))
+    if planned is not None:
+        bound, plan = planned
         state.available_clips.clear()
         for row in plan:
             item = state.available_clips.add()
             item.seed, item.name, item.folder = row["seed"], row["label"], "animations"
         state.animation_seeds = loading.seed_lines(seeds)
-        state.animation_attachment = json.dumps(binding)
-        state.animation_companions = json.dumps({row["seed"]: row["companion_seed"] for row in plan})
-        state.animation_character_name = binding["label"]
+        state.animation_character_name = bound["label"]
         _apply_animation_filter(state)
         _redraw()
         return
@@ -2217,9 +2186,6 @@ def _discover_animations(context, arguments):
         item.name = row["name"]
         item.folder = _clip_folder(row["container"])
     state.animation_seeds = loading.seed_lines(seeds)
-    answer = attachments.current()
-    binding = answer.picked(set(seeds)) if answer is not None else None
-    state.animation_attachment = json.dumps(binding) if binding is not None else ""
     state.animation_character_name = (rows[0]["name"] if len(rows) == 1
                                       else "{0} selected rows".format(len(rows)))
     _apply_animation_filter(state)
@@ -2237,25 +2203,9 @@ def _play_checked_animations(context, arguments):
     if not clips:
         _announce(context, "No animations checked.", host_port.WARNING)
         return
-    if state.animation_attachment:
-        binding = json.loads(state.animation_attachment)
-        answer = attachments.current()
-        if (answer is None or answer.map is not cabmap_state.ROWS or answer.bridge is not cabmap_state.BRIDGE
-                or not any(row["id"] == binding["id"] and row["seed"] == binding["seed"] for row in answer.rows)):
-            raise ValueError("The equipment context changed. Discover Animations again.")
-        host = host_port.current()
-        if host_port.AttachmentAnimationTarget not in host.capabilities:
-            raise ValueError("This host has no mounted animation target resolver.")
-        rig = host.attachment_animation_target(context, binding)
-        if state.animation_companions:
-            from . import companion_animations
-            played, lines = companion_animations.perform(context, rig, binding, clips,
-                json.loads(state.animation_companions), as_options(state))
-            _announce(context, "{0} animation(s) imported. {1}".format(played, " ".join(lines[:3])))
-            _redraw()
-            return
-        played, lines = loading.perform(context, clips, rig=rig, options=as_options(state), activate=True)
-        _announce(context, "{0} animation(s) imported onto {1}. {2}".format(played, rig.name, " ".join(lines[:3])))
+    if attachments.performing():
+        played, lines = attachments.perform(context, clips, as_options(state))
+        _announce(context, "{0} animation(s) imported. {1}".format(played, " ".join(lines[:3])))
         _redraw()
         return
     seeds = ([] if host_port.selected_rig(context) is not None
@@ -2526,22 +2476,18 @@ def draw(layout, context):
     batch = " {0}".format(selected_count) if selected_count > 1 else ""
     resettable = host_port.SceneGraph in host.capabilities
     actions = gated.row(align=True)
-    append = actions.operator(IMPORT_SELECTED.id,
-                              text="Import{0}{1}".format(batch, " (Append)" if resettable else ""))
-    append.reset_scene = False
-    # Blender can retain an operator's last properties. State the ordinary
-    # action explicitly so a preceding equipment click never changes Append.
-    append.attach_to_target = False
+    actions.operator(IMPORT_SELECTED.id,
+                     text="Import{0}{1}".format(batch, " (Append)" if resettable else "")
+                     ).reset_scene = False
     if resettable:
         # "Append" only means something against "Reset": a host whose document IS
         # one mesh has one button, not one of each with the same effect.
-        reset = actions.operator(IMPORT_SELECTED.id, text="Import{0} (Reset Scene)".format(batch))
-        reset.reset_scene = True
-        reset.attach_to_target = False
+        actions.operator(IMPORT_SELECTED.id,
+                         text="Import{0} (Reset Scene)".format(batch)).reset_scene = True
     gated.operator(IMPORT_WITH_DEPENDENTS.id,
                    text="Import{0} (With Dependents)".format(batch),
                    icon="LOOP_BACK").reset_scene = False
-    draw_equipment_animations(gated, context, state, _target_cabs(state))
+    _draw_attachment_and_animations(gated, context, state)
     # A model that carries its own secondary motion carries it whether or not any
     # of the game's tables ever names that model -- so the rows get their own way
     # in, beside the import that would have brought it along.
@@ -2558,16 +2504,16 @@ def draw(layout, context):
     shading.operator(READ_ALL_SHADERS.id, icon="SHADERFX")
 
 
-def draw_equipment_animations(layout, context, state, cabs):
-    """One frame for attachment controls and the existing animation browser."""
-    equipped = attachments.current() is not None
+def _draw_attachment_and_animations(layout, context, state):
+    """One frame for an open attachment answer and the animation list that plays what it mounted."""
+    answered = attachments.current() is not None
     timeline = host_port.Timeline in host_port.current().capabilities
-    if not equipped and not timeline:
+    if not answered and not timeline:
         return
     box = layout.box()
-    attachments.draw(box, context, cabs, IMPORT_SELECTED.id, framed=False)
+    attachments.draw(box, context, _target_cabs(state), ATTACH_SELECTED.id)
     if timeline:
-        if equipped:
+        if answered:
             box.separator()
         _draw_animations(box, state)
 

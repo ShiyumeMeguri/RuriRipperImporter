@@ -26,7 +26,7 @@ class Session:
         scene = context.scene
         self.time = scene.frame_start, scene.frame_end, scene.frame_current, scene.frame_subframe
 
-    def capture(self, rig):
+    def capture(self):
         actions = [a for a in bpy.data.actions if a not in self.seen]
         self.seen.update(actions)
         return actions

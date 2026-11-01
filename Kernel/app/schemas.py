@@ -310,8 +310,6 @@ BROWSER = Schema("Browser", """The cabmap browser's whole state.""", (
     # The seeds the listed clips were discovered from, one per line: what is loaded
     # first when the checked clips have no rig in front of the user to play onto.
     Field("animation_seeds", state.STRING, ""),
-    Field("animation_attachment", state.STRING, ""),
-    Field("animation_companions", state.STRING, ""),
     Field("animation_search", state.STRING, "", "Filter",
           "Filter the discovered clips by name or by the game's own folder",
           update="on_animation_search", live=True),
