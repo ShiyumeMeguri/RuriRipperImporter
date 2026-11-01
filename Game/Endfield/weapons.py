@@ -56,7 +56,8 @@ def find(context, arguments):
         # exact CAB rules and binding facts; Python never constructs a seed.
         app_browser.show_rules(context, json.loads(rows[0]["rules"]))
         attachments.open_for(None, rows, resolver=lambda target, paths, target_basis:
-                             datasets.weapon_bindings(seed, target, paths, target_basis))
+                             datasets.weapon_bindings(seed, target, paths, target_basis),
+                             animations=lambda binding: datasets.weapon_animation_plan(binding["actor_seed"], binding["seed"]))
         cabmap_state.clear_selection()
         app_browser.state_of(context).active_index = -1
         app_browser.state_of(context).cursor_cab = ""
@@ -71,3 +72,39 @@ FIND = command.COMMANDS.define(
     icon="OUTLINER_OB_MESH", poll=can_find, requires=host_port.RigAttachment,
     steps=True, status_state="ruri_roster", settle=lambda context, result: result,
     failure="Weapon query failed")
+
+
+def can_find_animations(context):
+    return (cabmap_state.BRIDGE is not None and cabmap_state.active_game() == "Endfield"
+            and host_port.selected_rig(context) is not None
+            and not app_browser.state_of(context).loading)
+
+
+def find_animations(context, arguments):
+    host = host_port.current()
+    rig = host_port.selected_rig(context)
+    seed = host.rig_seed(rig)
+    asked = cabmap_state.ACTIVE, cabmap_state.ROWS, cabmap_state.BRIDGE
+    table = yield command.Read(lambda: datasets.weapon_animation_search(seed), 0.5)
+    try:
+        if (any(a is not b for a, b in zip(asked, (cabmap_state.ACTIVE, cabmap_state.ROWS, cabmap_state.BRIDGE)))
+                or host_port.selected_rig(context) != rig or host.rig_seed(rig) != seed):
+            raise ValueError("The selected rig or install changed. Run Find again.")
+        if not len(table):
+            app_browser.state_of(context).status = "No owned animation resources were found for this weapon."
+            return {"CANCELLED"}
+        app_browser.show_rules(context, json.loads(table.cell(0, "rules")))
+        attachments.clear()
+        cabmap_state.clear_selection()
+        app_browser.state_of(context).active_index = -1
+        app_browser.state_of(context).cursor_cab = ""
+        app_browser.state_of(context).status = "Select clips, then Add Animations on the weapon rig."
+    finally:
+        table.close()
+
+
+FIND_ANIMATIONS = command.COMMANDS.define(
+    "ruri.endfield_find_weapon_animations", "Find Weapon Animations", find_animations,
+    description="Find the selected imported weapon rig's owned clips; does not change any action",
+    icon="ANIM_DATA", poll=can_find_animations, requires=host_port.Timeline,
+    steps=True, status_state="ruri_cabmap", failure="Weapon animation query failed")

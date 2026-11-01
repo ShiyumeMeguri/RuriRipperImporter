@@ -356,6 +356,35 @@ class RigAttachment(abc.ABC):
         """Return a reason to stop, or an empty string. Never mutate the target."""
 
 
+class AttachmentChains(abc.ABC):
+    """Optional transactional composition of ordinary rig attachments.
+
+    The context manager returns a session with target(part), reuse(part, final)
+    and accept(part, built). It resolves opaque parent keys, validates reusable
+    scene objects and rolls back only newly placed objects on failure.
+    """
+
+    @abc.abstractmethod
+    def attachment_chain(self, context, owner):
+        """Open a synchronous attachment transaction against this owner rig."""
+
+
+class AttachmentAnimationTarget(abc.ABC):
+    """Resolve an already mounted rig from an opaque binding, never from clip names."""
+
+    @abc.abstractmethod
+    def attachment_animation_target(self, context, binding):
+        """Return one editable mounted rig, or raise before loading animation data."""
+
+
+class CompanionAnimations(abc.ABC):
+    """Optional synchronized activation of two independently loaded rig actions."""
+
+    @abc.abstractmethod
+    def companion_animations(self, context, rig, binding):
+        """Transaction exposing owner, can_pair, capture(rig), synchronize(primary, companion)."""
+
+
 class Timeline(abc.ABC):
     """A host with an animation surface: actions, curves, a playhead."""
 
@@ -496,7 +525,7 @@ class RegionPicking(abc.ABC):
 
 
 #: Every protocol a driver can answer, in the order a diagnostics surface lists them.
-PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, Timeline, Retarget, MorphTargets, NodeMaterials,
+PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, AttachmentChains, AttachmentAnimationTarget, CompanionAnimations, Timeline, Retarget, MorphTargets, NodeMaterials,
              TextureCache, TextureSets, DisplaySettings, RegionPicking)
 
 _BOUND = []

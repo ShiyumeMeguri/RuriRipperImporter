@@ -35,6 +35,8 @@ CHARACTER_MODELS = "endfield.character.models"
 LANGUAGE = "endfield.roster.language"
 CAST = "endfield.roster.cast"
 WEAPON_BINDINGS = "endfield.character.weapon_bindings"
+WEAPON_CHAIN_BINDINGS = "endfield.character.weapon_chain_bindings"
+WEAPON_ANIMATION_SEARCH = "endfield.weapon.animation_search"
 MODEL = "endfield.asset.model"
 PART = "endfield.asset.part"
 NAMED = "endfield.asset.named"
@@ -96,7 +98,22 @@ def _table(dataset_id, **args):
 
 def weapon_bindings(seed, target, paths, basis):
     """Host-neutral binding facts for a selected existing rig."""
-    return _table(WEAPON_BINDINGS, seed=seed, target=target, paths=paths, basis=basis)
+    # Dataset negotiation only: an older backend retains the existing direct path.
+    published = _table("core.datasets")
+    try:
+        chained = any(published.cell(i, "id") == WEAPON_CHAIN_BINDINGS for i in range(len(published)))
+    finally:
+        published.close()
+    return _table(WEAPON_CHAIN_BINDINGS if chained else WEAPON_BINDINGS,
+                  seed=seed, target=target, paths=paths, basis=basis)
+
+
+def weapon_animation_search(seed):
+    return _table(WEAPON_ANIMATION_SEARCH, seed=seed)
+
+
+def weapon_animation_plan(seed, weapon):
+    return _table("endfield.weapon.animation_plan", seed=seed, weapon=weapon)
 
 
 def _rows(dataset_id, **args):

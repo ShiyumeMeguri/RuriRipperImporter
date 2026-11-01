@@ -23,6 +23,7 @@ import json
 import os
 import re
 import time
+from contextlib import closing
 
 from .. import host as host_port
 from .. import options as kernel_options
@@ -1753,6 +1754,11 @@ def _import_selected(context, arguments):
         if arguments["reset_scene"]:
             raise ValueError("Equipping preserves the existing scene; Reset Scene is a separate operation.")
         answer, binding, target = yield from attachments.prepare(context, {row["cab"] for row in rows})
+        if binding.get("chain"):
+            placed, reused = yield from attachments.load_chain(context, answer, binding, target, as_options(state))
+            _announce(context, "{0} object(s) placed; {1} parent attachment(s) reused.".format(placed, reused), host_port.INFO)
+            _redraw()
+            return
         yield from _load_steps(context, state, [binding["seed"]], (), False, attachment=(answer, binding, target))
         return
     host = host_port.current()
@@ -2044,6 +2050,29 @@ READ_ALL_SHADERS = app_command.COMMANDS.define(
     icon="SHADERFX", poll=_map_ready, steps=True, status_state=STATE,
     failure="Reading this install's shaders failed")
 
+def _add_animations(context, arguments):
+    state = state_of(context)
+    rows, reason = _importable_rows(context, state, _ensure_active_config(state))
+    if reason:
+        raise ValueError(reason)
+    if not rows or any(not _row_is_clip_only(row) for row in rows):
+        raise ValueError("Select animation-only rows to add actions without placing objects.")
+    rig = host_port.selected_rig(context)
+    if rig is None:
+        raise ValueError("Select the target rig first.")
+    played, lines = loading.perform(context, [row["cab"] for row in rows], rig=rig,
+                                   options=as_options(state), activate=False)
+    _announce(context, "{0} animation(s) added; current action retained. {1}".format(
+        played, " ".join(lines[:3])), host_port.INFO if played else host_port.WARNING)
+    _redraw()
+
+
+ADD_ANIMATIONS = app_command.COMMANDS.define(
+    "ruri.add_animations", "Add Animations", _add_animations,
+    description="Add selected animation clips as new actions without replacing the active action",
+    icon="ACTION", poll=_can_import, requires=host_port.Timeline, failure="Adding animations failed")
+
+
 IMPORT_SELECTED = app_command.COMMANDS.define(
     "ruri.import_selected", "Import Selected", _import_selected,
     description="Import every selected row as one selection",
@@ -2160,6 +2189,23 @@ def _discover_animations(context, arguments):
     state = state_of(context)
     rows = _selected_target_rows(state)
     seeds = [row["cab"] for row in rows]
+    state.animation_companions = ""
+    answer = attachments.current()
+    binding = answer.picked(set(seeds)) if answer is not None else None
+    if binding is not None and answer.animations is not None:
+        with closing(answer.animations(binding)) as table:
+            plan = [table.row(i) for i in range(len(table))]
+        state.available_clips.clear()
+        for row in plan:
+            item = state.available_clips.add()
+            item.seed, item.name, item.folder = row["seed"], row["label"], "animations"
+        state.animation_seeds = loading.seed_lines(seeds)
+        state.animation_attachment = json.dumps(binding)
+        state.animation_companions = json.dumps({row["seed"]: row["companion_seed"] for row in plan})
+        state.animation_character_name = binding["label"]
+        _apply_animation_filter(state)
+        _redraw()
+        return
     by_cab = cabmap_state.rows_by_cab()
     clips = sorted((by_cab[cab] for cab in cabmap_state.BRIDGE.resolve_closure_cab_names(seeds)
                     if cab in by_cab and "AnimationClip" in by_cab[cab]["type_names"]),
@@ -2171,6 +2217,9 @@ def _discover_animations(context, arguments):
         item.name = row["name"]
         item.folder = _clip_folder(row["container"])
     state.animation_seeds = loading.seed_lines(seeds)
+    answer = attachments.current()
+    binding = answer.picked(set(seeds)) if answer is not None else None
+    state.animation_attachment = json.dumps(binding) if binding is not None else ""
     state.animation_character_name = (rows[0]["name"] if len(rows) == 1
                                       else "{0} selected rows".format(len(rows)))
     _apply_animation_filter(state)
@@ -2187,6 +2236,27 @@ def _play_checked_animations(context, arguments):
     clips = [item.seed for item in state.available_clips if item.selected]
     if not clips:
         _announce(context, "No animations checked.", host_port.WARNING)
+        return
+    if state.animation_attachment:
+        binding = json.loads(state.animation_attachment)
+        answer = attachments.current()
+        if (answer is None or answer.map is not cabmap_state.ROWS or answer.bridge is not cabmap_state.BRIDGE
+                or not any(row["id"] == binding["id"] and row["seed"] == binding["seed"] for row in answer.rows)):
+            raise ValueError("The equipment context changed. Discover Animations again.")
+        host = host_port.current()
+        if host_port.AttachmentAnimationTarget not in host.capabilities:
+            raise ValueError("This host has no mounted animation target resolver.")
+        rig = host.attachment_animation_target(context, binding)
+        if state.animation_companions:
+            from . import companion_animations
+            played, lines = companion_animations.perform(context, rig, binding, clips,
+                json.loads(state.animation_companions), as_options(state))
+            _announce(context, "{0} animation(s) imported. {1}".format(played, " ".join(lines[:3])))
+            _redraw()
+            return
+        played, lines = loading.perform(context, clips, rig=rig, options=as_options(state), activate=True)
+        _announce(context, "{0} animation(s) imported onto {1}. {2}".format(played, rig.name, " ".join(lines[:3])))
+        _redraw()
         return
     seeds = ([] if host_port.selected_rig(context) is not None
              else loading.seeds_in(state.animation_seeds))
@@ -2471,7 +2541,7 @@ def draw(layout, context):
     gated.operator(IMPORT_WITH_DEPENDENTS.id,
                    text="Import{0} (With Dependents)".format(batch),
                    icon="LOOP_BACK").reset_scene = False
-    attachments.draw(gated, context, _target_cabs(state), IMPORT_SELECTED.id)
+    draw_equipment_animations(gated, context, state, _target_cabs(state))
     # A model that carries its own secondary motion carries it whether or not any
     # of the game's tables ever names that model -- so the rows get their own way
     # in, beside the import that would have brought it along.
@@ -2487,8 +2557,19 @@ def draw(layout, context):
     shading.operator(READ_SHADERS.id, icon="NODE_MATERIAL")
     shading.operator(READ_ALL_SHADERS.id, icon="SHADERFX")
 
-    if host_port.Timeline in host.capabilities:
-        _draw_animations(gated.box(), state)
+
+def draw_equipment_animations(layout, context, state, cabs):
+    """One frame for attachment controls and the existing animation browser."""
+    equipped = attachments.current() is not None
+    timeline = host_port.Timeline in host_port.current().capabilities
+    if not equipped and not timeline:
+        return
+    box = layout.box()
+    attachments.draw(box, context, cabs, IMPORT_SELECTED.id, framed=False)
+    if timeline:
+        if equipped:
+            box.separator()
+        _draw_animations(box, state)
 
 
 #: One discovered clip: its checkbox, its name, and the game's own folder for it -- dimmed,
