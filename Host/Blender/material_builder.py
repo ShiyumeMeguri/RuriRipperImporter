@@ -154,6 +154,8 @@ LIGHT_PARAMETERS = extensions.point(
 LIGHT_FADE_PROPERTY = "ruri_light_fade"
 #: On an object whose renderer casts with both faces whatever its material's shadow culling says; the stacks' cull read it.
 SHADOW_TWO_SIDED_PROPERTY = "ruri_shadow_two_sided"
+#: On a material such a renderer uses: whether its shadow is culled differs per object, which only its graph can answer.
+SHADOW_PER_OBJECT_PROPERTY = "ruri_shadow_per_object"
 
 #: The LIGHT attribute every stack's light template reads a light's world orientation
 #: through -- the one thing about a light the host's light loop does not hand over: the
@@ -295,36 +297,37 @@ def unregister_scene_time(scales):
 def apply_scene_time(scene):
     """The clocks the registered stacks read, as properties of ``scene`` driven by its frame: the shading tree
     reads them through a View Layer attribute and the compositor through a driver of its own, so playing or
-    rendering the frame range moves them with nothing else written. A stated clock stays as it is; two stacks
-    scaling one clock differently are refused. Returns how many drivers were added."""
+    rendering the frame range moves them with nothing else written. The frame rate is a number in the expression:
+    a driver on the scene that reads the scene's own settings is a dependency cycle. Two stacks scaling one clock
+    differently are refused. Returns how many drivers were written."""
     wanted = {}
     for provider in SCENE_TIME:
         for name, scales in provider().items():
             if wanted.setdefault(name, list(scales)) != list(scales):
                 raise ValueError("[material] clock {0} has two scales: {1} and {2}".format(
                     name, wanted[name], list(scales)))
-    added = 0
+    seconds_per_frame = scene.render.fps_base / scene.render.fps
+    written = 0
     for name, scales in wanted.items():
         if name not in scene:
             scene[name] = [0.0, 0.0, 0.0, 0.0]
         path = '["{0}"]'.format(name)
-        drivers = scene.animation_data.drivers if scene.animation_data else ()
         for index, scale in enumerate(scales):
-            if scale == 0.0 or any(curve.data_path == path and curve.array_index == index for curve in drivers):
+            if scale == 0.0:
                 continue
-            driver = scene.driver_add(path, index).driver
-            driver.type = "SCRIPTED"
-            for variable_name, data_path in (("fps", "render.fps"), ("fps_base", "render.fps_base")):
-                variable = driver.variables.new()
-                variable.name = variable_name
-                variable.type = "SINGLE_PROP"
-                variable.targets[0].id_type = "SCENE"
-                variable.targets[0].id = scene
-                variable.targets[0].data_path = data_path
-            driver.expression = "frame * fps_base / fps * {0}".format(scale)
-            added += 1
-            drivers = scene.animation_data.drivers
-    return added
+            drivers = scene.animation_data.drivers if scene.animation_data else ()
+            curve = next((curve for curve in drivers if curve.data_path == path and curve.array_index == index), None)
+            if curve is None:
+                curve = scene.driver_add(path, index)
+            driver = curve.driver
+            expression = "frame * {0!r}".format(seconds_per_frame * scale)
+            if driver.type != "SCRIPTED" or driver.expression != expression or len(driver.variables):
+                driver.type = "SCRIPTED"
+                for variable in list(driver.variables):
+                    driver.variables.remove(variable)
+                driver.expression = expression
+                written += 1
+    return written
 
 
 def register_object_attributes(bases):
@@ -540,6 +543,26 @@ def push_camera_stages(objects=None, camera=None):
 
 def apply_rig_stages(objects=None):
     return sum(stage(objects=objects) for stage in RIG_STAGES)
+
+
+def apply_two_sided_casting(objects):
+    """A renderer that casts with both faces overrides its material's shadow culling for itself alone, and the host's
+    native culling state belongs to the whole material: every material such a renderer uses keeps drawing its shadow
+    through its graph, which reads the object's property (the stacks' ``_declare_shadow_pass`` honours the mark on the
+    next edit). Returns how many materials were marked."""
+    marked = 0
+    for obj in objects:
+        if obj.get(SHADOW_TWO_SIDED_PROPERTY) is None:
+            continue
+        for slot in obj.material_slots:
+            material = slot.material
+            if material is None or material.library is not None or SHADOW_PER_OBJECT_PROPERTY in material:
+                continue
+            material[SHADOW_PER_OBJECT_PROPERTY] = 1.0
+            material.use_transparent_shadow = True
+            material.use_backface_culling_shadow = False
+            marked += 1
+    return marked
 
 
 def compile_stacks():

@@ -13,8 +13,11 @@ and an exclude-only set leaves every other object blocking it.
 from __future__ import annotations
 
 import bpy
+import numpy
 
 MAIN_LIGHT_EXCLUSIONS = "Ruri Main Light Shadow Exclusions"
+#: A column of the object matrix summing below 1e-10 is what the draw manager calls flat; this leaves room for a scale of 500.
+_FLAT_SCALE = 1e-13
 
 
 def shadow_only(obj):
@@ -57,3 +60,57 @@ def bind_directional_lights(scene):
             obj.light_linking.blocker_collection = collection
             bound += 1
     return bound
+
+
+def flatten_alpha_casters(objects):
+    """A level's casters with a clipped shadow, ready for final renders. In a final render EEVEE redraws, every sample,
+    each shadow page a caster with a transparent shadow touches (eevee_shadow.cc:769,971), because its transparency may
+    be stochastic. A clip is not: every sample draws the same shadow. EEVEE skips that redraw for a caster whose bounding
+    sphere is invalid (eevee_shadow_tag_update.bsl.hh:53), and a matrix column below 1e-10 makes it so while the bounds'
+    corners stay valid for the light's depth range (draw_resource_finalize.bsl.hh:76-81, eevee_shadow_tilemap_bounds.bsl.hh:140).
+    So such a caster flattens along its local Z over a mesh stretched back by the same factor: same world positions, same
+    shadow, no redraw. One the camera also sees hands its shadow to a shadow-only child, whose stretched normals nothing
+    reads. A flat caster never refreshes a page when it moves in the viewport, so this is for a level that stays put; a
+    deformed caster keeps its own shadow. Returns how many objects now cast flat."""
+    excluded = bpy.data.collections.get(MAIN_LIGHT_EXCLUSIONS)
+    excluded = set(excluded.objects) if excluded is not None else ()
+    stretched = {}
+    flattened = 0
+
+    def stretched_mesh(mesh):
+        made = stretched.get(mesh)
+        if made is None:
+            made = stretched[mesh] = mesh.copy()
+            positions = numpy.empty(len(made.vertices) * 3, dtype=numpy.float32)
+            made.vertices.foreach_get("co", positions)
+            positions[2::3] /= _FLAT_SCALE
+            made.vertices.foreach_set("co", positions)
+            made.update()
+        return made
+
+    for obj in objects:
+        if (obj.type != "MESH" or not obj.visible_shadow or obj.hide_render or len(obj.modifiers) or not len(obj.data.polygons)
+                or not any(slot.material is not None and slot.material.use_transparent_shadow
+                           and slot.material.get("ruri_uber_stack") for slot in obj.material_slots)):
+            continue
+        flattened += 1
+        if not obj.visible_camera:
+            obj.data = stretched_mesh(obj.data)
+            obj.scale[2] *= _FLAT_SCALE
+            continue
+        twin = bpy.data.objects.new(obj.name + " Flat Caster", stretched_mesh(obj.data))
+        for collection in obj.users_collection:
+            collection.objects.link(twin)
+        for key in obj.keys():
+            twin[key] = obj[key]
+        for index, slot in enumerate(obj.material_slots):
+            if slot.link == "OBJECT":
+                twin.material_slots[index].link = "OBJECT"
+                twin.material_slots[index].material = slot.material
+        twin.parent = obj
+        twin.scale = (1.0, 1.0, _FLAT_SCALE)
+        shadow_only(twin)
+        if obj in excluded:
+            exclude_from_main_light(twin)
+        obj.visible_shadow = False
+    return flattened

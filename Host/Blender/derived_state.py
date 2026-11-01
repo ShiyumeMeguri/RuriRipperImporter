@@ -157,6 +157,13 @@ def _run_shadow_sets(change):
     return shadow_casting.bind_directional_lights(change.scene)
 
 
+def _run_two_sided_casting(change):
+    """两面投影的渲染器用着的材质,阴影趟要留着跑图:逐物体的剔除判断只有图里读得到。换代照记录重编的材质没有这个记号,
+    所以开文件与换代都要扫一遍;图完整、记号已在的一张不碰。"""
+    scope = change.scene.objects if change.whole_scene else change.objects
+    return material_builder.apply_two_sided_casting(scope)
+
+
 def _run_vertex(change):
     """顶点腿的**拓扑**:壳层位移与反壳描边那棵几何节点树,以及挂着它的那个修改器。
 
@@ -189,7 +196,7 @@ def _run_rig_basis(change):
 
 def _run_scene_time(change):
     """引擎逐帧写的时钟全局(水面的波相、特效的滚动、自发光的扫光都按它走)。场景上一条带驱动的属性,随文件存盘,
-    放动画时依赖图自己走,不碰任何材质;已经陈述过的不再动。"""
+    放动画时依赖图自己走,不碰任何材质;帧率写在驱动式子里,帧率变了才重写。"""
     return material_builder.apply_scene_time(change.scene)
 
 
@@ -206,11 +213,12 @@ STAGES = (
     Stage("capabilities", (WORLD, LOADED, APPENDED), _run_capabilities),
     Stage("medium", (LOADED,), _run_medium),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
+    Stage("two-sided-casting", (OBJECTS, LOADED, APPENDED), _run_two_sided_casting),
     Stage("vertex", (OBJECTS,), _run_vertex),
     Stage("camera-basis", (CAMERA, LOADED, APPENDED), _run_camera_basis),
     Stage("rig-basis", (OBJECTS, MATERIALS, RIG, LOADED, APPENDED), _run_rig_basis),
     # 合成器的时钟口读这条属性,所以排在后处理之前。
-    Stage("scene-time", (OBJECTS, MATERIALS, LOADED), _run_scene_time),
+    Stage("scene-time", (OBJECTS, MATERIALS, CAMERA, LOADED), _run_scene_time),
     # 后处理读的其实是「这个场景现在在放游戏内容了吗」:网格、材质、游戏自己的灯,
     # 任何一样进场都是证据(展示台可以只上太阳不上美术,那时也该有 tonemap)。
     # 装过就跳过,所以反复触发也只是一次 installed() 判断;相机事实含出图尺寸,
@@ -417,6 +425,7 @@ def _camera_signature(scene):
         round(getattr(data, "shift_y", 0.0), 6),
         render.resolution_x, render.resolution_y, render.resolution_percentage,
         round(render.pixel_aspect_x, 5), round(render.pixel_aspect_y, 5),
+        render.fps, round(render.fps_base, 5),
     )
 
 

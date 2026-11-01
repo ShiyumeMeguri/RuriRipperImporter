@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(c18cec9b0a626956):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(e6cc39de6d7178ab):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1800,6 +1800,7 @@ class Stack:
         self.PART_META = manifest.get('part_meta') or {}
         self.NON_SHADING = set(manifest.get('non_shading') or [])
         self.HOST_SHADOW_CASTERS = manifest['host_shadow_casters']
+        self.SHADOW_CLIP_SWITCHES = manifest.get('shadow_clip_switches')
         # 游戏词汇 → 风格词汇。清单里记的是 风格名 → 游戏名(声明面朝着图的口),
         # 这里翻过来存:材质自述时报的是游戏名,要按它查。
         self.SOURCE_NAMES = {game: uniform for uniform, game
@@ -2332,6 +2333,25 @@ class Stack:
                 raise RuntimeError('[ruri-uber] 材质 {0} 的图里没有剔除值节点 {1}'.format(mat.name, label))
             if node.outputs[0].default_value != float(value):
                 node.outputs[0].default_value = float(value)
+
+    def _declare_shadow_pass(self, mat):
+        """真源 ShadowCaster 趟落到宿主的原生状态。那一趟只有一个 Cull 状态和材质开着的裁切,一个裁切都没开的材质没有片元要算:
+        use_backface_culling_shadow 就是它的 Cull Back;use_transparent_shadow 一关,宿主拿缺省深度着色器画(eevee_shader.cc:1513),
+        最终渲染也不用每采样重画它盖到的阴影页(eevee_shadow.cc:769)。还要跑图的只有:开了裁切的,混合的(透射是连续值),
+        剔正面的(原生只能剔背面),被两面投影的渲染器用着的(逐物体的判断只有图里读得到,见 _cull_transparency)。"""
+        part = mat.get('ruri_uber_part', '')
+        if not self.HOST_SHADOW_CASTERS or self.SHADOW_CLIP_SWITCHES is None or part not in self.PART_META:
+            return
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        shadow_cull = self._record_shadow_cull(self.PART_META[part], floats, mat.name)
+        clips = any(float(self._record_float(floats, switch) or 0.0) > 0.5 for switch in self.SHADOW_CLIP_SWITCHES)
+        runs_graph = (clips or mat.surface_render_method == 'BLENDED' or shadow_cull == 1.0
+                      or mat.get(_host().SHADOW_PER_OBJECT_PROPERTY) is not None)
+        culls_back = not runs_graph and shadow_cull == 2.0
+        if mat.use_transparent_shadow != runs_graph:
+            mat.use_transparent_shadow = runs_graph
+        if mat.use_backface_culling_shadow != culls_back:
+            mat.use_backface_culling_shadow = culls_back
 
     def build_material(self, mat, part=None, opaque=True, blend=None, cull=2.0, images=None):
         part = part or self.DEFAULT_PART
@@ -3202,6 +3222,7 @@ class Stack:
             mat[key] = value
         mat['ruri_uber_colors'] = colors
         self._declare_shading(mat)
+        self._declare_shadow_pass(mat)
         self.apply_params(mat)
         print('[ruri-uber] {0}: shader={1} part={2} images={3}'.format(
             name, record['ruri_uber_shader'], part, swapped), flush=True)
@@ -4124,6 +4145,7 @@ class Stack:
         self._vtx_panel_write(mat, self._vertex_values(mat, names))
         self._remember_inputs(mat)
         self._declare_shading(mat)
+        self._declare_shadow_pass(mat)
         self._require_budget(mat)
 
     def _vertex_values(self, mat, names):
