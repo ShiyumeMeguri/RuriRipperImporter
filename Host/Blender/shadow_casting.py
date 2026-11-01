@@ -18,6 +18,8 @@ import numpy
 MAIN_LIGHT_EXCLUSIONS = "Ruri Main Light Shadow Exclusions"
 #: A column of the object matrix summing below 1e-10 is what the draw manager calls flat; this leaves room for a scale of 500.
 _FLAT_SCALE = 1e-13
+#: On a shadow-only child that casts for an object the camera sees (see :func:`flatten_alpha_casters`).
+FLAT_CASTER_PROPERTY = "ruri_flat_caster"
 
 
 def shadow_only(obj):
@@ -103,6 +105,7 @@ def flatten_alpha_casters(objects):
             collection.objects.link(twin)
         for key in obj.keys():
             twin[key] = obj[key]
+        twin[FLAT_CASTER_PROPERTY] = 1.0
         for index, slot in enumerate(obj.material_slots):
             if slot.link == "OBJECT":
                 twin.material_slots[index].link = "OBJECT"
@@ -114,3 +117,11 @@ def flatten_alpha_casters(objects):
             exclude_from_main_light(twin)
         obj.visible_shadow = False
     return flattened
+
+
+def drop_orphan_casters():
+    """A flat caster whose object was deleted would go on throwing its shadow from the world origin. Returns how many went."""
+    orphans = [obj for obj in bpy.data.objects
+               if obj.library is None and obj.parent is None and FLAT_CASTER_PROPERTY in obj]
+    bpy.data.batch_remove(orphans)
+    return len(orphans)

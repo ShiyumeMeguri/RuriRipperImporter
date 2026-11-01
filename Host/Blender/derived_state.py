@@ -164,6 +164,11 @@ def _run_two_sided_casting(change):
     return material_builder.apply_two_sided_casting(scope)
 
 
+def _run_flat_casters(change):
+    """物体被删后,替它投影的压扁子物体没了父级会落到世界原点继续投影:开文件时清掉。"""
+    return shadow_casting.drop_orphan_casters()
+
+
 def _run_vertex(change):
     """顶点腿的**拓扑**:壳层位移与反壳描边那棵几何节点树,以及挂着它的那个修改器。
 
@@ -214,6 +219,7 @@ STAGES = (
     Stage("medium", (LOADED,), _run_medium),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
     Stage("two-sided-casting", (OBJECTS, LOADED, APPENDED), _run_two_sided_casting),
+    Stage("flat-casters", (LOADED,), _run_flat_casters),
     Stage("vertex", (OBJECTS,), _run_vertex),
     Stage("camera-basis", (CAMERA, LOADED, APPENDED), _run_camera_basis),
     Stage("rig-basis", (OBJECTS, MATERIALS, RIG, LOADED, APPENDED), _run_rig_basis),

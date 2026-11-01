@@ -64,6 +64,30 @@ _machine_memory_gb = []
 #: ShadowOnly), the level's light blockers the same. A level without them stands in full sun under its own canopy.
 LEVEL_ANSWERS = {"import_shadow_proxies": True}
 
+#: How a level's materials sample their images, for fitting them to a film (SceneFunctionEndfield, SceneMixedPass): the
+#: switch that picks a slot's UV set, the tiling that scales it, the slot read at an explicit level. An image in a slot
+#: not named stays whole.
+TEXTURE_SAMPLING = {
+    "slots": {
+        "_BaseColorMap": {"Set": "_BaseUVSet"},
+        "_NormalMap": {"Set": "_BasePbrMapUVSet"},
+        "_MROMap": {"Set": "_BasePbrMapUVSet", "St": "_NormalMap"},
+        "_MaskMap": {"Set": "_MaskUVSet"},
+        "_EmissiveMap": {"Set": "_EmissiveUVSet"},
+        "_MacroNormalMap": {},
+        "_DetailMap": {},
+        "_Layer1BaseMap": {"WorldType": "_LayerBlendUVType", "Tile": "_Layer1Tilling"},
+        "_Layer1BumpMap": {"WorldType": "_LayerBlendUVType", "Tile": "_Layer1Tilling"},
+        "_BaseHeightMap": {"WorldType": "_LayerBlendUVType", "Tile": "_Layer1Tilling"},
+        "_ParallaxMaskMap": {"Keep": True},
+        "_OffsetTex": {"Keep": True},
+        "_OffsetMaskTex": {"Keep": True},
+        "_NoiseOffsetTex": {"Keep": True},
+    },
+    "clip_switches": ("_EnableAlphaTest", "_UseCutoff"),
+    "shadow_slots": ("_BaseColorMap", "_NormalMap"),
+}
+
 
 def state_of(context):
     return host_port.current().panel_state(context, STATE)
@@ -375,6 +399,7 @@ def _import(context, arguments):
     notes.extend(built.warnings[:2])
     if anchor is not None:
         notes.extend(_stand_up_lighting(context, host, map_name, rect, anchor, states))
+        notes.extend(host.finish_level(context, built.objects))
     state.status = "{0}: {1} object(s). {2}".format(
         _label(state), built.imported, "  ".join(notes))
 
@@ -440,6 +465,16 @@ def _relight(context, arguments):
     state.status = "{0}: lit from the view. {1}".format(_label(state), "  ".join(notes))
 
 
+def _fit_textures(context, arguments):
+    """Fit the images the document draws to the film its camera shoots. Asked for, never part of an import."""
+    state = state_of(context)
+    if context.scene.camera is None:
+        state.status = "No camera: fitting the textures needs the film's camera path."
+        return
+    yield command.Mark(0.1)
+    state.status = "  ".join(host_port.current().fit_textures_to_film(context, TEXTURE_SAMPLING))
+
+
 def _label(state):
     entry = _selected(state)
     return (entry.label if entry else "") or _map_name(state)
@@ -464,6 +499,12 @@ RELIGHT = command.COMMANDS.define(
     description="Resolve the level's sky, irradiance, probes, fog and grading again around the current view",
     icon="LIGHT_SUN", requires=host_port.SceneGraph, poll=_has_selection, steps=True, status_state=STATE,
     failure="Re-lighting the level failed")
+FIT_TEXTURES = command.COMMANDS.define(
+    "ruri.endfield_scene_fit_textures", "Fit Textures To Film", _fit_textures,
+    description="Drop the top mips no frame of this file's camera samples, to fit a level on the graphics card. It "
+                "changes the images for good and holds for this camera path and output size only; not part of an import",
+    icon="IMAGE_DATA", requires=host_port.SceneGraph, steps=True, status_state=STATE,
+    failure="Fitting the textures failed")
 
 
 def _has_picture(context):
@@ -616,6 +657,7 @@ def _draw_actions(layout, context, state, enabled):
         tail.prop(state, "reset_scene")
     tail.operator(IMPORT.id, icon="IMPORT")
     tail.operator(RELIGHT.id, icon="LIGHT_SUN")
+    layout.operator(FIT_TEXTURES.id, icon="IMAGE_DATA")
 
 
 def _draw_self_contained(layout, context, state):

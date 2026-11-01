@@ -177,6 +177,18 @@ class SceneGraph(abc.ABC):
         with, and a level shaded under those shows what no stack was verified to show."""
 
     @abc.abstractmethod
+    def finish_level(self, context, objects):
+        """A level's content is built and lit: make what stays put cheaper to draw, where the host can do
+        so without changing the picture. ``objects`` is what the level placed. Returns the lines to report."""
+
+    @abc.abstractmethod
+    def fit_textures_to_film(self, context, sampling):
+        """Drop the top mips of the images the document draws that no frame of its film samples. An explicit step, never
+        part of an import: it changes the images for good and holds for one camera path. ``sampling`` says how a level's
+        materials sample their images: ``slots`` ({slot: {Set, St, Tile, WorldType}}, ``Keep`` for a slot read at an
+        explicit level), ``clip_switches`` and ``shadow_slots``. Returns the lines to report."""
+
+    @abc.abstractmethod
     def apply_environment(self, context, environment):
         """Stand the environment a level puts its viewer under up in the document,
         replacing any stood up before. ``environment`` is ``{"label", "ambient",

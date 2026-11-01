@@ -1,13 +1,16 @@
 """The renderer a level is shaded under.
 
 The generated shading stacks are verified in a scene whose renderer is EEVEE with every one of its own
-settings at the renderer's defaults, whose view applies no exposure, gamma, curve or white balance of its
-own, and whose compositor runs on the GPU the display chain is authored for -- the chain itself does the tone
-mapping and puts the display transform it needs in place when it installs. A level imported into a startup
-scene saved with other settings (a horizon-scan thickness, ray-tracing thicknesses, a CPU compositor) would
-be shaded under a configuration none of the stacks was verified under, and look it. So a level import puts
-the renderer back first; what the level itself states for it -- its medium's integration, its shadow pool --
-is applied on top afterwards.
+settings at the renderer's defaults and whose view applies no exposure, gamma, curve or white balance of its
+own -- the display chain itself does the tone mapping and puts the display transform it needs in place when it
+installs. A level imported into a startup scene saved with other settings (a horizon-scan thickness, ray-tracing
+thicknesses) would be shaded under a configuration none of the stacks was verified under, and look it. So a level
+import puts the renderer back first; what the level itself states for it -- its medium's integration, its shadow
+pool -- is applied on top afterwards.
+
+A level composites on the CPU. The display chain gives the same picture on either device, but on the GPU its render
+passes and intermediate results stay in video memory through the next frame, a level's textures already fill the
+card, and the overflow slows the renderer by more than the chain gains.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from __future__ import annotations
 import bpy
 
 ENGINE = "BLENDER_EEVEE"
-COMPOSITOR_DEVICE = "GPU"
+COMPOSITOR_DEVICE = "CPU"
 #: The view's own adjustments, each put back to its default; the transform and look are the display chain's.
 VIEW_ADJUSTMENTS = ("exposure", "gamma", "use_curve_mapping", "use_white_balance")
 

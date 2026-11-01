@@ -162,6 +162,15 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         from . import renderer
         renderer.apply(context.scene)
 
+    def finish_level(self, context, objects):
+        from . import material_builder, shadow_casting
+        material_builder.apply_two_sided_casting(objects)
+        return ["{0} clipped caster(s) drawn flat".format(shadow_casting.flatten_alpha_casters(objects))]
+
+    def fit_textures_to_film(self, context, sampling):
+        from . import texture_fit
+        return texture_fit.fit(context.scene, sampling["slots"], sampling["clip_switches"], sampling["shadow_slots"])
+
     def apply_environment(self, context, environment):
         from . import renderer, ui_stage, world_builder
         ambient = environment["ambient"]
