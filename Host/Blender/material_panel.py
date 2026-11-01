@@ -410,6 +410,12 @@ def stack_of(material):
     return None
 
 
+def stack_by_key(panel_key):
+    """栈键对应的已注册生成栈,没有返回 None:调用方手里还没有这个栈认领的材质时(新建它的第一张材质)用。"""
+    entry = _STACKS.get(panel_key)
+    return entry["stack"] if entry is not None else None
+
+
 def sync(material):
     """图 → 面板。生成物答当前值,这里回填镜子。守卫关掉写路径,否则回读一次就把图重写一遍。"""
     entry = stack_of(material)
