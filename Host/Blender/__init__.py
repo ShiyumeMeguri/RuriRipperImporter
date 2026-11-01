@@ -47,7 +47,7 @@ def _preferences():
     return entry.preferences if entry is not None else None
 
 
-class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, host_port.Rig,
+class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, host_port.Rig, host_port.RigAttachment,
                   host_port.Timeline, host_port.Retarget, host_port.MorphTargets, host_port.NodeMaterials,
                   host_port.RegionPicking):
     """What Blender can do, and where Blender keeps the one path that differs
@@ -325,6 +325,10 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
     def materialise(self, context, statement, options, report=None):
         from . import materialise as materialiser
         return materialiser.materialise(context, statement, options, report)
+
+    def validate_attachment(self, context, rig, binding):
+        from . import attachments
+        return attachments.validate(context, rig, binding)
 
 
 #: Bound BEFORE this driver's own modules are imported, and long before

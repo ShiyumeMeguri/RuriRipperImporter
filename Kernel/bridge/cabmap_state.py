@@ -72,7 +72,7 @@ class GameSession:
 
     __slots__ = ("key", "game", "ROWS", "VISIBLE", "CURRENT_DIR", "CURRENT_SUBFOLDERS",
                  "SELECTED_CABS", "SELECT_ANCHOR",
-                 "_CAB_INDEX", "_FLAGGED", "_sort_column", "_sort_dir", "_active_rules")
+                 "_CAB_INDEX", "_FLAGGED", "_sort_column", "_sort_dir", "_active_rules", "attachment")
 
     def __init__(self, key, game=""):
         self.key = key
@@ -88,6 +88,7 @@ class GameSession:
         self._sort_column = "name"
         self._sort_dir = 0            # 0 = unsorted (load order), 1 = ascending, 2 = descending
         self._active_rules = ()       # whatever was last passed to apply_filter()'s `rules` arg
+        self.attachment = None       # optional binding answer for this browser/install
 
 
 # install key (or None for the session a host uses before it has named one) -> GameSession.

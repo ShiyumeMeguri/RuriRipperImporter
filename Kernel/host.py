@@ -331,6 +331,19 @@ class Rig(abc.ABC):
         other's words."""
 
 
+class RigAttachment(abc.ABC):
+    """A host that can attach a loaded selection to an existing rig bone.
+
+    A binding contains an opaque key, source bone_path, host-basis row-major
+    offset matrix and visibility. The game supplies those facts; the host only
+    validates the live target and realizes them. Normal materialise is reused.
+    """
+
+    @abc.abstractmethod
+    def validate_attachment(self, context, rig, binding):
+        """Return a reason to stop, or an empty string. Never mutate the target."""
+
+
 class Timeline(abc.ABC):
     """A host with an animation surface: actions, curves, a playhead."""
 
@@ -471,7 +484,7 @@ class RegionPicking(abc.ABC):
 
 
 #: Every protocol a driver can answer, in the order a diagnostics surface lists them.
-PROTOCOLS = (SceneGraph, Compositor, Rig, Timeline, Retarget, MorphTargets, NodeMaterials,
+PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, Timeline, Retarget, MorphTargets, NodeMaterials,
              TextureCache, TextureSets, DisplaySettings, RegionPicking)
 
 _BOUND = []

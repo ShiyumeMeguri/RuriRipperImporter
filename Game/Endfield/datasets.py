@@ -34,6 +34,7 @@ NPC_PARTS = "endfield.npc.parts"
 CHARACTER_MODELS = "endfield.character.models"
 LANGUAGE = "endfield.roster.language"
 CAST = "endfield.roster.cast"
+WEAPON_BINDINGS = "endfield.character.weapon_bindings"
 MODEL = "endfield.asset.model"
 PART = "endfield.asset.part"
 NAMED = "endfield.asset.named"
@@ -91,6 +92,11 @@ WETNESS_LISTS = "_WaterWetnessLists"
 
 def _table(dataset_id, **args):
     return cabmap_state.BRIDGE.game_data(dataset_id, **args)
+
+
+def weapon_bindings(seed, target, paths, basis):
+    """Host-neutral binding facts for a selected existing rig."""
+    return _table(WEAPON_BINDINGS, seed=seed, target=target, paths=paths, basis=basis)
 
 
 def _rows(dataset_id, **args):

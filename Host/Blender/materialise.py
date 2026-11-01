@@ -58,7 +58,48 @@ _HUMANOID_REGIONS = (
 def materialise(context, statement, options, report=None):
     """Put one statement into the document. Returns
     :class:`Kernel.statement.Built`."""
-    return _Materialisation(context, statement, dict(options or {}), report).run()
+    values = dict(options or {})
+    attachment = values.get("attachment")
+    if attachment is None:
+        return _Materialisation(context, statement, values, report).run()
+    from . import attachments
+    rig, binding = attachment
+    reason = attachments.validate(context, rig, binding)
+    if reason:
+        raise ValueError(reason)
+    before = set(bpy.data.objects)
+    old_meshes, old_armatures = set(bpy.data.meshes), set(bpy.data.armatures)
+    active, selected = context.view_layer.objects.active, list(context.selected_objects)
+    try:
+        # Blender enters multi-object Edit Mode for every selected armature.
+        # A weapon may build its own rig: keep the existing actor out of that
+        # edit session altogether, not just restore its selection afterwards.
+        for obj in selected:
+            obj.select_set(False)
+        context.view_layer.objects.active = None
+        built = _Materialisation(context, statement, values, report).run()
+        return attachments.bind(context, statement, built, rig, binding)
+    except BaseException:
+        # An exception while constructing edit bones must leave Edit Mode
+        # before removing the newly created armature datablock.
+        if context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        # Only objects/datablocks created by this synchronous load are rolled
+        # back. No actor bones, weights, action, pose or user objects were edited.
+        for obj in set(bpy.data.objects) - before:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        for blocks, previous in ((bpy.data.meshes, old_meshes), (bpy.data.armatures, old_armatures)):
+            for block in set(blocks) - previous:
+                if block.users == 0:
+                    blocks.remove(block)
+        raise
+    finally:
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        for obj in selected:
+            if context.scene.objects.get(obj.name) == obj:
+                obj.select_set(True)
+        context.view_layer.objects.active = active
 
 
 def build_rig(context, statement, key, options=None):

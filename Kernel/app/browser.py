@@ -27,7 +27,7 @@ import time
 from .. import host as host_port
 from .. import options as kernel_options
 from . import command as app_command
-from . import filtering, loading, look, schemas, texturing
+from . import attachments, filtering, loading, look, schemas, texturing
 from . import layout as vocabulary
 from . import state as app_state
 from ...Kernel.bridge import bootstrap, pythonnet_bridge, workspace
@@ -66,7 +66,7 @@ def state_of(context):
 #: the column boundaries are draggable sliders rather than constants; a column with
 #: none takes whatever is left.
 _ROW_COLUMNS = (
-    vocabulary.ListColumn(lambda row: row.name or row.cab, "Name",
+    vocabulary.ListColumn(lambda row: attachments.resource_label(row.cab, row.name or row.cab), "Name",
                           width="col_name_factor"),
     vocabulary.ListColumn(lambda row: row.container or row.cab, "Path",
                           width="col_container_factor"),
@@ -1749,6 +1749,12 @@ def _import_selected(context, arguments):
     if refused:
         _announce(context, refused, host_port.ERROR)
         return
+    if arguments.get("attach_to_target"):
+        if arguments["reset_scene"]:
+            raise ValueError("Equipping preserves the existing scene; Reset Scene is a separate operation.")
+        answer, binding, target = yield from attachments.prepare(context, {row["cab"] for row in rows})
+        yield from _load_steps(context, state, [binding["seed"]], (), False, attachment=(answer, binding, target))
+        return
     host = host_port.current()
     things = [row["cab"] for row in rows if not _row_is_clip_only(row)]
     clips = [row["cab"] for row in rows if _row_is_clip_only(row)]
@@ -1848,6 +1854,7 @@ def show_rules(context, rules):
     The rules REPLACE whatever was there -- rules left over from another query would silently
     AND into this one -- and the quick-search box is left empty, so it stays the user's own
     narrowing on top of them."""
+    attachments.clear()
     state = state_of(context)
     state.active_tab = BROWSER_TAB_ID
     state.filter_rules.clear()
@@ -1864,7 +1871,7 @@ def show_rules(context, rules):
     _reapply_and_refresh(context)
 
 
-def _load_steps(context, state, seeds, clips, reset_scene, panel=""):
+def _load_steps(context, state, seeds, clips, reset_scene, panel="", attachment=None):
     """Read the statement off the main thread, place it, then play the performances."""
     host = host_port.current()
     options = as_options(state)
@@ -1879,6 +1886,16 @@ def _load_steps(context, state, seeds, clips, reset_scene, panel=""):
     rig = None
     if stated is not None:
         with stated:
+            if attachment is not None:
+                answer, binding, target = attachment
+                if attachments.current() is not answer:
+                    raise ValueError("The install or equipment target changed during import.")
+                if answer.map is not cabmap_state.ROWS or answer.bridge is not cabmap_state.BRIDGE:
+                    raise ValueError("The loaded map changed during import.")
+                reason = host.validate_attachment(context, target, binding)
+                if reason:
+                    raise ValueError(reason)
+                options["attachment"] = (target, binding)
             built = loading.place(context, stated, options, lines)
         placed = built.imported
         rig = built.rig
@@ -2000,6 +2017,11 @@ def _has_target(context):
     return _map_ready(context) and bool(_target_cabs(state_of(context)))
 
 
+def _can_import(context):
+    """A second import must not overlap a read through the same session bridge."""
+    return _has_target(context) and not state_of(context).loading
+
+
 def _has_shading_target(context):
     """Whether anything the selection pulls in is a material -- the only rows a decompile
     of the selection can answer about."""
@@ -2025,9 +2047,10 @@ READ_ALL_SHADERS = app_command.COMMANDS.define(
 IMPORT_SELECTED = app_command.COMMANDS.define(
     "ruri.import_selected", "Import Selected", _import_selected,
     description="Import every selected row as one selection",
-    icon="IMPORT", poll=_has_target, steps=True, status_state=STATE,
+    icon="IMPORT", poll=_can_import, steps=True, status_state=STATE,
     failure="Import failed",
-    arguments=(app_state.Field("reset_scene", app_state.BOOL, False),))
+    arguments=(app_state.Field("reset_scene", app_state.BOOL, False),
+               app_state.Field("attach_to_target", app_state.BOOL, False),))
 
 REVEAL = app_command.COMMANDS.define(
     "ruri.reveal", "Open Containing Folder", _reveal,
@@ -2082,7 +2105,7 @@ IMPORT_WITH_DEPENDENTS = app_command.COMMANDS.define(
     description=("Find every CAB that directly depends on the selected row(s) -- e.g. the "
                  "Prefab/Material that actually uses a mesh-only CAB -- and import "
                  "everything together in one step"),
-    icon="LOOP_BACK", poll=_has_target, steps=True, status_state=STATE,
+    icon="LOOP_BACK", poll=_can_import, steps=True, status_state=STATE,
     failure="Import failed",
     arguments=(app_state.Field("reset_scene", app_state.BOOL, False),))
 
@@ -2433,17 +2456,22 @@ def draw(layout, context):
     batch = " {0}".format(selected_count) if selected_count > 1 else ""
     resettable = host_port.SceneGraph in host.capabilities
     actions = gated.row(align=True)
-    actions.operator(IMPORT_SELECTED.id,
-                     text="Import{0}{1}".format(batch, " (Append)" if resettable else "")
-                     ).reset_scene = False
+    append = actions.operator(IMPORT_SELECTED.id,
+                              text="Import{0}{1}".format(batch, " (Append)" if resettable else ""))
+    append.reset_scene = False
+    # Blender can retain an operator's last properties. State the ordinary
+    # action explicitly so a preceding equipment click never changes Append.
+    append.attach_to_target = False
     if resettable:
         # "Append" only means something against "Reset": a host whose document IS
         # one mesh has one button, not one of each with the same effect.
-        actions.operator(IMPORT_SELECTED.id,
-                         text="Import{0} (Reset Scene)".format(batch)).reset_scene = True
+        reset = actions.operator(IMPORT_SELECTED.id, text="Import{0} (Reset Scene)".format(batch))
+        reset.reset_scene = True
+        reset.attach_to_target = False
     gated.operator(IMPORT_WITH_DEPENDENTS.id,
                    text="Import{0} (With Dependents)".format(batch),
                    icon="LOOP_BACK").reset_scene = False
+    attachments.draw(gated, context, _target_cabs(state), IMPORT_SELECTED.id)
     # A model that carries its own secondary motion carries it whether or not any
     # of the game's tables ever names that model -- so the rows get their own way
     # in, beside the import that would have brought it along.

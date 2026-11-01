@@ -32,7 +32,7 @@ from ...Kernel.app.state import Field, Schema
 from ...Kernel.app import state as app_state
 from ...Kernel.app import view as app_view
 from ...Kernel.bridge import cabmap_state
-from . import datasets
+from . import datasets, weapons
 
 STATE = "ruri_roster"
 BROWSER_STATE = "ruri_cabmap"
@@ -213,7 +213,7 @@ def _draw_library(layout, context):
 
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "roster", REFRESH.id, state_of, STATE,
-    animation_rules=_animation_rules, actions=(LOAD_EXPRESSIONS.id,), facet=CHARACTERS,
+    animation_rules=_animation_rules, actions=(LOAD_EXPRESSIONS.id, weapons.FIND.id), facet=CHARACTERS,
     # 这个游戏自己写下来的两份目录,与引擎自己答得出的那两份并列在同一格里 ——
     # 「统一」不是把它们摊平成一份,是它们在同一个地方,并说清各自出自哪儿。
     animations=(cast_panel.Source("story", "Story",
