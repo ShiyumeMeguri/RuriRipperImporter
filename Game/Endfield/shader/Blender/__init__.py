@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(83fde310bcc43a04):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(57ac023f30b2026e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -694,9 +694,9 @@ def _apply_own_sampler(node, image):
     """片元图节点按绑定那张图自带的采样器设寻址与过滤。
 
     两轴相同且图节点有原生等价(repeat/clamp/mirror):原生扩展方式,线性与点采样都精确。
-    其余组合只在**点采样**下有精确等价:点采样不取 mip,逐轴在坐标上做寻址与硬件逐纹素相同 ——
-    与顶点腿 own_sampler_fetch 同一套折法,图节点重复寻址。线性过滤带 mip,坐标上的折法会改 mip 的选择,
-    没有精确等价物,响亮拒绝而不是挑一个近似。"""
+    其余组合逐轴在坐标上做寻址,图节点重复寻址,与顶点腿 own_sampler_fetch 同一套折法:点采样不取 mip,与硬件逐纹素相同;
+    线性过滤在第 0 级也相同,缩小到粗 mip 时贴着钳制边那半个粗纹素会混进对边 —— 图节点两轴共用一个扩展方式,这是它给得出的
+    最近答案,特效贴图常有 U 重复 V 钳制这一组,拒绝就是整张材质编不出来。"""
     wrap_u, wrap_v, point = _own_sampler_state(image)
     # 先比后写:宿主每写一次节点属性都把整棵树重算一遍,换图时这几格多半没变。
     interpolation = 'Closest' if point else 'Linear'
@@ -708,10 +708,6 @@ def _apply_own_sampler(node, image):
             node.extension = native
         _axis_addressing(node, None, None, image)
         return
-    if not point:
-        raise RuntimeError('[ruri-uber] 贴图 {0} 自带的寻址是 u={1} v={2} 且线性过滤:Blender 图像节点的扩展方式'
-                           '两轴共用且带 mip,这一组没有精确等价物。'.format(
-                               image.name if image is not None else '?', wrap_u, wrap_v))
     if node.extension != 'REPEAT':
         node.extension = 'REPEAT'
     _axis_addressing(node, wrap_u, wrap_v, image)
@@ -1820,6 +1816,7 @@ class Stack:
         self.ST_SLOT = names.get('st_slot', '_BaseMap')
         self.ST_NODE = names.get('st_node', 'RuriBaseMapST')
         self.VERTEX_PARTS = manifest.get('vertex_parts') or {}
+        self.VERTEX_GATES = manifest.get('vertex_gates') or {}
         self.VERTEX_ANSWERS = manifest.get('vertex_host_answers') or {}
         # 作者值住 sRGB 的属性名(见清单同名键)。快照恒是 .mat 里的原值,线性化只发生在
         # 「值 → uniform」那一步,与 Unity 上传时做的那次是同一件事。
@@ -3703,7 +3700,7 @@ class Stack:
                 pass
             key = mat.name + '|' + sock.name
             state['keys'][item.identifier] = key
-            state['templates'][key] = template_name
+            state['templates'][item.identifier] = template_name
             state['values'][item.identifier] = value
             wire = next((o for o in group_input.outputs if o.identifier == item.identifier), None)
             if wire is not None:
@@ -3724,7 +3721,7 @@ class Stack:
         item.default_value = bool(enabled)
         key = mat.name + '|' + name
         state['keys'][item.identifier] = key
-        state['templates'][key] = ''
+        state['templates'][item.identifier] = ''
         state['values'][item.identifier] = bool(enabled)
         state['switches'].append(item.identifier)
         return next(o for o in group_input.outputs if o.identifier == item.identifier)
@@ -3815,12 +3812,14 @@ class Stack:
                 continue
             inputs = mod.properties.inputs
             port_of = {}
+            identifier_of = {}
             dialed = []
             for identifier, key in keys.items():
                 port = getattr(inputs, identifier, None)
                 if port is None:
                     continue
                 port_of[key] = port
+                identifier_of[key] = identifier
                 value = self._vtx_plain(port.value)
                 marker = (obj.session_uid, identifier)
                 if seen.get(marker) == value:
@@ -3842,7 +3841,7 @@ class Stack:
                 if mat_name not in images_of:
                     images_of[mat_name] = self._material_images(mat)
                 if self._vtx_same(port.value, self._vtx_expected(
-                        mat, templates.get(key), prop, images_of[mat_name])):
+                        mat, templates.get(identifier_of[key]), prop, images_of[mat_name])):
                     continue
                 self._vtx_commit(mat, rows, prop, port_of)
                 self._vtx_outline_flags(mod, tree)
@@ -4323,6 +4322,39 @@ class Stack:
         uv_layers[source_name].data.foreach_get('uv', values)
         uv_layers.new(name=self.OUTLINE_NORMAL_LAYER).data.foreach_set('uv', values)
 
+    def _vertex_moves(self, mat):
+        """part 的顶点腿在材质关键字全关时恒等(清单 vertex_gates 记着这条腿读的关键字):这张材质一个都没开就不挪,
+        不值得一棵逐帧求值的树;其余 part 的腿无条件有位移。"""
+        gate = self.VERTEX_GATES.get(mat['ruri_uber_part'])
+        if gate is None:
+            return True
+        floats, _st, _colors = self._mat_meta(mat)
+        return any(float(floats.get(name, 0.0)) > 0.5 for name in gate)
+
+    def _wire_vertex_clock(self, tree, node):
+        """顶点腿的时钟全局:几何节点读不到着色树用的那条视图层属性,这棵树自己接场景时间(帧 × fps_base / fps,同一个量),
+        按配方 SceneTime 的系数乘到口上。组上没有这个口 = 这条腿不读时钟,一个节点都不加。"""
+        seconds = None
+        for name, scales in self.scene_time.items():
+            vector = node.inputs.get(name)
+            alone = node.inputs.get(name + '_w')
+            if vector is None and alone is None:
+                continue
+            if seconds is None:
+                seconds = tree.nodes.new('GeometryNodeInputSceneTime').outputs['Seconds']
+            if vector is not None and any(scales[:3]):
+                scaled = tree.nodes.new('ShaderNodeVectorMath')
+                scaled.operation = 'SCALE'
+                scaled.inputs[0].default_value = scales[:3]
+                tree.links.new(seconds, scaled.inputs['Scale'])
+                tree.links.new(scaled.outputs[0], vector)
+            if alone is not None and scales[3]:
+                scaled = tree.nodes.new('ShaderNodeMath')
+                scaled.operation = 'MULTIPLY'
+                scaled.inputs[1].default_value = scales[3]
+                tree.links.new(seconds, scaled.inputs[0])
+                tree.links.new(scaled.outputs[0], alone)
+
     def apply_vertex_stage(self, objects, camera=None):
         """壳层位移 + 反壳描边的壳(同树虚拟几何;壳往外挪多少在材质的位移出口里逐视图算,见 _wire_outline)。
         **唯一的生成途径 = 从游戏读材质、造出这批对象的那一刻**:objects 只能是导入刚造出来的对象,没有「整场景」、
@@ -4353,7 +4385,7 @@ class Stack:
             # 真源只给它跑投影趟,壳与描边建出来也没人看得见,只是白付每一次几何重算。
             if not self._drawn_into_views(obj):
                 slots = []
-            vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in self.VERTEX_PARTS]
+            vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in self.VERTEX_PARTS and self._vertex_moves(m)]
             for capability, prepare in CAP_PREPARERS.items():
                 asking = [slot for slot, mat in slots if self._asks(mat['ruri_uber_part'], capability)]
                 if asking:
@@ -4529,6 +4561,7 @@ class Stack:
                 wire_vertex_inputs(gn)
                 self._write_screen_sockets(gn, screen)
                 self._answer_vertex_capabilities(mt, gn, part, scene, swap_yz, answers)
+                self._wire_vertex_clock(mt, gn)
                 self._vtx_expose(mt, gin, gn, mat, knobs, panels, template_name, state,
                                  self._material_images(mat))
                 self._vtx_own_samplers(gn, self._material_images(mat))
@@ -5525,7 +5558,6 @@ class Stack:
             source.image = self._level_image(slot)
             tree.links.new(source.outputs['Image'], socket)
 
-    WATER_REFLECT_HISTORY = 0.7
     WATER_REFLECT_CYCLE = 8
     # 透射率低到看不见身后时,拆不透明色只是在放大噪声:这个像素的不透明色只有水面的反射与折射读,不许放大到盖过场景。
     WATER_TRANSMITTANCE_FLOOR = 0.0625
@@ -5535,8 +5567,9 @@ class Stack:
         深度与颜色是不含水的那份;水面层按同一台相机再画一遍,读它的深度、各通道与覆盖询问。两份深度各转设备深度,
         场景那份降成半分辨率低深度,反射在半分辨率上追踪,合成在出图分辨率上,返回合成后的场景色。
 
-        反射的时间性:真源本帧 = lerp(追踪, 上一帧, 0.7),抖动八帧一周期,可信度只取本帧。一张静帧没有上一帧,就直接求
-        它的不动点:第 j 帧之前的那次追踪权重 0.3·0.7^j / (1 − 0.7^8);可信度在真源的画面上由 TAA 按周期摊平,取八次的均值。
+        反射的时间性:真源本帧 = lerp(追踪, 上一帧, 0.7),抖动八帧一周期,再经 TAA 按周期摊平。八个相位的不动点再取均值,
+        每次追踪的权重都是 1/8(0.7 的历史只决定相位之间怎么分,加起来是一样的),亮度与可信度同样取八次的均值;
+        只取某一相位的不动点,半分辨率的抖动花纹就留在水面反射里。
 
         先后:真源先合水面再画透明物体,宿主把混合物体直接画进了场景层的颜色。场景层的透明通道交出它们(预乘的颜色,
         α 是不透明度,没盖到的像素是 0):场景色 = 通道色 + (1 − α) · 不透明色。从场景色里拆出不透明的那份给水面读,水面改了
@@ -5644,13 +5677,12 @@ class Stack:
                         computed('ShaderNodeMath', 'POWER',
                                  computed('ShaderNodeMath', 'MAXIMUM', transmittance, self.WATER_TRANSMITTANCE_FLOOR), -1.0))
 
-        history, cycle = self.WATER_REFLECT_HISTORY, self.WATER_REFLECT_CYCLE
+        cycle = self.WATER_REFLECT_CYCLE
         reflect_lighting = reflect_fade = None
         for frames_back in range(cycle):
             traced = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': opaque},
                          {'levelSize': extent(half)}, frames_back)
-            lighting = computed('ShaderNodeVectorMath', 'SCALE', traced.outputs['ret_lighting'],
-                                (1.0 - history) * history ** frames_back / (1.0 - history ** cycle))
+            lighting = computed('ShaderNodeVectorMath', 'SCALE', traced.outputs['ret_lighting'], 1.0 / cycle)
             fade = computed('ShaderNodeMath', 'MULTIPLY', traced.outputs['ret_fade'], 1.0 / cycle)
             reflect_lighting = lighting if reflect_lighting is None else computed(
                 'ShaderNodeVectorMath', 'ADD', reflect_lighting, lighting)

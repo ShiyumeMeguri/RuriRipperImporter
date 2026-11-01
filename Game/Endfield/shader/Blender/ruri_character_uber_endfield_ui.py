@@ -300,14 +300,12 @@ NAMES = (
     '_Cull',
     '_Responsive',
     '_EnableTransparentMV',
-    '_UseVertexOffset',
     '_OffsetSpeed',
     '_OffsetDir',
     '_OffsetSwitchDir',
     '_OffsetIntensity',
     '_Bi_Offset',
     '_OffsetUVSet',
-    '_UseVertexOffsetMask',
     '_OffsetMaskSpeed',
     '_OffsetMaskPower',
     '_MainTexUseFlowmap',
@@ -334,6 +332,7 @@ NAMES = (
     '_LocalPivortSpace',
     '_UsePosYAsScreenV',
     '_ScreenUVUseDepth',
+    '_UseScreenUV',
     '_SoftDistance',
     '_SoftBias',
     '_ExpThreshold',
@@ -418,7 +417,8 @@ NAMES = (
     '_NormalMapUVSet',
     '_HeightColorGradientInvert',
     '_HeightColorGradientInvert2',
-    '_UseScreenUV',
+    '_UseVertexOffset',
+    '_UseVertexOffsetMask',
     '_UseSoftBlend',
     '_EnablePreDepthPass',
     '_ShadowOverIris',
@@ -765,7 +765,6 @@ def annotations(kit, stack):
     a['p_Responsive'] = bpy.props.FloatProperty(name='Responsive Transparent', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_Responsive', default=0.0, update=kit.writer(stack, '_Responsive'))
     a['c_Responsive'] = kit.choice('p_Responsive', 'Responsive Transparent', '游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_Responsive', ((0.0, 'NormalTransparent'), (1.0, 'ResponsiveTransparent'),))
     a['p_EnableTransparentMV'] = bpy.props.BoolProperty(name='Enable Transparent MV', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_EnableTransparentMV', default=False, update=kit.writer(stack, '_EnableTransparentMV'))
-    a['p_UseVertexOffset'] = bpy.props.BoolProperty(name='Use Vertex Offset', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseVertexOffset', default=False, update=kit.writer(stack, '_UseVertexOffset'))
     a['p_OffsetSpeed'] = bpy.props.FloatVectorProperty(name='Offset Speed(XY: By Time,ZW:By Custom)', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetSpeed', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_OffsetSpeed'))
     a['p_OffsetDir'] = bpy.props.FloatVectorProperty(name='Offset Dir(XYZ: Axis,W:By CustomY)', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetDir', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_OffsetDir'))
     a['p_OffsetSwitchDir'] = bpy.props.FloatProperty(name='Dir Switcher', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetSwitchDir', default=0.0, update=kit.writer(stack, '_OffsetSwitchDir'))
@@ -774,7 +773,6 @@ def annotations(kit, stack):
     a['p_Bi_Offset'] = bpy.props.BoolProperty(name='Use Two Direction Offset', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_Bi_Offset', default=False, update=kit.writer(stack, '_Bi_Offset'))
     a['p_OffsetUVSet'] = bpy.props.FloatProperty(name='Vertex Offset UV Set', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetUVSet', default=0.0, update=kit.writer(stack, '_OffsetUVSet'))
     a['c_OffsetUVSet'] = kit.choice('p_OffsetUVSet', 'Vertex Offset UV Set', '游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetUVSet', ((0.0, 'UV0'), (1.0, 'UV1'),))
-    a['p_UseVertexOffsetMask'] = bpy.props.BoolProperty(name='Use Vertex Offset Mask', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseVertexOffsetMask', default=False, update=kit.writer(stack, '_UseVertexOffsetMask'))
     a['p_OffsetMaskSpeed'] = bpy.props.FloatVectorProperty(name='Offset Mask Speed(XY: By Time,ZW:By Custom)', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetMaskSpeed', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_OffsetMaskSpeed'))
     a['p_OffsetMaskPower'] = bpy.props.FloatProperty(name='Offset Mask Power', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_OffsetMaskPower', default=0.0, min=0.0, max=5.0, update=kit.writer(stack, '_OffsetMaskPower'))
     a['p_MainTexUseFlowmap'] = bpy.props.BoolProperty(name='Main Tex Use Flowmap', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_MainTexUseFlowmap', default=False, update=kit.writer(stack, '_MainTexUseFlowmap'))
@@ -802,6 +800,7 @@ def annotations(kit, stack):
     a['p_LocalPivortSpace'] = bpy.props.BoolProperty(name='局部轴点空间', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_LocalPivortSpace', default=False, update=kit.writer(stack, '_LocalPivortSpace'))
     a['p_UsePosYAsScreenV'] = bpy.props.BoolProperty(name='使用世界坐标的Y作为V', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UsePosYAsScreenV', default=False, update=kit.writer(stack, '_UsePosYAsScreenV'))
     a['p_ScreenUVUseDepth'] = bpy.props.BoolProperty(name='屏幕坐标是否受相机距离影响', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_ScreenUVUseDepth', default=True, update=kit.writer(stack, '_ScreenUVUseDepth'))
+    a['p_UseScreenUV'] = bpy.props.BoolProperty(name='Use Screen UV', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseScreenUV', default=False, update=kit.writer(stack, '_UseScreenUV'))
     a['p_SoftDistance'] = bpy.props.FloatProperty(name='Soft Distance', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_SoftDistance', default=0.001, min=0.001, max=10.0, update=kit.writer(stack, '_SoftDistance'))
     a['p_SoftBias'] = bpy.props.FloatProperty(name='Soft Bias', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_SoftBias', default=0.0, update=kit.writer(stack, '_SoftBias'))
     a['p_ExpThreshold'] = bpy.props.FloatProperty(name='Exp  Threshold', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_ExpThreshold', default=1.0, min=0.0, max=1.0, update=kit.writer(stack, '_ExpThreshold'))
@@ -923,7 +922,8 @@ def annotations(kit, stack):
     a['c_NormalMapUVSet'] = kit.choice('p_NormalMapUVSet', 'NormalMap UV Set', '游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_NormalMapUVSet', ((0.0, 'UV0'), (1.0, 'UV1'), (2.0, 'PolarUV'), (3.0, 'ScreenUV'),))
     a['p_HeightColorGradientInvert'] = bpy.props.BoolProperty(name='上下反转', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_HeightColorGradientInvert', default=False, update=kit.writer(stack, '_HeightColorGradientInvert'))
     a['p_HeightColorGradientInvert2'] = bpy.props.BoolProperty(name='上下反转', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_HeightColorGradientInvert2', default=False, update=kit.writer(stack, '_HeightColorGradientInvert2'))
-    a['p_UseScreenUV'] = bpy.props.BoolProperty(name='Use Screen UV', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseScreenUV', default=False, update=kit.writer(stack, '_UseScreenUV'))
+    a['p_UseVertexOffset'] = bpy.props.BoolProperty(name='Use Vertex Offset', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseVertexOffset', default=False, update=kit.writer(stack, '_UseVertexOffset'))
+    a['p_UseVertexOffsetMask'] = bpy.props.BoolProperty(name='Use Vertex Offset Mask', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseVertexOffsetMask', default=False, update=kit.writer(stack, '_UseVertexOffsetMask'))
     a['p_UseSoftBlend'] = bpy.props.BoolProperty(name='Use SoftBlend', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_UseSoftBlend', default=False, update=kit.writer(stack, '_UseSoftBlend'))
     a['p_EnablePreDepthPass'] = bpy.props.BoolProperty(name='开启 Pre Depth Pass（防重叠）', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_EnablePreDepthPass', default=False, update=kit.writer(stack, '_EnablePreDepthPass'))
     a['p_ShadowOverIris'] = bpy.props.FloatProperty(name='Shadow Over Iris （仅对眼睛生效）', description='游戏里的参数,Blender 里暂时没有对应效果,这里只记录数值,改它不会改变画面。\n_ShadowOverIris', default=4.0, update=kit.writer(stack, '_ShadowOverIris'))

@@ -69,35 +69,6 @@
 | ScreenDepth | Pipeline | Declared | raw device depth | reversed-Z / 线性 / 对数深度三种约定并存,_ZBufferParams 的打包也是引擎私有;而材质节点图读不到深度缓冲 |
 | VolumetricFogScattering | Pipeline | Declared | linear in-scattered radiance (rgb) and transmittance (w) between the camera and this point | froxel 网格的分辨率、深度分布、抖动与时间累积各家自定(HG 是 _IntegratedLightScattering 一张 3D RT,按抖动后的屏幕坐标与对数深度切片取值);编译器看见的只是一次 3D 纹理取值 |
 
-### 不可发射函数
-
-| 函数 | 原因 |
-|---|---|
-| EffectMixedPassVertex[VFXBaseV2] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXDsWrite] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXDistanceField] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXDitherAlpha] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXAdvance] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXTransparentDepthOnly] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXIce] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXElectricWire] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXLine] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXCaptureMesh] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXSmokeVat] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXCharacterOutline] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXCharacterWallhack] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXCharacterGrowing] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXWaterDitherAlpha] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXRefract] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXRadialBlur] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXSmokeSixWay] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXWater] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXWaterRefract] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXDecal] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[VFXFakeVolumeFog] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[CutsceneEffect] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[SceneEffectRain] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
-| EffectMixedPassVertex[UiFrameEffect] | EffectSkinnedPosition 降不下来:uniform _VertexSkinMatrices 为结构/资源型(StructuredBuffer),无节点图等价 |
 
 ## 栈 ruri_water_endfield
 
