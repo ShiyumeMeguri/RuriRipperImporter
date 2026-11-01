@@ -100,7 +100,8 @@ def _write_light(obj, target, value, scale):
     game is ``directColor * directIntensityDividePi``. Feeding it the undivided
     intensity is pi times too much light, which on a tone-mapped stage reads as
     a blown-white frame. The Lambert 1/pi is therefore accounted for exactly
-    once, on the side that authored it.
+    once, on the side that authored it. A character stack turns the same light
+    into the one the game hands characters (their own curve, in the stack).
 
     The colour arrives as the game emits it, linear and per unit of that energy:
     a temperature is the game's own curve, folded in before it gets here, never

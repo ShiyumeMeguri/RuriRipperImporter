@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(e6cc39de6d7178ab):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(83fde310bcc43a04):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -2503,6 +2503,8 @@ class Stack:
 
     # 顶点入口的 UV 通道 → 网格 UV 层名;空名 = 默认 UV(活动渲染层),与 Blender 节点的空名同一约定,不依赖网格怎么命名。
     TEXCOORD_LAYERS = {'input_texcoord': '', 'input_texcoord1': 'UV1', 'input_texcoord2': 'UV2'}
+    # 描边沿这一层外扩:切线空间平滑法线的 XY。第三套 UV 的含义各变体不同,描边不直接读它(搬进这一层的时机见 _own_outline_normal)。
+    OUTLINE_NORMAL_LAYER = 'OutlineNormal'
 
     def _texcoord_node(self, g, input_name):
         node = g._nd('ShaderNodeUVMap')
@@ -2577,7 +2579,10 @@ class Stack:
             raw['unit'] = (1.0, False)
         for name in self.TEXCOORD_LAYERS:
             if name in wanted:
-                raw[name] = (self._texcoord_node(g, name).outputs['UV'], True)
+                node = self._texcoord_node(g, name)
+                if name == 'input_texcoord2':
+                    node.uv_map = self.OUTLINE_NORMAL_LAYER
+                raw[name] = (node.outputs['UV'], True)
         if {'input_color', 'input_color_w'} & set(wanted):
             color = g.attr('Color')
             raw['color'] = (color.outputs['Color'], True)
@@ -4303,6 +4308,21 @@ class Stack:
                 else:
                     sock.default_value = value
 
+    def _own_outline_normal(self, obj, outline_slots):
+        """描边读 OUTLINE_NORMAL_LAYER。游戏的网格把平滑法线烘在第三套 UV 里,那一层只在描边走平均法线的材质上才是这个含义,
+        所以只给这样的对象按原样搬一份,原层不动;已有这一层的不碰(自己的网格由烘焙工具写),没有来源的等烘焙。"""
+        mesh = obj.data
+        uv_layers = mesh.uv_layers
+        source_name = self.TEXCOORD_LAYERS['input_texcoord2']
+        if self.OUTLINE_NORMAL_LAYER in uv_layers or source_name not in uv_layers or mesh.library is not None:
+            return
+        if not any(float(self._mat_meta(mat)[0].get('_OutlineAverageNormal', 1.0)) > 0.5 for _slot, mat, _on in outline_slots):
+            return
+        import numpy as _np
+        values = _np.empty(2 * len(mesh.loops), dtype=_np.float32)
+        uv_layers[source_name].data.foreach_get('uv', values)
+        uv_layers.new(name=self.OUTLINE_NORMAL_LAYER).data.foreach_set('uv', values)
+
     def apply_vertex_stage(self, objects, camera=None):
         """壳层位移 + 反壳描边的壳(同树虚拟几何;壳往外挪多少在材质的位移出口里逐视图算,见 _wire_outline)。
         **唯一的生成途径 = 从游戏读材质、造出这批对象的那一刻**:objects 只能是导入刚造出来的对象,没有「整场景」、
@@ -4372,6 +4392,7 @@ class Stack:
             # 顶点腿**只为几何而存在**。没有壳位移也没有描边 ⇒ 这个对象根本不该有修改器。
             if not vert_slots and not outline_slots:
                 continue
+            self._own_outline_normal(obj, outline_slots)
             tree_name = self.VTX_TREE_PREFIX + obj.name
             old = bpy.data.node_groups.get(tree_name)
             mod = obj.modifiers.get(self.VTX_MODIFIER)
