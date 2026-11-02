@@ -60,6 +60,10 @@ def _follow_images(world):
             continue
         if not _same_texels(image, own):
             if own.source == "TILED":
+                if image.source == "TILED" and not image.packed_files:
+                    # The empty set of a file that holds no level, such as a prop's: its objects stand in no decal's box
+                    # list, so nothing reads it.
+                    continue
                 raise RuntimeError("[level-follow] level image {0} is a tile set and differs from the one {1} states: a tile "
                                    "set cannot be handed over in memory".format(image.name, world.name))
             _take_texels(image, own)
