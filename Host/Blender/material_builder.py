@@ -96,12 +96,16 @@ POST_STAGES = extensions.point(
 #: stack reads LIVE from the level's world instead of baking them into its materials --
 #: per-level values such as fog -- each with the default its recipe declares and what
 #: states it: ``level_global`` (the level's environment phase) or ``volume_global`` (the
-#: volume stack the camera stands in -- post-processing switches, character lighting).
+#: volume stack the camera stands in -- post-processing switches, character lighting), both
+#: written on the level's world; or :data:`POST_EXPOSURE_STATEMENT`, the exposure a render's
+#: post stage multiplies each frame by, which the host's exposure-tracked render writes on the
+#: scene (it is that render's state, not the level's).
 #: The stack's graph reads ``property + default``, so a property that was never written
 #: answers the default and a session with no level in it is unchanged.
 LEVEL_GLOBALS = extensions.point(
     "blender.level_globals",
     "Per-level engine globals a shading stack reads live from the level's world.")
+POST_EXPOSURE_STATEMENT = "post_exposure"
 
 #: ``level_image_layouts() -> {name: layout}``. The images a stack reads level
 #: state through, since the host's material nodes only sample 2D images: a 2D
@@ -597,7 +601,8 @@ def compile_stacks():
     state = capability_state(bpy.context.scene)
     for material in compiled:
         material[CAPABILITY_STATE_PROPERTY] = state
-    declared = {name for provider in LEVEL_GLOBALS for name in provider()}
+    declared = {name for provider in LEVEL_GLOBALS for name, (statement, _base) in provider().items()
+                if statement != POST_EXPOSURE_STATEMENT}
     for scene in bpy.data.scenes:
         kept = sorted(name for name in scene.keys() if name in declared)
         if scene.library is None and kept:

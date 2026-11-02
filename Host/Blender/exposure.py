@@ -23,8 +23,6 @@ from bpy_extras import anim_utils
 
 from . import material_builder
 
-#: What the stacks call the statement a post stage's exposure makes (the recipe's engine global source).
-STATEMENT = "post_exposure"
 #: How many times one frame may be shaded while its exposure is sought before the render stops with what it found.
 PASSES = 4
 
@@ -34,7 +32,7 @@ def state_global():
     found = {}
     for provider in material_builder.LEVEL_GLOBALS:
         for name, (statement, base) in provider().items():
-            if statement == STATEMENT:
+            if statement == material_builder.POST_EXPOSURE_STATEMENT:
                 found[name] = [float(component) for component in base]
     if len(found) > 1:
         raise RuntimeError("[exposure] the stacks read {0} exposure states; there is one exposure".format(sorted(found)))
