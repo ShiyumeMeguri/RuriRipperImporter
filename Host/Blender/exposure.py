@@ -4,13 +4,15 @@ The build's render pipeline writes, every frame, the exposure its auto exposure 
 material reads -- x = E, y = 1/E -- and characters, with the emissives that ignore post exposure, multiply their final
 colour by 1/E (their ambient intensity is scaled by E): the exposure lifts the level and leaves them as they are. The post
 stage meters each frame in the compositor, after every material has been shaded, so no material can read the E of its own
-frame; the build reads back the previous frame's, and so does this host. A render driven here states each frame's exposure
-on the scene before the frame is shaded -- what the frame before metered -- and where the frame meters off it by more than
-half the post stage's tolerance (the first frame, a cut) it shades the frame again under the exposure the passes so far
-point to, until the frame meters what it was shaded under: the fixed point the build's adaptation settles on. The state is
-keys on the scene, so any later render of those frames reads the same state; it is the render's, not the level's, which
-is why it lives on the scene and not on the level's world (a material's view-layer attribute finds the scene first). A
-final render of any frame whose state is off what it meters by more than that tolerance is refused by the post stage.
+frame; the build reads back the previous frame's. A render driven here does the same while it renders -- each frame is
+stated, before it is shaded, the exposure the frame before it metered -- and then renders the frames again where they
+meter off their state by more than half the post stage's tolerance (a cut, a fast change), under the exposure the passes
+so far point to, until each frame meters what it was shaded under: the fixed point the build's adaptation settles on. It
+renders as animations -- the main pass, then one render over the frames still off that skips the rest -- because a still
+render starts the renderer again for every frame, and every render job compiles the scene's shaders again. The state is keys on the scene, so any later render of those frames reads the same state;
+it is the render's, not the level's, which is why it lives on the scene and not on the level's world (a material's
+view-layer attribute finds the scene first). A final render of any frame whose state is off what it meters by more than
+that tolerance is refused by the post stage.
 """
 
 from __future__ import annotations
@@ -115,49 +117,87 @@ def _next_guess(passes):
     return stated_now - (metered_now - stated_now) * (stated_now - stated_before) / slope
 
 
-def render_frames(scene, frames, path_of):
-    """Render ``frames`` of ``scene`` to ``path_of(frame)``, each shaded under the exposure the post stage multiplies it
-    by, and leave that exposure stated on the scene. Returns ``{frame: (stops, shaded_times)}``."""
+def _render_range(scene, first, last):
+    """One animation render of frames ``first``..``last``: the renderer starts once for the whole run. A still render
+    starts it again for every frame, which costs many times the frame itself."""
+    scene.frame_start, scene.frame_end, scene.frame_step = first, last, 1
+    bpy.ops.render.render(animation=True)
+
+
+def _render_again(scene, first, last):
+    """One animation render over ``first``..``last`` that shades only the frames whose output is missing: the renderer
+    skips a frame whose file exists when it may not overwrite. Every render job compiles the scene's shaders again, so the
+    frames still off go in one job, not one job per run."""
+    render = scene.render
+    overwrite = render.use_overwrite
+    render.use_overwrite = False
+    try:
+        _render_range(scene, first, last)
+    finally:
+        render.use_overwrite = overwrite
+
+
+def render_animation(scene, first, last):
+    """Render frames ``first``..``last`` of ``scene`` to its output path, each shaded under the exposure the post stage
+    multiplies it by, and leave that exposure stated on the scene. The main pass renders the whole range once, stating each
+    frame, as it is about to be shaded, the exposure the frame before it metered; frames still metering off their state by
+    more than half the post stage's tolerance (a cut, a fast change) are stated the next guess and rendered again in one
+    render that skips the rest, up to PASSES renders each. Returns ``{frame: (stops, renders)}``."""
     stages = [stage for stage in material_builder.POST_STAGES if stage.installed(scene)]
     if not stages:
         raise RuntimeError("[exposure] scene {0} has no post stage installed: nothing meters its frames".format(scene.name))
     tolerance = min(stage.EXPOSURE_TOLERANCE_STOPS for stage in stages) / 2.0
     folder = os.path.join(bpy.app.tempdir, "ruri_exposure_{0}".format(scene.name))
     os.makedirs(folder, exist_ok=True)
+    frames = list(range(first, last + 1))
     # The state exists before recording rebuilds the chain: the stage's guard reads it only if it was there when built.
-    start = stated(scene, frames[0])
-    state(scene, frames[0], 0.0 if start is None else start)
+    start = stated(scene, first)
+    state(scene, first, 0.0 if start is None else start)
     for stage in stages:
         stage.record_exposure(scene, folder)
-    done = {}
-    previous = None
+    kept = (scene.frame_start, scene.frame_end, scene.frame_step, scene.frame_current)
+    history = {frame: [] for frame in frames}
+
+    def meter(frame):
+        history[frame].append((stated(scene, frame), _metered(_record_of(stages, scene, frame), frame)))
+
+    def seed(scene_now, *_arguments):
+        frame = scene_now.frame_current
+        if frame - 1 in history and not history[frame - 1]:
+            meter(frame - 1)
+            state(scene_now, frame, history[frame - 1][-1][1])
+
     try:
         for frame in frames:
-            scene.frame_set(frame)
             record = _record_of(stages, scene, frame)
-            stops = previous if previous is not None else stated(scene, frame)
-            stops = 0.0 if stops is None else stops
-            passes = []
-            while True:
-                state(scene, frame, stops)
-                scene.frame_set(frame)
-                scene.render.filepath = path_of(frame)
-                if os.path.exists(record):
-                    os.remove(record)
-                bpy.ops.render.render(write_still=True)
-                metered = _metered(record, frame)
-                passes.append((stops, metered))
-                if abs(metered - stops) <= tolerance:
-                    break
-                if len(passes) == PASSES:
-                    raise RuntimeError("[exposure] frame {0} found no exposure it meters within {1} stops in {2} passes: {3}"
-                                       .format(frame, tolerance, PASSES, passes))
-                stops = _next_guess(passes)
-            done[frame] = (stops, len(passes))
-            previous = metered
-            print("[exposure] frame {0}: shaded under {1:+.3f} stops, metered {2:+.3f}, {3} pass(es)".format(
-                frame, stops, metered, len(passes)), flush=True)
+            if os.path.exists(record):
+                os.remove(record)
+        bpy.app.handlers.render_pre.append(seed)
+        try:
+            _render_range(scene, first, last)
+        finally:
+            bpy.app.handlers.render_pre.remove(seed)
+        meter(last)
+        unsettled = [frame for frame in frames if abs(history[frame][-1][1] - history[frame][-1][0]) > tolerance]
+        while unsettled:
+            print("[exposure] rendered {0} frame(s); {1} still off their state by more than {2} stops".format(
+                sum(len(history[frame]) for frame in frames), len(unsettled), tolerance), flush=True)
+            stuck = [frame for frame in unsettled if len(history[frame]) == PASSES]
+            if stuck:
+                raise RuntimeError("[exposure] frame(s) {0} found no exposure they meter within {1} stops in {2} renders: {3}"
+                                   .format(stuck, tolerance, PASSES, {frame: history[frame] for frame in stuck[:3]}))
+            for frame in unsettled:
+                state(scene, frame, _next_guess(history[frame]))
+                written = scene.render.frame_path(frame=frame)
+                if os.path.exists(written):
+                    os.remove(written)
+            _render_again(scene, unsettled[0], unsettled[-1])
+            for frame in unsettled:
+                meter(frame)
+            unsettled = [frame for frame in unsettled if abs(history[frame][-1][1] - history[frame][-1][0]) > tolerance]
     finally:
+        scene.frame_start, scene.frame_end, scene.frame_step = kept[0], kept[1], kept[2]
+        scene.frame_set(kept[3])
         for stage in stages:
             stage.record_exposure(scene, "")
-    return done
+    return {frame: (history[frame][-1][0], len(history[frame])) for frame in frames if history[frame]}

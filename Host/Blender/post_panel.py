@@ -127,10 +127,10 @@ class RURI_OT_render_exposure(bpy.types.Operator):
     bl_label = "Render Animation"
     bl_description = ("Render the scene's frames to its output path, each shaded under the exposure the post chain "
                       "multiplies it by. The materials that take the exposure back out (characters, emissives that "
-                      "ignore it) read it from the scene, and the chain meters it only after they are shaded, so each "
-                      "frame is stated what the frame before metered, and shaded again where a cut makes them differ. "
-                      "The exposure stays stated on the scene, so later renders of these frames read the same; a final "
-                      "render of a frame that meters off its stated exposure comes out magenta")
+                      "ignore it) read it from the scene, and the chain meters it only after they are shaded: each frame "
+                      "is stated what the frame before it metered, as the game reads back the previous frame, and frames "
+                      "a cut leaves off are shaded again. The exposure stays stated on the scene, so later renders of these frames "
+                      "read the same; a final render of a frame that meters off its stated exposure comes out magenta")
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -139,13 +139,7 @@ class RURI_OT_render_exposure(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        output = scene.render.filepath
-        frames = list(range(scene.frame_start, scene.frame_end + 1, scene.frame_step))
-        paths = {frame: scene.render.frame_path(frame=frame) for frame in frames}
-        try:
-            done = exposure.render_frames(scene, frames, paths.__getitem__)
-        finally:
-            scene.render.filepath = output
+        done = exposure.render_animation(scene, scene.frame_start, scene.frame_end)
         self.report({"INFO"}, "{0} frame(s) rendered under their own exposure.".format(len(done)))
         return {"FINISHED"}
 
