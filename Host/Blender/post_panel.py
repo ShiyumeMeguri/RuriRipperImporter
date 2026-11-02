@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import bpy
 
-from . import derived_state, material_builder, material_panel
+from . import derived_state, exposure, material_builder, material_panel
 from ...Kernel import host as host_port
 from ...Kernel.app import look
 
@@ -122,6 +122,34 @@ class RURI_OT_post_reset(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class RURI_OT_render_exposure(bpy.types.Operator):
+    bl_idname = "ruri.render_exposure"
+    bl_label = "Render Animation"
+    bl_description = ("Render the scene's frames to its output path, each shaded under the exposure the post chain "
+                      "multiplies it by. The materials that take the exposure back out (characters, emissives that "
+                      "ignore it) read it from the scene, and the chain meters it only after they are shaded, so each "
+                      "frame is stated what the frame before metered, and shaded again where a cut makes them differ. "
+                      "The exposure stays stated on the scene, so later renders of these frames read the same; a final "
+                      "render of a frame that meters off its stated exposure comes out magenta")
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(material_builder.post_stages_installed(context.scene))
+
+    def execute(self, context):
+        scene = context.scene
+        output = scene.render.filepath
+        frames = list(range(scene.frame_start, scene.frame_end + 1, scene.frame_step))
+        paths = {frame: scene.render.frame_path(frame=frame) for frame in frames}
+        try:
+            done = exposure.render_frames(scene, frames, paths.__getitem__)
+        finally:
+            scene.render.filepath = output
+        self.report({"INFO"}, "{0} frame(s) rendered under their own exposure.".format(len(done)))
+        return {"FINISHED"}
+
+
 class RURI_OT_derived_rebuild(bpy.types.Operator):
     bl_idname = "ruri.derived_rebuild"
     bl_label = "Rebuild Derived State"
@@ -195,6 +223,15 @@ def draw_post_chain_section(layout, context):
     state.prop(scene.view_settings, "view_transform")
     state.label(text="Viewport preview: shading popover > Compositor", icon="INFO")
 
+    stated = exposure.state_global()
+    if stated is not None:
+        row = layout.row()
+        row.alert = stated[0] not in scene
+        row.label(text="Exposure stated on this scene" if stated[0] in scene
+                  else "No exposure stated: frames metering off 0 stops render magenta",
+                  icon="CHECKMARK" if stated[0] in scene else "ERROR")
+        layout.operator(RURI_OT_render_exposure.bl_idname, icon="RENDER_ANIMATION")
+
     for stage, node in _stage_nodes(scene):
         box = layout.box()
         head = box.row()
@@ -231,6 +268,7 @@ _CLASSES = (
     RURI_OT_post_remove,
     RURI_OT_post_viewport_preview,
     RURI_OT_post_reset,
+    RURI_OT_render_exposure,
     RURI_OT_derived_rebuild,
 )
 

@@ -29,7 +29,6 @@ NAMES = (
     '_FresnelColor',
     '_IgnorePostExposure',
     '_CullMode',
-    '_ExposureWithMiscParams',
     '_VFXParams0',
     '_UseBlend',
     '_BlendTexUVSpeed',
@@ -488,7 +487,6 @@ def annotations(kit, stack):
     a['p_IgnorePostExposure'] = bpy.props.BoolProperty(name='Ignore Post Exposure', description='不受自动曝光影响:打开(默认)时特效颜色会乘上曝光补偿,画面曝光变化时特效亮度保持不变;关闭则特效和场景一起随曝光变亮变暗。\n_IgnorePostExposure', default=True, update=kit.writer(stack, '_IgnorePostExposure'))
     a['p_CullMode'] = bpy.props.FloatProperty(name='Render Face', description='渲染模型的哪一面:Front 只画正面,Back 只画背面,Both 双面都画;特效面片、薄壳常用 Both。\n_CullMode', default=2.0, update=kit.writer(stack, '_CullMode'))
     a['c_CullMode'] = kit.choice('p_CullMode', 'Render Face', '渲染模型的哪一面:Front 只画正面,Back 只画背面,Both 双面都画;特效面片、薄壳常用 Both。\n_CullMode', ((0.0, 'Both'), (1.0, 'Back'), (2.0, 'Front'),))
-    a['p_ExposureWithMiscParams'] = bpy.props.FloatVectorProperty(name='Exposure (y = post exposure)', description='引擎全局曝光相关参数,由场景或展示台自动写入,一般不用手调。\nX: 乘进角色受光强度的倍率。\nY: 乘在最终颜色上的倍率(后曝光)。\nZ: 预留,没有用到。\nW: 预留,没有用到。\n_ExposureWithMiscParams', size=4, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_ExposureWithMiscParams'))
     a['p_VFXParams0'] = bpy.props.FloatVectorProperty(name='VFX Params0 (xyz = 角色位, w = 时间)', description='引擎全局的特效参数,由场景自动写入,一般不用手调。\nX: 角色的世界位置 X。\nY: 角色的世界位置 Y。\nZ: 角色的世界位置 Z。\nW: 时间(秒)。\n_VFXParams0', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_VFXParams0'))
     a['p_UseBlend'] = bpy.props.BoolProperty(name='Use Blend', description='混合层开关:打开后在主图上再叠一层「混合图」的颜色(第二层纹理),两层颜色相加。\n_UseBlend', default=False, update=kit.writer(stack, '_UseBlend'))
     a['p_BlendTexUVSpeed'] = bpy.props.FloatVectorProperty(name='BlendTexUVSpeed(XY:By Time,ZW:By Custom1.Y)', description='混合图的 UV 滚动速度(UV 单位)。前两个数按时间滚动,后两个数按粒子自定义数据滚动(需要打开「Use In Particle」)。\nX: 按时间沿 U(横向)滚动:每秒滚动多少。\nY: 按时间沿 V(纵向)滚动:每秒滚动多少。\nZ: 按粒子自定义数据 Custom1.Y 沿 U 滚动:Custom1.Y 每增加 1 滚动多少。\nW: 按粒子自定义数据 Custom1.Y 沿 V 滚动:Custom1.Y 每增加 1 滚动多少。\n_BlendTexUVSpeed', size=4, default=(0.0, 0.0, 0.0, 0.0,), update=kit.writer(stack, '_BlendTexUVSpeed'))
@@ -959,7 +957,6 @@ def draw_Eyebrow(kit, layout, material, p):
         kit.prop(g0, p, 'p_OutlineTintColor', 'Outline Tint Color')
         kit.prop(g0, p, 'c_BackFaceNormalFlip', 'Back Face Normal Flip')
         kit.prop(g0, p, 'p_FBXRotationFix', 'FBX -90 Z Rotation Fix (OTW col0/col1 swap)')
-        kit.prop(g0, p, 'p_ExposureWithMiscParams', 'Exposure (y = post exposure)')
         kit.prop(g0, p, 'p_VFXParams0', 'VFX Params0 (xyz = 角色位, w = 时间)')
     g1 = kit.group(root, p, 'PBR 基础', 'PBR 基础', 0, None, True)
     if g1 is not None:

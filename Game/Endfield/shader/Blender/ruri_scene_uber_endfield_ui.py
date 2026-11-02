@@ -226,7 +226,6 @@ NAMES = (
     '_ParallaxTilling',
     '_ParallaxColor',
     '_ParallaxColorDark',
-    '_ExposureWithMiscParams',
     '_IgnorePostExposure',
     '_VFXParams1',
     '_ShadowAlphaClipThreshold',
@@ -620,7 +619,6 @@ def annotations(kit, stack):
     a['p_ParallaxTilling'] = bpy.props.FloatProperty(name='Parallax Tilling', description='视差图案的平铺:越大图案越细密。\n_ParallaxTilling', default=1.0, min=0.01, max=20.0, update=kit.writer(stack, '_ParallaxTilling'))
     a['p_ParallaxColor'] = bpy.props.FloatVectorProperty(name='Parallax Color', description='视差图案亮处的发光颜色(HDR):默认黑色看不到,要先调亮。\n_ParallaxColor', size=4, subtype='COLOR', min=0.0, soft_max=1.0, default=(0.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_ParallaxColor'))
     a['p_ParallaxColorDark'] = bpy.props.FloatVectorProperty(name='Parallax Color Dark', description='视差图案暗处的发光颜色(HDR):图案从暗到亮在「Parallax Color Dark」和「Parallax Color」之间过渡。\n_ParallaxColorDark', size=4, subtype='COLOR', min=0.0, soft_max=1.0, default=(0.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_ParallaxColorDark'))
-    a['p_ExposureWithMiscParams'] = bpy.props.FloatVectorProperty(name='ExposureWithMiscParams (.y=后曝光)', description='引擎全局曝光参数,由场景自动写入,一般不用手调。\nX: 没有用到。\nY: 后曝光倍率:「不受自动曝光影响」的发光会乘它。\nZ: 没有用到。\nW: 没有用到。\n_ExposureWithMiscParams', size=4, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_ExposureWithMiscParams'))
     a['p_IgnorePostExposure'] = bpy.props.BoolProperty(name='不受自动曝光影响', description='自发光不受自动曝光影响:打开后发光亮度不随画面曝光变化(发光看起来永远一样亮)。\n_IgnorePostExposure', default=True, update=kit.writer(stack, '_IgnorePostExposure'))
     a['p_VFXParams1'] = bpy.props.FloatVectorProperty(name='VFX Grade (rgb = tint, w = saturation)', description='引擎全局的最终调色参数,由场景自动写入,一般不用手调。\nX: 整体染色的红分量(1 = 不变)。\nY: 整体染色的绿分量(1 = 不变)。\nZ: 整体染色的蓝分量(1 = 不变)。\nW: 整体饱和度:1 = 不变,0 = 灰度。\n_VFXParams1', size=4, default=(1.0, 1.0, 1.0, 1.0,), update=kit.writer(stack, '_VFXParams1'))
     a['p_ShadowAlphaClipThreshold'] = bpy.props.FloatProperty(name='Shadow Clip', description='树叶投影的镂空阈值:只管往阴影图里画的那一趟,低于它的像素不投影。通常比显示用的阈值小,树影因此比叶子看上去更密。\n_ShadowAlphaClipThreshold', default=0.2, min=0.0, max=1.001, update=kit.writer(stack, '_ShadowAlphaClipThreshold'))
@@ -893,7 +891,6 @@ def draw_ContainerWater(kit, layout, material, p):
         kit.prop(g0, p, 'p_ParallaxTilling', 'Parallax Tilling')
         kit.prop(g0, p, 'p_ParallaxColor', 'Parallax Color')
         kit.prop(g0, p, 'p_ParallaxColorDark', 'Parallax Color Dark')
-        kit.prop(g0, p, 'p_ExposureWithMiscParams', 'ExposureWithMiscParams (.y=后曝光)')
         kit.prop(g0, p, 'p_VoxelEmissionScale', 'Voxel Emission Scale')
         kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_CullMode', 'Cull Mode')
@@ -939,7 +936,6 @@ def draw_Grass(kit, layout, material, p):
         kit.prop(g0, p, 'p_MinSubsurfaceThickness', 'Min Thickness')
         kit.prop(g0, p, 'p_MaxSubsurfaceThickness', 'Max Thickness')
         kit.prop(g0, p, 'p_SubsurfaceIndirect', 'Subsurface Indirect')
-        kit.prop(g0, p, 'p_ExposureWithMiscParams', 'ExposureWithMiscParams (.y=后曝光)')
         kit.prop(g0, p, 'p_IgnorePostExposure', '不受自动曝光影响')
         kit.prop(g0, p, 'p_VFXParams1', 'VFX Grade (rgb = tint, w = saturation)')
         kit.prop(g0, p, 'p_SubsurfaceColor', 'Subsurface Color')
@@ -1002,7 +998,6 @@ def draw_Leaf(kit, layout, material, p):
         kit.prop(g0, p, 'p_MinSubsurfaceThickness', 'Min Thickness')
         kit.prop(g0, p, 'p_MaxSubsurfaceThickness', 'Max Thickness')
         kit.prop(g0, p, 'p_SubsurfaceIndirect', 'Subsurface Indirect')
-        kit.prop(g0, p, 'p_ExposureWithMiscParams', 'ExposureWithMiscParams (.y=后曝光)')
         kit.prop(g0, p, 'p_IgnorePostExposure', '不受自动曝光影响')
         kit.prop(g0, p, 'p_VFXParams1', 'VFX Grade (rgb = tint, w = saturation)')
         kit.prop(g0, p, 'p_ShadowAlphaClipThreshold', 'Shadow Clip')
@@ -1238,7 +1233,6 @@ def draw_Lit(kit, layout, material, p):
         kit.prop(g0, p, 'p_ParallaxTilling', 'Parallax Tilling')
         kit.prop(g0, p, 'p_ParallaxColor', 'Parallax Color')
         kit.prop(g0, p, 'p_ParallaxColorDark', 'Parallax Color Dark')
-        kit.prop(g0, p, 'p_ExposureWithMiscParams', 'ExposureWithMiscParams (.y=后曝光)')
         kit.prop(g0, p, 'p_IgnorePostExposure', '不受自动曝光影响')
         kit.prop(g0, p, 'p_VFXParams1', 'VFX Grade (rgb = tint, w = saturation)')
         kit.prop(g0, p, 'p_SubsurfaceColor', 'Subsurface Color')

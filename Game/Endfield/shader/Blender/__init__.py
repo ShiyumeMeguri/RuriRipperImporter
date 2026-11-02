@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(c4a27f27cf587232):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(a6b5aaf8ab40123e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -5271,7 +5271,8 @@ class Stack:
                 max(1, render.resolution_y * render.resolution_percentage // 100))
 
     def _chain_signature(self, scene, tree):
-        """图链的拓扑由出图尺寸、各链的分辨率档、开关与视口预览定;没写过分辨率档时按半分辨率(真源 BloomResolution.Half = 2)。"""
+        """图链的拓扑由出图尺寸、各链的分辨率档、开关与视口预览、测光记录与曝光状态在不在定;没写过分辨率档时按半分辨率
+        (真源 BloomResolution.Half = 2)。"""
         remembered = self._stored(scene, self.POST_VALUES_KEY)
         width, height = self._output_size(scene)
         signature = [width, height] + [float(remembered[name][0]) if name in remembered else 2.0
@@ -5281,7 +5282,121 @@ class Stack:
                             for chain in chains if chain.get('enable_input')] + [
             1.0 if self._viewport_preview(scene, chain) else 0.0 for chain in chains
             if chain['kind'] in self.RENDER_ONLY_KINDS] + [
-            float(len(self._water_objects(scene, chain))) for chain in chains if chain['kind'] == 'water_lighting']
+            float(len(self._water_objects(scene, chain))) for chain in chains if chain['kind'] == 'water_lighting'] + [
+            1.0 if self._exposure_record(scene) else 0.0, 1.0 if self.exposure_state_present(scene) else 0.0]
+
+    POST_EXPOSURE_RECORD_KEY = 'ruri_post_exposure_record'
+    EXPOSURE_RECORD_NAME = 'Exposure'
+    # 材质读到的曝光与本帧测到的差过这么多档,最终渲染整帧拒绝;宿主逐帧测光渲染收敛到它的一半,单精度的比较翻不过去。
+    EXPOSURE_TOLERANCE_STOPS = 0.02
+    # 拒绝时送进主入口的场景色:一眼认得出的错,不是任何画面会有的颜色。
+    EXPOSURE_REFUSED_COLOR = (1.0, 0.0, 1.0)
+
+    @staticmethod
+    def exposure_state_name():
+        """各材质栈从世界读的曝光状态(陈述者 post_exposure)的名字:真源渲染管线每帧把乘在画面上的曝光 E 写成
+        x = E、y = 1/E,角色与不吃曝光的发光拿 1/E 抵掉。没有栈读它答 None;只能有一份。"""
+        names = sorted({name for stack in STACKS for name, (statement, _base) in stack.level_global_bases().items()
+                        if statement == 'post_exposure'})
+        if len(names) > 1:
+            raise RuntimeError('[ruri-post] 曝光状态只能有一份,各栈读的是 {0}'.format(names))
+        return names[0] if names else None
+
+    def exposure_state_present(self, scene):
+        """场景上有没有曝光状态:有没有决定守卫读状态的驱动建不建(见 _refuse_unstated),所以它进图链签名。"""
+        name = self.exposure_state_name()
+        return name is not None and name in scene
+
+    def _refuse_unstated(self, tree, scene, metered, delivered):
+        """最终渲染里,材质读到的曝光与本帧测到、乘在画面上的曝光差过容差就整帧送品红拒绝出图。材质拿不到本帧的 E,只能
+        由宿主逐帧测光渲染先把它写成场景上的曝光状态(这一次出图的状态,不是关卡的内容,材质经视图层属性先找场景);这里用
+        驱动读回同一个状态。没有状态时读 0,落在缺省 E = 1 —— 这时不建驱动:目标属性不在时建的驱动,之后属性出现了最终
+        渲染里也一直读 0(实测),所以状态一出现图链就按签名重建。视口照常(它从不出片)。"""
+        name = self.exposure_state_name()
+        if name is None:
+            return delivered
+        base = next(base for stack in STACKS for global_name, (_statement, base) in stack.level_global_bases().items()
+                    if global_name == name)
+
+        def math(operation, first, second):
+            node = tree.nodes.new('ShaderNodeMath')
+            node[self.POST_CHAIN_KEY] = 'auto_exposure'
+            node.operation = operation
+            for socket, value in zip(node.inputs, (first, second)):
+                if isinstance(value, float):
+                    socket.default_value = value
+                elif value is not None:
+                    tree.links.new(value, socket)
+            return node
+
+        stated = math('ADD', 0.0, float(base[0]))
+        if self.exposure_state_present(scene):
+            driver = stated.inputs[0].driver_add('default_value').driver
+            driver.type = 'AVERAGE'
+            variable = driver.variables.new()
+            variable.type = 'SINGLE_PROP'
+            target = variable.targets[0]
+            target.id_type = 'SCENE'
+            target.id = scene
+            target.data_path = '["{0}"][0]'.format(name)
+        stops = math('LOGARITHM', stated.outputs[0], 2.0)
+        gap = math('ABSOLUTE', math('SUBTRACT', stops.outputs[0], metered).outputs[0], None)
+        refused = math('GREATER_THAN', gap.outputs[0], float(self.EXPOSURE_TOLERANCE_STOPS))
+        colour = tree.nodes.new('ShaderNodeCombineXYZ')
+        colour[self.POST_CHAIN_KEY] = 'auto_exposure'
+        for axis, component in zip(('X', 'Y', 'Z'), self.EXPOSURE_REFUSED_COLOR):
+            colour.inputs[axis].default_value = component
+        switch = tree.nodes.new('GeometryNodeSwitch')
+        switch.input_type = 'VECTOR'
+        switch[self.POST_CHAIN_KEY] = 'auto_exposure'
+        tree.links.new(refused.outputs[0], switch.inputs['Switch'])
+        tree.links.new(delivered, switch.inputs['False'])
+        tree.links.new(colour.outputs['Vector'], switch.inputs['True'])
+        return self._render_only(tree, 'auto_exposure', switch.outputs[0], delivered)
+
+    def _exposure_record(self, scene):
+        return str(scene.get(self.POST_EXPOSURE_RECORD_KEY) or '')
+
+    def record_exposure(self, scene, folder):
+        """开关测光记录:folder 非空时自动曝光链把每一帧测到的档位(单值)写进该目录,宿主读回去写下一帧的曝光状态;
+        空 = 关。记录口长在图链上,开关即重建图链。"""
+        if folder:
+            scene[self.POST_EXPOSURE_RECORD_KEY] = folder
+        elif self.POST_EXPOSURE_RECORD_KEY in scene:
+            del scene[self.POST_EXPOSURE_RECORD_KEY]
+        tree = scene.compositing_node_group
+        if tree is not None and self.POST_SIZE_KEY in tree:
+            del tree[self.POST_SIZE_KEY]
+        return self.refresh_chains(scene)
+
+    def metering_record(self, scene, frame):
+        """宿主读回第 frame 帧测光档位的文件;没开记录答 None。命名只在这里与 _record_metering 两处成对。"""
+        folder = self._exposure_record(scene)
+        return os.path.join(folder, '{0:04d}_{1}.exr'.format(frame, self.EXPOSURE_RECORD_NAME)) if folder else None
+
+    def _record_metering(self, tree, scene, value, folder):
+        """测到的档位写成一像素 EXR。输出文件节点只写图、整个跳过单值口,所以先给档位一张 1×1 的域(域坐标乘零加档位,
+        值逐位不变);文件名里的 #### 静帧渲染也代换成帧号。"""
+        field = self._level_domain(tree, scene, 'auto_exposure', 'record', (1, 1))
+        separate = tree.nodes.new('ShaderNodeSeparateXYZ')
+        separate[self.POST_CHAIN_KEY] = 'auto_exposure'
+        tree.links.new(field, separate.inputs[0])
+        held = tree.nodes.new('ShaderNodeMath')
+        held[self.POST_CHAIN_KEY] = 'auto_exposure'
+        held.operation = 'MULTIPLY_ADD'
+        tree.links.new(separate.outputs['X'], held.inputs[0])
+        held.inputs[1].default_value = 0.0
+        tree.links.new(value, held.inputs[2])
+        output = tree.nodes.new('CompositorNodeOutputFile')
+        output[self.POST_CHAIN_KEY] = 'auto_exposure'
+        output.directory = folder
+        output.file_name = '####_'
+        output.format.media_type = 'IMAGE'
+        output.format.file_format = 'OPEN_EXR'
+        output.format.color_depth = '32'
+        output.format.color_mode = 'BW'
+        item = output.file_output_items.new('FLOAT', self.EXPOSURE_RECORD_NAME)
+        tree.links.new(held.outputs[0], output.inputs[item.name])
 
     POST_VIEWPORT_KEY = 'ruri_post_viewport'
     # 替换场景色的链:视口里不算它 = 视口直接看没补过的渲染结果,是精确的「这条链不在」。
@@ -5394,13 +5509,20 @@ class Stack:
             composed = self._water_lighting(tree, scene, render, chain, width, height, beneath)
             if composed is not None:
                 scene_color = self._render_only(tree, chain['kind'], composed, beneath)
-        tree.links.new(scene_color if scene_color is not None else packed.outputs['Vector'],
-                       stage.inputs[self.post['color_in']])
+        metering = [chain for chain in chains if chain['kind'] == 'auto_exposure' and self._chain_enabled(scene, tree, chain)]
+        if len(metering) > 1:
+            raise RuntimeError('[ruri-post] 一帧只有一个曝光,开着的自动曝光链有 {0} 条'.format(len(metering)))
+        folder = self._exposure_record(scene)
+        delivered = scene_color if scene_color is not None else packed.outputs['Vector']
         driven = []
-        for chain in chains:
-            if chain['kind'] == 'auto_exposure' and self._chain_enabled(scene, tree, chain):
-                source = scene_color if scene_color is not None else render.outputs['Image']
-                driven.append((chain, self._auto_exposure(tree, scene, chain, source, width, height)))
+        for chain in metering:
+            source = scene_color if scene_color is not None else render.outputs['Image']
+            value = self._auto_exposure(tree, scene, chain, source, width, height)
+            driven.append((chain, value))
+            if folder:
+                self._record_metering(tree, scene, value, folder)
+            delivered = self._refuse_unstated(tree, scene, value, delivered)
+        tree.links.new(delivered, stage.inputs[self.post['color_in']])
         for chain in chains:
             if chain['kind'] != 'bloom_pyramid' or not self._chain_enabled(scene, tree, chain):
                 continue
