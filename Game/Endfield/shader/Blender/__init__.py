@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(ea7afa9119cbaf5c):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(a8bf97e253cc1e0e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1507,6 +1507,9 @@ CAP_BUILDERS = {
     'OpaqueDistanceBehind': _cap_opaque_distance_behind,
     'ScreenSpaceOcclusion': _cap_screen_space_occlusion,
 }
+
+# 答案读世界内容的能力(见 _world_sample):部件问了它们,换世界才要重接兑现面。
+WORLD_READING_CAPS = frozenset(('AmbientIrradiance', 'SpecularRadiance'))
 
 # 能力身份 → 建图器(几何节点一条腿,顶点腿):(树, 场景, Y/Z 对调) → {叶: 接口 socket | 常量 | None(这一叶答不出)};
 # 整个返回 None = 本场景答不出。表里查不到 = 什么都不接,口停在能力自声明缺席值上并大声记账。
@@ -3333,8 +3336,17 @@ class Stack:
             raise RuntimeError('[ruri-uber] {0} 张材质照记录编不出来:{1}'.format(len(failed), failed))
         return list(replaced.values()) + [twin for _mat, twin in twins]
 
+    @staticmethod
+    def _reads_world(spec):
+        """部件的兑现面里有答案读世界内容的能力:别的能力不看世界,换世界时这张材质一个节点都不用碰。"""
+        rows = list(spec['capabilities'])
+        for zone in spec['zones']:
+            rows.extend(zone['capabilities'])
+        return any(row['cap'] in WORLD_READING_CAPS for row in rows)
+
     def rewire_capabilities(self, mat):
-        """重接兑现面(换灯/换世界后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。"""
+        """重接兑现面(换世界后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。部件的答案不读世界就没有可重接的,
+        所以工程用自己的世界链接别的文件的关卡时,开文件不用把链接进来的材质整张重接。"""
         part = mat.get('ruri_uber_part')
         if part is None or part not in self.m['parts'] or mat.node_tree is None:
             return False
@@ -3344,6 +3356,8 @@ class Stack:
             # 兑现面是编出来的图的一部分:图还不完整的材质(模板组没存进文件)没有可重接的,编它时按当下的场景接。
             return False
         spec = self.part(part)
+        if not self._reads_world(spec):
+            return False
         nt = mat.node_tree
         # 重接期间把出口摘下来,收尾再接回:宿主的灯链接校验在每次改链时跑,并且用上一次的判定
         # 决定这次遍历走哪些链接;闭包还没重建时灯节点经 alpha 够得到出口却够不到 Light Accumulation,
