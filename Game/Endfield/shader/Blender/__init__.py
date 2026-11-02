@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(d432c25af0615952):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(ea7afa9119cbaf5c):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -2278,7 +2278,7 @@ class Stack:
 
     # ==================== 材质装配 ====================
 
-    ANCHOR_SLOTS = ('_BaseMap', '_BaseColorMap', '_MainTex')
+    ANCHOR_SLOTS = ('_BaseColorMap', '_BaseMap', '_MainTex')
 
     CULL_LABEL = 'RuriCull'
     SHADOW_CULL_LABEL = 'RuriShadowCull'
@@ -2970,6 +2970,21 @@ class Stack:
             return 'DITHERED'
         return 'DITHERED' if (opaque and (blend is None or blend in OVER_BLENDS)) else 'BLENDED'
 
+    def _aim_active_texture(self, tree, images):
+        """激活贴图是不跑着色树时看这张材质的入口:Workbench 的 Texture 颜色读它,贴图绘制也落在它上面。基础色可能住在
+        ANCHOR_SLOTS 的任何一个槽,算数的是这张材质真绑了图的那个。模板里全是中性占位,拷过来的激活节点只知道槽序,
+        落在没绑图的槽上就是整片白。"""
+        for slot in self.ANCHOR_SLOTS:
+            if images.get(slot) is None:
+                continue
+            for node in tree.nodes:
+                if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == slot:
+                    if tree.nodes.active is not None:
+                        tree.nodes.active.select = False
+                    tree.nodes.active = node
+                    node.select = True
+                    return
+
     def instantiate(self, name, part, images=None, opaque=True, blend=None, cull=2.0, shadow_cull=2.0):
         """一张材质 = 模板拷贝 + 贴图指针 + 剔除值;参数由调用方写完记录后经 apply_params 写成常量。零建图。
         灯上的那一格(主光身份、朝向)不在这里烙:新材质进场是派生态调度器的一件事实,那一批落地时刷一次。"""
@@ -2990,6 +3005,7 @@ class Stack:
                 if real is not None:
                     _swap_image(nd, real, images)
                     swapped += 1
+            self._aim_active_texture(mat.node_tree, images)
         # 随绑定真图走的表列(模板按占位图建);漏了 ramp/LUT 的 UV 整体错位。
         sizes = self._image_rows(part, images)
         if sizes:
@@ -4828,6 +4844,8 @@ class Stack:
                                                          src.outputs[fetch['sock'] + '_uv'], bound)
                     self._feed(g, heads, fetch['sock'], color, alpha)
             _frame_generated(mat.node_tree)
+        if mat.node_tree is not None:
+            self._aim_active_texture(mat.node_tree, bound)
         # 顶点腿的槽:模板是共享的,**不许**往它的图节点上写(那是所有材质共用的一份)。
         # 这里只借模板接口那格的中性占位图判色彩空间,值本身经修改器端口落到本材质那一格。
         for group_node in self._panel_vertex_nodes(mat):
