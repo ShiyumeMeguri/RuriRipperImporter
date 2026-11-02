@@ -502,7 +502,8 @@ RELIGHT = command.COMMANDS.define(
 FIT_TEXTURES = command.COMMANDS.define(
     "ruri.endfield_scene_fit_textures", "Fit Textures To Film", _fit_textures,
     description="Drop the top mips no frame of this file's camera samples, to fit a level on the graphics card. It "
-                "changes the images for good and holds for this camera path and output size only; not part of an import",
+                "holds for this camera path and output size only, so a linked level stays whole and what this film "
+                "keeps goes on its world; not part of an import",
     icon="IMAGE_DATA", requires=host_port.SceneGraph, steps=True, status_state=STATE,
     failure="Fitting the textures failed")
 

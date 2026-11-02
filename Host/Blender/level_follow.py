@@ -32,6 +32,13 @@ def follow(scene):
     return _follow_images(world) + _follow_object_globals(world)
 
 
+def release():
+    """Put every image that took a world's texels back on its own: its next read decodes what its file packed."""
+    for image in bpy.data.images:
+        if _FOLLOWED.pop(image.session_uid, None) is not None:
+            image.buffers_free()
+
+
 def _same_texels(image, stated):
     """Tile sets answer by size alone: each tile is an OpenEXR stamped with the time it was written, so the same tiles
     never match byte for byte, and the same tiles compress to the same size."""

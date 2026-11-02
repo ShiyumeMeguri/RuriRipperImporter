@@ -7,11 +7,11 @@ computed once: per image, the finest density of screen pixels per metre any fram
 metres one repeat of the image covers on that object, is how many texels the image needs across. What is above that is
 never sampled.
 
-An explicit step, never part of an import: it changes the images for good and it is true of this camera path at this
-output size only. The kept levels hold what the GPU's own mip chain held (a 2x2 box per level, in linear light for sRGB
-colour, on the raw values for data and alpha), so what a frame samples stays what it sampled wherever the estimate holds.
+An explicit step, never part of an import: it is true of this camera path at this output size only. The kept levels hold
+what the GPU's own mip chain held (a 2x2 box per level, in linear light for sRGB colour, on the raw values for data and
+alpha), so what a frame samples stays what it sampled wherever the estimate holds.
 
-Run as a script on a library, it applies a table to that file (see :func:`fit`).
+Run as a script on the file that holds a film's world, it applies a table to that file (see :func:`fit`).
 """
 
 from __future__ import annotations
@@ -288,11 +288,30 @@ def drop_mips(image, levels):
     image.pack()
 
 
-def _apply_to_library(library, table):
-    """Linked images change in the file that holds them, by a Blender of its own on that file, without the add-ons: they
-    would rebuild a library's materials for a world it does not have. Its old version stays beside it as .blend1. The
-    session then reads the file again."""
-    path = bpy.path.abspath(library.filepath, library=library.library)
+def _keep_fitted(world, libraries, held_property):
+    """Copy each image of ``libraries`` ({file: {image: levels to drop}}) out of its file, fit the copy and leave it on
+    ``world``, in place of what an earlier fit left there."""
+    held = world.get(held_property)
+    bound = {key: held[key] for key in held.keys() if held[key] is not None} if held is not None else {}
+    for path, table in libraries.items():
+        for name in table:
+            stale = bound.pop(name, None)
+            if stale is not None:
+                bpy.data.images.remove(stale)
+        with bpy.data.libraries.load(path, link=False) as (_source, target):
+            target.images = list(table)
+        for image in target.images:
+            drop_mips(image, table[image.name])
+            image.buffers_free()
+            bound[image.name] = image
+    world[held_property] = bound
+
+
+def _keep_on_linked_world(world, libraries, held_property):
+    """The world lives in another file, so a Blender of its own does the work on that file, without the add-ons: they
+    would rebuild what the file holds. Its old version stays beside it as .blend1. The session then reads the file again."""
+    path = bpy.path.abspath(world.library.filepath, library=world.library.library)
+    table = {"World": world.name, "Property": held_property, "Libraries": libraries}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
         json.dump(table, handle, ensure_ascii=False)
     try:
@@ -300,11 +319,16 @@ def _apply_to_library(library, table):
                         "--python", os.path.abspath(__file__), "--", handle.name], check=True)
     finally:
         os.remove(handle.name)
-    library.reload()
+    world.library.reload()
 
 
 def fit(scene, slot_rules, clip_switches, shadow_slots):
-    """Fit the images ``scene`` draws to its film. Returns the lines to report."""
+    """Fit the images ``scene`` draws to its film. An image in this file changes here. A linked image stays whole in the
+    file that holds it, since other files link that file too: what this film keeps of it goes on the world that lights
+    the film, and a linked image takes what the world holds of its name (see :mod:`level_follow`). Returns the lines to
+    report."""
+    from . import level_follow, material_builder
+    level_follow.release()
     levels = plan(scene, slot_rules, clip_switches, shadow_slots)
     before = after = 0
     local = 0
@@ -317,10 +341,16 @@ def fit(scene, slot_rules, clip_switches, shadow_slots):
             drop_mips(image, drop)
             local += 1
         else:
-            libraries.setdefault(image.library, {})[image.name] = drop
-    for library, table in libraries.items():
-        _apply_to_library(library, table)
-    return ["{0} image(s) fitted to this film at {1}x{2}, {3:.2f} -> {4:.2f} GB with mips ({5} in this file, {6} in libraries)".format(
+            path = bpy.path.abspath(image.library.filepath, library=image.library.library)
+            libraries.setdefault(path, {})[image.name] = drop
+    if libraries:
+        world = material_builder.level_world(scene)
+        if world.library is None:
+            _keep_fitted(world, libraries, material_builder.LEVEL_IMAGES_PROPERTY)
+        else:
+            _keep_on_linked_world(world, libraries, material_builder.LEVEL_IMAGES_PROPERTY)
+    level_follow.follow(scene)
+    return ["{0} image(s) fitted to this film at {1}x{2}, {3:.2f} -> {4:.2f} GB with mips ({5} in this file, {6} kept on its world)".format(
         len(levels), scene.render.resolution_x, scene.render.resolution_y, before * 16 / 3 / 2 ** 30, after * 16 / 3 / 2 ** 30,
         local, len(levels) - local)]
 
@@ -328,15 +358,12 @@ def fit(scene, slot_rules, clip_switches, shadow_slots):
 def _apply_table(path):
     with open(path, encoding="utf-8") as handle:
         table = json.load(handle)
-    for image in bpy.data.images:
-        drop = table.get(image.name)
-        if drop:
-            drop_mips(image, drop)
+    _keep_fitted(bpy.data.worlds[table["World"]], table["Libraries"], table["Property"])
     # What the importer holds at runtime has no user of its own here, and a save writes no block without one.
     for block in bpy.data.user_map():
         if block.library is None and not block.users and not block.use_fake_user:
             block.use_extra_user = True
-    bpy.ops.wm.save_mainfile(compress=False)
+    bpy.ops.wm.save_mainfile()
 
 
 if __name__ == "__main__":

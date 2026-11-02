@@ -184,7 +184,7 @@ class SceneGraph(abc.ABC):
     @abc.abstractmethod
     def fit_textures_to_film(self, context, sampling):
         """Drop the top mips of the images the document draws that no frame of its film samples. An explicit step, never
-        part of an import: it changes the images for good and holds for one camera path. ``sampling`` says how a level's
+        part of an import: it holds for one camera path, so it stays with this film and never reaches a file it links. ``sampling`` says how a level's
         materials sample their images: ``slots`` ({slot: {Set, St, Tile, WorldType}}, ``Keep`` for a slot read at an
         explicit level), ``clip_switches`` and ``shadow_slots``. Returns the lines to report."""
 
