@@ -13,7 +13,9 @@ Objects reaching the same boxes share one run: the distinct lists go end to end 
 and each object carries where its run starts and how many entries it has as a per-object global (the
 value minus the default the stacks declare, the encoding every per-object global uses). An object no
 box reaches carries an empty run -- and, when that equals the declared default, nothing at all, so it
-reads the default.
+reads the default. The runs go with the level's world too: which boxes a viewer binds changes with where
+it stands, so a file lighting linked objects through its own world hands them the runs that world holds
+(see :mod:`level_follow`).
 """
 import numpy
 from mathutils import Matrix, Vector
@@ -39,6 +41,7 @@ def apply(context, boxes, range_attribute, list_table):
     runs = {}
     entries = []
     reached = 0
+    stated = {}
     for obj in context.scene.objects:
         if obj.type != "MESH":
             continue
@@ -63,14 +66,15 @@ def apply(context, boxes, range_attribute, list_table):
             if range_attribute in obj:
                 del obj[range_attribute]
             continue
-        obj[range_attribute] = [component - default for component, default in zip(value, base)]
+        stated[obj.name] = obj[range_attribute] = [component - default for component, default in zip(value, base)]
     capacity = int(layout["size"][1])
     if len(entries) > capacity:
         raise ValueError("[box-lists] {0} entries in {1} distinct run(s) overflow {2}, which holds {3}".format(
             len(entries), len(runs), list_table, capacity))
     rows = numpy.zeros((len(entries), 1, 4), dtype=numpy.float32)
     rows[:, 0, 0] = entries
-    material_builder.write_level_table(list_table, rows)
+    material_builder.write_level_table(context.scene, list_table, rows)
+    material_builder.state_object_global(context.scene, range_attribute, stated)
     return (["{0} box(es) of {1} reach {2} object(s) through {3} distinct run(s)".format(
         len(boxes), list_table, reached, len(runs))] if boxes else [])
 

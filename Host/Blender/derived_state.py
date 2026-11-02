@@ -63,7 +63,7 @@ import traceback
 
 import bpy
 
-from . import material_builder, shadow_casting
+from . import level_follow, material_builder, shadow_casting
 
 
 # ---- 事实 ----
@@ -150,6 +150,12 @@ def _run_medium(change):
     return len(medium.restore(change.scene, bpy.data.objects.get(LEVEL_SUN)))
 
 
+def _run_level_follow(change):
+    """别的文件链接进来的关卡听当前世界的:世界陈述的关卡图和逐物体的盒列表,在内存里交给链接进来的图和物体,存盘不写。
+    世界就是关卡自己文件里那个时什么都不变。"""
+    return level_follow.follow(change.scene)
+
+
 def _run_shadow_sets(change):
     """平行光的投影排除集:声明自己的投影不进平行光级联的物体收在一个全排除的集合里(见 shadow_casting),它是每一盏
     平行光的遮挡集合 —— 着色栈把每一盏平行光都当主光照。东西进场时给还没有遮挡集合的平行光挂上,排除集与平行光
@@ -217,6 +223,7 @@ STAGES = (
     Stage("compile", (LOADED, APPENDED), _run_compile),
     Stage("capabilities", (WORLD, LOADED, APPENDED), _run_capabilities),
     Stage("medium", (LOADED,), _run_medium),
+    Stage("level-follow", (WORLD, LOADED, APPENDED), _run_level_follow),
     Stage("shadow-sets", (OBJECTS,), _run_shadow_sets),
     Stage("two-sided-casting", (OBJECTS, LOADED, APPENDED), _run_two_sided_casting),
     Stage("flat-casters", (LOADED,), _run_flat_casters),

@@ -20,6 +20,7 @@ on the kernel side.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 import bpy
@@ -391,15 +392,27 @@ def level_image_layout(name):
     return found
 
 
-def write_level_table(name, rows):
+def write_level_table(scene, name, rows):
     """Fill one level data table from ``rows``, a float array shaped (elements, fields, 4) in
-    element order; the rows past them stay zero."""
+    element order; the rows past them stay zero. It is the level's content like any level image, so
+    the world holds it."""
     layout = level_image_layout(name)
     if layout is None or layout["kind"] != "table":
         raise ValueError("[material] no stack reads a data table {0}".format(name))
     image = volume_image(layout)
     image.pixels.foreach_set(_table_pixels([rows[None]], layout).ravel())
     image.pack()
+    _hold_level_images(level_world(scene), [image])
+
+
+def state_object_global(scene, name, rows):
+    """Keep on the level's world what every object carries of the per-object global ``name``: ``rows`` by object name,
+    encoded as the objects hold it, an object at the declared default absent."""
+    world = level_world(scene)
+    held = world.get(LEVEL_OBJECT_GLOBALS_PROPERTY)
+    stated = json.loads(held) if held is not None else {}
+    stated[name] = rows
+    world[LEVEL_OBJECT_GLOBALS_PROPERTY] = json.dumps(stated, separators=(",", ":"))
 
 
 def register_light_parameters(attributes):
@@ -794,6 +807,16 @@ def level_world(scene):
 #: The custom property on a level's world that holds the images its texel blocks were filled into, keyed by
 #: image name: the level's content, so the world is their user and they go wherever the world is linked.
 LEVEL_IMAGES_PROPERTY = "ruri_level_images"
+#: The custom property on a level's world that holds, as JSON, the per-object globals its state hands the level's objects
+#: (see :func:`state_object_global`).
+LEVEL_OBJECT_GLOBALS_PROPERTY = "ruri_level_object_globals"
+
+
+def _hold_level_images(world, images):
+    held = world.get(LEVEL_IMAGES_PROPERTY)
+    bound = {key: held[key] for key in held.keys() if held[key] is not None} if held is not None else {}
+    bound.update((image.name, image) for image in images)
+    world[LEVEL_IMAGES_PROPERTY] = bound
 
 
 def _apply_level_globals(scene, values):
@@ -1218,10 +1241,7 @@ def _apply_level_images(scene, blocks):
         world = level_world(scene)
         for key, row in texel_sizes.items():
             world[key] = row
-        held = world.get(LEVEL_IMAGES_PROPERTY)
-        bound = {key: held[key] for key in held.keys() if held[key] is not None} if held is not None else {}
-        bound.update((image.name, image) for image in images)
-        world[LEVEL_IMAGES_PROPERTY] = bound
+        _hold_level_images(world, images)
         world.update_tag()
     return filled, sorted(name for name in blocks if name not in layouts and name not in slices)
 
