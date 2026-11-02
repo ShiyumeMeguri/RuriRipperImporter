@@ -77,7 +77,7 @@ def resource_label(cab, fallback):
     labels = answer.labels.get(cab, ())
     if not labels or set(labels) <= {fallback, fallback.rsplit(".", 1)[0]}:
         return fallback
-    return "{0} · {1}".format(" / ".join(sorted(labels)), fallback)
+    return " / ".join(sorted(labels))
 
 
 def select_variant(context, arguments):

@@ -65,11 +65,14 @@ def state_of(context):
 #: What a browser row shows. A width is the NAME of a live panel property, because
 #: the column boundaries are draggable sliders rather than constants; a column with
 #: none takes whatever is left.
+#: An attachment answer supplies the name; the original resource path stays in
+#: its own cell and is only muted, never replaced or hidden.
 _ROW_COLUMNS = (
     vocabulary.ListColumn(lambda row: attachments.resource_label(row.cab, row.name or row.cab), "Name",
-                          width="col_name_factor"),
+                          width="col_name_factor", align=vocabulary.LEFT),
     vocabulary.ListColumn(lambda row: row.container or row.cab, "Path",
-                          width="col_container_factor"),
+                          width="col_container_factor", align=vocabulary.LEFT,
+                          active=lambda row: not attachments.resource_label(row.cab, "")),
     vocabulary.ListColumn("type_names", "Type", width="col_type_factor"),
     vocabulary.ListColumn(lambda row: str(row.deps), "Deps", width="col_deps_factor"),
     vocabulary.ListColumn("source", "Source"),
