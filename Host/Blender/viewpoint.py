@@ -324,13 +324,16 @@ def _on_data_replaced(*_args):
 
 @bpy.app.handlers.persistent
 def _on_render_start(scene, *_args):
-    # A render is drawn for its camera at the output size, whatever viewport the user last moved.
+    # A render is drawn for its camera at the output size, whatever viewport the user last moved; each frame of an
+    # animation states it again, since the markers may cut to another camera.
     _rendering[0] = True
     sync_windows(scene)
 
 
 @bpy.app.handlers.persistent
 def _on_render_end(scene, *_args):
+    # Back to the viewport once the whole render is over, not after each frame: between two frames of an animation
+    # nothing is drawn for the viewport, and reading the view then evaluates the whole scene again for every frame.
     _rendering[0] = False
     sync_windows(scene)
 
@@ -353,7 +356,7 @@ def _on_save_post(*_args):
 
 
 _HANDLERS = (("load_post", _on_data_replaced), ("undo_post", _on_data_replaced), ("redo_post", _on_data_replaced),
-             ("render_pre", _on_render_start), ("render_post", _on_render_end), ("render_cancel", _on_render_end),
+             ("render_pre", _on_render_start), ("render_complete", _on_render_end), ("render_cancel", _on_render_end),
              ("save_pre", _on_save_pre), ("save_post", _on_save_post))
 
 
