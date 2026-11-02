@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(a6b5aaf8ab40123e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(59be070215f4688e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -6161,14 +6161,21 @@ class Stack:
     @bpy.app.handlers.persistent
     def refresh_chains_for_render(scene, *_arguments):
         """后台会话没有计时器:脚本改了出图尺寸,图链的各级尺寸就还是旧的,渲出来静默地错。开渲这一刻宿主还没读合成树,
-        重判一次(签名没变就是一次比较)。重建了就在这里让依赖图落定:留给渲染流程那次刷新,它重建求值场景时读到空的原件
-        Base,当场崩。"""
+        重判一次(签名没变就是一次比较);这次渲染不合成就不读合成树,也就不判(工作台出不了图链要读的 AOV)。重建了 ——
+        建到一半抛错也算 —— 就在这里让依赖图落定:留给渲染流程那次刷新,它重建求值场景时读到空的原件 Base,当场崩。"""
+        if not scene.render.use_compositing:
+            return
         rebuilt = False
-        for stack in STACKS:
-            if stack.post is not None:
-                rebuilt = stack.refresh_chains(scene) or rebuilt
-        if rebuilt:
-            bpy.context.view_layer.update()
+        try:
+            for stack in STACKS:
+                if stack.post is not None:
+                    rebuilt = stack.refresh_chains(scene) or rebuilt
+        except Exception:
+            rebuilt = True
+            raise
+        finally:
+            if rebuilt:
+                bpy.context.view_layer.update()
 
     @staticmethod
     @bpy.app.handlers.persistent
