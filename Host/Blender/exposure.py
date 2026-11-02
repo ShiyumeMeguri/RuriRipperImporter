@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import os
 
+import OpenImageIO
 import bpy
 from bpy_extras import anim_utils
 
@@ -45,16 +46,42 @@ def _path(name):
     return '["{0}"]'.format(name)
 
 
+def _curves(scene, name):
+    """The four curves keying the state on ``scene``, or None when it is not keyed."""
+    data = scene.animation_data
+    channels = anim_utils.action_get_channelbag_for_slot(data.action, data.action_slot) if data and data.action else None
+    if channels is None:
+        return None
+    curves = [channels.fcurves.find(_path(name), index=index) for index in range(4)]
+    return curves if all(curve is not None for curve in curves) else None
+
+
+def _key_at(curve, frame):
+    """The key of ``curve`` on ``frame``, or None: the keys stay sorted by frame, so a bisection finds it."""
+    points = curve.keyframe_points
+    low, high = 0, len(points)
+    while low < high:
+        middle = (low + high) // 2
+        if points[middle].co[0] < frame - 0.5:
+            low = middle + 1
+        else:
+            high = middle
+    return points[low] if low < len(points) and abs(points[low].co[0] - frame) < 0.5 else None
+
+
+def _values(base, stops):
+    multiplier = 2.0 ** stops
+    return (multiplier - base[0], 1.0 / multiplier - base[1], 0.0, 0.0)
+
+
 def stated(scene, frame):
     """The exposure, in stops, stated on ``scene`` for ``frame``; None when the scene states none."""
     known = state_global()
     if known is None or known[0] not in scene:
         return None
     name, base = known
-    data = scene.animation_data
-    channels = anim_utils.action_get_channelbag_for_slot(data.action, data.action_slot) if data and data.action else None
-    curve = channels.fcurves.find(_path(name), index=0) if channels else None
-    value = curve.evaluate(frame) if curve is not None else scene[name][0]
+    curves = _curves(scene, name)
+    value = curves[0].evaluate(frame) if curves is not None else scene[name][0]
     multiplier = float(value) + base[0]
     if multiplier <= 0.0:
         raise RuntimeError("[exposure] scene {0} states an exposure multiplier of {1} at frame {2}".format(
@@ -64,21 +91,45 @@ def stated(scene, frame):
 
 def state(scene, frame, stops):
     """State ``stops`` on ``scene`` for ``frame``: x = 2^stops, y = its inverse, the rest at their defaults, each written
-    as its difference from the stacks' declared default and keyed constant from this frame on."""
+    as its difference from the stacks' declared default and keyed constant from this frame on. A frame already keyed has
+    its keys' values changed in place: writing the property or inserting a key makes the whole scene evaluate again, a
+    large share of a frame while a render runs."""
     known = state_global()
     if known is None:
         raise RuntimeError("[exposure] no registered stack reads a post exposure state")
     name, base = known
-    multiplier = 2.0 ** stops
-    scene[name] = [multiplier - base[0], 1.0 / multiplier - base[1], 0.0, 0.0]
+    values = _values(base, stops)
+    curves = _curves(scene, name)
+    keys = [_key_at(curve, frame) for curve in curves] if curves is not None else None
+    if keys is not None and all(key is not None for key in keys):
+        for curve, key, value in zip(curves, keys, values):
+            if key.co[1] != value:
+                key.co[1] = value
+                curve.update()
+        return
+    scene[name] = list(values)
     scene.keyframe_insert(_path(name), frame=frame)
-    data = scene.animation_data
-    channels = anim_utils.action_get_channelbag_for_slot(data.action, data.action_slot)
-    for index in range(4):
-        curve = channels.fcurves.find(_path(name), index=index)
-        for point in curve.keyframe_points:
-            if abs(point.co[0] - frame) < 0.5:
-                point.interpolation = "CONSTANT"
+    for curve in _curves(scene, name):
+        _key_at(curve, frame).interpolation = "CONSTANT"
+        curve.update()
+
+
+def _key_frames(scene, frames, stops):
+    """Key ``stops`` constant on every one of ``frames`` that has no key yet, in one go: a render that states its frames
+    as it goes then only changes values."""
+    state(scene, frames[0], stops)
+    name, base = state_global()
+    for curve, value in zip(_curves(scene, name), _values(base, stops)):
+        keyed = {round(point.co[0]) for point in curve.keyframe_points}
+        missing = [frame for frame in frames if frame not in keyed]
+        if not missing:
+            continue
+        start = len(curve.keyframe_points)
+        curve.keyframe_points.add(len(missing))
+        for offset, frame in enumerate(missing):
+            point = curve.keyframe_points[start + offset]
+            point.co = (frame, value)
+            point.interpolation = "CONSTANT"
         curve.update()
 
 
@@ -91,14 +142,18 @@ def _record_of(stages, scene, frame):
 
 
 def _metered(record, frame):
-    """The stops the post stage metered on ``frame``, read back from the one-pixel image its compositor recorded."""
+    """The stops the post stage metered on ``frame``, read back from the one-pixel image its compositor recorded. Read
+    with the image library itself, not loaded as an image datablock: adding and removing a datablock rebuilds the
+    scene's dependencies, which on a level costs more than the frame it was read for."""
     if not os.path.isfile(record):
         raise RuntimeError("[exposure] frame {0} rendered without recording its metering to {1}".format(frame, record))
-    image = bpy.data.images.load(record, check_existing=False)
+    reader = OpenImageIO.ImageInput.open(record)
+    if reader is None:
+        raise RuntimeError("[exposure] frame {0}: {1} cannot be read ({2})".format(frame, record, OpenImageIO.geterror()))
     try:
-        value = float(image.pixels[0])
+        value = float(reader.read_image("float").flat[0])
     finally:
-        bpy.data.images.remove(image)
+        reader.close()
         os.remove(record)
     return value
 
@@ -152,7 +207,7 @@ def render_animation(scene, first, last):
     frames = list(range(first, last + 1))
     # The state exists before recording rebuilds the chain: the stage's guard reads it only if it was there when built.
     start = stated(scene, first)
-    state(scene, first, 0.0 if start is None else start)
+    _key_frames(scene, frames, 0.0 if start is None else start)
     for stage in stages:
         stage.record_exposure(scene, folder)
     kept = (scene.frame_start, scene.frame_end, scene.frame_step, scene.frame_current)
