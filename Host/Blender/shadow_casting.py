@@ -74,8 +74,8 @@ def flatten_alpha_casters(objects):
     shadow, no redraw. One the camera also sees hands its shadow to a shadow-only child, whose stretched normals nothing
     reads. A flat caster never refreshes a page when it moves in the viewport, so this is for a level that stays put; a
     deformed caster keeps its own shadow. Returns how many objects now cast flat."""
-    excluded = bpy.data.collections.get(MAIN_LIGHT_EXCLUSIONS)
-    excluded = set(excluded.objects) if excluded is not None else ()
+    exclusions = bpy.data.collections.get(MAIN_LIGHT_EXCLUSIONS)
+    excluded = set(exclusions.objects) if exclusions is not None else ()
     stretched = {}
     flattened = 0
 
@@ -102,7 +102,8 @@ def flatten_alpha_casters(objects):
             continue
         twin = bpy.data.objects.new(obj.name + " Flat Caster", stretched_mesh(obj.data))
         for collection in obj.users_collection:
-            collection.objects.link(twin)
+            if collection != exclusions:
+                collection.objects.link(twin)
         for key in obj.keys():
             twin[key] = obj[key]
         twin[FLAT_CASTER_PROPERTY] = 1.0
