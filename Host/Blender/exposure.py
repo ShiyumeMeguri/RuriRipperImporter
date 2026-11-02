@@ -91,45 +91,17 @@ def stated(scene, frame):
 
 def state(scene, frame, stops):
     """State ``stops`` on ``scene`` for ``frame``: x = 2^stops, y = its inverse, the rest at their defaults, each written
-    as its difference from the stacks' declared default and keyed constant from this frame on. A frame already keyed has
-    its keys' values changed in place: writing the property or inserting a key makes the whole scene evaluate again, a
-    large share of a frame while a render runs."""
+    as its difference from the stacks' declared default and keyed constant from this frame on. Inserted as a key, which
+    a render running picks up for the frame it is about to shade; a key changed in place, even with its action tagged,
+    is not seen by that render."""
     known = state_global()
     if known is None:
         raise RuntimeError("[exposure] no registered stack reads a post exposure state")
     name, base = known
-    values = _values(base, stops)
-    curves = _curves(scene, name)
-    keys = [_key_at(curve, frame) for curve in curves] if curves is not None else None
-    if keys is not None and all(key is not None for key in keys):
-        for curve, key, value in zip(curves, keys, values):
-            if key.co[1] != value:
-                key.co[1] = value
-                curve.update()
-        return
-    scene[name] = list(values)
+    scene[name] = list(_values(base, stops))
     scene.keyframe_insert(_path(name), frame=frame)
     for curve in _curves(scene, name):
         _key_at(curve, frame).interpolation = "CONSTANT"
-        curve.update()
-
-
-def _key_frames(scene, frames, stops):
-    """Key ``stops`` constant on every one of ``frames`` that has no key yet, in one go: a render that states its frames
-    as it goes then only changes values."""
-    state(scene, frames[0], stops)
-    name, base = state_global()
-    for curve, value in zip(_curves(scene, name), _values(base, stops)):
-        keyed = {round(point.co[0]) for point in curve.keyframe_points}
-        missing = [frame for frame in frames if frame not in keyed]
-        if not missing:
-            continue
-        start = len(curve.keyframe_points)
-        curve.keyframe_points.add(len(missing))
-        for offset, frame in enumerate(missing):
-            point = curve.keyframe_points[start + offset]
-            point.co = (frame, value)
-            point.interpolation = "CONSTANT"
         curve.update()
 
 
@@ -207,7 +179,7 @@ def render_animation(scene, first, last):
     frames = list(range(first, last + 1))
     # The state exists before recording rebuilds the chain: the stage's guard reads it only if it was there when built.
     start = stated(scene, first)
-    _key_frames(scene, frames, 0.0 if start is None else start)
+    state(scene, first, 0.0 if start is None else start)
     for stage in stages:
         stage.record_exposure(scene, folder)
     kept = (scene.frame_start, scene.frame_end, scene.frame_step, scene.frame_current)
