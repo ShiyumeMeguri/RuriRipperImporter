@@ -8,9 +8,10 @@ thicknesses) would be shaded under a configuration none of the stacks was verifi
 import puts the renderer back first; what the level itself states for it -- its medium's integration, its shadow
 pool -- is applied on top afterwards.
 
-A level composites on the CPU. The display chain gives the same picture on either device, but on the GPU its render
-passes and intermediate results stay in video memory through the next frame, a level's textures already fill the
-card, and the overflow slows the renderer by more than the chain gains.
+A level renders the way the indoor film does: eight samples a frame (next to sixteen a mean 0.35 of 255 levels off) and
+the compositor on the GPU, where the display chain takes a fraction of the CPU's time and gives the same picture. Its
+passes stay in video memory through the next frame, so a film fits the level's textures to its camera path (Fit
+Textures To Film) to leave them room.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from __future__ import annotations
 import bpy
 
 ENGINE = "BLENDER_EEVEE"
-COMPOSITOR_DEVICE = "CPU"
+COMPOSITOR_DEVICE = "GPU"
+RENDER_SAMPLES = 8
 #: The view's own adjustments, each put back to its default; the transform and look are the display chain's.
 VIEW_ADJUSTMENTS = ("exposure", "gamma", "use_curve_mapping", "use_white_balance")
 
@@ -27,6 +29,7 @@ def apply(scene):
     """Put ``scene``'s renderer in the configuration the stacks are verified under."""
     scene.render.engine = ENGINE
     _to_defaults(scene.eevee)
+    scene.eevee.taa_render_samples = RENDER_SAMPLES
     view = scene.view_settings
     for name in VIEW_ADJUSTMENTS:
         _set_default(view, view.bl_rna.properties[name])
