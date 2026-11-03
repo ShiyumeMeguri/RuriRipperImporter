@@ -332,6 +332,9 @@ class _Materialisation:
 
         if node.kind == kernel_statement.SKINNED and node.mesh:
             self._build_skinned(node)
+            # The mesh sits at its rig, so what hangs under this node is placed through the node's own transform.
+            self.carried[node.index] = local
+            self.built[node.index] = self.built.get(node.parent)
             return
         data = self._data_for(node)
         if data is None and not self._needs_empty(node):
@@ -449,7 +452,6 @@ class _Materialisation:
         self._draws_now(made, node)
         self._cast_shadows(made, node)
         self._object_parameters(made, node)
-        self.built[node.index] = made
         self.objects.append(made)
         rig, bone_names = self.rigs.get(node.skeleton, (None, {}))
         mesh = self.statement.meshes.get(node.mesh)
