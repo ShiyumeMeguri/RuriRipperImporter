@@ -135,8 +135,8 @@ screen, what each half has selected, and how much of a place to take.""", (
     Field("window_max_x", app_state.FLOAT, 0.0),
     Field("window_max_z", app_state.FLOAT, 0.0),
     Field("scene_state_id", app_state.ENUM, None, "Scene State",
-          "Which dressing of this world to read. States are alternates of the same "
-          "place, so one at a time", items="state_items"),
+          "Which dressing of this world to read. Every state streams over the shared "
+          "state 0, so state 0 alone is the bare level", items="state_items"),
     Field("reset_scene", app_state.BOOL, True, "Reset Scene",
           "Empty the document before importing, so a re-imported window does not stack "
           "on the previous one"),
