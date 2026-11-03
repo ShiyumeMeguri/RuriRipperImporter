@@ -1,0 +1,65 @@
+"""The scene layer: the transform hierarchy, and a reference wherever it draws something already written.
+
+Every node the scene keeps is a prim at its place in the hierarchy, carrying its local transform and what
+the source says of it. A node that draws a static piece has a child prim that refers to the piece's layer and
+is instanceable, so the pieces of one kind are one prototype however many objects draw them. The root of a
+rig refers to the rig's layer, and everything below it is that layer's. Nothing here is geometry.
+"""
+
+from __future__ import annotations
+
+from pxr import Sdf, UsdGeom, UsdSkel
+
+from .. import statement as kernel_statement
+from . import sources, stages, transforms
+from .layout import Layout
+from .names import Namer, identifier
+
+#: The child prim of a node that draws a static piece.
+RENDERER = "MeshRenderer"
+
+
+def _refer(prim, scene_layer, target_layer, target_root):
+    prim.GetReferences().AddReference(Layout.reference(scene_layer, target_layer), target_root)
+
+
+def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, characters, pieces):
+    """Write the scene ``scene_name`` to ``layer_path``. ``characters`` maps a rig root's node index to the
+    written character, ``pieces`` a node index to the written piece it draws. Returns counts of what was written."""
+    stage = stages.create(layer_path, kernel_statement.USD, "Scene {0}".format(scene_name))
+    top_path = Sdf.Path("/" + identifier(scene_name))
+    top = UsdGeom.Xform.Define(stage, top_path)
+    stage.SetDefaultPrim(top.GetPrim())
+    for root in statement.roots:
+        if (root.position, root.rotation, root.scale) != ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0)):
+            raise ValueError("the usd basis states no top-level turn, and root '{0}' asks for one.".format(root.label))
+    names = Namer()
+    paths = {}
+    counts = {"prims": 1, "references": 0, "instanceable": 0, "characters": 0, "inside_rigs": 0}
+    for node in hierarchy.nodes:
+        index = node.index
+        if covered[index] and index not in rig_roots:
+            counts["inside_rigs"] += 1
+            continue
+        parent_path = top_path if node.parent < 0 else paths[node.parent]
+        path = parent_path.AppendChild(names.claim(str(parent_path), identifier(node.name)))
+        prim = (UsdSkel.Root.Define(stage, path) if index in rig_roots else UsdGeom.Xform.Define(stage, path)).GetPrim()
+        transforms.author(prim, node.position, node.rotation, node.scale)
+        sources.describe(prim, node, hierarchy.source_paths[index])
+        paths[index] = path
+        counts["prims"] += 1
+        if index in rig_roots:
+            character = characters[index]
+            _refer(prim, layer_path, character.layer_path, character.root)
+            counts["references"] += 1
+            counts["characters"] += 1
+        elif index in pieces:
+            piece = pieces[index]
+            renderer = UsdGeom.Xform.Define(stage, path.AppendChild(names.claim(str(path), RENDERER))).GetPrim()
+            _refer(renderer, layer_path, piece.layer_path, piece.root)
+            renderer.SetInstanceable(True)
+            counts["prims"] += 1
+            counts["references"] += 1
+            counts["instanceable"] += 1
+    stage.GetRootLayer().Save()
+    return counts

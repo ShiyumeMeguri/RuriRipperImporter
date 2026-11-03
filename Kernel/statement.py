@@ -45,6 +45,7 @@ REPORT = "core.statement.report"
 UNITY = "unity"
 BLENDER = "blender"
 GLTF = "gltf"
+USD = "usd"
 
 SEPARATOR = ";"
 
@@ -153,7 +154,7 @@ class Node:
     __slots__ = ("index", "parent", "name", "path", "kind", "active", "mesh",
                  "skeleton", "materials", "anchor", "position", "rotation", "scale",
                  "light", "camera", "tag", "shadows", "main_light_shadows", "two_sided_shadows", "object_parameters",
-                 "collection")
+                 "collection", "layer", "avatar")
 
     def __init__(self, row):
         self.index = int(row["node"])
@@ -207,6 +208,11 @@ class Node:
         #: The collection this node is gathered under apart from the rest of the import (the
         #: pipeline's own draws, by the shader that draws them), or empty for none.
         self.collection = row["collection"]
+        #: The engine's layer number of the object this node is.
+        self.layer = int(row["layer"])
+        #: The key of the avatar the node's animator is built with, which makes the node the
+        #: root of a rig, or empty for a node that animates nothing.
+        self.avatar = row["avatar"]
 
     @property
     def renders(self):
