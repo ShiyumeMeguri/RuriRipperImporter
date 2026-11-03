@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(7227f55a61559d23):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(df2f614de48ec50d):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -5573,7 +5573,7 @@ class Stack:
         label = chain['kind']
         passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
         roles = {role: passes[group] for role, group in chain['roles'].items()}
-        self._ssr_view_layers(scene, chain)
+        self._ssr_view_layers(scene, chain, render.layer)
         render.update()
         sizes = [(width, height)]
         for _level in range(1, self.SSR_LEVELS):
@@ -5677,10 +5677,22 @@ class Stack:
                 return found
         return None
 
+    @staticmethod
+    def _mirror_layer_collections(source, target, skip):
+        """target 层的集合开关(排除、挖空、只间接)照抄 source 层,skip 里的集合不动。"""
+        for source_child, target_child in zip(source.children, target.children):
+            if source_child.collection not in skip:
+                for flag in ('exclude', 'holdout', 'indirect_only'):
+                    value = getattr(source_child, flag)
+                    if getattr(target_child, flag) != value:
+                        setattr(target_child, flag, value)
+            Stack._mirror_layer_collections(source_child, target_child, skip)
+
     def _water_view_layer(self, scene, chain, collections, beneath):
-        """水面层画全部内容 —— 水面像素上的深度、各通道与覆盖询问就是水面自己的,别的像素不读 —— 另开这条链读的
-        通道与覆盖询问的 AOV;其余视图层一律排除水面的集合,它们的颜色与深度就是真源不含水的场景色与深度,
-        链读的那一层(beneath)因此也要出深度,和把混合物体单独交出来的透明通道。"""
+        """水面层画链读那一层(beneath)画的全部内容再加上水面 —— 水面像素上的深度、各通道与覆盖询问就是水面自己的,
+        别的像素不读 —— 另开这条链读的通道与覆盖询问的 AOV。所以水面层的集合开关照抄 beneath,只有水面集合相反:
+        其余视图层一律排除水面的集合,它们的颜色与深度就是真源不含水的场景色与深度;两层的依赖图也就只差水面,
+        每帧切层时没有别的物体进出。beneath 因此也要出深度,和把混合物体单独交出来的透明通道。"""
         water = scene.view_layers.get(self.WATER_LAYER)
         if water is None:
             water = scene.view_layers.new(self.WATER_LAYER)
@@ -5694,6 +5706,7 @@ class Stack:
                 excluded = layer != water
                 if entry.exclude != excluded:
                     entry.exclude = excluded
+        self._mirror_layer_collections(scene.view_layers[beneath].layer_collection, water.layer_collection, collections)
         water.use = True
         water.use_pass_z = True
         for spec in chain['layer_passes'].values():
@@ -5879,12 +5892,18 @@ class Stack:
         return computed('ShaderNodeVectorMath', 'ADD', beneath, scaled(changed, transmittance))
 
     @staticmethod
-    def _ssr_view_layers(scene, chain):
-        """反射链读的渲染通道:深度与材质存的覆盖询问(一律按颜色 AOV 存,标量询问读它的第一个通道)。"""
+    def _ssr_view_layers(scene, chain, read):
+        """反射链读的渲染通道只登记在链读的那一层(read):深度与材质存的覆盖询问(一律按颜色 AOV 存,标量询问读它的
+        第一个通道)。别的视图层撤下这几格:材质照旧写,渲染器却每采样多累加、回读、再上传给合成器一份没人读的通道。"""
+        names = set(chain['overlays'].values())
         for layer in scene.view_layers:
+            if layer.name != read:
+                for aov in [aov for aov in layer.aovs if aov.name in names]:
+                    layer.aovs.remove(aov)
+                continue
             layer.use_pass_z = True
             present = {aov.name for aov in layer.aovs}
-            for name in sorted(set(chain['overlays'].values())):
+            for name in sorted(names):
                 if name not in present:
                     aov = layer.aovs.add()
                     aov.name = name
