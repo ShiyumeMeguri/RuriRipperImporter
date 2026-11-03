@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(59be070215f4688e):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(a99ac653a8ded15c):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -5497,7 +5497,10 @@ class Stack:
         packed = next(node for node in tree.nodes if node.get(self.POST_PACK_KEY))
         scene_color = None
         for chain in chains:
-            if chain['kind'] == 'screen_space_reflection' and self._chain_enabled(scene, tree, chain):
+            if chain['kind'] == 'screen_space_reflection' and not self._chain_enabled(scene, tree, chain):
+                self._drop_ssr_view_layers(scene, chain)
+                render.update()
+            elif chain['kind'] == 'screen_space_reflection':
                 preview = self._viewport_preview(scene, chain)
                 scene_color = self._screen_space_reflection(tree, scene, render, chain, width, height, preview)
                 if not preview:
@@ -5867,6 +5870,15 @@ class Stack:
                     aov = layer.aovs.add()
                     aov.name = name
                     aov.type = 'COLOR'
+
+    @staticmethod
+    def _drop_ssr_view_layers(scene, chain):
+        """反射链不建时撤下它登记的覆盖询问 AOV:材质照旧写这几格,渲染器却每帧多累加、回读、再上传给合成器一份没人读的
+        通道。深度通道留着(别处也可能要)。"""
+        names = set(chain['overlays'].values())
+        for layer in scene.view_layers:
+            for aov in [aov for aov in layer.aovs if aov.name in names]:
+                layer.aovs.remove(aov)
 
     @staticmethod
     def _link_answer(tree, node, name, answer):
