@@ -509,8 +509,9 @@ def scene_grading(map_name, anchor, states):
     says the phase meters its frame instead (the build's histogram auto exposure), and the
     metering's own parameters ride along as the phase states them: the EV range the
     histogram spans, the EV range the slots clamp into, the luminance percentile band kept,
-    the exposure clamp range, the metering mode and the compensation the metered
-    exposure is multiplied by. They mean something only with ``exposureAuto`` on, so they
+    the exposure clamp range, the metering mode, the compensation the metered
+    exposure is multiplied by, and the speeds, per second, the exposure adapts up and down
+    toward what it meters. They mean something only with ``exposureAuto`` on, so they
     go out as stated rather than as differences.
 
     White balance is the LMS coefficients the build computes from the phase's temperature
@@ -534,6 +535,7 @@ IDENTITY_POST = {
     "exposureAuto": 0.0, "exposureStops": 0.0, "exposureAutoCompensation": 0.0,
     "exposureRangeX": 0.0, "exposureRangeY": 0.0, "exposureHistogramX": 0.0, "exposureHistogramY": 0.0,
     "exposurePixelX": 0.0, "exposurePixelY": 0.0, "exposureClampX": 0.0, "exposureClampY": 0.0, "exposureMetering": 0.0,
+    "exposureLerpX": 0.0, "exposureLerpY": 0.0,
     "gradeBalanceL": 1.0, "gradeBalanceM": 1.0, "gradeBalanceS": 1.0,
     "gradeFilterR": 1.0, "gradeFilterG": 1.0, "gradeFilterB": 1.0,
     "gradeHue": 0.0, "gradeSaturation": 1.0, "gradeContrast": 1.0,
@@ -565,6 +567,7 @@ def grading_inputs(values):
         "exposurePixelRange": (float(values["exposurePixelX"]), float(values["exposurePixelY"])),
         "exposureClampRange": (float(values["exposureClampX"]), float(values["exposureClampY"])),
         "exposureMeteringMode": float(values["exposureMetering"]),
+        "exposureLerp": (float(values["exposureLerpX"]), float(values["exposureLerpY"])),
         "gradeColorBalance": (float(values["gradeBalanceL"]) - 1.0,
                               float(values["gradeBalanceM"]) - 1.0,
                               float(values["gradeBalanceS"]) - 1.0),

@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(a99ac653a8ded15c):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(7227f55a61559d23):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -5181,8 +5181,19 @@ class Stack:
                                               for a, b in zip(have, want))
 
     def _chain_inputs(self):
-        """只由图链读、不进任何内核的宿主输入(各链的分辨率档)。"""
-        return {chain['resolution_input'] for chain in (self.post.get('chains') or [])}
+        """只由图链或宿主读、不进任何内核的宿主输入(各链的分辨率档、自动曝光的适应速度)。"""
+        chains = self.post.get('chains') or []
+        return {chain['resolution_input'] for chain in chains} | {chain['adaptation_input'] for chain in chains}
+
+    def exposure_adaptation(self, scene):
+        """(上调, 下调)每秒:关卡陈述的自动曝光适应速度(真源 autoExposureLerpUpSpeed / LerpDownSpeed),宿主逐帧出图
+        按它把曝光从上一帧的值向测到的目标插过去;本级没有自动曝光链或关卡没陈述答 None。"""
+        names = {chain['adaptation_input'] for chain in (self.post.get('chains') or [])
+                 if chain['kind'] == 'auto_exposure'} - {''}
+        if len(names) != 1:
+            return None
+        value = self._stored(scene, self.POST_VALUES_KEY).get(names.pop())
+        return (float(value[0]), float(value[1])) if value else None
 
     def _unbuilt_inputs(self, tree):
         """此刻没建在树上的图链:只长在它各趟上的输入口无处可写(写下的值记在树上,链建出来时照原样写回)。
@@ -5275,20 +5286,19 @@ class Stack:
         (真源 BloomResolution.Half = 2)。"""
         remembered = self._stored(scene, self.POST_VALUES_KEY)
         width, height = self._output_size(scene)
-        signature = [width, height] + [float(remembered[name][0]) if name in remembered else 2.0
-                                       for name in sorted(self._chain_inputs())]
         chains = self.post.get('chains') or []
+        signature = [width, height] + [float(remembered[name][0]) if name in remembered else 2.0
+                                       for name in sorted({chain['resolution_input'] for chain in chains})]
         return signature + [1.0 if self._chain_enabled(scene, tree, chain) else 0.0
                             for chain in chains if chain.get('enable_input')] + [
             1.0 if self._viewport_preview(scene, chain) else 0.0 for chain in chains
             if chain['kind'] in self.RENDER_ONLY_KINDS] + [
             float(len(self._water_objects(scene, chain))) for chain in chains if chain['kind'] == 'water_lighting'] + [
-            1.0 if self._exposure_record(scene) else 0.0, 1.0 if self.exposure_state_present(scene) else 0.0]
+            1.0 if self._exposure_record(scene) else 0.0, 1.0 if self.exposure_state_present(scene) else 0.0,
+            1.0 if self._temporal_record(scene) else 0.0, 1.0 if self.temporal_state_present(scene) else 0.0]
 
     POST_EXPOSURE_RECORD_KEY = 'ruri_post_exposure_record'
     EXPOSURE_RECORD_NAME = 'Exposure'
-    # 材质读到的曝光与本帧测到的差过这么多档,最终渲染整帧拒绝;宿主逐帧测光渲染收敛到它的一半,单精度的比较翻不过去。
-    EXPOSURE_TOLERANCE_STOPS = 0.02
     # 拒绝时送进主入口的场景色:一眼认得出的错,不是任何画面会有的颜色。
     EXPOSURE_REFUSED_COLOR = (1.0, 0.0, 1.0)
 
@@ -5303,56 +5313,53 @@ class Stack:
         return names[0] if names else None
 
     def exposure_state_present(self, scene):
-        """场景上有没有曝光状态:有没有决定守卫读状态的驱动建不建(见 _refuse_unstated),所以它进图链签名。"""
+        """场景上有没有曝光状态:有没有决定乘在画面上的曝光读不读它、守卫拒不拒绝(见 _applied_exposure 与
+        _refuse_unstated),所以它进图链签名。"""
         name = self.exposure_state_name()
         return name is not None and name in scene
 
-    def _refuse_unstated(self, tree, scene, metered, delivered):
-        """最终渲染里,材质读到的曝光与本帧测到、乘在画面上的曝光差过容差就整帧送品红拒绝出图。材质拿不到本帧的 E,只能
-        由宿主逐帧测光渲染先把它写成场景上的曝光状态(这一次出图的状态,不是关卡的内容,材质经视图层属性先找场景);这里用
-        驱动读回同一个状态。没有状态时读 0,落在缺省 E = 1 —— 这时不建驱动:目标属性不在时建的驱动,之后属性出现了最终
-        渲染里也一直读 0(实测),所以状态一出现图链就按签名重建。视口照常(它从不出片)。"""
+    def _applied_exposure(self, tree, scene, metered):
+        """乘在画面上的曝光(档),接到自动曝光链 Drives 指名的口:场景上有宿主陈述的曝光状态就读它 —— 真源每帧乘的是
+        向测到的目标适应过来的那个值(AutoExposureUpdateData 写回相机的 exposureAdaptation),材质读的曝光状态也是它,
+        宿主逐帧出图照关卡的适应速度把它从上一帧的值插过去;没有状态(视口预览、没经宿主出图)就是本帧测到的目标。
+        读状态的驱动只在状态在场时建:目标属性不在时建的驱动,之后属性出现了最终渲染里也一直读 0(实测),所以状态
+        一出现图链就按签名重建。"""
         name = self.exposure_state_name()
-        if name is None:
-            return delivered
+        if name is None or not self.exposure_state_present(scene):
+            return metered
         base = next(base for stack in STACKS for global_name, (_statement, base) in stack.level_global_bases().items()
                     if global_name == name)
+        stated = tree.nodes.new('ShaderNodeMath')
+        stated[self.POST_CHAIN_KEY] = 'auto_exposure'
+        stated.operation = 'ADD'
+        stated.inputs[1].default_value = float(base[0])
+        driver = stated.inputs[0].driver_add('default_value').driver
+        driver.type = 'AVERAGE'
+        variable = driver.variables.new()
+        variable.type = 'SINGLE_PROP'
+        target = variable.targets[0]
+        target.id_type = 'SCENE'
+        target.id = scene
+        target.data_path = '["{0}"][0]'.format(name)
+        stops = tree.nodes.new('ShaderNodeMath')
+        stops[self.POST_CHAIN_KEY] = 'auto_exposure'
+        stops.operation = 'LOGARITHM'
+        tree.links.new(stated.outputs[0], stops.inputs[0])
+        stops.inputs[1].default_value = 2.0
+        return stops.outputs[0]
 
-        def math(operation, first, second):
-            node = tree.nodes.new('ShaderNodeMath')
-            node[self.POST_CHAIN_KEY] = 'auto_exposure'
-            node.operation = operation
-            for socket, value in zip(node.inputs, (first, second)):
-                if isinstance(value, float):
-                    socket.default_value = value
-                elif value is not None:
-                    tree.links.new(value, socket)
-            return node
-
-        stated = math('ADD', 0.0, float(base[0]))
-        if self.exposure_state_present(scene):
-            driver = stated.inputs[0].driver_add('default_value').driver
-            driver.type = 'AVERAGE'
-            variable = driver.variables.new()
-            variable.type = 'SINGLE_PROP'
-            target = variable.targets[0]
-            target.id_type = 'SCENE'
-            target.id = scene
-            target.data_path = '["{0}"][0]'.format(name)
-        stops = math('LOGARITHM', stated.outputs[0], 2.0)
-        gap = math('ABSOLUTE', math('SUBTRACT', stops.outputs[0], metered).outputs[0], None)
-        refused = math('GREATER_THAN', gap.outputs[0], float(self.EXPOSURE_TOLERANCE_STOPS))
+    def _refuse_unstated(self, tree, scene, delivered):
+        """最终渲染里,自动曝光在测光、场景上却没有宿主陈述的曝光状态,就整帧送品红拒绝出图。材质拿不到本帧的 E,只能
+        由宿主逐帧出图把它写成场景上的曝光状态(这一次出图的状态,不是关卡的内容,材质经视图层属性先找场景);没有它
+        材质落在缺省 E = 1,画面就是错的。有状态时不比较:曝光是前几帧向测到的目标适应过来的,本来就不等于本帧测到的
+        目标。视口照常(它从不出片)。"""
+        if self.exposure_state_name() is None or self.exposure_state_present(scene):
+            return delivered
         colour = tree.nodes.new('ShaderNodeCombineXYZ')
         colour[self.POST_CHAIN_KEY] = 'auto_exposure'
         for axis, component in zip(('X', 'Y', 'Z'), self.EXPOSURE_REFUSED_COLOR):
             colour.inputs[axis].default_value = component
-        switch = tree.nodes.new('GeometryNodeSwitch')
-        switch.input_type = 'VECTOR'
-        switch[self.POST_CHAIN_KEY] = 'auto_exposure'
-        tree.links.new(refused.outputs[0], switch.inputs['Switch'])
-        tree.links.new(delivered, switch.inputs['False'])
-        tree.links.new(colour.outputs['Vector'], switch.inputs['True'])
-        return self._render_only(tree, 'auto_exposure', switch.outputs[0], delivered)
+        return self._render_only(tree, 'auto_exposure', colour.outputs['Vector'], delivered)
 
     def _exposure_record(self, scene):
         return str(scene.get(self.POST_EXPOSURE_RECORD_KEY) or '')
@@ -5401,7 +5408,7 @@ class Stack:
     POST_VIEWPORT_KEY = 'ruri_post_viewport'
     # 替换场景色的链:视口里不算它 = 视口直接看没补过的渲染结果,是精确的「这条链不在」。
     # 泛光是主入口按强度插过去的一张图,喂什么都不是恒等,只能整条开关(强度 0 就不建,见 _chain_enabled)。
-    RENDER_ONLY_KINDS = ('screen_space_reflection', 'water_lighting')
+    RENDER_ONLY_KINDS = ('screen_space_reflection', 'water_lighting', 'temporal_anti_aliasing')
     # 能在视口里预览的那几种:水面要第二个视图层,视口的合成器只看得到活动视图层。
     PREVIEWABLE_KINDS = ('screen_space_reflection',)
 
@@ -5479,7 +5486,8 @@ class Stack:
         coordinates[self.POST_CHAIN_KEY] = label
         return coordinates.outputs['Normalized']
 
-    CHAIN_KINDS = ('bloom_pyramid', 'screen_space_reflection', 'water_lighting', 'auto_exposure')
+    CHAIN_KINDS = ('bloom_pyramid', 'screen_space_reflection', 'water_lighting', 'auto_exposure',
+                   'temporal_anti_aliasing')
 
     def _build_chains(self, scene, tree, render, stage):
         """场景树里现建各图链。替换场景色的链(屏幕空间反射)先建:它合成后的颜色才是主入口与泛光看到的场景色。
@@ -5512,6 +5520,17 @@ class Stack:
             composed = self._water_lighting(tree, scene, render, chain, width, height, beneath)
             if composed is not None:
                 scene_color = self._render_only(tree, chain['kind'], composed, beneath)
+        for chain in chains:
+            if chain['kind'] != 'temporal_anti_aliasing':
+                continue
+            folder = self._temporal_record(scene)
+            if not folder or not self.temporal_state_present(scene):
+                self._drop_temporal_view_layers(scene, chain)
+                render.update()
+                continue
+            beneath = scene_color if scene_color is not None else packed.outputs['Vector']
+            resolved = self._temporal_anti_aliasing(tree, scene, render, chain, width, height, beneath, folder)
+            scene_color = self._render_only(tree, chain['kind'], resolved, beneath)
         metering = [chain for chain in chains if chain['kind'] == 'auto_exposure' and self._chain_enabled(scene, tree, chain)]
         if len(metering) > 1:
             raise RuntimeError('[ruri-post] 一帧只有一个曝光,开着的自动曝光链有 {0} 条'.format(len(metering)))
@@ -5521,10 +5540,10 @@ class Stack:
         for chain in metering:
             source = scene_color if scene_color is not None else render.outputs['Image']
             value = self._auto_exposure(tree, scene, chain, source, width, height)
-            driven.append((chain, value))
+            driven.append((chain, self._applied_exposure(tree, scene, value)))
             if folder:
                 self._record_metering(tree, scene, value, folder)
-            delivered = self._refuse_unstated(tree, scene, value, delivered)
+            delivered = self._refuse_unstated(tree, scene, delivered)
         tree.links.new(delivered, stage.inputs[self.post['color_in']])
         for chain in chains:
             if chain['kind'] != 'bloom_pyramid' or not self._chain_enabled(scene, tree, chain):
@@ -6148,6 +6167,236 @@ class Stack:
             tree.links.new(counted.outputs[histogram['outs'][slot // len(channels)]], levels.inputs['Image'])
             tree.links.new(levels.outputs['Mean'], resolved.inputs[name])
         return resolved.outputs[resolve['out']]
+
+    POST_TEMPORAL_RECORD_KEY = 'ruri_post_temporal_record'
+    # 宿主逐帧陈述在场景上的时间性状态(这一次出图的,不是关卡的内容):抖动 (x, y)、首帧、快速收敛,再按列的重投影矩阵。
+    TEMPORAL_STATE_NAME = 'ruri_post_temporal_state'
+    TEMPORAL_STATE_LAYOUT = (('taauJitter', 0, 2), ('taauFirstFrame', 2, 1), ('taauFastConverge', 3, 1),
+                             ('taauReprojection0', 4, 4), ('taauReprojection1', 8, 4), ('taauReprojection2', 12, 4),
+                             ('taauReprojection3', 16, 4))
+    TEMPORAL_STATE_LENGTH = 20
+    # 每帧存下、下一帧读回的三份历史:颜色(a 是稳定度)、膨胀后的设备深度、膨胀后的运动向量(a 是物体类别)。
+    TEMPORAL_RECORDS = (('TaaColor', 'RGBA'), ('TaaDepth', 'BW'), ('TaaMotion', 'RGBA'))
+    # 视图层上由本链打开的通道:链不建时只关自己开的那些。
+    TEMPORAL_PASS_KEY = 'ruri_post_temporal_passes'
+
+    # 带历史的图链:每帧读上一帧自己的出图,宿主按帧陈述时间性状态与历史目录(见 record_history)。
+    HISTORY_KINDS = ('temporal_anti_aliasing',)
+
+    def keeps_history(self):
+        """本级有没有带历史的图链:没有就没有谁读宿主陈述的时间性状态,宿主不该陈述它。"""
+        return any(chain['kind'] in self.HISTORY_KINDS for chain in self.post.get('chains') or [])
+
+    def _temporal_record(self, scene):
+        return str(scene.get(self.POST_TEMPORAL_RECORD_KEY) or '')
+
+    def temporal_state_present(self, scene):
+        """场景上有没有宿主陈述的时间性状态:驱动只在状态在时建(目标属性不在时建的驱动,之后属性出现了最终渲染里也一直
+        读 0),所以它进图链签名。"""
+        return self.TEMPORAL_STATE_NAME in scene
+
+    def record_history(self, scene, folder):
+        """开关时间性抗锯齿的历史记录:folder 非空时链把每一帧的历史写进该目录、下一帧按帧号读回;空 = 关,链不建。
+        记录口长在图链上,开关即重建图链。"""
+        if folder:
+            scene[self.POST_TEMPORAL_RECORD_KEY] = folder
+        elif self.POST_TEMPORAL_RECORD_KEY in scene:
+            del scene[self.POST_TEMPORAL_RECORD_KEY]
+        tree = scene.compositing_node_group
+        if tree is not None and self.POST_SIZE_KEY in tree:
+            del tree[self.POST_SIZE_KEY]
+        return self.refresh_chains(scene)
+
+    def history_record(self, scene, frame, name):
+        """第 frame 帧的一份历史文件;没开记录答 None。命名只在这里与 _temporal_anti_aliasing 两处成对。"""
+        folder = self._temporal_record(scene)
+        return os.path.join(folder, '{0:04d}_{1}.exr'.format(frame, name)) if folder else None
+
+    @staticmethod
+    def _temporal_view_layers(scene, chain):
+        """时间性链读的渲染通道:深度、清单声明的通道(运动向量)与材质存的覆盖询问(按颜色 AOV 存);由本链打开的通道
+        记在视图层上。"""
+        for layer in scene.view_layers:
+            layer.use_pass_z = True
+            opened = list(layer.get(Stack.TEMPORAL_PASS_KEY) or [])
+            for spec in chain['layer_passes'].values():
+                if spec['enable'] and not getattr(layer, spec['enable']):
+                    setattr(layer, spec['enable'], True)
+                    opened.append(spec['enable'])
+            if opened:
+                layer[Stack.TEMPORAL_PASS_KEY] = opened
+            present = {aov.name for aov in layer.aovs}
+            for name in sorted(set(chain['overlays'].values())):
+                if name not in present:
+                    aov = layer.aovs.add()
+                    aov.name = name
+                    aov.type = 'COLOR'
+
+    @staticmethod
+    def _drop_temporal_view_layers(scene, chain):
+        """时间性链不建时关掉它打开的通道、撤下它登记的覆盖询问 AOV:向量通道要求渲染器逐帧多求两次前后帧的位置,
+        AOV 是每帧多累加、回读、上传的一份。"""
+        names = set(chain['overlays'].values())
+        for layer in scene.view_layers:
+            opened = list(layer.get(Stack.TEMPORAL_PASS_KEY) or [])
+            for name in opened:
+                setattr(layer, name, False)
+            if Stack.TEMPORAL_PASS_KEY in layer:
+                del layer[Stack.TEMPORAL_PASS_KEY]
+            for aov in [aov for aov in layer.aovs if aov.name in names]:
+                layer.aovs.remove(aov)
+
+    def _state_driver(self, scene, socket, component, index):
+        curve = socket.driver_add('default_value', component) if component is not None else socket.driver_add('default_value')
+        driver = curve.driver
+        driver.type = 'AVERAGE'
+        variable = driver.variables.new()
+        variable.type = 'SINGLE_PROP'
+        target = variable.targets[0]
+        target.id_type = 'SCENE'
+        target.id = scene
+        target.data_path = '["{0}"][{1}]'.format(self.TEMPORAL_STATE_NAME, index)
+
+    def _drive_temporal_state(self, scene, node, entry):
+        """一趟组上由宿主逐帧陈述的口,按载体约定(四维 = 向量口 + _w 口,二维 = z 恒 0 的向量口)逐分量挂驱动读回。"""
+        for name, start, count in self.TEMPORAL_STATE_LAYOUT:
+            socket = node.inputs.get(name) if name in entry['sizes'] else None
+            if socket is None:
+                continue
+            if count == 1:
+                self._state_driver(scene, socket, None, start)
+                continue
+            for component in range(min(count, 3)):
+                self._state_driver(scene, socket, component, start + component)
+            if count == 4 and node.inputs.get(name + '_w') is not None:
+                self._state_driver(scene, node.inputs[name + '_w'], None, start + 3)
+
+    def _history_image(self, tree, scene, label, folder, name):
+        """上一帧的一份历史:半精度 EXR 的图像序列(数据,不做色彩变换;a 与颜色各自独立),合成器图像节点按帧偏移 -1
+        取 —— 第 f 帧读第 f-1 帧写下的那一份;文件不在(这一次出图的首帧)时节点出 0。"""
+        image = _host().scratch(bpy.data.images.new('{0} {1} {2}'.format(self.post['group'], name, scene.name),
+                                                    1, 1, alpha=True, float_buffer=True, is_data=True))
+        image[self.POST_LEVEL_KEY] = scene.name
+        image.source = 'SEQUENCE'
+        image.filepath = os.path.join(folder, '{0:04d}_{1}.exr'.format(1, name))
+        image.colorspace_settings.name = 'Non-Color'
+        image.alpha_mode = 'CHANNEL_PACKED'
+        node = tree.nodes.new('CompositorNodeImage')
+        node[self.POST_CHAIN_KEY] = label
+        node.image = image
+        node.frame_start = 1
+        node.frame_offset = -1
+        node.frame_duration = 1048574
+        node.use_auto_refresh = True
+        return node.outputs['Image']
+
+    def _temporal_anti_aliasing(self, tree, scene, render, chain, width, height, beneath, folder):
+        """时间性抗锯齿(真源桌面档 TAAU 的三趟,算法在生成的内核里):宿主深度转设备深度,宿主的运动向量转真源那张 RT;
+        膨胀读上一帧膨胀后的深度与运动向量,遮罩膨胀,解析读上一帧的历史颜色。上一帧的三份由本链上一帧的输出文件节点
+        写成半精度 EXR,这一帧按帧偏移 -1 读回;首帧没有历史,历史颜色取本帧的场景色(首帧的静止历史权重与稳定度都是 0)。
+        抖动、首帧、快速收敛与重投影矩阵由宿主逐帧陈述在场景上,驱动读回。返回解析后的场景色。"""
+        label = chain['kind']
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        roles = {role: passes[group] for role, group in chain['roles'].items()}
+        self._temporal_view_layers(scene, chain)
+        render.update()
+        layer_inputs = {}
+        for image, spec in chain['layer_passes'].items():
+            socket = render.outputs.get(spec['output'])
+            if socket is None:
+                raise RuntimeError('[ruri-post] 渲染层没有 {0} 通道(视图层打开之后渲染层节点仍不出这个口)'.format(spec['output']))
+            layer_inputs[image] = socket
+        for image, aov in chain['overlays'].items():
+            socket = render.outputs.get(aov)
+            if socket is None:
+                raise RuntimeError('[ruri-post] 渲染层没有 AOV {0}(视层登记之后渲染层节点仍不出这个口)'.format(aov))
+            layer_inputs[image] = socket
+        coordinates = tree.nodes.new('CompositorNodeImageCoordinates')
+        coordinates[self.POST_CHAIN_KEY] = label
+        tree.links.new(render.outputs['Image'], coordinates.inputs['Image'])
+        field = coordinates.outputs['Normalized']
+        camera = self._ssr_camera(tree, render, label, False)
+        fixed = {'taauScreenSize': (float(width), float(height), 1.0 / width, 1.0 / height),
+                 'taauFrameAspect': float(height) / float(width)}
+        stated = {name for name, _start, _count in self.TEMPORAL_STATE_LAYOUT}
+        if set(fixed) | stated | {'ssrZBufferParams'} != set(chain['geometry']):
+            raise RuntimeError('[ruri-post] 时间性链按帧给的是 {0},清单声明的是 {1}'.format(
+                sorted(set(fixed) | stated | {'ssrZBufferParams'}), sorted(chain['geometry'])))
+
+        def nd(kind):
+            node = tree.nodes.new(kind)
+            node[self.POST_CHAIN_KEY] = label
+            return node
+
+        def run(role, images):
+            entry = roles[role]
+            node = nd('CompositorNodeGroup')
+            node.node_tree = self.group(entry['group'])
+            tree.links.new(field, node.inputs[entry['coords'][0]])
+            if set(images) != set(entry['images']):
+                raise RuntimeError('[ruri-post] {0} 要图 {1},链给了 {2}'.format(
+                    entry['group'], sorted(entry['images']), sorted(images)))
+            for name, image in images.items():
+                tree.links.new(image, node.inputs[name])
+            for name, value in fixed.items():
+                if name in entry['sizes']:
+                    self._write_input(node, name, value, entry['sizes'][name])
+            for name, answer in camera.items():
+                self._link_answer(tree, node, name, answer)
+            self._drive_temporal_state(scene, node, entry)
+            return node
+
+        def only(node, role):
+            return node.outputs[roles[role]['out']]
+
+        def packed(rgb, alpha):
+            node = nd('CompositorNodeSetAlpha')
+            node.inputs['Type'].default_value = 'Replace Alpha'
+            tree.links.new(rgb, node.inputs['Image'])
+            tree.links.new(alpha, node.inputs['Alpha'])
+            return node.outputs['Image']
+
+        histories = {name: self._history_image(tree, scene, label, folder, name) for name, _mode in self.TEMPORAL_RECORDS}
+        first_index = next(start for name, start, _count in self.TEMPORAL_STATE_LAYOUT if name == 'taauFirstFrame')
+        first = nd('ShaderNodeMath')
+        first.operation = 'GREATER_THAN'
+        first.inputs[1].default_value = 0.5
+        self._state_driver(scene, first.inputs[0], None, first_index)
+        chooser = nd('GeometryNodeSwitch')
+        chooser.input_type = 'RGBA'
+        tree.links.new(first.outputs[0], chooser.inputs['Switch'])
+        tree.links.new(histories['TaaColor'], chooser.inputs['False'])
+        tree.links.new(beneath, chooser.inputs['True'])
+        device = only(run('device_depth', {'sceneDepth': render.outputs['Depth']}), 'device_depth')
+        motion = run('motion', {name: layer_inputs[name] for name in roles['motion']['images']})
+        motion_image = packed(motion.outputs['ret_motion'], motion.outputs['ret_tag'])
+        dilated = run('dilation', {'deviceDepth': device, 'sceneMotion': motion_image,
+                                   'previousDepth': histories['TaaDepth'], 'previousMotion': histories['TaaMotion']})
+        dilated_image = packed(dilated.outputs['ret_motion'], dilated.outputs['ret_tag'])
+        mask = only(run('mask_dilation', {'dilatedMotion': dilated_image}), 'mask_dilation')
+        resolved = run('resolve', {'sceneColor': beneath, 'deviceDepth': device, 'dilatedMotion': dilated_image,
+                                   'dilatedMask': mask, 'historyColor': chooser.outputs[0]})
+        written = {'TaaColor': packed(resolved.outputs['ret_color'], resolved.outputs['ret_stability']),
+                   'TaaDepth': dilated.outputs['ret_depth'], 'TaaMotion': dilated_image}
+        output = nd('CompositorNodeOutputFile')
+        output.directory = folder
+        output.file_name = '####_'
+        output.format.media_type = 'IMAGE'
+        output.format.file_format = 'OPEN_EXR'
+        output.format.color_depth = '16'
+        output.format.color_mode = 'RGBA'
+        output.format.exr_codec = 'NONE'
+        for name, mode in self.TEMPORAL_RECORDS:
+            item = output.file_output_items.new('RGBA' if mode == 'RGBA' else 'FLOAT', name)
+            if mode != 'RGBA':
+                item.override_node_format = True
+                item.format.media_type = 'IMAGE'
+                item.format.file_format = 'OPEN_EXR'
+                item.format.color_depth = '16'
+                item.format.color_mode = mode
+                item.format.exr_codec = 'NONE'
+            tree.links.new(written[name], output.inputs[item.name])
+        return resolved.outputs['ret_color']
 
     def refresh_chains(self, scene):
         """出图尺寸、分辨率档或哪条链该开变了就重建图链(级数与各级尺寸都随它们);主入口不动,新建的各趟照主入口此刻的值

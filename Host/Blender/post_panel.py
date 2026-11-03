@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import bpy
 
-from . import derived_state, exposure, material_builder, material_panel
+from . import derived_state, exposure, material_builder, material_panel, temporal
 from ...Kernel import host as host_port
 from ...Kernel.app import look
 
@@ -125,12 +125,13 @@ class RURI_OT_post_reset(bpy.types.Operator):
 class RURI_OT_render_exposure(bpy.types.Operator):
     bl_idname = "ruri.render_exposure"
     bl_label = "Render Animation"
-    bl_description = ("Render the scene's frames to its output path, each shaded under the exposure the post chain "
-                      "multiplies it by. The materials that take the exposure back out (characters, emissives that "
-                      "ignore it) read it from the scene, and the chain meters it only after they are shaded: each frame "
-                      "is stated what the frame before it metered, as the game reads back the previous frame, and frames "
-                      "a cut leaves off are shaded again. The exposure stays stated on the scene, so later renders of these frames "
-                      "read the same; a final render of a frame that meters off its stated exposure comes out magenta")
+    bl_description = ("Render the scene's frames to its output path, each shaded and multiplied by the exposure the "
+                      "game's auto exposure adapts to. The materials that take the exposure back out (characters, "
+                      "emissives that ignore it) read it from the scene, and the chain meters a frame only after they are "
+                      "shaded: each frame is stated the exposure adapted from the frame before it toward what that frame "
+                      "metered, at the level's adaptation speeds, as the game reads back an earlier frame. The exposure "
+                      "stays stated on the scene, so later renders of these frames read the same; a final render with no "
+                      "exposure stated comes out magenta")
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -140,7 +141,25 @@ class RURI_OT_render_exposure(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         done = exposure.render_animation(scene, scene.frame_start, scene.frame_end)
-        self.report({"INFO"}, "{0} frame(s) rendered under their own exposure.".format(len(done)))
+        self.report({"INFO"}, "{0} frame(s) rendered under their adapted exposure.".format(len(done)))
+        return {"FINISHED"}
+
+
+class RURI_OT_post_temporal(bpy.types.Operator):
+    bl_idname = "ruri.post_temporal"
+    bl_label = "Temporal Anti-Aliasing"
+    bl_description = ("Resolve each rendered frame the way the game does: one jittered sample per frame through the "
+                      "post chain's temporal anti-aliasing, against the frames before it. Off, a frame is the scene's "
+                      "own samples through its film filter. On, render one sample per frame: every sample of a frame "
+                      "shares the frame's one jitter")
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return temporal.available(context.scene)
+
+    def execute(self, context):
+        temporal.set_enabled(context.scene, not temporal.enabled(context.scene))
         return {"FINISHED"}
 
 
@@ -222,8 +241,12 @@ def draw_post_chain_section(layout, context):
         row = layout.row()
         row.alert = stated[0] not in scene
         row.label(text="Exposure stated on this scene" if stated[0] in scene
-                  else "No exposure stated: frames metering off 0 stops render magenta",
+                  else "No exposure stated: a final render comes out magenta",
                   icon="CHECKMARK" if stated[0] in scene else "ERROR")
+        if temporal.available(scene):
+            on = temporal.enabled(scene)
+            layout.operator(RURI_OT_post_temporal.bl_idname, depress=on,
+                            icon="CHECKBOX_HLT" if on else "CHECKBOX_DEHLT")
         layout.operator(RURI_OT_render_exposure.bl_idname, icon="RENDER_ANIMATION")
 
     for stage, node in _stage_nodes(scene):
@@ -263,6 +286,7 @@ _CLASSES = (
     RURI_OT_post_viewport_preview,
     RURI_OT_post_reset,
     RURI_OT_render_exposure,
+    RURI_OT_post_temporal,
     RURI_OT_derived_rebuild,
 )
 
