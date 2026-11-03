@@ -489,7 +489,7 @@ class _Materialisation:
     def _build_mesh(self, stated, name, slots):
         mesh = bpy.data.meshes.new(name)
         positions = stated.positions
-        triangles = stated.triangles.astype(np.int32)
+        triangles, slot_per_triangle = self._enclosing_triangles(stated, name)
         vertex_count = len(positions)
         triangle_count = len(triangles)
 
@@ -516,7 +516,7 @@ class _Materialisation:
         mesh.loops.foreach_set("vertex_index", corner_vertices)
         mesh.polygons.foreach_set(
             "loop_start", np.arange(triangle_count, dtype=np.int32) * 3)
-        mesh.polygons.foreach_set("material_index", self._slot_per_triangle(stated))
+        mesh.polygons.foreach_set("material_index", slot_per_triangle)
         mesh.update(calc_edges=True)
 
         for index in sorted(stated.uvs):
@@ -555,6 +555,21 @@ class _Materialisation:
         for material in slots:
             mesh.materials.append(material)
         return mesh
+
+    def _enclosing_triangles(self, stated, name):
+        """The triangles that name three different vertices, and the material slot each draws with.
+
+        A triangle that names one vertex twice encloses nothing, and Blender's custom-normal call cannot be handed one:
+        it takes the process down with an access violation, sometimes on a later mesh than the one that held it."""
+        triangles = stated.triangles.astype(np.int32)
+        slots = self._slot_per_triangle(stated)
+        enclosing = ((triangles[:, 0] != triangles[:, 1]) & (triangles[:, 1] != triangles[:, 2])
+                     & (triangles[:, 0] != triangles[:, 2]))
+        if enclosing.all():
+            return triangles, slots
+        self.warnings.append("{0}: {1} triangle(s) name one vertex twice and are left out".format(
+            name, int((~enclosing).sum())))
+        return triangles[enclosing], slots[enclosing]
 
     def _slot_per_triangle(self, stated):
         """The material slot each triangle draws with, from the stated runs."""
