@@ -50,6 +50,7 @@ def author(layer_path, name, mesh, material_keys, statement, textures, families)
         slot_materials.append(made[key])
     mesh_path = root.GetPath().AppendChild(names.claim(str(root.GetPath()), identifier(mesh.name)))
     geom = geometry.author(stage, mesh_path, mesh)
-    geometry.bind_materials(geom, mesh, slot_materials, names)
+    if any(material is not None for material in slot_materials):
+        geometry.bind_materials(geom, mesh, slot_materials, names)
     stage.GetRootLayer().Save()
     return Piece(name, layer_path)

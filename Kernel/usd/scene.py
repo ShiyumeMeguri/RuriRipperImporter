@@ -11,6 +11,7 @@ from __future__ import annotations
 from pxr import Sdf, UsdGeom, UsdSkel
 
 from .. import statement as kernel_statement
+from . import colliders as collider_module
 from . import sources, stages, transforms
 from .layout import Layout
 from .names import Namer, identifier
@@ -23,9 +24,12 @@ def _refer(prim, scene_layer, target_layer, target_root):
     prim.GetReferences().AddReference(Layout.reference(scene_layer, target_layer), target_root)
 
 
-def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, characters, pieces):
+def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, characters, pieces, colliders=None,
+           collision_pieces=None):
     """Write the scene ``scene_name`` to ``layer_path``. ``characters`` maps a rig root's node index to the
-    written character, ``pieces`` a node index to the written piece it draws. Returns counts of what was written."""
+    written character, ``pieces`` a node index to the written piece it draws, ``colliders`` a node index to the
+    volumes it carries (a node below a rig root has none here: its rig holds them) and ``collision_pieces`` a
+    mesh key to the written piece holding it. Returns counts of what was written."""
     stage = stages.create(layer_path, kernel_statement.USD, "Scene {0}".format(scene_name))
     top_path = Sdf.Path("/" + identifier(scene_name))
     top = UsdGeom.Xform.Define(stage, top_path)
@@ -35,7 +39,10 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
             raise ValueError("the usd basis states no top-level turn, and root '{0}' asks for one.".format(root.label))
     names = Namer()
     paths = {}
-    counts = {"prims": 1, "references": 0, "instanceable": 0, "characters": 0, "inside_rigs": 0}
+    colliders = colliders or {}
+    collision_pieces = collision_pieces or {}
+    counts = {"prims": 1, "references": 0, "instanceable": 0, "characters": 0, "inside_rigs": 0, "colliders": 0,
+              "colliders_without_geometry": 0}
     for node in hierarchy.nodes:
         index = node.index
         if covered[index] and index not in rig_roots:
@@ -61,5 +68,13 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
             counts["prims"] += 1
             counts["references"] += 1
             counts["instanceable"] += 1
+        for collider in colliders.get(index, ()):
+            if collider_module.author(stage, layer_path, path, collider, names, collision_pieces.get(collider.mesh)):
+                counts["prims"] += 1
+                counts["colliders"] += 1
+                counts["references"] += collider.kind == "mesh"
+                counts["instanceable"] += collider.kind == "mesh"
+            else:
+                counts["colliders_without_geometry"] += 1
     stage.GetRootLayer().Save()
     return counts

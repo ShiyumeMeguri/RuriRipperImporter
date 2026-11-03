@@ -12,6 +12,7 @@ import numpy as np
 from pxr import Sdf, UsdSkel, Vt
 
 from .. import statement as kernel_statement
+from . import colliders as collider_module
 from . import geometry, materials, sources, stages
 from .names import Namer, identifier
 from .transforms import move_normals, move_points, to_usd
@@ -84,11 +85,16 @@ def parts_of(statement, hierarchy, rig):
     return parts, notes
 
 
-def fingerprint(rig, parts):
-    """What two rigs must share to be the same character: the same joints, and the same meshes bound the same way."""
+def fingerprint(rig, parts, volumes=()):
+    """What two rigs must share to be the same character: the same joints, the same meshes bound the same way and the
+    same volumes on the same joints."""
     return (tuple(rig.sources),
             tuple((part.node.name, part.node.kind, part.mesh.name, len(part.positions), len(part.mesh.triangles),
-                   tuple(part.node.materials)) for part in parts))
+                   tuple(part.node.materials)) for part in parts),
+            tuple(sorted((rig.joint_of[volume.node], volume.kind, tuple(round(float(v), 5) for v in volume.center),
+                          tuple(round(float(v), 5) for v in volume.size), round(float(volume.radius), 5),
+                          round(float(volume.height), 5), volume.axis, volume.trigger, volume.enabled, volume.layer,
+                          volume.material) for volume in volumes)))
 
 
 def same_points(rig, parts, other_rig, other_parts):
@@ -106,8 +112,9 @@ def _material(stage, scope_path, key, statement, textures, layer_path, families,
     return made[key]
 
 
-def author(layer_path, name, rig, parts, hierarchy, statement, textures, families):
-    """Write the character ``name`` to ``layer_path``. Returns the root prim's path."""
+def author(layer_path, name, rig, parts, hierarchy, statement, textures, families, volumes=()):
+    """Write the character ``name`` to ``layer_path``, with the ``volumes`` that sit on its joints. Returns the root
+    prim's path."""
     stage = stages.create(layer_path, kernel_statement.USD, "Rig {0}".format(name))
     names = Namer()
     root = UsdSkel.Root.Define(stage, "/" + name)
@@ -145,5 +152,8 @@ def author(layer_path, name, rig, parts, hierarchy, statement, textures, familie
             geometry.attach(geom, skeleton.GetPath(), part.joint)
         relative = "" if node.index == rig.root else rig.sources[rig.joint_of[node.index]]
         sources.describe(geom.GetPrim(), node, relative)
+    for volume in volumes:
+        joint = rig.joint_of[volume.node]
+        collider_module.author(stage, layer_path, root_path, volume, names, frame=rig.bind[joint], joint=rig.tokens[joint])
     stage.GetRootLayer().Save()
     return root_path

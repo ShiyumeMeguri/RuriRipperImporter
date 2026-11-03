@@ -62,21 +62,30 @@ def export(statement, scene_name, root, product, families, extension, textures=N
               "roots": len(hierarchy.roots), "rigs": len(rig_roots), "rig_missing_meshes": 0,
               "rig_bare_vertices": 0, "mesh_missing": 0, "unrigged_skinned": 0}
 
+    stated = statement.colliders
     written = []
     placed = {}
+    on_joints = set()
+    report["colliders_on_joints"] = 0
+    report["colliders_on_joints_unwritten"] = 0
     for index in rig_roots:
         rig = rigs.Rig(hierarchy, index, Namer())
         parts, notes = characters.parts_of(statement, hierarchy, rig)
         report["rig_missing_meshes"] += notes["missing"]
         report["rig_bare_vertices"] += notes["bare"]
-        print_key = characters.fingerprint(rig, parts)
+        carried_volumes = [volume for volume in stated if volume.node in rig.joint_of]
+        volumes = [volume for volume in carried_volumes if volume.kind != "mesh"]
+        on_joints.update(volume.node for volume in carried_volumes)
+        report["colliders_on_joints"] += len(volumes)
+        report["colliders_on_joints_unwritten"] += len(carried_volumes) - len(volumes)
+        print_key = characters.fingerprint(rig, parts, volumes)
         match = next((entry for entry in written if entry.fingerprint == print_key
                       and characters.same_points(rig, parts, entry.rig, entry.parts)), None)
         if match is None:
             name = folders.claim("characters", file_stem(hierarchy.nodes[index].name))
             layer_path = layout.character(name)
             match = _Character(layer_path, characters.author(layer_path, name + "_postmodel", rig, parts, hierarchy,
-                                                             statement, textures, families),
+                                                             statement, textures, families, volumes),
                                print_key, rig, parts)
             written.append(match)
             for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
@@ -110,8 +119,28 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     report["piece_layers"] = len(by_signature)
     report["piece_instances"] = len(pieces)
 
+    drawn = {}
+    for signature, piece in by_signature.items():
+        if signature[1] == kernel_statement.MESH:
+            drawn.setdefault(signature[0], piece)
+    collision = {}
+    for collider in stated:
+        if collider.kind != "mesh" or collider.mesh in drawn or collider.mesh in collision:
+            continue
+        mesh = statement.meshes.get(collider.mesh)
+        if mesh is None or not len(mesh.positions):
+            continue
+        name = folders.claim(("pieces", scene_name), file_stem(mesh.name or collider.mesh) + "_collision")
+        collision[collider.mesh] = statics.author(layout.static(scene_name, name), name, mesh, [], statement, textures,
+                                                  families)
+    report["collision_layers"] = len(collision)
+    report["collider_rows"] = len(stated)
+    placements = {}
+    for collider in stated:
+        if collider.node not in on_joints:
+            placements.setdefault(collider.node, []).append(collider)
     report.update(scene.author(layout.scene(scene_name), scene_name, statement, hierarchy, set(rig_roots), covered,
-                               placed, pieces))
+                               placed, pieces, placements, {**collision, **drawn}))
     report["textures_written"] = textures.written
     report["textures_linked"] = textures.linked
     report["textures_copied"] = textures.copied
