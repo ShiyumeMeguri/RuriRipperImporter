@@ -66,6 +66,9 @@ class TextureStore:
     def _duplicate(self, first, target):
         """The file ``target`` with the content of ``first``: a hard link where the volume has them, so a texture
         every layer owns is stored once, else a copy."""
+        if os.path.exists(target) and os.path.samefile(first, target):
+            self.linked += 1
+            return
         try:
             os.link(first, target)
             self.linked += 1
