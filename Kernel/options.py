@@ -74,6 +74,11 @@ SCHEMA = (
            "Renderers that are disabled, or sit on a deactivated GameObject, draw nothing "
            "in the game -- but they are usually runtime-toggled variants. Untick to import "
            "exactly what the game draws"),
+    Option("import_colliders", BOOL, False, "Import Colliders",
+           "Keep the collision volumes the game puts on its objects: boxes, spheres and capsules as empties "
+           "of the same shape, mesh colliders as hidden meshes, gathered in one collection with what the "
+           "game states of each. Nothing simulates",
+           requires=host_port.SceneGraph),
 
     Option("game_shaders", BOOL, True, "Game Shaders",
            "Rebuild the game's own shading stack (NPR lighting, SDF face shadows, fur "

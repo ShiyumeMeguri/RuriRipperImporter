@@ -40,6 +40,7 @@ def statement(seeds, options=None):
         detail=int(values.get("detail_level", 0) or 0),
         inactive=bool(values.get("import_inactive", True)),
         shadow_proxies=bool(values.get("import_shadow_proxies", False)),
+        colliders=bool(values.get("import_colliders", False)),
         containers=list(host.texture_containers() or ()),
         roles=list(values.get("role_layers") or ()))
 

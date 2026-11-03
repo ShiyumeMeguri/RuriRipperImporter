@@ -30,6 +30,10 @@ from . import derived_state, light_parameters, material_builder, renderer, rig_i
 #: the game tagged is found again by what the game called it.
 TAG = "unity_tag"
 
+#: The collection the collision volumes of an import are gathered in, and the prefix of what each carries of its own.
+COLLIDERS = "Colliders"
+COLLIDER_PREFIX = "unity_collider_"
+
 #: Cosmetic bone length for a bone with no child to point at.
 _DEFAULT_BONE_LENGTH = 0.03
 _MAX_BONE_LENGTH = 0.3
@@ -137,6 +141,15 @@ class _Materialisation:
         self.meshes = {}
         #: per-draw values the statement binds that no shading stack reads -> how many objects carried one
         self.unread_parameters = {}
+        #: the nodes that carry a collision volume this run keeps and every node above one, which each need an object
+        #: to hold what hangs under it
+        self.collider_nodes = set()
+        if options.get("import_colliders"):
+            for collider in statement.colliders:
+                cursor = collider.node
+                while cursor >= 0 and cursor not in self.collider_nodes:
+                    self.collider_nodes.add(cursor)
+                    cursor = statement.nodes[cursor].parent
 
     # -- the run ------------------------------------------------------------
     def run(self):
@@ -145,6 +158,7 @@ class _Materialisation:
             derived_state.announce(self._build_rig(key))
         for node in self.statement.nodes:
             self._build_node(node, roots)
+        self._build_colliders()
         self._stamp_light_frames()
         for entry in self.statement.report:
             self.warnings.append("{0} x{1}: {2}".format(entry.what, entry.count, entry.detail))
@@ -425,7 +439,7 @@ class _Materialisation:
         """Whether a transform with nothing on it still has to exist: because the
         user asked for every one, or because something under it will be parented
         to it."""
-        if self.options.get("import_empties"):
+        if self.options.get("import_empties") or node.index in self.collider_nodes:
             return True
         return any(other.parent == node.index and other.renders
                    for other in self.statement.nodes)
@@ -471,6 +485,82 @@ class _Materialisation:
             self.missing.append("{0}: no rig for skeleton {1}".format(node.name, node.skeleton))
         self._apply_morphs(made, node.mesh)
         derived_state.announce(made)
+
+    # -- colliders ----------------------------------------------------------
+    def _build_colliders(self):
+        """The collision volumes the statement states, under the objects their nodes became: a box, sphere or capsule
+        as an empty of the same shape, a mesh collider as a hidden mesh, each carrying what the game states of it."""
+        if not self.collider_nodes:
+            return
+        home = self.context.collection
+        gathered = home.children.get(COLLIDERS)
+        if gathered is None:
+            gathered = bpy.data.collections.new(COLLIDERS)
+            home.children.link(gathered)
+        for collider in self.statement.colliders:
+            node = self.statement.nodes[collider.node]
+            made = self._collider_object(collider, node)
+            if made is None:
+                continue
+            gathered.objects.link(made)
+            parent = self.built.get(node.index)
+            if parent is not None:
+                made.parent = parent
+                made.matrix_parent_inverse = Matrix.Identity(4)
+            carried = self.carried.get(node.index)
+            if carried is not None:
+                made.matrix_basis = carried @ made.matrix_basis
+            if not collider.enabled or not node.active:
+                made.hide_viewport = True
+            made.hide_render = True
+            for name, value in (
+                    ("kind", collider.kind), ("trigger", int(collider.trigger)), ("enabled", int(collider.enabled)),
+                    ("layer", int(collider.layer)), ("material", collider.material), ("mesh", collider.mesh),
+                    ("convex", int(collider.convex)), ("radius", float(collider.radius)),
+                    ("height", float(collider.height)), ("axis", int(collider.axis)),
+                    ("size", [float(entry) for entry in collider.size]),
+                    ("center", [float(entry) for entry in collider.center])):
+                made[COLLIDER_PREFIX + name] = value
+            self.objects.append(made)
+            derived_state.announce(made)
+
+    def _collider_object(self, collider, node):
+        """The object that stands for one volume, placed in the frame of its node, or None where it has no geometry."""
+        name = "{0}.{1}".format(node.name, collider.kind)
+        if collider.kind == "mesh":
+            data = self._collider_mesh(collider.mesh)
+            if data is None:
+                self.missing.append("{0}: the statement carries no geometry for {1}".format(name, collider.mesh))
+                return None
+            made = bpy.data.objects.new(name, data)
+            made.hide_viewport = True
+            return made
+        made = bpy.data.objects.new(name, None)
+        scale = [1.0, 1.0, 1.0]
+        if collider.kind == "box":
+            made.empty_display_type = "CUBE"
+            made.empty_display_size = 1.0
+            scale = [float(value) / 2.0 for value in collider.size]
+        else:
+            made.empty_display_type = "SPHERE"
+            made.empty_display_size = max(float(collider.radius), 1e-4)
+            if collider.kind == "capsule" and collider.radius > 0.0:
+                scale[collider.axis] = max(collider.height / (2.0 * collider.radius), 1.0)
+        made.matrix_basis = _trs(collider.center, (0.0, 0.0, 0.0, 1.0), scale)
+        return made
+
+    def _collider_mesh(self, key):
+        """The mesh datablock a mesh collider collides with: the one a renderer already built from it, else its own."""
+        for (mesh_key, _materials), data in self.meshes.items():
+            if mesh_key == key:
+                return data
+        stated = self.statement.meshes.get(key)
+        if stated is None or not len(stated.positions):
+            return None
+        data = self._build_mesh(stated, stated.name or key, [])
+        self.meshes[(key, ())] = data
+        derived_state.announce(data)
+        return data
 
     # -- meshes -------------------------------------------------------------
     def _mesh_data(self, node):

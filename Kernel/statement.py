@@ -31,6 +31,7 @@ ROOTS = "core.statement.roots"
 NODES = "core.statement.nodes"
 MESHES = "core.statement.meshes"
 MORPHS = "core.statement.morphs"
+COLLIDERS = "core.statement.colliders"
 SKELETONS = "core.statement.skeletons"
 AVATARS = "core.statement.avatars"
 MATERIALS = "core.statement.materials"
@@ -306,6 +307,33 @@ class Morph:
 
     def __repr__(self):
         return "<Morph {0}.{1}>".format(self.mesh, self.name)
+
+
+class Collider:
+    """One collision volume of one node, in the node's own space and the requested basis. ``kind`` is box, sphere,
+    capsule or mesh; a box states ``size``, a sphere ``radius``, a capsule ``radius`` and ``height`` along ``axis``
+    (0 x, 1 y, 2 z of the basis), a mesh the key of one of the statement's meshes."""
+
+    __slots__ = ("node", "kind", "trigger", "enabled", "layer", "center", "size", "radius", "height", "axis",
+                 "convex", "mesh", "material")
+
+    def __init__(self, row):
+        self.node = int(row["node"])
+        self.kind = row["kind"]
+        self.trigger = bool(row["trigger"])
+        self.enabled = bool(row["enabled"])
+        self.layer = int(row["layer"])
+        self.center = (row["center_x"], row["center_y"], row["center_z"])
+        self.size = (row["size_x"], row["size_y"], row["size_z"])
+        self.radius = row["radius"]
+        self.height = row["height"]
+        self.axis = int(row["axis"])
+        self.convex = bool(row["convex"])
+        self.mesh = row["mesh"]
+        self.material = row["material"]
+
+    def __repr__(self):
+        return "<Collider {0} on node {1}>".format(self.kind, self.node)
 
 
 class Bone:
@@ -721,20 +749,21 @@ class Statement:
 
     @classmethod
     def of(cls, seeds, basis=UNITY, detail=0, inactive=True, shadow_proxies=False,
-           roles=(), containers=()):
+           roles=(), containers=(), colliders=False):
         """Ask what these seeds are.
 
         ``detail`` is the level to keep and -1 every level; ``inactive`` keeps
         renderers the game has switched off; ``shadow_proxies`` keeps
         renderers that draw only into the shadow map; ``roles`` are texture-role
         layer files, later overriding earlier; ``containers`` are the image
-        containers this host loads directly."""
+        containers this host loads directly; ``colliders`` states the collision
+        volumes of the objects, which are otherwise left out."""
         seeds = [str(seed) for seed in (seeds if isinstance(seeds, (list, tuple, set))
                                         else [seeds]) if str(seed)]
         if not seeds:
             raise ValueError("a statement needs at least one seed")
         return cls({"seed": seeds, "basis": basis, "detail": detail,
-                    "inactive": inactive, "shadow_proxies": shadow_proxies,
+                    "inactive": inactive, "shadow_proxies": shadow_proxies, "colliders": colliders,
                     "roles": list(roles), "containers": list(containers)})
 
     @property
@@ -787,6 +816,12 @@ class Statement:
                 found.setdefault(morph.mesh, []).append(morph)
             return found
         return self._rows(MORPHS, build)
+
+    @property
+    def colliders(self):
+        """The collision volumes of the objects, when the statement was asked for them."""
+        return self._rows(COLLIDERS, lambda table: [
+            Collider(table.row(index)) for index in range(table.row_count)])
 
     @property
     def skeletons(self):
