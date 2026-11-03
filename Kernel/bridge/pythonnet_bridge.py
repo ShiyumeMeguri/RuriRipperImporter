@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 # A claimed CoreCLR runtime can never be re-claimed in this process, so reloading
 # this module would only desync the guards below from what is really loaded.
 HOLDS_PROCESS_STATE = True
+
+#: The runtime is claimed and the reader loaded by whoever asks first -- the dependency worker that claims it
+#: early, or the first use of the bridge on the host's thread -- and both ask while the other may be asking.
+_claim_lock = threading.RLock()
 
 _runtime_set = False
 _bridge_type = None
@@ -139,32 +144,33 @@ def _claim_coreclr(runtime_config):
     decompiler emits through) finds nothing -- every shader export failed. The
     base is stated here, the one value ``dotnet <app>.dll`` would have set."""
     global _runtime_set
-    if _runtime_set:
-        return
-    from clr_loader import get_coreclr
-    from pythonnet import set_runtime
-    application_base = os.path.join(os.path.dirname(runtime_config), "")
-    try:
-        set_runtime(get_coreclr(runtime_config=runtime_config,
-                                properties={"APP_CONTEXT_BASE_DIRECTORY": application_base}))
-    except RuntimeError as exc:
-        if "already been loaded" not in str(exc):
-            raise
-        bound, bound_kind = _bound_runtime_kind()
-        if bound_kind and "netfx" in bound_kind.lower():
-            raise RuntimeError(
-                "A .NET Framework runtime is already loaded in this host process "
-                f"({bound_kind}, {bound!r}) -- pythonnet allows only one CLR runtime per "
-                "process, and .NET Framework cannot load Ruri.RipperHook.dll (targets "
-                "net10.0). Something imported `clr` (or called pythonnet.load()) before "
-                "claim_runtime_early() got the chance to claim CoreCLR. Restart the "
-                "application with this plugin loading first; if it keeps happening, "
-                "another plugin/add-on in this profile is the culprit and needs to be "
-                "identified."
-            ) from exc
-        # Bound to something else CoreCLR-compatible (most likely: our own
-        # earlier claim_runtime_early() in this same process) -- fine.
-    _runtime_set = True
+    with _claim_lock:
+        if _runtime_set:
+            return
+        from clr_loader import get_coreclr
+        from pythonnet import set_runtime
+        application_base = os.path.join(os.path.dirname(runtime_config), "")
+        try:
+            set_runtime(get_coreclr(runtime_config=runtime_config,
+                                    properties={"APP_CONTEXT_BASE_DIRECTORY": application_base}))
+        except RuntimeError as exc:
+            if "already been loaded" not in str(exc):
+                raise
+            bound, bound_kind = _bound_runtime_kind()
+            if bound_kind and "netfx" in bound_kind.lower():
+                raise RuntimeError(
+                    "A .NET Framework runtime is already loaded in this host process "
+                    f"({bound_kind}, {bound!r}) -- pythonnet allows only one CLR runtime per "
+                    "process, and .NET Framework cannot load Ruri.RipperHook.dll (targets "
+                    "net10.0). Something imported `clr` (or called pythonnet.load()) before "
+                    "claim_runtime_early() got the chance to claim CoreCLR. Restart the "
+                    "application with this plugin loading first; if it keeps happening, "
+                    "another plugin/add-on in this profile is the culprit and needs to be "
+                    "identified."
+                ) from exc
+            # Bound to something else CoreCLR-compatible (most likely: our own
+            # earlier claim_runtime_early() in this same process) -- fine.
+        _runtime_set = True
 
 
 def claim_runtime_early():
@@ -297,53 +303,54 @@ def _boot_runtime():
     unloaded once set, whether that "once" was this call or an earlier
     claim_runtime_early()) and load Ruri.RipperHook.dll."""
     global _bridge_type
-    if _bridge_type is not None:
-        return
-    dll_dir, runtime_config = _runtime_config_path()
-    if not os.path.isfile(runtime_config):
-        raise RuntimeError(f"Missing runtimeconfig.json next to the DLL: {runtime_config}")
-    _claim_coreclr(runtime_config)
+    with _claim_lock:
+        if _bridge_type is not None:
+            return
+        dll_dir, runtime_config = _runtime_config_path()
+        if not os.path.isfile(runtime_config):
+            raise RuntimeError(f"Missing runtimeconfig.json next to the DLL: {runtime_config}")
+        _claim_coreclr(runtime_config)
 
-    if dll_dir not in sys.path:
-        sys.path.append(dll_dir)
-    import clr
-    import System
+        if dll_dir not in sys.path:
+            sys.path.append(dll_dir)
+        import clr
+        import System
 
-    dll_path = os.path.join(dll_dir, "Ruri.RipperHook.dll")
-    clr.AddReference(dll_path)
-    assembly = next((a for a in System.AppDomain.CurrentDomain.GetAssemblies()
-                     if str(a.GetName().Name) == "Ruri.RipperHook"), None)
-    if assembly is None:
-        raise RuntimeError(
-            f"Ruri.RipperHook.dll (loaded from {dll_path}) is not among "
-            "AppDomain.CurrentDomain.GetAssemblies() after AddReference() -- the load itself failed.")
+        dll_path = os.path.join(dll_dir, "Ruri.RipperHook.dll")
+        clr.AddReference(dll_path)
+        assembly = next((a for a in System.AppDomain.CurrentDomain.GetAssemblies()
+                         if str(a.GetName().Name) == "Ruri.RipperHook"), None)
+        if assembly is None:
+            raise RuntimeError(
+                f"Ruri.RipperHook.dll (loaded from {dll_path}) is not among "
+                "AppDomain.CurrentDomain.GetAssemblies() after AddReference() -- the load itself failed.")
 
-    # Diagnostic only, never fatal: if Ruri.RipperHook.dll has a type somewhere that can't
-    # resolve one of its own dependencies, THIS is what silently empties AssemblyManager's
-    # namespace scan for the whole assembly (see _StaticTypeProxy's doc comment) -- surface
-    # exactly which dependency so the real fix (getting it into the bin dir) is findable,
-    # without blocking on it, since Assembly.GetType() below doesn't need this to succeed.
-    try:
-        assembly.GetExportedTypes()
-    except Exception as exc:
-        missing = getattr(exc, "FileName", None) or getattr(exc, "Message", None) or str(exc)
-        print(f"[RuriRipper] Ruri.RipperHook.dll: not every exported type resolves cleanly "
-              f"({type(exc).__name__}: {missing}) -- this is why `from Ruri.RipperHook...import` "
-              "doesn't work and the reflection fallback is needed; harmless if the fallback "
-              "below still finds RipperBlenderBridge.")
+        # Diagnostic only, never fatal: if Ruri.RipperHook.dll has a type somewhere that can't
+        # resolve one of its own dependencies, THIS is what silently empties AssemblyManager's
+        # namespace scan for the whole assembly (see _StaticTypeProxy's doc comment) -- surface
+        # exactly which dependency so the real fix (getting it into the bin dir) is findable,
+        # without blocking on it, since Assembly.GetType() below doesn't need this to succeed.
+        try:
+            assembly.GetExportedTypes()
+        except Exception as exc:
+            missing = getattr(exc, "FileName", None) or getattr(exc, "Message", None) or str(exc)
+            print(f"[RuriRipper] Ruri.RipperHook.dll: not every exported type resolves cleanly "
+                  f"({type(exc).__name__}: {missing}) -- this is why `from Ruri.RipperHook...import` "
+                  "doesn't work and the reflection fallback is needed; harmless if the fallback "
+                  "below still finds RipperBlenderBridge.")
 
-    bridge_type = assembly.GetType("Ruri.RipperHook.BlenderBridge.RipperBlenderBridge")
-    if bridge_type is None:
-        raise RuntimeError(
-            "Ruri.RipperHook.dll loaded, but has no Ruri.RipperHook.BlenderBridge.RipperBlenderBridge type -- "
-            "rebuild Source/Ruri.RipperHook/Ruri.RipperHook.csproj against the latest source.")
-    _bridge_type = _StaticTypeProxy(bridge_type)
-    # Every decoder beyond the kernel's own -- the Unreal one is the module today --
-    # is declared by its build in Modules/*.module beside the kernel, because kernel
-    # and modules build into one folder. Nothing above this line names a decoder, and
-    # no host carries a path to one: what is in the bin dir is what can be read.
-    _bridge_type.LoadDeclaredModules()
-    _bridge_type.SetLocale(_locale)
+        bridge_type = assembly.GetType("Ruri.RipperHook.BlenderBridge.RipperBlenderBridge")
+        if bridge_type is None:
+            raise RuntimeError(
+                "Ruri.RipperHook.dll loaded, but has no Ruri.RipperHook.BlenderBridge.RipperBlenderBridge type -- "
+                "rebuild Source/Ruri.RipperHook/Ruri.RipperHook.csproj against the latest source.")
+        _bridge_type = _StaticTypeProxy(bridge_type)
+        # Every decoder beyond the kernel's own -- the Unreal one is the module today --
+        # is declared by its build in Modules/*.module beside the kernel, because kernel
+        # and modules build into one folder. Nothing above this line names a decoder, and
+        # no host carries a path to one: what is in the bin dir is what can be read.
+        _bridge_type.LoadDeclaredModules()
+        _bridge_type.SetLocale(_locale)
 
 
 def list_decoders():
