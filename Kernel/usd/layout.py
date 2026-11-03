@@ -16,6 +16,7 @@ STATIC_ASSETS = "arts/environment/sceneassets"
 CHARACTERS = "dynamicassets/gameplay/actors/postmodels/characters"
 CHARACTER_SUFFIX = "_postmodel"
 TEXTURES = "textures"
+ANIMATIONS = "animations"
 
 #: The two file formats a layer is written in, by extension.
 TEXT = "usda"
@@ -44,6 +45,10 @@ class Layout:
         stem = name + CHARACTER_SUFFIX
         folder = os.path.join(self.base, *CHARACTERS.split("/"), stem)
         return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def animation(self, name, clip):
+        folder = os.path.join(self.base, *CHARACTERS.split("/"), name + CHARACTER_SUFFIX, ANIMATIONS)
+        return os.path.join(folder, "{0}.{1}".format(clip, self.extension))
 
     @staticmethod
     def textures(layer_path):

@@ -14,11 +14,11 @@ import time
 import numpy as np
 
 from .. import statement as kernel_statement
-from . import characters, rigs, scene, statics
+from . import animations, characters, rigs, scene, statics
 from .hierarchy import Hierarchy
 from .layout import Layout
 from .materials import TextureStore
-from .names import Namer, file_stem
+from .names import Namer, file_stem, identifier
 from .transforms import move_normals, move_points
 
 
@@ -44,9 +44,11 @@ def _carried(mesh, matrix):
     return moved
 
 
-def export(statement, scene_name, root, product, families, extension, textures=None):
+def export(statement, scene_name, root, product, families, extension, textures=None, performances=None):
     """Write the statement as the tree of layers of ``extension`` under ``root``/assets/``product``. The
-    statement must have been read in the usd basis. Returns a dict of what was written."""
+    statement must have been read in the usd basis. ``performances``, when given, is asked for the clips each new
+    character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's.
+    Returns a dict of what was written."""
     if statement.basis != kernel_statement.USD:
         raise ValueError("a statement is written to USD in the {0} basis, and this one is in {1}.".format(
             kernel_statement.USD, statement.basis))
@@ -77,6 +79,11 @@ def export(statement, scene_name, root, product, families, extension, textures=N
                                                              statement, textures, families),
                                print_key, rig, parts)
             written.append(match)
+            for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
+                made = animations.author(layout.animation(name, file_stem(clip.name)), identifier(clip.name), rig,
+                                         hierarchy, clip)
+                if made is not None:
+                    report.setdefault("animations", []).append(dict(made, character=name, clip=clip.name))
         placed[index] = match
     report["character_layers"] = len(written)
 
