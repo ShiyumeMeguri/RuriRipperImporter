@@ -22,12 +22,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 
 import bpy
 
 from . import linked_twins as _linked_twins
 from . import scratch as _scratch
 from ...Kernel import extensions
+
+#: The suffix Blender gives a datablock whose name is taken.
+_NAME_SUFFIX = re.compile(r"\.\d{3}$")
 
 #: A stack registers ``provider(builder, props) -> bpy.types.Material | None``
 #: and SELF-SELECTS by the material's own shader identity, returning None to
@@ -1452,6 +1456,7 @@ class MaterialBuilder:
         self.options = dict(options or {})
         self._by_key = {}
         self._images = {}
+        self._resident = None
 
     def shader_display_name(self, props):
         """The shader a material names, as the shader asset calls itself. A stack
@@ -1487,10 +1492,15 @@ class MaterialBuilder:
             texture = self.statement.textures.get(guid)
             if texture is None or not texture.bytes:
                 return None
-            cached = _image_from_bytes(texture.image, texture.name or guid,
-                                       "." + texture.container if texture.container else None)
+            data = texture.image
+            name = texture.name or guid
+            cached = self._resident_image(name, data)
             if cached is None:
-                return None
+                cached = _image_from_bytes(data, name, "." + texture.container if texture.container else None)
+                if cached is None:
+                    return None
+                if self._resident is not None:
+                    self._resident.setdefault(name, []).append(cached)
             self._images[guid] = cached
         # Colour space is the TEXTURE's own fact, never the slot's: one image is
         # routinely bound in a normal slot and an emission slot at once, and the
@@ -1515,6 +1525,26 @@ class MaterialBuilder:
             except Exception:
                 pass
         return cached
+
+    def _residents(self):
+        """The document's own packed images by the texture name they were loaded under."""
+        if self._resident is None:
+            self._resident = {}
+            for image in bpy.data.images:
+                if image.library is None and image.packed_file is not None:
+                    self._resident.setdefault(_NAME_SUFFIX.sub("", image.name), []).append(image)
+        return self._resident
+
+    def _resident_image(self, name, data):
+        """The image the document already holds for this texture: one of this name packed from these very bytes,
+        however many loads reached it. The source keeps one copy of an asset whatever references it, and every
+        load of a document is one of those references; a texture of this name with other bytes (another version of
+        it, a fit of it, or another asset that shares its name) is another image."""
+        candidates = self._residents().get(name)
+        if not candidates:
+            return None
+        digest = hashlib.sha1(data).digest()
+        return next((image for image in candidates if hashlib.sha1(image.packed_file.data).digest() == digest), None)
 
     def _build(self, props):
         name = props.name or "Material"
