@@ -78,11 +78,22 @@ CAPABILITY_REWIRES = extensions.point(
     "blender.capability_rewires",
     "Re-answering a built material's environment queries after the scene changed.")
 
+#: ``capability_reads(material) -> frozenset | None``. The kinds of scene content
+#: (see :func:`capability_state`) a built material's environment answers read, as
+#: the stack that built it states them for the graphs of its own generation; None
+#: for any other material, which is then held to every kind. A material is held
+#: only to what its answers read, so a level linked into a film that has a world
+#: of its own is not rewired for that world when its answers read only the lights.
+CAPABILITY_READS = extensions.point(
+    "blender.capability_reads",
+    "Which kinds of scene content a built material's environment answers read.")
+
 #: The scene state a material's environment answers were last built against,
-#: stamped on the material when it is built and whenever it is rewired. A rewire
-#: whose state is the one already built in is skipped: an import states its world
-#: before it builds a single material, so the world-driven rewire that follows
-#: used to rebuild every fulfilment node it had just built (445 s of a 537 s flush).
+#: stamped on the material when it is built and whenever it is rewired: the
+#: digests of the kinds its answers read. A rewire whose state is the one already
+#: built in is skipped: an import states its world before it builds a single
+#: material, so the world-driven rewire that follows used to rebuild every
+#: fulfilment node it had just built (445 s of a 537 s flush).
 CAPABILITY_STATE_PROPERTY = "ruri_capability_state"
 
 #: A whole MODULE rather than one function: post-processing owns scene-level
@@ -262,6 +273,14 @@ def register_capability_rewire(rewire):
 
 def unregister_capability_rewire(rewire):
     CAPABILITY_REWIRES.remove(rewire)
+
+
+def register_capability_reads(reads):
+    CAPABILITY_READS.add(reads)
+
+
+def unregister_capability_reads(reads):
+    CAPABILITY_READS.remove(reads)
 
 
 def register_post_stage(stage):
@@ -600,7 +619,7 @@ def compile_stacks():
             failures.append(str(error))
     state = capability_state(bpy.context.scene)
     for material in compiled:
-        material[CAPABILITY_STATE_PROPERTY] = state
+        stamp_capability_state(material, state)
     declared = {name for provider in LEVEL_GLOBALS for name, (statement, _base) in provider().items()
                 if statement != POST_EXPOSURE_STATEMENT}
     for scene in bpy.data.scenes:
@@ -667,15 +686,39 @@ def carried_light_attributes():
 
 
 def capability_state(scene):
-    """Everything a material's environment answers read from the scene, as one
-    comparable digest: the world's content (the environment is a snapshot of its
-    nodes) and which per-light attributes any light in the file carries (see
-    :func:`carried_light_attributes`). The lights' values are not in it -- the stacks read
-    them through the host's own light loop, live, so placing, turning and colouring
-    lights never rewires a material; only a light that brings an attribute no other
-    light carried does."""
+    """What a material's environment answers can read from the scene, one digest per
+    kind of content: ``world``, the world's content (the environment is a snapshot of
+    its nodes), and ``lights``, which per-light attributes any light in the file
+    carries (see :func:`carried_light_attributes`). The lights' values are in
+    neither -- the stacks read them through the host's own light loop, live, so
+    placing, turning and colouring lights never rewires a material; only a light that
+    brings an attribute no other light carried does."""
     carried = tuple(sorted(carried_light_attributes()))
-    return hashlib.sha1(repr((_world_state(scene.world), carried)).encode("utf-8")).hexdigest()
+    return {"world": hashlib.sha1(repr(_world_state(scene.world)).encode("utf-8")).hexdigest(),
+            "lights": hashlib.sha1(repr(carried).encode("utf-8")).hexdigest()}
+
+
+def _capability_reads(material):
+    for reads in CAPABILITY_READS:
+        stated = reads(material)
+        if stated is not None:
+            return stated
+    return None
+
+
+def stamp_capability_state(material, state):
+    """Stamp ``material`` with the digests of the kinds in ``state`` its answers read
+    (every kind when no stack states what they read)."""
+    reads = _capability_reads(material)
+    material[CAPABILITY_STATE_PROPERTY] = {kind: digest for kind, digest in state.items()
+                                           if reads is None or kind in reads}
+
+
+def _capability_fresh(material, state):
+    stamped = material.get(CAPABILITY_STATE_PROPERTY)
+    if not hasattr(stamped, "to_dict"):
+        return False
+    return all(state.get(kind) == digest for kind, digest in stamped.to_dict().items())
 
 
 def rewire_capabilities(materials=None, force=False):
@@ -687,10 +730,10 @@ def rewire_capabilities(materials=None, force=False):
     pool = list(bpy.data.materials) if materials is None else list(materials)
     rewired = 0
     for material in pool:
-        if material is None or (not force and material.get(CAPABILITY_STATE_PROPERTY) == state):
+        if material is None or (not force and _capability_fresh(material, state)):
             continue
         if any(rewire(material) for rewire in CAPABILITY_REWIRES):
-            material[CAPABILITY_STATE_PROPERTY] = state
+            stamp_capability_state(material, state)
             rewired += 1
     return rewired
 
@@ -1427,7 +1470,7 @@ class MaterialBuilder:
             return made
         made = self._build(stated)
         made[SOURCE_KEY_PROPERTY] = str(key)
-        made[CAPABILITY_STATE_PROPERTY] = capability_state(bpy.context.scene)
+        stamp_capability_state(made, capability_state(bpy.context.scene))
         self._by_key[key] = made
         _announce(made)
         return made

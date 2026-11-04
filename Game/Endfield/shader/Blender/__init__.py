@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(e7110c911f2e0139):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(23d6735a555625a2):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -994,7 +994,7 @@ def _camera_fade(g, light_position):
     d = 相机到灯心,(a, k, b, m) 是灯上宿主照关卡陈述写下的 LIGHT_FADE_PROPERTY(没有这一格的灯读全零 = 不淡出)。
     相机位置 = 着色点 + 视向 × 视距,与灯无关,光循环外只算一次;淡出只随相机与灯心,视口里转镜头当场跟上。
     文件里没有一盏灯带这一格时每盏灯读到的都是全零,淡出恒 1:答常量,逐灯不读属性、不算距离(灯带的参数种类变了由
-    宿主的能力状态重接,见 _reads_scene_state)。"""
+    宿主的能力状态重接,见 _scene_reads)。"""
     if _host().LIGHT_FADE_PROPERTY not in _host().carried_light_attributes():
         return 1.0
     fade = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_FADE_PROPERTY)
@@ -1572,6 +1572,9 @@ def _image_row_value(row_name, image):
 
 
 _LINKED = {}
+
+# 本会话已经报过的别代材质:(所在文件, 那一代的 stamp),每样只报一次。
+_OTHER_GENERATIONS = set()
 
 # 一次 append 能把哪几类数据块一并带进来:模板组嵌套的组、组里图节点绑的图、几何组里指到的材质与物体。
 _APPENDED_KINDS = ('node_groups', 'images', 'materials', 'textures', 'objects', 'collections', 'meshes', 'texts')
@@ -3352,27 +3355,65 @@ class Stack:
         return list(replaced.values()) + [twin for _mat, twin in twins]
 
     @staticmethod
-    def _reads_scene_state(spec):
-        """部件的兑现面里有答案按场景状态建的能力:读世界内容的,或按文件里的灯带不带某一格属性答常量的。别的能力两样都不看,
-        场景状态变了这张材质一个节点都不用碰。"""
+    def _scene_reads(spec):
+        """部件的兑现面按场景里的哪几样内容建答案:读世界内容的能力读 world,按文件里的灯带不带某一格属性答常量的读 lights。
+        两样都不读的部件,场景状态怎么变这张材质一个节点都不用碰。"""
         rows = list(spec['capabilities'])
         for zone in spec['zones']:
             rows.extend(zone['capabilities'])
-        return any(row['cap'] in WORLD_READING_CAPS or row['cap'] in LIGHT_STATE_READING_CAPS for row in rows)
+        reads = set()
+        for row in rows:
+            if row['cap'] in WORLD_READING_CAPS:
+                reads.add('world')
+            if row['cap'] in LIGHT_STATE_READING_CAPS:
+                reads.add('lights')
+        return frozenset(reads)
+
+    def _generations(self, mat):
+        """这张材质的图由哪几代编出来:树里本栈组实例指着的模板组上烙的 stamp。"""
+        return {node.node_tree.get('ruri_stamp') for node in mat.node_tree.nodes
+                if node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
+                and node.node_tree.get('ruri_stamp') is not None}
+
+    def _own_compiled(self, mat):
+        """本栈这一代编出的完整材质的部件名,别的一律 None。能力表(割点、询问口、结果叶)是这一代的,只对这一代的图成立;
+        别代的图照它那一代的答案画,换代是显式的更新,所以这里认出来就大声记一笔(每个文件每代一次),不拿这一代的表去套。"""
+        part = mat.get('ruri_uber_part')
+        if part is None or part not in self.m['parts'] or mat.node_tree is None:
+            return None
+        if mat.get('ruri_uber_stack') != self.PANEL_KEY:
+            return None
+        if not self._compiled(mat):
+            return None
+        generations = self._generations(mat)
+        if generations != {self.STAMP}:
+            seen = (mat.library.filepath if mat.library is not None else '', tuple(sorted(generations)))
+            if seen not in _OTHER_GENERATIONS:
+                _OTHER_GENERATIONS.add(seen)
+                print('[ruri-cap] {0}的材质是别代编的(stamp {1},本代 {2}),如 {3}:照它那一代的答案画、不重接;'
+                      '更新那份文件的着色器后才按当下场景重接'.format(
+                          seen[0] or '本文件', '/'.join(seen[1]), self.STAMP, mat.name), flush=True)
+            return None
+        return part
+
+    def capability_reads(self, mat):
+        """宿主问这张材质的兑现面读场景里的哪几样(world、lights):宿主只拿这几样的摘要判它过没过期。不是本栈这一代编的
+        完整材质答 None,宿主按全部几样判。"""
+        part = self._own_compiled(mat)
+        if part is None:
+            return None
+        return self._scene_reads(self.part(part))
 
     def rewire_capabilities(self, mat):
         """重接兑现面(换世界、灯带的参数种类变了之后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。部件的答案不读
-        场景状态就没有可重接的,所以工程用自己的世界链接别的文件的关卡时,开文件不用把链接进来的材质整张重接。"""
-        part = mat.get('ruri_uber_part')
-        if part is None or part not in self.m['parts'] or mat.node_tree is None:
-            return False
-        if mat.get('ruri_uber_stack') != self.PANEL_KEY:
-            return False
-        if not self._compiled(mat):
+        场景状态就没有可重接的;读哪几样宿主照 capability_reads 只比那几样,所以工程用自己的世界链接别的文件的关卡时,
+        只读灯带的关卡材质开文件不重接。只重接本栈这一代编的图(见 _own_compiled)。"""
+        part = self._own_compiled(mat)
+        if part is None:
             # 兑现面是编出来的图的一部分:图还不完整的材质(模板组没存进文件)没有可重接的,编它时按当下的场景接。
             return False
         spec = self.part(part)
-        if not self._reads_scene_state(spec):
+        if not self._scene_reads(spec):
             return False
         nt = mat.node_tree
         # 重接期间把出口摘下来,收尾再接回:宿主的灯链接校验在每次改链时跑,并且用上一次的判定
@@ -6657,6 +6698,7 @@ class Stack:
         host.register_camera_stage(self.push_screen_size)
         host.register_rig_stage(self.apply_rig_basis)
         host.register_capability_rewire(self.rewire_capabilities)
+        host.register_capability_reads(self.capability_reads)
         getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
         getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
         host.register_scene_time(self.scene_time_scales)
@@ -6713,6 +6755,7 @@ class Stack:
         host.unregister_camera_stage(self.push_screen_size)
         host.unregister_rig_stage(self.apply_rig_basis)
         host.unregister_capability_rewire(self.rewire_capabilities)
+        host.unregister_capability_reads(self.capability_reads)
         getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
         getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
         host.unregister_scene_time(self.scene_time_scales)
