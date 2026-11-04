@@ -649,12 +649,33 @@ def _world_state(world):
     return tuple(sorted(nodes, key=repr)), tuple(sorted(links))
 
 
+def carried_light_attributes():
+    """The per-light attributes the stacks read that some light object in the file (or its light data) carries: the
+    fade and the source's parameter vectors, as :mod:`light_parameters` stamps them. Every light reads an attribute it
+    does not carry as zeros, so when no light carries one the stacks answer it as that constant instead of reading it
+    per light."""
+    from . import light_parameters
+    names = [LIGHT_FADE_PROPERTY] + light_parameters.attribute_names()
+    carried = set()
+    for obj in bpy.data.objects:
+        if obj.type != "LIGHT":
+            continue
+        for name in names:
+            if name not in carried and (name in obj.keys() or name in obj.data.keys()):
+                carried.add(name)
+    return frozenset(carried)
+
+
 def capability_state(scene):
     """Everything a material's environment answers read from the scene, as one
     comparable digest: the world's content (the environment is a snapshot of its
-    nodes). Lights are not in it -- the stacks read them through the host's own light
-    loop, live."""
-    return hashlib.sha1(repr(_world_state(scene.world)).encode("utf-8")).hexdigest()
+    nodes) and which per-light attributes any light in the file carries (see
+    :func:`carried_light_attributes`). The lights' values are not in it -- the stacks read
+    them through the host's own light loop, live, so placing, turning and colouring
+    lights never rewires a material; only a light that brings an attribute no other
+    light carried does."""
+    carried = tuple(sorted(carried_light_attributes()))
+    return hashlib.sha1(repr((_world_state(scene.world), carried)).encode("utf-8")).hexdigest()
 
 
 def rewire_capabilities(materials=None, force=False):
