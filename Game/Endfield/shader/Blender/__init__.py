@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(23d6735a555625a2):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(e6e1b19fd8f5bded):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1388,9 +1388,7 @@ def _cap_opaque_distance_behind(g, query, ctx):
     material = ctx.get('material')
     if material is not None and material.surface_render_method == 'BLENDED':
         position = query.get('position')
-        if position is None:
-            return None
-        origin = g.u2b(position)
+        origin = g.geo().outputs['Position'] if position is None else g.u2b(position)
         camera = g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT')
         ray = g.vmath('NORMALIZE', g.vmath('SUBTRACT', origin, camera))
         raycast = g._nd('ShaderNodeRaycast')
@@ -3217,6 +3215,9 @@ class Stack:
             'ruri_uber_shader_guid': str(ref.get('guid', '')) if isinstance(ref, dict) else '',
             'ruri_uber_shader': self._shader_name(builder, props) or '',
         }
+        resident = self._resident_material(props, record)
+        if resident is not None:
+            return resident
         mat = self._compile(name, record)
         # 同名旧材质只改名让位,不删:宿主缓存攥着数据块,删了 = 悬垂指针 ReferenceError。
         stale = bpy.data.materials.get(name)
@@ -3224,6 +3225,24 @@ class Stack:
             stale.name = name + '.old'
             mat.name = name
         return mat
+
+    def _resident_material(self, props, record):
+        """文件里已经有的这张材质:宿主烙着同一来源键、本栈这一代编的完整图、记录与这次陈述出的逐格相等(随绑定真图走的
+        颜色行只比陈述里有的那几列)。真源里一份材质资产不论被多少预制体引用都只有一份,文件的每一次导入都是其中一次引用;
+        记录不等(口被拧过、游戏换了版本)或别代编的都不是它,照常新编,同名的让位。"""
+        key = str(getattr(props, 'key', '') or '')
+        if not key:
+            return None
+        colors = record['ruri_uber_colors']
+        for mat in bpy.data.materials:
+            if mat.library is not None or mat.get(_host().SOURCE_KEY_PROPERTY) != key or self._own_compiled(mat) is None:
+                continue
+            held = _plain(mat.get('ruri_uber_colors')) or {}
+            if any(_plain(mat.get(field)) != value for field, value in record.items() if field != 'ruri_uber_colors'):
+                continue
+            if all(held.get(name) == value for name, value in colors.items()):
+                return mat
+        return None
 
     def _compile(self, name, record):
         """一张材质按它的记录编出来:模板拷贝 + 贴图 + 参数常量。导入、append 进来还没有图的材质、换代走同一条。
