@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(df2f614de48ec50d):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(616325cbdcfac2b1):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -992,7 +992,11 @@ def _light_builtin(g, name):
 def _camera_fade(g, light_position):
     """源管线的灯表按镜头距离给这盏灯的那一份淡出,不画的灯为 0:saturate(1 + a - d²k) · saturate(1 + d²m - b),
     d = 相机到灯心,(a, k, b, m) 是灯上宿主照关卡陈述写下的 LIGHT_FADE_PROPERTY(没有这一格的灯读全零 = 不淡出)。
-    相机位置 = 着色点 + 视向 × 视距,与灯无关,光循环外只算一次;淡出只随相机与灯心,视口里转镜头当场跟上。"""
+    相机位置 = 着色点 + 视向 × 视距,与灯无关,光循环外只算一次;淡出只随相机与灯心,视口里转镜头当场跟上。
+    文件里没有一盏灯带这一格时每盏灯读到的都是全零,淡出恒 1:答常量,逐灯不读属性、不算距离(灯带的参数种类变了由
+    宿主的能力状态重接,见 _reads_scene_state)。"""
+    if _host().LIGHT_FADE_PROPERTY not in _host().carried_light_attributes():
+        return 1.0
     fade = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_FADE_PROPERTY)
     a, k, b = g.sep(fade.outputs['Vector'])
     m = fade.outputs['Alpha']
@@ -1312,12 +1316,20 @@ def _cap_punctual_light(g, query, ctx):
 def _cap_source_light_parameters(g, query, ctx):
     """第 index 盏灯带着的源管线逐灯参数:宿主光循环这一圈的灯上、宿主照关卡陈述写下的那几个向量属性,
     index 恒 0。每个向量是 LIGHT 型属性 LIGHT_PARAMETER_ATTRIBUTE.format(结果叶),宿主从 light_parameter_attributes()
-    取同一份名字去写;全零的向量宿主不写,读回来一样是全零(结构体按「全零 = 宿主的一盏普通灯」编码)。"""
+    取同一份名字去写;全零的向量宿主不写,读回来一样是全零(结构体按「全零 = 宿主的一盏普通灯」编码)。
+    文件里没有一盏灯带的那个向量,每盏灯读到的都是全零:答常量零,逐灯不读属性,依赖它的盒、管光、cookie 那几支
+    在着色器编译期整段折掉。"""
     _ = query
     results = ctx['results']
+    carried = _host().carried_light_attributes()
     answer = {}
     for leaf, vector in results.items():
         if not vector:
+            continue
+        if LIGHT_PARAMETER_ATTRIBUTE.format(leaf) not in carried:
+            answer[leaf] = (0.0, 0.0, 0.0)
+            if leaf + '_w' in results:
+                answer[leaf + '_w'] = 0.0
             continue
         node = _find_native_node(g, 'ShaderNodeAttribute', LIGHT_PARAMETER_ATTRIBUTE.format(leaf))
         answer[leaf] = node.outputs['Vector']
@@ -1510,6 +1522,9 @@ CAP_BUILDERS = {
 
 # 答案读世界内容的能力(见 _world_sample):部件问了它们,换世界才要重接兑现面。
 WORLD_READING_CAPS = frozenset(('AmbientIrradiance', 'SpecularRadiance'))
+
+# 答案按文件里的灯带不带某一格属性建的能力(见 _camera_fade、_cap_source_light_parameters):灯带的参数种类变了才要重接。
+LIGHT_STATE_READING_CAPS = frozenset(('MainLight', 'AdditionalLight', 'PunctualLight', 'SourceLightParameters'))
 
 # 能力身份 → 建图器(几何节点一条腿,顶点腿):(树, 场景, Y/Z 对调) → {叶: 接口 socket | 常量 | None(这一叶答不出)};
 # 整个返回 None = 本场景答不出。表里查不到 = 什么都不接,口停在能力自声明缺席值上并大声记账。
@@ -3337,16 +3352,17 @@ class Stack:
         return list(replaced.values()) + [twin for _mat, twin in twins]
 
     @staticmethod
-    def _reads_world(spec):
-        """部件的兑现面里有答案读世界内容的能力:别的能力不看世界,换世界时这张材质一个节点都不用碰。"""
+    def _reads_scene_state(spec):
+        """部件的兑现面里有答案按场景状态建的能力:读世界内容的,或按文件里的灯带不带某一格属性答常量的。别的能力两样都不看,
+        场景状态变了这张材质一个节点都不用碰。"""
         rows = list(spec['capabilities'])
         for zone in spec['zones']:
             rows.extend(zone['capabilities'])
-        return any(row['cap'] in WORLD_READING_CAPS for row in rows)
+        return any(row['cap'] in WORLD_READING_CAPS or row['cap'] in LIGHT_STATE_READING_CAPS for row in rows)
 
     def rewire_capabilities(self, mat):
-        """重接兑现面(换世界后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。部件的答案不读世界就没有可重接的,
-        所以工程用自己的世界链接别的文件的关卡时,开文件不用把链接进来的材质整张重接。"""
+        """重接兑现面(换世界、灯带的参数种类变了之后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。部件的答案不读
+        场景状态就没有可重接的,所以工程用自己的世界链接别的文件的关卡时,开文件不用把链接进来的材质整张重接。"""
         part = mat.get('ruri_uber_part')
         if part is None or part not in self.m['parts'] or mat.node_tree is None:
             return False
@@ -3356,7 +3372,7 @@ class Stack:
             # 兑现面是编出来的图的一部分:图还不完整的材质(模板组没存进文件)没有可重接的,编它时按当下的场景接。
             return False
         spec = self.part(part)
-        if not self._reads_world(spec):
+        if not self._reads_scene_state(spec):
             return False
         nt = mat.node_tree
         # 重接期间把出口摘下来,收尾再接回:宿主的灯链接校验在每次改链时跑,并且用上一次的判定
