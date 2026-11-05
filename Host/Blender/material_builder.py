@@ -94,7 +94,7 @@ CAPABILITY_READS = extensions.point(
 
 #: The scene state a material's environment answers were last built against,
 #: stamped on the material when it is built and whenever it is rewired: the
-#: digests of the kinds its answers read. A rewire whose state is the one already
+#: state of each kind its answers read. A rewire whose state is the one already
 #: built in is skipped: an import states its world before it builds a single
 #: material, so the world-driven rewire that follows used to rebuild every
 #: fulfilment node it had just built (445 s of a 537 s flush).
@@ -696,16 +696,16 @@ def carried_light_attributes():
 
 
 def capability_state(scene):
-    """What a material's environment answers can read from the scene, one digest per
-    kind of content: ``world``, the world's content (the environment is a snapshot of
-    its nodes), and ``lights``, which per-light attributes any light in the file
-    carries (see :func:`carried_light_attributes`). The lights' values are in
-    neither -- the stacks read them through the host's own light loop, live, so
-    placing, turning and colouring lights never rewires a material; only a light that
-    brings an attribute no other light carried does."""
-    carried = tuple(sorted(carried_light_attributes()))
+    """What a material's environment answers can read from the scene, per kind of
+    content: ``world``, a digest of the world's content (the environment is a
+    snapshot of its nodes), and ``lights``, the per-light attributes any light in the
+    file carries (see :func:`carried_light_attributes`), one name per line. The
+    lights' values are in neither -- the stacks read them through the host's own
+    light loop, live, so placing, turning and colouring lights never rewires a
+    material; only a light that brings an attribute no other light carried does
+    (see :func:`_capability_fresh`)."""
     return {"world": hashlib.sha1(repr(_world_state(scene.world)).encode("utf-8")).hexdigest(),
-            "lights": hashlib.sha1(repr(carried).encode("utf-8")).hexdigest()}
+            "lights": "\n".join(sorted(carried_light_attributes()))}
 
 
 def _capability_reads(material):
@@ -717,18 +717,33 @@ def _capability_reads(material):
 
 
 def stamp_capability_state(material, state):
-    """Stamp ``material`` with the digests of the kinds in ``state`` its answers read
+    """Stamp ``material`` with the state of the kinds in ``state`` its answers read
     (every kind when no stack states what they read)."""
     reads = _capability_reads(material)
-    material[CAPABILITY_STATE_PROPERTY] = {kind: digest for kind, digest in state.items()
+    material[CAPABILITY_STATE_PROPERTY] = {kind: stated for kind, stated in state.items()
                                            if reads is None or kind in reads}
 
 
 def _capability_fresh(material, state):
+    """Whether ``material``'s answers still say what the scene states. A world answer
+    is a snapshot, so the world must be the one it was built against. A light answer
+    reads per light every attribute some light carried when it was built and answers
+    the rest as the zeros a light without them reads, so it stays true while the
+    file's lights carry nothing beyond that: a film whose lights carry fewer
+    attributes than the level it links draws the level's materials as they are."""
     stamped = material.get(CAPABILITY_STATE_PROPERTY)
     if not hasattr(stamped, "to_dict"):
         return False
-    return all(state.get(kind) == digest for kind, digest in stamped.to_dict().items())
+    for kind, built in stamped.to_dict().items():
+        current = state.get(kind)
+        if current is None:
+            return False
+        if kind == "lights":
+            if not set(filter(None, current.split("\n"))) <= set(filter(None, str(built).split("\n"))):
+                return False
+        elif current != built:
+            return False
+    return True
 
 
 def rewire_capabilities(materials=None, force=False):
