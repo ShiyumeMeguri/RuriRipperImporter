@@ -528,7 +528,7 @@ class Texture:
     Nothing is remembered here -- an image lands in the document and the bytes
     are done -- so a scene costs one image resident rather than all of them."""
 
-    __slots__ = ("key", "name", "srgb", "container", "bytes", "wrap_u", "wrap_v", "filter", "_statement")
+    __slots__ = ("key", "name", "srgb", "container", "format", "bytes", "wrap_u", "wrap_v", "filter", "_statement")
 
     def __init__(self, row, statement):
         self.key = row["texture"]
@@ -544,6 +544,9 @@ class Texture:
         self.wrap_v = row["wrap_v"]
         self.filter = row["filter"]
         self.container = row["container"]
+        #: The pixel format the source stores it in, by the source engine's own
+        #: name; empty where the source hands its pixels over already decoded.
+        self.format = row["format"]
         #: How many bytes its pixels are, stated without fetching them.
         self.bytes = int(row["bytes"])
         self._statement = statement
