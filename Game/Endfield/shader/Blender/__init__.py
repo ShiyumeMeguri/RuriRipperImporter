@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(e6e1b19fd8f5bded):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(128452493845def5):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -989,6 +989,18 @@ def _light_builtin(g, name):
     return _find_native_node(g, 'ShaderNodeAttribute', name).outputs['Alpha']
 
 
+def _light_range(g):
+    """这一圈灯在源管线里的范围。宿主在源管线的着色照不到任何东西之处剔除这盏灯(剔除盒最远的角与范围取近者,
+    再放宽到宿主光循环的阈值之外),影响距离 cutoff_distance 就设在那里,范围比它大的那一截记在灯的
+    LIGHT_RANGE_EXCESS_PROPERTY 上(四个分量同值,没有这一格的灯读零 = 范围就是影响距离);文件里没有一盏灯带这一格时
+    答影响距离本身,逐灯不读属性。"""
+    cutoff = _light_builtin(g, 'cutoff_distance')
+    if _host().LIGHT_RANGE_EXCESS_PROPERTY not in _host().carried_light_attributes():
+        return cutoff
+    excess = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_RANGE_EXCESS_PROPERTY).outputs['Alpha']
+    return g.math('ADD', cutoff, excess)
+
+
 def _camera_fade(g, light_position):
     """源管线的灯表按镜头距离给这盏灯的那一份淡出,不画的灯为 0:saturate(1 + a - d²k) · saturate(1 + d²m - b),
     d = 相机到灯心,(a, k, b, m) 是灯上宿主照关卡陈述写下的 LIGHT_FADE_PROPERTY(没有这一格的灯读全零 = 不淡出)。
@@ -1048,13 +1060,23 @@ def _cone_ramp(g, position):
 
 
 def _urp_attenuation(g, position):
-    """URP 附加光的衰减:截止窗口 × 锥斜坡² / max(d², HALF_MIN)(Lighting.hlsl 的 DistanceAttenuation × AngleAttenuation)。
-    原生 Mask = 窗口 × smoothstep(t) = 窗口 × t²(3 - 2t),除以 (3 - 2t) 就是窗口 × t²;方向光 Mask、t、Distance 恒 1,答 1。"""
+    """URP 附加光的衰减:截止窗口 × 锥斜坡² / max(d², HALF_MIN)(Lighting.hlsl 的 DistanceAttenuation × AngleAttenuation),
+    截止窗口 saturate(1 - (d²/范围²)²)²。原生 Mask = 影响窗口 × smoothstep(t) = 影响窗口 × t²(3 - 2t),影响距离就是范围时
+    影响窗口即截止窗口,除以 (3 - 2t) 就是窗口 × t²;文件里有灯带 LIGHT_RANGE_EXCESS_PROPERTY 时宿主可能在范围之内就剔除
+    (见 _light_range),窗口改按范围自己算、乘锥斜坡的平方。方向光 Mask、t、Distance 恒 1,范围无穷,答 1。"""
     evaluation = _light_evaluation(g, position)
     distance = evaluation.outputs['Distance']
-    return g.math('DIVIDE', evaluation.outputs['Mask'],
-                  g.math('MULTIPLY', g.math('MULTIPLY_ADD', _cone_ramp(g, position), -2.0, 3.0),
-                         g.math('MAXIMUM', g.math('MULTIPLY', distance, distance), HALF_MIN)))
+    distance2 = g.math('MULTIPLY', distance, distance)
+    falloff = g.math('MAXIMUM', distance2, HALF_MIN)
+    ramp = _cone_ramp(g, position)
+    if _host().LIGHT_RANGE_EXCESS_PROPERTY not in _host().carried_light_attributes():
+        return g.math('DIVIDE', evaluation.outputs['Mask'],
+                      g.math('MULTIPLY', g.math('MULTIPLY_ADD', ramp, -2.0, 3.0), falloff))
+    reach = _light_range(g)
+    factor = g.math('DIVIDE', distance2, g.math('MULTIPLY', reach, reach))
+    window = g.math('SUBTRACT', 1.0, g.math('MULTIPLY', factor, factor), clamp=True)
+    return g.math('DIVIDE', g.math('MULTIPLY', g.math('MULTIPLY', window, window), g.math('MULTIPLY', ramp, ramp)),
+                  falloff)
 
 
 def _light_axes(g):
@@ -1293,7 +1315,7 @@ def _cap_additional_light_count(g, query, ctx):
 
 def _cap_punctual_light(g, query, ctx):
     """第 index 盏点光/聚光本身:宿主光循环这一圈的灯,index 恒 0(盏数恒 1,见 _cap_additional_light_count)。
-    灯心、颜色、范围(截止距离)、锥斜坡(在询问给的位置上)与是不是聚光全是原生量,三根轴是导入时烙下的朝向
+    灯心、颜色、锥斜坡(在询问给的位置上)与是不是聚光全是原生量,范围见 _light_range,三根轴是导入时烙下的朝向
     (见 _light_axes);源内核拿它们按自己的衰减窗口、锥角平方、管光与 cookie 去算。镜面倍率答 1,与 URP 宿主同答:
     原生光循环读不到灯的 Specular 滑杆,它只乘在 Light Accumulation 的光泽口上。方向光那一圈颜色乘零 —— 它不是点光,
     贡献走主光链。"""
@@ -1303,7 +1325,7 @@ def _cap_punctual_light(g, query, ctx):
     return {
         'position': g.b2u(light['position'], point=True),
         'color': g.vmath('SCALE', light['color'], s=g.math('SUBTRACT', 1.0, _light_builtin(g, 'is_sun'))),
-        'range': _light_builtin(g, 'cutoff_distance'),
+        'range': _light_range(g),
         'cone': _cone_ramp(g, query.get('position')),
         'spot': _light_builtin(g, 'is_spot'),
         'right': g.b2u(right),
