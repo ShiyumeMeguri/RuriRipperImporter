@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(128452493845def5):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(aa4c3a393ca60962):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -2396,6 +2396,40 @@ class Stack:
         if mat.use_backface_culling_shadow != culls_back:
             mat.use_backface_culling_shadow = culls_back
 
+    def _declare_camera_pass(self, mat):
+        """真源上屏那一趟的 Cull 是光栅化状态:剔背面或不剔时,宿主原生的 use_backface_culling 就是它(与图里 Backfacing
+        读的是同一个 gl_FrontFacing),用不着经透射把那一面抹掉;经透射抹的背面照样进双面 G-buffer 子通道,深度恰好等于正面
+        处会写下覆盖率 0 的黑闭包(eevee_pipeline.cc:734 的 DEPTH_EQUAL)。表面混合节点的透射口一连上 Transparent BSDF,宿主
+        就把整张材质记成透明(node_shader_bsdf_transparent.cc:33),预通道从此用不上缺省深度着色器(eevee_shader.cc:1513),
+        每张材质多编一到两遍整棵树。所以只有真要靠图来透的材质才连它:带描边壳的 part(壳的正面要逐片元剔)、剔正面的(原生只能剔
+        背面)、抖动 alpha 的 part、混合的、开了裁切的、阴影趟要跑图的(见 _declare_shadow_pass,须先于本函数)。其余的断开
+        透射、交给原生剔除;覆盖率那一支照旧乘进闭包,栅格化下来的片元覆盖率恒为 1。"""
+        nt = mat.node_tree
+        if nt is None:
+            return
+        seat = next((node for node in nt.nodes if node.label == self.SURFACE_MIX_LABEL), None)
+        through = next((node for node in nt.nodes if node.label == self.SURFACE_THROUGH_LABEL), None)
+        part = mat.get('ruri_uber_part', '')
+        meta = self.PART_META.get(part)
+        if seat is None or through is None or meta is None or part not in self.m['parts']:
+            return
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        cull = self._record_cull(meta, floats, mat.name)
+        clips = self.SHADOW_CLIP_SWITCHES is None or any(
+            float(self._record_float(floats, switch) or 0.0) > 0.5 for switch in self.SHADOW_CLIP_SWITCHES)
+        graph_cull = bool(self.part(part).get('outline') or meta.get('stochastic_alpha') or clips or cull == 1.0
+                          or mat.surface_render_method == 'BLENDED' or mat.use_transparent_shadow)
+        transmission = seat.inputs[0]
+        linked = any(link.from_node == through for link in transmission.links)
+        if graph_cull and not linked:
+            nt.links.new(through.outputs[0], transmission)
+        elif not graph_cull and linked:
+            for link in list(transmission.links):
+                nt.links.remove(link)
+        culls_back = not graph_cull and cull == 2.0
+        if mat.use_backface_culling != culls_back:
+            mat.use_backface_culling = culls_back
+
     def build_material(self, mat, part=None, opaque=True, blend=None, cull=2.0, images=None):
         part = part or self.DEFAULT_PART
         spec = self.part(part)
@@ -2509,6 +2543,7 @@ class Stack:
                 coverage = g.math('MULTIPLY', coverage, clip_sock)
             coverage = self._coverage(g, coverage)
             through = g._nd('ShaderNodeBsdfTransparent')
+            through.label = self.SURFACE_THROUGH_LABEL
             g._set(through.inputs['Color'], g.vmath('SUBTRACT', (1.0, 1.0, 1.0), coverage))
         else:
             # 其余混合按「源 × A + 帧 × T」拆:A 乘进闭包的输入(见 _wire_closure),T 是透射色。
@@ -2516,6 +2551,7 @@ class Stack:
             coverage = keep if clip_sock is None else g.math('MULTIPLY', keep, clip_sock)
             coverage = self._coverage(g, coverage)
             through = g._nd('ShaderNodeBsdfTransparent')
+            through.label = self.SURFACE_THROUGH_LABEL
             g._set(through.inputs['Color'], g.mixv(
                 coverage, (1.0, 1.0, 1.0), self._blend_transmission(g, blend, color_sock, alpha_sock)))
         seat = g._nd('ShaderNodeAddShader')
@@ -2811,6 +2847,8 @@ class Stack:
     STAMP_KEY = 'ruri_uber_stamp'
     SURFACE_MIX_LABEL = 'RuriSurfaceMix'
     SURFACE_COVERAGE_LABEL = 'RuriSurfaceCoverage'
+    # 表面混合节点透射那一口上的 Transparent BSDF(见 _declare_camera_pass)。
+    SURFACE_THROUGH_LABEL = 'RuriSurfaceThrough'
     # 闭包落在表面混合节点(AddShader)的哪一个口。
     CLOSURE_SEAT_KEY = 'ruri_closure_input'
     # 材质兑现时用的真源混合因子 [源, 目标](Unity BlendMode 值);空 = 家族缺省的 over / 不透明。
@@ -3308,6 +3346,7 @@ class Stack:
         mat['ruri_uber_colors'] = colors
         self._declare_shading(mat)
         self._declare_shadow_pass(mat)
+        self._declare_camera_pass(mat)
         self.apply_params(mat)
         print('[ruri-uber] {0}: shader={1} part={2} images={3}'.format(
             name, record['ruri_uber_shader'], part, swapped), flush=True)
@@ -3778,10 +3817,11 @@ class Stack:
         return self._vtx_template_default(template_name, name)
 
     def _vtx_template_default(self, template_name, name):
-        """模板接口上那一格的缺省 —— codegen 说了算的那个值。"""
+        """模板接口上那一格的缺省 —— codegen 说了算的那个值。读文件里这棵树实例化的那张模板组:判断已有的树被拧过
+        没有,参照只能是播种它的那一代;建树取组那条路(self.group)会整套 append、也拒绝别代的文件,判据用不上它。"""
         if not template_name:
             return None
-        for item in self.group(template_name).interface.items_tree:
+        for item in _local_group(template_name).interface.items_tree:
             if item.item_type != 'PANEL' and item.in_out == 'INPUT' and item.name == name:
                 value = getattr(item, 'default_value', None)
                 return tuple(value) if hasattr(value, '__len__') and not isinstance(value, str) else value
@@ -4286,6 +4326,7 @@ class Stack:
         self._remember_inputs(mat)
         self._declare_shading(mat)
         self._declare_shadow_pass(mat)
+        self._declare_camera_pass(mat)
         self._require_budget(mat)
 
     def _vertex_values(self, mat, names):
