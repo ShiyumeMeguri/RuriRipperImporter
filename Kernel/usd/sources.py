@@ -46,7 +46,7 @@ def _light(prim, light):
     _attribute(prim, "ruri:light:type", Sdf.ValueTypeNames.Int, int(light["kind"]))
     _attribute(prim, "ruri:light:color", Sdf.ValueTypeNames.FloatArray,
                Vt.FloatArray([float(component) for component in light["color"]]))
-    for key in ("intensity", "range", "angle", "inner_angle", "width", "height", "volume", "specular"):
+    for key in ("intensity", "range", "reach", "angle", "inner_angle", "width", "height", "volume", "specular"):
         _attribute(prim, "ruri:light:" + _camel(key), Sdf.ValueTypeNames.Float, float(light[key]))
     _attribute(prim, "ruri:light:shadows", Sdf.ValueTypeNames.Bool, bool(light["shadows"]))
     _attribute(prim, "ruri:light:shadowResolution", Sdf.ValueTypeNames.Int, int(light["shadow_resolution"]))

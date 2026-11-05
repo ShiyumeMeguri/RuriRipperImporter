@@ -49,7 +49,9 @@ inverse-square singularity: its falloff is ``1 / (d^2 + 1)``. EEVEE's volume fal
 sphere light of radius ``r``, ``2 / (d^2 + r^2 + d sqrt(d^2 + r^2))``, tends to
 ``1 / (d^2 + 0.75 r^2)``, so a copy of radius ``2 / sqrt(3)`` has the source's far field and a
 finite centre (half again the source's value there). Each such lamp gets that copy, for the
-medium alone, and gives up its own volume share.
+medium alone, and gives up its own volume share. The copy is culled at the lamp's range: EEVEE
+windows a volume's lighting by the cull radius, and the lamp's own may stop short of its range
+where its surface shading does (:func:`light_parameters.cull`).
 
 The grid is the source's: its slices over ``[start, end]`` with its log2 depth distribution
 and one froxel per its pixel tile. The source's slices sit at ``(2^(z/S) - O) / B`` for slice
@@ -67,7 +69,7 @@ import math
 import bpy
 from mathutils import Vector
 
-from . import material_builder, scratch
+from . import light_parameters, material_builder, scratch
 
 #: The custom property on a level's world that keeps the medium's statement as JSON: the level's content, like its
 #: globals and its texel blocks, so a file that holds the world holds the fog. The volume, the lamps' copies and
@@ -332,6 +334,9 @@ def _lamp_copies(scene, medium, receivers, tint):
         share = obj.data.volume_factor
         data = scratch.mark(obj.data.copy())
         data.name = obj.data.name + TWIN_SUFFIX
+        data.cutoff_distance = light_parameters.source_range(obj.data)
+        if material_builder.LIGHT_RANGE_EXCESS_PROPERTY in data:
+            del data[material_builder.LIGHT_RANGE_EXCESS_PROPERTY]
         data.volume_factor = share
         data.diffuse_factor = 0.0
         data.specular_factor = 0.0

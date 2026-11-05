@@ -757,9 +757,10 @@ class _Materialisation:
         power is radiant flux, and EEVEE hands a light loop ``power / (4 pi)`` for them
         (``Light::point_radiance_get``). A sun's strength is already the irradiance it hands
         over. So point and spot power is the intensity times 4 pi, and a sun's is the
-        intensity as stated. The source's lights are points: no radius. What a light scatters
-        into a participating medium is scaled by the volume factor it states, its specular
-        reflections by the specular factor it states.
+        intensity as stated. The source's lights are points: no radius. A point or spot is
+        culled where the source's shading stops lighting anything (:func:`light_parameters.cull`).
+        What a light scatters into a participating medium is scaled by the volume factor it
+        states, its specular reflections by the specular factor it states.
 
         A stated shadow resolution is the texels the source's shadow map spans across the
         light's shadow frustum: a spot's cone, each face of a point light's cube (a 90 degree
@@ -780,8 +781,7 @@ class _Materialisation:
         if kind in ("POINT", "SPOT"):
             light.energy = stated["intensity"] * 4.0 * np.pi
             light.shadow_soft_size = 0.0
-            light.use_custom_distance = True
-            light.cutoff_distance = stated["range"]
+            light_parameters.cull(light, stated)
         else:
             light.energy = stated["intensity"]
         if kind == "SPOT":

@@ -174,14 +174,15 @@ class Node:
         self.rotation = (row["qx"], row["qy"], row["qz"], row["qw"])
         self.scale = (row["sx"], row["sy"], row["sz"])
         #: A light's colour is linear (the reader decodes what the source keeps sRGB-encoded) and
-        #: its intensity the source's own; angles are full cone angles in degrees. ``fade`` is the
-        #: source's camera-distance fade as four coefficients, ``parameters`` what its light list
-        #: carries beyond geometry and radiance, one row of four per vector, in the order the shading
-        #: stack that reads them declares.
+        #: its intensity the source's own; angles are full cone angles in degrees. ``reach`` is how
+        #: far from the light the source's shading lights anything at all, at most its range.
+        #: ``fade`` is the source's camera-distance fade as four coefficients, ``parameters`` what
+        #: its light list carries beyond geometry and radiance, one row of four per vector, in the
+        #: order the shading stack that reads them declares.
         self.light = (None if row["light_kind"] < 0 else {
             "kind": int(row["light_kind"]),
             "color": (row["light_r"], row["light_g"], row["light_b"]),
-            "intensity": row["light_intensity"], "range": row["light_range"],
+            "intensity": row["light_intensity"], "range": row["light_range"], "reach": row["light_reach"],
             "angle": row["light_angle"], "inner_angle": row["light_inner_angle"],
             "width": row["light_width"], "height": row["light_height"],
             "shadows": bool(row["light_shadows"]), "shadow_resolution": int(row["light_shadow_resolution"]),

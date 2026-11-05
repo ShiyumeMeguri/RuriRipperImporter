@@ -172,6 +172,12 @@ LIGHT_PARAMETERS = extensions.point(
 #: reads zeros, no fade. Declared on this registry module because every stack reaches the
 #: host through it.
 LIGHT_FADE_PROPERTY = "ruri_light_fade"
+#: The LIGHT attribute every stack's light template reads a light's source range through where
+#: the host culls the light short of it: how far the range exceeds the light's cutoff distance,
+#: four times over. The host culls a stated light where the source's shading stops lighting
+#: anything (:func:`light_parameters.cull`), so a stack rebuilding the source's window from its
+#: range adds this back; a light culled at its range carries none and reads zero.
+LIGHT_RANGE_EXCESS_PROPERTY = "ruri_light_range_excess"
 #: On an object whose renderer casts with both faces whatever its material's shadow culling says; the stacks' cull read it.
 SHADOW_TWO_SIDED_PROPERTY = "ruri_shadow_two_sided"
 #: On a material such a renderer uses: whether its shadow is culled differs per object, which only its graph can answer.
@@ -674,11 +680,11 @@ def _world_state(world):
 
 def carried_light_attributes():
     """The per-light attributes the stacks read that some light object in the file (or its light data) carries: the
-    fade and the source's parameter vectors, as :mod:`light_parameters` stamps them. Every light reads an attribute it
-    does not carry as zeros, so when no light carries one the stacks answer it as that constant instead of reading it
-    per light."""
+    fade, the range excess and the source's parameter vectors, as :mod:`light_parameters` stamps them. Every light reads
+    an attribute it does not carry as zeros, so when no light carries one the stacks answer it as that constant instead
+    of reading it per light."""
     from . import light_parameters
-    names = [LIGHT_FADE_PROPERTY] + light_parameters.attribute_names()
+    names = [LIGHT_FADE_PROPERTY, LIGHT_RANGE_EXCESS_PROPERTY] + light_parameters.attribute_names()
     carried = set()
     for obj in bpy.data.objects:
         if obj.type != "LIGHT":
