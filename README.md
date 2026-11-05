@@ -7,7 +7,7 @@
 游戏安装目录 ──▶ Ruri-RipperHook(读取器,C#)──▶ RuriRipperImporter(本仓,宿主插件)──▶ Blender / Substance Painter
 ```
 
-基于 Blender **5.1+** 与 Substance Painter **12** 验证。
+基于 Blender **5.3+** 与 Substance Painter **12** 验证。
 
 ---
 
