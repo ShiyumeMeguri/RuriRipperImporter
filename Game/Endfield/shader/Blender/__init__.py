@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(aa4c3a393ca60962):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(6f25f0f0760400c3):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -37,6 +37,8 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RuriManifest
 
 OWN_SAMPLER = 'TEXTURE'
 OVERLAY_OUTPUT_PREFIX = '__overlay__'
+PARAMETER_BUNDLE = 'P'
+PARAMETER_GROUP_ROLE = 'parameters'
 OWN_SAMPLER_LENDER_SEPARATOR = ':'
 OWN_SAMPLER_WRAPS = ('repeat', 'clamp', 'mirror', 'mirroronce')
 OWN_SAMPLER_SOCKETS = ('__wrap_u', '__wrap_v', '__point')
@@ -2019,10 +2021,19 @@ class Stack:
         return taken
 
     @staticmethod
-    def _generated(node):
-        """材质树里本栈建的组实例(各段与循环体):指着带 stamp 的模板组。用户自己拖进来的组不带 stamp,不是。"""
+    def _parameters(node):
+        """材质树里本栈参数组的实例:一张材质的参数口全在它上面一处,各段、循环体与视图段从它出的参数 bundle 里按名拆。
+        认的是模板组上物化时烙的角色,用户自己拖进来的组没有。"""
         return node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None \
-            and node.node_tree.get('ruri_stamp') is not None
+            and node.node_tree.get('ruri_role') == PARAMETER_GROUP_ROLE
+
+    @staticmethod
+    def _feed_parameters(g, instances, bundle):
+        """参数 bundle 接到读参数的每个组实例上;一个参数都不读的段没有这个口。"""
+        for instance in instances:
+            socket = instance.inputs.get(PARAMETER_BUNDLE)
+            if socket is not None:
+                g._set(socket, bundle)
 
     def apply_params(self, mat):
         """材质记录 → 它图里的全部参数口(各段与循环体的组实例、显式 LOD 采样的纹素域尺寸),值写成常量:宿主内联
@@ -2039,7 +2050,7 @@ class Stack:
         values = matrix.ravel()
         index = self._param_index(part)
         for node in tree.nodes:
-            if self._generated(node):
+            if self._parameters(node):
                 width, destinations, sources, _sockets = self._param_targets(node, part)
                 if not len(destinations):
                     continue
@@ -2260,7 +2271,7 @@ class Stack:
         (1/宽, 1/高, 宽, 高) 按「值 - 缺省」写成视图层属性,组里读回再加缺省。"""
         return {name: [float(value) for value in base] for name, base in (self.texel_sizes or {}).items()}
 
-    def _wire_zone(self, g, insts, zone, images, inst_sink, part, ctx):
+    def _wire_zone(self, g, insts, zone, images, inst_sink, part, ctx, parameters):
         feed = insts[zone['depth']]
         heads = insts[zone['depth'] + 1:]
         zin = g._nd('GeometryNodeRepeatInput')
@@ -2291,6 +2302,7 @@ class Stack:
                 out = feed.outputs.get(zone['sock'] + '_r_' + rname)
                 if sock is not None and out is not None:
                     g._set(sock, out)
+        self._feed_parameters(g, binsts, parameters)
         self._wire_crossings(g, binsts, zone['body_crossings'])
         for c in zone['capabilities']:
             self._wire_capability(g, binsts, c, ctx)
@@ -2448,6 +2460,12 @@ class Stack:
             grp.node_tree = self.group(name)
             grp.width = 320
             insts.append(grp)
+        # 参数组:这张材质的参数只住在它上面,出一枚 bundle 给读参数的每个段、循环体与视图段。
+        holder = g._nd('ShaderNodeGroup')
+        holder.node_tree = self.group(spec['parameters'])
+        holder.width = 320
+        parameters = holder.outputs[PARAMETER_BUNDLE]
+        self._feed_parameters(g, insts, parameters)
         geo = g.geo()
         tc = g.texco()
         tan_ws, tan_w = g.tbn()
@@ -2503,7 +2521,7 @@ class Stack:
         for c in spec['capabilities']:
             self._wire_capability(g, insts, c, {'material': mat})
         for z in spec['zones']:
-            self._wire_zone(g, insts, z, images, all_insts, part, {'material': mat})
+            self._wire_zone(g, insts, z, images, all_insts, part, {'material': mat}, parameters)
         if anchor is not None:
             nt.nodes.active = anchor
             anchor.select = True
@@ -2514,7 +2532,7 @@ class Stack:
         clip_sock = self._final_socket(insts, finals, '__clip')
         cull_fac = self._cull_transparency(g, cull, olattr.outputs['Fac'])
         outp = g._nd('ShaderNodeOutputMaterial')
-        self._wire_outline(g, mat, part, spec, images, olattr.outputs['Fac'], outp)
+        self._wire_outline(g, mat, part, spec, images, olattr.outputs['Fac'], outp, parameters)
         mat[self.BLEND_KEY] = list(blend) if blend is not None else []
         if blend in MULTIPLY_BLENDS:
             # 乘法帧(真源的 Blend Zero SrcColor):内核终色**就是乘数**,这一趟没有任何受光项
@@ -2599,7 +2617,7 @@ class Stack:
                 return layer.name
         return ''
 
-    def _wire_outline(self, g, mat, part, spec, images, shell, output):
+    def _wire_outline(self, g, mat, part, spec, images, shell, output, parameters):
         """描边视图段:真源描边趟的顶点入口落在材质的位移出口上,宿主在顶点着色阶段逐视图求值 —— 视矩阵是正在画的那个
         视图的,投影与像素数是宿主陈述在这个物体上的那个视图的。转视角只动 GPU,几何树一次都不重算。
 
@@ -2637,6 +2655,7 @@ class Stack:
                 sock = grp.inputs.get(name)
                 if sock is not None:
                     g._set(sock, inside[name])
+        self._feed_parameters(g, insts, parameters)
         self._wire_crossings(g, insts, view['crossings'])
         for fetch in view['fetches']:
             self._wire_fetch(g, part, insts, fetch, images.get(fetch['slot']) if images else None, images)
@@ -4113,7 +4132,7 @@ class Stack:
         if material.node_tree is not None and part in self.m['parts']:
             values = self._record_matrix(material).ravel()
             for node in material.node_tree.nodes:
-                if self._generated(node):
+                if self._parameters(node):
                     _width, _destinations, sources, _sockets = self._param_targets(node, part)
                     lanes[node.as_pointer()] = values[sources].astype(np.float32)
         return {'record': self._record_values(material), 'lanes': lanes}
@@ -4153,7 +4172,7 @@ class Stack:
         lanes = {}
         if material.node_tree is not None and part in self.m['parts']:
             for node in material.node_tree.nodes:
-                if self._generated(node):
+                if self._parameters(node):
                     width, destinations, _sources, _sockets = self._param_targets(node, part)
                     flat = np.empty(width, dtype=np.float32)
                     node.inputs.foreach_get('default_value', flat)
@@ -4190,7 +4209,7 @@ class Stack:
         linear = None
         stmap = None
         for node in material.node_tree.nodes:
-            if self._generated(node):
+            if self._parameters(node):
                 seen = lanes.get(node.as_pointer())
                 if seen is None:
                     continue
@@ -4293,7 +4312,7 @@ class Stack:
             wanted = np.array(sorted(index[name] for name in names if name in index), dtype=np.int64)
             st_row = self.ST_SLOT + '_ST'
             for node in tree.nodes:
-                if self._generated(node):
+                if self._parameters(node):
                     width, destinations, sources, _sockets = self._param_targets(node, part)
                     chosen = np.isin(sources // 4, wanted)
                     if not chosen.any():
