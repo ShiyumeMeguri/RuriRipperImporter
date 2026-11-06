@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(4f292747b4c18fd2):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(ef3a02e937180437):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -2034,7 +2034,7 @@ class Stack:
     # ---- 取模板面(产物即库;缺组响亮拒绝,零现场重建退路) ----
 
     def group(self, name):
-        fetch = _kept_group if self.post is None and self.sky is None else _session_group
+        fetch = _kept_group if self.post is None else _session_group
         return fetch(self.path, self.STAMP, self.group_names, name, self._adopt_level_images, self.PANEL_KEY)
 
     def _adopt_level_images(self, appended):
@@ -5344,6 +5344,59 @@ class Stack:
         tree.links.new(sky.outputs['Background'], gate.inputs[2])
         tree.links.new(gate.outputs['Shader'], output.inputs['Surface'])
         return nodes
+
+    def sky_branches(self):
+        """文件里每个本地世界上本栈建的相机支:[(世界, 每层选中的入口后缀或 None, {后缀: {口名: 值}})]。天空组是随文件存盘的
+        模板组,口上的值就是真值(没有别的记录),换代前按口名记下,清掉旧一代之后 rebuild_sky_branches 照着用这一代重建。
+        组口上有曲线、驱动或 NLA 就在动任何东西之前拒绝:重建带不过去。"""
+        import re
+        found = []
+        for world in bpy.data.worlds:
+            tree = world.node_tree
+            if world.library is not None or tree is None:
+                continue
+            entries = {node.label: node for node in tree.nodes
+                       if node.bl_idname == 'ShaderNodeGroup' and node.get(self.SKY_MARK)}
+            if not entries:
+                continue
+            names = {node.name for node in entries.values()}
+            for owner, prefix in ((tree, ''), (world, 'node_tree.')):
+                data = owner.animation_data
+                if data is None:
+                    continue
+                if len(data.nla_tracks):
+                    raise RuntimeError('[ruri-sky] 世界 {0} 的节点树有 NLA 轨道:天空换代重建带不过去,先把轨道烘回动作'.format(
+                        world.name))
+                for curve in list(data.drivers) + _slot_curves(data):
+                    hit = re.match(NODE_PATH, curve.data_path[len(prefix):]) if curve.data_path.startswith(prefix) else None
+                    if hit is not None and bpy.utils.unescape_identifier(hit.group(1)) in names:
+                        raise RuntimeError('[ruri-sky] 世界 {0} 的天空组口上有动画 {1}:换代重建带不过去,拒绝'.format(
+                            world.name, curve.data_path))
+            chosen = []
+            for layer in self.sky_layers():
+                present = [suffix for suffix in layer['entries'] if suffix in entries]
+                chosen.append(present[0] if present else None)
+            values = {}
+            for suffix, node in entries.items():
+                values[suffix] = {}
+                for socket in node.inputs:
+                    if hasattr(socket, 'default_value'):
+                        value = socket.default_value
+                        values[suffix][socket.name] = tuple(value) if hasattr(value, '__len__') else value
+            found.append((world, chosen, values))
+        return found
+
+    def rebuild_sky_branches(self, found):
+        """照 sky_branches 记下的,在旧一代清掉之后用这一代的模板组重建每个世界的相机支,组口的值按口名写回:新一代新增的口
+        取缺省,去掉的口不读。返回重建了几个世界。"""
+        for world, chosen, values in found:
+            nodes = self.build_sky_world(world, chosen)
+            for suffix, node in nodes.items():
+                stated = values.get(suffix, {})
+                for socket in node.inputs:
+                    if socket.name in stated and hasattr(socket, 'default_value'):
+                        socket.default_value = stated[socket.name]
+        return len(found)
     # ==================== 合成器后处理级(kind = post 的栈) ====================
     # Blender 5.2 契约(真渲染实测,写错是静默全黑):渲染结果只能由组内 CompositorNodeRLayers 取,
     # 出口走 NodeGroupOutput;喂组输入 socket 拿到的是全 0。
@@ -7154,7 +7207,9 @@ def retire_generation():
     模板材质的键。别的平台的组一个不碰。本文件拥有、却画着别的文件里别代模板组的材质(link 材质的本地拷贝)一并放开那几张组,
     与画着本文件模板组的一样照记录重编;组节点一没树宿主就按口序删口上的动画,所以先把这些材质的动画改按口名写
     (_name_socket_animation,重编时 Stack.recompile 再接回),NLA 轨道带不过去就在动任何东西之前拒绝。材质的记录与口上的值
-    一概不碰(调用方先 settle_inputs 把口上的值记回记录)。进程态随之作废。返回清掉几个。"""
+    一概不碰(调用方先 settle_inputs 把口上的值记回记录)。天空栈在世界上建的相机支先按口名记下(Stack.sky_branches),
+    旧一代清掉之后用这一代的模板组照着重建。进程态随之作废。返回清掉几个。"""
+    skies = [(stack, stack.sky_branches()) for stack in STACKS if stack.sky is not None]
     RIG_DRIVEN.clear()
     RIG_SCANNED[0] = False
     vertex_prefixes = tuple(stack.VTX_TREE_PREFIX for stack in STACKS if stack.post is None)
@@ -7199,6 +7254,8 @@ def retire_generation():
         node.node_tree = None
     if doomed:
         bpy.data.batch_remove(list(doomed.values()))
+    for stack, found in skies:
+        stack.rebuild_sky_branches(found)
     return len(doomed)
 
 

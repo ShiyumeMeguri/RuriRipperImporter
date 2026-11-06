@@ -37,13 +37,14 @@ MISSING = "missing"
 class StackState:
     """One stack of a package: the generation it runs, the one installed, and how its materials stand."""
 
-    __slots__ = ("key", "loaded", "installed", "counts", "linked", "legacy")
+    __slots__ = ("key", "loaded", "installed", "counts", "worlds", "linked", "legacy")
 
     def __init__(self, key, loaded, installed):
         self.key = key
         self.loaded = loaded
         self.installed = installed
         self.counts = collections.Counter()
+        self.worlds = collections.Counter()
         self.linked = 0
         self.legacy = []
 
@@ -82,17 +83,21 @@ class PackageState:
         return [name for stack in self.stacks for name in stack.legacy]
 
     @property
+    def stale_worlds(self):
+        return sum(stack.worlds[OLD] + stack.worlds[MISSING] for stack in self.stacks)
+
+    @property
     def outdated(self):
         if self.failure:
             return False
         uncompiled = self.uncompiled_materials > 0 and not derived_state.pending()
-        return self.replaced or self.stale_materials > 0 or uncompiled
+        return self.replaced or self.stale_materials > 0 or uncompiled or self.stale_worlds > 0
 
 
 class Result:
     """What an update did, in numbers the panel and the report line say."""
 
-    __slots__ = ("packages", "recompiled", "identical", "differing", "renamed", "vertex_objects", "failures")
+    __slots__ = ("packages", "recompiled", "identical", "differing", "renamed", "vertex_objects", "sky_worlds", "failures")
 
     def __init__(self):
         self.packages = []
@@ -101,6 +106,7 @@ class Result:
         self.differing = []
         self.renamed = 0
         self.vertex_objects = 0
+        self.sky_worlds = 0
         self.failures = []
 
     def summary(self):
@@ -114,6 +120,8 @@ class Result:
             text += ", {0} differ (see console)".format(len(self.differing))
         if self.vertex_objects:
             text += ", vertex stack rebuilt on {0} object(s)".format(self.vertex_objects)
+        if self.sky_worlds:
+            text += ", sky rebuilt on {0} world(s)".format(self.sky_worlds)
         if self.failures:
             text += "; the derived state reports an error (see Derived state below)"
         return text
@@ -142,6 +150,27 @@ def _saved_old_groups(material, stamp):
         return False
     return any(node.node_tree is not None and node.node_tree.get(GROUP_STAMP) not in (None, stamp)
                for node in tree.nodes if node.bl_idname == "ShaderNodeGroup")
+
+
+def _sky_worlds(stack):
+    """The file's own worlds whose camera branch a sky stack built, each with the generation its sky draws through: a
+    world's sky is the stack's the way a material is, so a file that keeps nothing else of the stack still needs the
+    update."""
+    found = []
+    for world in bpy.data.worlds:
+        if world.library is not None or world.node_tree is None:
+            continue
+        groups = [node.node_tree for node in world.node_tree.nodes
+                  if node.bl_idname == "ShaderNodeGroup" and node.get(stack.SKY_MARK)]
+        if not groups:
+            continue
+        if any(group is None for group in groups):
+            found.append((world, MISSING))
+        elif any(group.get(GROUP_STAMP) != stack.STAMP for group in groups):
+            found.append((world, OLD))
+        else:
+            found.append((world, CURRENT))
+    return found
 
 
 def _survey(by_key):
@@ -192,6 +221,9 @@ def scan():
             state.stacks.append(stack_state)
             if stack.post is None:
                 by_key[stack.PANEL_KEY] = (stack, stack_state)
+            if stack.m.get("sky") is not None:
+                for _world, drawn in _sky_worlds(stack):
+                    stack_state.worlds[drawn] += 1
         loaded_keys = {stack.PANEL_KEY for stack in package.STACKS}
         for key, now in installed_of[package].items():
             if key not in loaded_keys:
@@ -334,6 +366,13 @@ def update(renames=()):
     behind = [material.name for material in compiled if _group_state(material, fresh[material[STACK]].STAMP) != CURRENT]
     if behind:
         result.failures.append("{0} material(s) still draw through another generation: {1}".format(len(behind), ", ".join(behind)))
+    skies = [(world, drawn) for stack in fresh.values() if stack.m.get("sky") is not None
+             for world, drawn in _sky_worlds(stack)]
+    behind_skies = [world.name for world, drawn in skies if drawn != CURRENT]
+    if behind_skies:
+        result.failures.append("{0} world(s) still draw their sky through another generation: {1}".format(
+            len(behind_skies), ", ".join(behind_skies)))
+    result.sky_worlds = len(skies) - len(behind_skies)
     after = _records(compiled, fresh)
     result.recompiled = len(compiled)
     for name, record in after.items():
