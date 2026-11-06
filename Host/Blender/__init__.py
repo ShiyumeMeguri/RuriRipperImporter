@@ -184,6 +184,10 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         from . import material_builder
         return material_builder.apply_post_inputs(context.scene, values)
 
+    def apply_sky(self, context, sky):
+        from . import sky_builder
+        return sky_builder.apply(context.scene, sky)
+
     def apply_level_resources(self, context, values, payloads):
         from . import material_builder
         return material_builder.apply_level_resources(context.scene, values, payloads)

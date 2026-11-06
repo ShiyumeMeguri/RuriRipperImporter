@@ -107,6 +107,12 @@ POST_STAGES = extensions.point(
     "blender.post_stages",
     "Whole-frame processing a shading stack installs onto the scene.")
 
+#: A stack that ports the source's sky material: its draw layers (``sky_layers``), each entry's
+#: group and outputs (``sky_entry``) and the camera branch it builds on a world (``build_sky_world``).
+SKY_STAGES = extensions.point(
+    "blender.sky_stages",
+    "The sky a shading stack draws for camera rays on the level's world.")
+
 #: ``level_global_bases() -> {name: (statement, [default, ...])}``. Engine globals a
 #: stack reads LIVE from the level's world instead of baking them into its materials --
 #: per-level values such as fog -- each with the default its recipe declares and what
@@ -299,6 +305,14 @@ def register_post_stage(stage):
 
 def unregister_post_stage(stage):
     POST_STAGES.remove(stage)
+
+
+def register_sky_stage(stage):
+    SKY_STAGES.add(stage)
+
+
+def unregister_sky_stage(stage):
+    SKY_STAGES.remove(stage)
 
 
 def register_level_globals(bases):
@@ -882,7 +896,7 @@ def apply_level_resources(scene, values, payloads):
                 raise ValueError("[material] level block {0} stated twice".format(name))
             blocks[name] = block
     written, unclaimed = _apply_level_globals(scene, merged)
-    filled, unread = _apply_level_images(scene, blocks)
+    filled, unread = _apply_level_images(scene, blocks, merged)
     return written + filled, unclaimed + unread
 
 
@@ -1269,18 +1283,43 @@ def _table_pixels(levels, layout):
     return pixels
 
 
+def _cube_layout(name, layout, levels, values):
+    """A cube's atlas layout, completed from the cube a level states (six faces of edge N, M mips): the
+    array layout of :func:`_array_pixels` with tiles N + N/2 wide (N for one mip) and N high, ``columns`` by
+    ``rows`` of them -- the arithmetic the stack lowers from ``<name>_TexelSize`` and ``<name>_MipCount``.
+    A face edge the stack fixes is its layout's size, and a level stating another is refused; so is a level
+    whose mip count global says other than the mips it states, since the stack addresses the atlas by it."""
+    faces, height, width = (int(value) for value in levels[0].shape[:3])
+    if faces != int(layout["slices"]) or height != width:
+        raise ValueError("[material] cube {0}: stated {1} faces of {2}x{3}, the stack reads {4} square faces".format(
+            name, faces, width, height, layout["slices"]))
+    if "size" in layout and tuple(int(value) for value in layout["size"]) != (width, width):
+        raise ValueError("[material] cube {0}: stated faces of {1}, the stack fixes {2}".format(
+            name, width, list(layout["size"])))
+    mips = len(levels)
+    stated = values.get(name + "_MipCount")
+    if stated is None or float(stated[0]) != float(mips):
+        raise ValueError("[material] cube {0}: {1} mips stated, its {0}_MipCount says {2}".format(
+            name, mips, None if stated is None else stated[0]))
+    tile = (width + width // 2 if mips > 1 else width, width)
+    return dict(layout, size=(width, width), mips=mips, tile=tile,
+                atlas=(int(layout["columns"]) * tile[0], int(layout["rows"]) * tile[1]))
+
+
 _LEVEL_PIXELS = {"texture": _texture_pixels, "volume": _volume_pixels, "array": _array_pixels,
-                 "table": _table_pixels}
+                 "cube": _array_pixels, "table": _table_pixels}
 
 
-def _apply_level_images(scene, blocks):
+def _apply_level_images(scene, blocks, values):
     """Fill the image behind every stated block some registered stack reads. Two
     stacks laying one resource out differently cannot share its image, so that is
     refused. A texture array a stack reads one image per slice (``slice`` layouts)
     comes as a tile set, tile i being slice i; a level stating more slices than the
     stack reads is refused, since the stack clamps a slice index it has no image for.
-    A texture made at its level's own size gets its ``_TexelSize`` global written
-    alongside, when a stack reads one. Returns ``(filled, unread)``."""
+    A cube comes as a six-slice array with its mips and is laid out at its own face
+    edge (:func:`_cube_layout`, checked against the globals the level states in ``values``).
+    A texture or cube made at its level's own size gets its ``_TexelSize`` global
+    written alongside, when a stack reads one. Returns ``(filled, unread)``."""
     layouts = {}
     for provider in LEVEL_IMAGES:
         for name, layout in provider().items():
@@ -1310,13 +1349,14 @@ def _apply_level_images(scene, blocks):
                 images.append(image)
             filled.append(name)
             continue
-        layout = layouts.get(name)
-        if layout is None:
+        stack_layout = layouts.get(name)
+        if stack_layout is None:
             continue
-        expected = layout["kind"] if layout["kind"] in ("volume", "tiles") else "array"
+        expected = stack_layout["kind"] if stack_layout["kind"] in ("volume", "tiles") else "array"
         if kind != expected:
             raise ValueError("[material] level image {0}: stated as a {1}, read as a {2}".format(
-                name, kind, layout["kind"]))
+                name, kind, stack_layout["kind"]))
+        layout = _cube_layout(name, stack_layout, levels, values) if stack_layout["kind"] == "cube" else stack_layout
         image = volume_image(layout)
         images.append(image)
         if kind == "tiles":
@@ -1325,9 +1365,10 @@ def _apply_level_images(scene, blocks):
             continue
         pixels = _LEVEL_PIXELS[layout["kind"]](levels, layout)
         _fill_image(image, pixels)
-        base = _texel_size_base(name + "_TexelSize") if layout["kind"] == "texture" and "size" not in layout else None
+        sized = "size" not in stack_layout and layout["kind"] in ("texture", "cube")
+        base = _texel_size_base(name + "_TexelSize") if sized else None
         if base is not None:
-            height, width = pixels.shape[:2]
+            width, height = layout["size"] if layout["kind"] == "cube" else (pixels.shape[1], pixels.shape[0])
             texel_sizes[name + "_TexelSize"] = [value - offset for value, offset in
                                                 zip((1.0 / width, 1.0 / height, float(width), float(height)), base)]
         filled.append(name)

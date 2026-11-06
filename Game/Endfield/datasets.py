@@ -71,6 +71,8 @@ SCENE_FOG = "endfield.scene.fog"
 RENDER_PIPELINE = "endfield.render.pipeline"
 SCENE_COOKIES = "endfield.scene.cookies"
 SCENE_CLOUD_SHADOW = "endfield.scene.cloud_shadow"
+SCENE_SKY = "endfield.scene.sky"
+SCENE_SKY_IMAGES = "endfield.scene.sky_images"
 SCENE_SHADOW_RAMP = "endfield.scene.shadow_ramp"
 SCENE_WATER = "endfield.scene.water"
 SCENE_DECALS = "endfield.scene.decals"
@@ -421,6 +423,24 @@ def scene_cloud_shadow(map_name, anchor, states):
     x, y, z = anchor
     return cabmap_state.BRIDGE.game_data_blob(
         SCENE_CLOUD_SHADOW, map=map_name, x=x, y=y, z=z, states=[str(state) for state in states])
+
+
+def scene_sky(map_name, anchor, states):
+    """Every value the source's sky renderer prepares for the sky a viewer at ``anchor`` sees, in the
+    shape :meth:`Kernel.host.SceneGraph.apply_sky` takes: the uniforms its sky materials read, by the
+    shader's own names and packed the way the build packs them, its keywords as 0 or 1, and the rows
+    that decide which of its sky passes draw."""
+    return {row["name"]: tuple(float(row[axis]) for axis in ("x", "y", "z", "w"))
+            for row in _rows(SCENE_SKY, **_viewer(map_name, anchor, states))}
+
+
+def scene_sky_images(map_name, anchor, states):
+    """The images the source's sky samples where a viewer at ``anchor`` stands: its three atmosphere
+    lookup tables, computed the way the build computes them, and the sky's textures -- a level-resources
+    payload the host applies as it is."""
+    x, y, z = anchor
+    return cabmap_state.BRIDGE.game_data_blob(
+        SCENE_SKY_IMAGES, map=map_name, x=x, y=y, z=z, states=[str(state) for state in states])
 
 
 def scene_shadow_ramp(map_name, anchor, states):

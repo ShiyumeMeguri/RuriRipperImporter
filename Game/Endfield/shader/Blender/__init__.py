@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(0856b334488af548):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(4f292747b4c18fd2):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -36,6 +36,8 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RuriManifest
     MANIFESTS = json.load(manifest_stream)['stacks']
 
 OWN_SAMPLER = 'TEXTURE'
+OWN_SAMPLER_KEY = 'ruri_own_sampler'
+RENDER_FOOTPRINT_ATTRIBUTE = 'ruri_render_pixel_footprint'
 OVERLAY_OUTPUT_PREFIX = '__overlay__'
 OWN_SAMPLER_LENDER_SEPARATOR = ':'
 OWN_SAMPLER_WRAPS = ('repeat', 'clamp', 'mirror', 'mirroronce')
@@ -666,8 +668,7 @@ def _retire_materials(replaced, doomed=()):
         new.name = name
 
 
-# 图节点上的这一格:1 = 按自己绑的图采;槽名 = 借那个槽绑的图的采样器(真源 SAMPLE_TEXTURE2D(甲, sampler_乙))。
-OWN_SAMPLER_KEY = 'ruri_own_sampler'
+# 图节点上的这一格(名字住在 PythonTables.OwnSamplerKey):1 = 按自己绑的图采;槽名 = 借那个槽绑的图的采样器(真源 SAMPLE_TEXTURE2D(甲, sampler_乙))。
 
 
 def _sampler_image(node, real, images):
@@ -915,9 +916,8 @@ def require_uniform_budget(mat, zone_copies, probes):
 
 # 源管线逐灯参数的一个向量在灯上的属性名(按结果叶取名):宿主经 light_parameter_attributes() 取同一份去写。
 LIGHT_PARAMETER_ATTRIBUTE = 'ruri_light_{0}'
-# 渲染输出一个像素的世界尺寸 = x + y × 视深(x 正交项、y 透视项),场景上的视层属性:宿主按渲染相机与输出分辨率
+# 渲染输出一个像素的世界尺寸的场景视层属性名住在 PythonTables.RenderFootprintAttribute:宿主按渲染相机与输出分辨率
 # 经 render_footprint_attributes() 取同一份名字去写,换镜头或分辨率只改值、不重接。
-RENDER_FOOTPRINT_ATTRIBUTE = 'ruri_render_pixel_footprint'
 # URP 给附加光的距离平方垫底值(Lighting.hlsl 的 max(dot(lightVector, lightVector), HALF_MIN))。
 HALF_MIN = 6.103515625e-05
 NATIVE_LIGHT_LABEL = 'RuriNativeLight'
@@ -2011,6 +2011,7 @@ class Stack:
         self.host = manifest.get('host') or {}
         declare_world_basis(self.host.get('world_basis'))
         self.post = manifest.get('post')
+        self.sky = manifest.get('sky')
         self.engine_global_sources = manifest.get('engine_global_sources') or {}
         self.scene_time = manifest.get('scene_time') or {}
         self.object_attributes = manifest.get('object_attributes') or {}
@@ -2033,7 +2034,7 @@ class Stack:
     # ---- 取模板面(产物即库;缺组响亮拒绝,零现场重建退路) ----
 
     def group(self, name):
-        fetch = _kept_group if self.post is None else _session_group
+        fetch = _kept_group if self.post is None and self.sky is None else _session_group
         return fetch(self.path, self.STAMP, self.group_names, name, self._adopt_level_images, self.PANEL_KEY)
 
     def _adopt_level_images(self, appended):
@@ -2045,6 +2046,13 @@ class Stack:
             image.user_remap(self._level_image(_slot_of(image.name)))
         if placeholders:
             bpy.data.batch_remove(placeholders)
+        # 取点标了「自带采样器」的关卡图:寻址与过滤是宿主陈述在那张图上的状态,换上真图之后才知道。
+        for group in appended:
+            if not isinstance(group, bpy.types.NodeTree):
+                continue
+            for node in group.nodes:
+                if node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) and node.image is not None:
+                    _apply_own_sampler(node, node.image)
 
     # ==================== 材质参数(材质 = 组输入上的常量) ====================
 
@@ -3078,7 +3086,10 @@ class Stack:
         }
 
     def render_footprint_attributes(self):
-        """本栈读渲染像素世界尺寸的场景视层属性:询问了屏幕半径上限的遮蔽要它;宿主按渲染相机写上去。"""
+        """本栈读渲染像素世界尺寸的场景视层属性:询问了屏幕半径上限的遮蔽要它,天空的立方体采样按屏幕导数选 mip 也要它;
+        宿主按渲染相机写上去。"""
+        if self.m.get('render_footprint'):
+            return [RENDER_FOOTPRINT_ATTRIBUTE]
         for part in self.m['parts'].values():
             for cap in list(part['capabilities']) + [cap for zone in part['zones'] for cap in zone['capabilities']]:
                 if cap['cap'] == 'ScreenSpaceOcclusion' and 'pixel_radius' in cap['query']:
@@ -5243,6 +5254,96 @@ class Stack:
                 spread = (list(value) + [0.0] * 4)[:row.get('display', row['size'])]
                 values[name] = tuple(float(x) for x in spread)
         return {'values': values, 'images': images, 'st': st_out}
+    # ==================== 天空栈(清单 sky 段) ====================
+
+    # 天空栈自己建的节点都烙这一格:重建只拆自己的,认不得的节点一个不碰。
+    SKY_MARK = 'ruri_sky_stage'
+
+    def sky_entry(self, suffix):
+        """清单里一个入口的行:组名、颜色与 alpha 出口名、绘制行名(draw_row:源管线判定这一入口画不画的天空数据行,
+        行的 x 为 1 画、0 不画)、组输入口(每口 {name, size, default},default 的分量数恰等于 size)。"""
+        return self.sky['entries'][suffix]
+
+    def sky_layers(self):
+        """游戏的绘制层序:每层 {entries: 互斥的入口后缀, blend: Replace | Alpha}。"""
+        return self.sky['layers']
+
+    def _sky_release(self, world, tree, output):
+        """拆掉上一次建的相机支,把世界输出的 Surface 还给它下面那一支照明。认得的形状只有两种:Surface 直接连着 Background
+        (宿主的球谐背景,没建过天空),或连着本栈烙过印的混合着色器(它的第一个 Shader 口就是照明支)。别的形状拒绝:
+        不是宿主的照明支就不替它挑。"""
+        socket = output.inputs['Surface']
+        head = socket.links[0].from_node if socket.is_linked else None
+        if head is not None and head.get(self.SKY_MARK):
+            lighting = head.inputs[1]
+            if not lighting.is_linked:
+                raise RuntimeError('[ruri-sky] 世界 {0} 上天空的相机支底下没有照明支:认不得这棵树,拒绝重建'.format(world.name))
+            tree.links.new(lighting.links[0].from_socket, socket)
+        for node in [node for node in tree.nodes if node.get(self.SKY_MARK)]:
+            tree.nodes.remove(node)
+        if not socket.is_linked or socket.links[0].from_node.type != 'BACKGROUND':
+            raise RuntimeError('[ruri-sky] 世界 {0} 的 Surface 不是可保留的 Background:天空只接在宿主的照明背景旁边,'
+                               '照明由它答(球谐与辐照),天空只是相机看到的那一支'.format(world.name))
+        return socket.links[0].from_socket
+
+    def build_sky_world(self, world, chosen):
+        """在 world 上装出天空,不替换世界:世界输出原先连着的 Background 是照明支(宿主的球谐背景),原样留着;
+        新建 Mix Shader(Fac = Light Path 的 Is Camera Ray,Shader 1 = 照明支,Shader 2 = 天空的 Background),
+        相机直接看到天空,照明光线走照明支。重复调用只换本栈自己的相机支。世界没有节点树或 Surface 不是 Background 就拒绝。
+        chosen = 每层选中的入口后缀(None = 这一层不画),长度与 sky_layers() 相同。Replace 层盖住下面的层;
+        Alpha 层是游戏的云趟混合状态 SrcAlpha / OneMinusSrcAlpha:颜色 = 本层色 · alpha + 下层色 · (1 - alpha)。
+        返回 {入口后缀: 组节点},宿主据此给各组的材质参数与关键字口赋值。"""
+        layers = self.sky_layers()
+        if len(chosen) != len(layers):
+            raise RuntimeError('[ruri-sky] 层数 {0} 与所选 {1} 不符'.format(len(layers), len(chosen)))
+        if not world.use_nodes or world.node_tree is None:
+            raise RuntimeError('[ruri-sky] 世界 {0} 没有节点树:宿主的球谐 Background 要先在'.format(world.name))
+        tree = world.node_tree
+        output = _world_output(tree)
+        if output is None:
+            raise RuntimeError('[ruri-sky] 世界 {0} 没有 EEVEE 取用的世界输出'.format(world.name))
+        lighting = self._sky_release(world, tree, output)
+
+        def made(kind, label):
+            node = tree.nodes.new(kind)
+            node[self.SKY_MARK] = 1
+            node.label = label
+            return node
+
+        radiance = None
+        nodes = {}
+        for index, (layer, suffix) in enumerate(zip(layers, chosen)):
+            if suffix is None:
+                continue
+            if suffix not in layer['entries']:
+                raise RuntimeError('[ruri-sky] 第 {0} 层没有入口 {1}(可选 {2})'.format(index, suffix, layer['entries']))
+            row = self.sky_entry(suffix)
+            node = made('ShaderNodeGroup', suffix)
+            node.node_tree = self.group(row['group'])
+            nodes[suffix] = node
+            color = node.outputs[row['color_out']]
+            if radiance is None or layer['blend'] == 'Replace':
+                radiance = color
+                continue
+            mix = made('ShaderNodeMix', 'Layer {0}'.format(index))
+            mix.data_type = 'RGBA'
+            mix.blend_type = 'MIX'
+            tree.links.new(node.outputs[row['alpha_out']], mix.inputs['Factor'])
+            tree.links.new(radiance, mix.inputs['A'])
+            tree.links.new(color, mix.inputs['B'])
+            radiance = mix.outputs['Result']
+        if radiance is None:
+            raise RuntimeError('[ruri-sky] 没有选中任何入口')
+        sky = made('ShaderNodeBackground', 'Sky')
+        sky.inputs['Strength'].default_value = 1.0
+        tree.links.new(radiance, sky.inputs['Color'])
+        path = made('ShaderNodeLightPath', 'Camera Ray')
+        gate = made('ShaderNodeMixShader', 'Camera Branch')
+        tree.links.new(path.outputs['Is Camera Ray'], gate.inputs['Fac'])
+        tree.links.new(lighting, gate.inputs[1])
+        tree.links.new(sky.outputs['Background'], gate.inputs[2])
+        tree.links.new(gate.outputs['Shader'], output.inputs['Surface'])
+        return nodes
     # ==================== 合成器后处理级(kind = post 的栈) ====================
     # Blender 5.2 契约(真渲染实测,写错是静默全黑):渲染结果只能由组内 CompositorNodeRLayers 取,
     # 出口走 NodeGroupOutput;喂组输入 socket 拿到的是全 0。
@@ -6909,6 +7010,19 @@ class Stack:
                 raise RuntimeError('[Ruri] 宿主世界基与生成期声明的不一致:宿主 {0},清单 {1}。'
                                    '模板组按清单那份物化,照这样挂上去世界量全按错轴算 -- 拒绝加载,'
                                    '改配方的 Host.WorldBasis 后重新生成。'.format(answer, stated))
+        if self.sky is not None:
+            getattr(host, self.host['register_sky_stage_fn'])(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.register_scene_time(self.scene_time_scales)
+            if self.texel_sizes:
+                host.register_texel_sizes(self.texel_size_bases)
+            if self.render_footprint_attributes():
+                host.register_render_footprints(self.render_footprint_attributes)
+            if self.level_images:
+                getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
+            return
         if self.post is not None:
             fn = self.host.get('register_post_stage_fn')
             if fn:
@@ -6959,6 +7073,19 @@ class Stack:
 
     def unregister_host(self):
         host = self._host_module()
+        if self.sky is not None:
+            getattr(host, self.host['unregister_sky_stage_fn'])(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.unregister_scene_time(self.scene_time_scales)
+            if self.texel_sizes:
+                host.unregister_texel_sizes(self.texel_size_bases)
+            if self.render_footprint_attributes():
+                host.unregister_render_footprints(self.render_footprint_attributes)
+            if self.level_images:
+                getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
+            return
         if self.post is not None:
             if self.sync_post_chains in bpy.app.handlers.depsgraph_update_post:
                 bpy.app.handlers.depsgraph_update_post.remove(self.sync_post_chains)

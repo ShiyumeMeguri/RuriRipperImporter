@@ -203,6 +203,16 @@ class SceneGraph(abc.ABC):
         reflecting that default."""
 
     @abc.abstractmethod
+    def apply_sky(self, context, sky):
+        """Stand the sky a level's camera sees up in the document's world, for camera rays only:
+        what it lights keeps the world :meth:`apply_environment` stood up, as the source's sky is
+        drawn and never read by lighting. ``sky`` is ``{name: (x, y, z, w)}``, every value the
+        source's sky renderer prepares at the viewer -- its sky materials' uniforms by the shader's
+        own names, its keywords as 0 or 1 and the rows that decide which of its sky passes draw --
+        with the sky's images handed over through :meth:`apply_level_resources`. Called after
+        :meth:`apply_environment`, which replaces the world. Returns the lines to report."""
+
+    @abc.abstractmethod
     def apply_level_resources(self, context, values, payloads):
         """Hand the shading stacks everything a level states for every material: the
         engine globals in ``values`` (keyed by the engine's own names, in the source's

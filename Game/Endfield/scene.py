@@ -411,8 +411,8 @@ def _stand_up_lighting(context, host, map_name, rect, anchor, states):
     # Everything the level states for every material, as one state the stacks read live: its
     # globals (fog, the default sky SH), its baked irradiance rebuilt as the game's camera
     # clipmaps, the reflection probes the game's camera would use, the cloud shadow texture, the
-    # shadow ramp, the water state, the deferred decals, the water proxies its wetness pass draws and what
-    # the render pipeline itself binds for every material.
+    # shadow ramp, the water state, the deferred decals, the water proxies its wetness pass draws, the
+    # images its sky samples and what the render pipeline itself binds for every material.
     _written, unread = host.apply_level_resources(
         context, datasets.scene_globals(map_name, anchor, states),
         [datasets.scene_irradiance(map_name, anchor),
@@ -421,11 +421,13 @@ def _stand_up_lighting(context, host, map_name, rect, anchor, states):
          datasets.scene_cloud_shadow(map_name, anchor, states),
          datasets.scene_shadow_ramp(map_name, anchor, states),
          datasets.scene_water(map_name, rect, anchor, states),
+         datasets.scene_sky_images(map_name, anchor, states),
          datasets.render_pipeline(),
          datasets.scene_decals(map_name, rect, states),
          datasets.scene_water_wetness(map_name, rect, states)])
     if unread:
         notes.append("{0} level resource(s) no shading stack reads".format(len(unread)))
+    notes.extend(host.apply_sky(context, datasets.scene_sky(map_name, anchor, states)))
     # Its deferred decals, handed to the objects their boxes reach (the stacks apply them in
     # the material, where the game projects them into its GBuffer).
     notes.extend(host.apply_box_lists(context, datasets.scene_decal_boxes(map_name, rect, states),

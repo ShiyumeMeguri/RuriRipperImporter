@@ -79,3 +79,12 @@
 | VolumetricFogScattering | Pipeline | Declared | linear in-scattered radiance (rgb) and transmittance (w) between the camera and this point | froxel 网格的分辨率、深度分布、抖动与时间累积各家自定(HG 是 _IntegratedLightScattering 一张 3D RT,按抖动后的屏幕坐标与对数深度切片取值);编译器看见的只是一次 3D 纹理取值 |
 
 
+## 栈 ruri_sky_endfield
+
+### 宿主答不出的环境询问(按缺席值折叠)
+
+| 能力 | 答案来源 | 缺席契约 | 结果语义 | 编译器为什么认不出 |
+|---|---|---|---|---|
+| VolumetricFogScattering | Pipeline | Declared | linear in-scattered radiance (rgb) and transmittance (w) between the camera and this point | froxel 网格的分辨率、深度分布、抖动与时间累积各家自定(HG 是 _IntegratedLightScattering 一张 3D RT,按抖动后的屏幕坐标与对数深度切片取值);编译器看见的只是一次 3D 纹理取值 |
+
+
