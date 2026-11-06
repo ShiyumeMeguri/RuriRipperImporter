@@ -267,18 +267,6 @@ def _owned_materials(stacks):
             and linked_twins.ORIGIN not in material]
 
 
-def _release_foreign_groups(owned, stacks):
-    """A material this file owns can draw through groups another file keeps (a local copy of a linked material). Retiring a
-    generation clears only this file's own groups, so such a material would stay whole and old: let go of those groups
-    too, and it compiles from its record through this file's own generation like every other."""
-    for material in owned:
-        stamp = stacks[material[STACK]].STAMP
-        for node in material.node_tree.nodes:
-            if (node.bl_idname == "ShaderNodeGroup" and node.node_tree is not None and node.node_tree.library is not None
-                    and node.node_tree.get(GROUP_STAMP) not in (None, stamp)):
-                node.node_tree = None
-
-
 def _vertex_objects(stacks):
     found = []
     for obj in bpy.data.objects:
@@ -339,7 +327,6 @@ def update(renames=()):
                 touched.add(material.name_full)
     result.renamed = len(touched)
     material_panel.forget()
-    _release_foreign_groups(owned, fresh)
     derived_state.refresh_after_replacement([obj for obj, _key, _was in vertex])
     if derived_state.LAST_ERROR:
         result.failures.append(derived_state.LAST_ERROR)

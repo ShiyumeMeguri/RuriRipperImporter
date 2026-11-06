@@ -1,6 +1,6 @@
 """Ruri Blender 材质栈运行时(生成物,勿手改)。
 
-本平台产物同批同 stamp(aa4c3a393ca60962):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+本平台产物同批同 stamp(0856b334488af548):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
 headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
 stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
 (平台 ruri_endfield 的包入口)—— 运行时。
@@ -1574,6 +1574,151 @@ PARAM_SOCKET_WIDTHS = {'VALUE': 1, 'VECTOR': 3}
 
 # 宿主给节点输入口的动画与驱动写的路径:nodes["节点名"].inputs[口序].default_value(节点名按 RNA 转义)。
 ANIMATED_SOCKET_PATH = r'nodes\["((?:[^"\\]|\\.)*)"\]\.inputs\[(\d+)\]\.default_value'
+
+# 节点输入口上曲线与驱动的路径,口按序(宿主自己写的形)或按名(换代时暂存的形,见 _name_socket_animation)。
+INPUT_SOCKET_PATH = r'^nodes\["((?:[^"\\]|\\.)*)"\]\.inputs\[(?:(\d+)|"((?:[^"\\]|\\.)*)")\](.*)$'
+NODE_PATH = r'^nodes\["((?:[^"\\]|\\.)*)"\]'
+
+
+def _tree_animation_owners(material):
+    """动画能指到材质图里节点口上的两份动画数据,与它们的路径从哪里开始说图:图自己的(从 nodes 起)、材质的(从 node_tree. 起)。"""
+    return ((material.node_tree, ''), (material, 'node_tree.'))
+
+
+def _slot_curves(data):
+    """一份动画数据里动作分给它那一槽的曲线(动作是库里的就没有可改的)。"""
+    from bpy_extras import anim_utils
+    if data.action is None or data.action_slot is None or data.action.library is not None:
+        return []
+    bag = anim_utils.action_get_channelbag_for_slot(data.action, data.action_slot)
+    return list(bag.fcurves) if bag is not None else []
+
+
+def _instance_key(node):
+    """组实例在它那张材质图里的身份:段序(ruri_inst)或循环体的 (循环, 序)(ruri_zone、ruri_binst),照记录重编不变。"""
+    if node.bl_idname != 'ShaderNodeGroup':
+        return None
+    if node.get('ruri_inst') is not None:
+        return ('inst', int(node['ruri_inst']))
+    if node.get('ruri_zone') is not None:
+        return ('zone', str(node['ruri_zone']), int(node['ruri_binst']))
+    return None
+
+
+def _name_socket_animation(material):
+    """组实例输入口上的曲线与驱动改按口名写:模板组退役、组节点没了树,宿主按口序删掉指着那些口的曲线与驱动
+    (node_socket.cc refresh_node_sockets_animation_inout),按口名写的不在它删的范围里;照记录重编(Stack.recompile)
+    再按口名接回新图的口序。返回改写了几条。"""
+    import re
+    tree = material.node_tree
+    named = 0
+    for owner, prefix in _tree_animation_owners(material):
+        data = owner.animation_data
+        if data is None:
+            continue
+        for curve in list(data.drivers) + _slot_curves(data):
+            if not curve.data_path.startswith(prefix):
+                continue
+            found = re.match(INPUT_SOCKET_PATH, curve.data_path[len(prefix):])
+            if found is None or found.group(2) is None:
+                continue
+            node = tree.nodes.get(bpy.utils.unescape_identifier(found.group(1)))
+            index = int(found.group(2))
+            if node is None or _instance_key(node) is None or index >= len(node.inputs):
+                continue
+            curve.data_path = '{0}nodes["{1}"].inputs["{2}"]{3}'.format(
+                prefix, bpy.utils.escape_identifier(node.name), bpy.utils.escape_identifier(node.inputs[index].name),
+                found.group(4))
+            named += 1
+    return named
+
+
+def _socket_path(path, prefix, old_tree, new_tree):
+    """一条动画路径在照记录重编出来的新图上的写法。不说图里节点的原样留;组实例的输入口按实例身份(_instance_key)与口名找
+    新图的口序,身份对上的实例没有这个口就取新图里唯一带这个口的实例;别的节点要新图里有同名同类的节点,说口序的还要同序的口
+    同名,才原样留。找不到返回 None。"""
+    import re
+    if not path.startswith(prefix) or not path[len(prefix):].startswith('nodes['):
+        return path
+    tail = path[len(prefix):]
+    found = re.match(INPUT_SOCKET_PATH, tail)
+    named = re.match(NODE_PATH, tail)
+    node = old_tree.nodes.get(bpy.utils.unescape_identifier(named.group(1))) if named is not None else None
+    if node is None:
+        return None
+    if found is None:
+        twin = new_tree.nodes.get(node.name)
+        return path if twin is not None and twin.bl_idname == node.bl_idname else None
+    if found.group(2) is not None:
+        index = int(found.group(2))
+        if index >= len(node.inputs):
+            # 旧口已经没了:与别的材质共用的动作里,这条已经按那张新图改写过,新图上接得上就原样留。
+            socket = 'nodes["{0}"].inputs[{1}]'.format(named.group(1), index)
+            return path if new_tree.path_resolve(socket, False) is not None else None
+        name = node.inputs[index].name
+    else:
+        index = None
+        name = bpy.utils.unescape_identifier(found.group(3))
+    key = _instance_key(node)
+    if key is None:
+        twin = new_tree.nodes.get(node.name)
+        if index is None or twin is None or twin.bl_idname != node.bl_idname or index >= len(twin.inputs) \
+                or twin.inputs[index].name != name:
+            return None
+        return path
+    carriers = [other for other in new_tree.nodes
+                if _instance_key(other) is not None and any(socket.name == name for socket in other.inputs)]
+    chosen = next((other for other in carriers if _instance_key(other) == key), None)
+    if chosen is None and len(carriers) == 1:
+        chosen = carriers[0]
+    if chosen is None:
+        return None
+    at = next(position for position, socket in enumerate(chosen.inputs) if socket.name == name)
+    return '{0}nodes["{1}"].inputs[{2}]{3}'.format(prefix, bpy.utils.escape_identifier(chosen.name), at, found.group(4))
+
+
+def _refuse_nla(materials):
+    """NLA 轨道照记录重编带不过去(重编整张换新,留在旧材质上就是丢):有的就在动任何东西之前响亮拒绝。"""
+    held = [material.name for material in materials
+            if any(owner.animation_data is not None and len(owner.animation_data.nla_tracks)
+                   for owner, _prefix in _tree_animation_owners(material))]
+    if held:
+        raise RuntimeError('[ruri-uber] 这几张材质的动画有 NLA 轨道,照记录重编带不过去,先把轨道烘回动作:{0}'.format(held))
+
+
+def _carry_animation(old, new):
+    """照记录重编时旧材质(与它的图)的动画搬到新材质(与新图)上:同一个动作与槽,槽里的曲线与驱动按 _socket_path 改写路径,
+    驱动变量指着旧材质的改指新材质。新图上没有着落的那几条响亮记下、不带。"""
+    retarget = {old.as_pointer(): new}
+    dropped = []
+    for (source, prefix), (target, _same) in zip(_tree_animation_owners(old), _tree_animation_owners(new)):
+        data = source.animation_data
+        if data is None or (data.action is None and not len(data.drivers)):
+            continue
+        carried = target.animation_data_create()
+        if data.action is not None:
+            carried.action = data.action
+            if data.action_slot is not None:
+                carried.action_slot = data.action_slot
+            for curve in _slot_curves(data):
+                path = _socket_path(curve.data_path, prefix, old.node_tree, new.node_tree)
+                if path is None:
+                    dropped.append(curve.data_path)
+                elif path != curve.data_path:
+                    curve.data_path = path
+        for driver in data.drivers:
+            path = _socket_path(driver.data_path, prefix, old.node_tree, new.node_tree)
+            if path is None:
+                dropped.append(driver.data_path)
+                continue
+            copy = carried.drivers.from_existing(src_driver=driver)
+            copy.data_path = path
+            for variable in copy.driver.variables:
+                for variable_target in variable.targets:
+                    if variable_target.id is not None and variable_target.id.as_pointer() in retarget:
+                        variable_target.id = retarget[variable_target.id.as_pointer()]
+    if dropped:
+        print('[ruri-uber] !! {0} 照记录重编后这几条动画路径在新图上没有着落,不带过去:{1}'.format(old.name, dropped), flush=True)
 
 
 def _image_row_slot(row_name):
@@ -3369,18 +3514,23 @@ class Stack:
         return generated
 
     def recompile(self, mat):
-        """照记录重编一张材质:新编一张,把别处写在旧材质上的内容(基座骨名、来源键……)带过去;
-        调用方拿新的整批顶替旧的。记录缺格 = 不是生成栈写下的材质,响亮拒绝,不猜。"""
+        """照记录重编一张材质:新编一张,把别处写在旧材质上的内容(基座骨名、来源键……)与它和它的图上的动画(_carry_animation)
+        带过去;调用方拿新的整批顶替旧的。记录缺格 = 不是生成栈写下的材质,响亮拒绝,不猜。link 进来的材质编的是本会话的替身,
+        它的动画是库里的,不搬。"""
         missing = [key for key in self.RECORD_KEYS if key not in mat]
         if missing:
             raise RuntimeError('[ruri-uber] 材质 {0} 的记录缺 {1}:重新导入它'.format(mat.name, missing))
         record = {key: _plain(mat[key]) for key in self.RECORD_KEYS}
+        if mat.library is None:
+            _refuse_nla([mat])
         new = self._compile(mat.name, record)
         compiled = set(self.RECORD_KEYS) | set(self.SUPERSEDED_KEYS) | {
             'ruri_uber_stack', self.BLEND_KEY, self.SHADING_KEY}
         for key in mat.keys():
             if key not in compiled:
                 new[key] = _plain(mat[key])
+        if mat.library is None:
+            _carry_animation(mat, new)
         return new
 
     def compile_all(self):
@@ -3673,12 +3823,14 @@ class Stack:
 
         判据放宽到 `RuriRig` 前缀(不只当前那批标签):这座桥换过送值通道,旧通道留下的
         节点与**挂在它们 socket 上的驱动器**必须一起走 —— 驱动器是每帧弄脏材质树的那个
-        8.89 倍,漏掉一张材质就等于漏掉整帧。删节点会连带删掉它 socket 上的驱动器。"""
+        8.89 倍,漏掉一张材质就等于漏掉整帧。删节点会连带删掉它 socket 上的驱动器。动画数据块里只剩空壳才收:
+        动作(口上打的关键帧)、别的驱动、NLA 轨道都不是这座桥的。"""
         tree = mat.node_tree
         for node in [n for n in tree.nodes if (n.label or '').startswith('RuriRig')]:
             tree.nodes.remove(node)
         animation = tree.animation_data
-        if animation is not None and not len(animation.drivers):
+        if animation is not None and animation.action is None and not len(animation.drivers) \
+                and not len(animation.nla_tracks):
             tree.animation_data_clear()
 
     def rig_rescan(self):
@@ -6872,14 +7024,17 @@ def retire_generation():
     """换代:清掉本平台各栈这一代留在文件里的东西,随后由 compile_all 照记录重编材质、顶点阶段对挂着旧树的对象重生成顶点腿。
     认人只用本平台自己的词汇:带本平台各栈栈键(ruri_stack)的数据块(模板组与随组带进来的图、材质、物体……;换代前的
     各代都按栈键认,不论 stamp)、点着本平台组名的带 stamp 的组、顶点腿的树名前缀、后处理级的合成树名与图名前缀、
-    模板材质的键。别的平台的组一个不碰。材质的记录与口上的值一概不碰(调用方先 settle_inputs 把口上的值记回记录)。
-    进程态随之作废。返回清掉几个。"""
+    模板材质的键。别的平台的组一个不碰。本文件拥有、却画着别的文件里别代模板组的材质(link 材质的本地拷贝)一并放开那几张组,
+    与画着本文件模板组的一样照记录重编;组节点一没树宿主就按口序删口上的动画,所以先把这些材质的动画改按口名写
+    (_name_socket_animation,重编时 Stack.recompile 再接回),NLA 轨道带不过去就在动任何东西之前拒绝。材质的记录与口上的值
+    一概不碰(调用方先 settle_inputs 把口上的值记回记录)。进程态随之作废。返回清掉几个。"""
     RIG_DRIVEN.clear()
     RIG_SCANNED[0] = False
     vertex_prefixes = tuple(stack.VTX_TREE_PREFIX for stack in STACKS if stack.post is None)
     scene_trees = {stack.post['scene_tree'] for stack in STACKS if stack.post is not None}
     post_prefixes = tuple(stack.post['group'] + ' ' for stack in STACKS if stack.post is not None)
     owners = {stack.PANEL_KEY for stack in STACKS}
+    stamps = {stack.PANEL_KEY: stack.STAMP for stack in STACKS if stack.post is None}
     group_names = {name for stack in STACKS for name in stack.group_names}
     doomed = {}
     for kind in _APPENDED_KINDS:
@@ -6898,6 +7053,23 @@ def retire_generation():
     for image in bpy.data.images:
         if image.library is None and image.name.startswith(post_prefixes):
             doomed[image.as_pointer()] = image
+    recompiled = []
+    released = []
+    for material in bpy.data.materials:
+        if material.library is not None or material.node_tree is None or material.get(Stack.TEMPLATE_KEY) is not None \
+                or material.get('ruri_uber_stack') not in stamps:
+            continue
+        instances = [node for node in material.node_tree.nodes if Stack._generated(node)]
+        foreign = [node for node in instances if node.node_tree.library is not None
+                   and node.node_tree.get('ruri_stamp') != stamps[material['ruri_uber_stack']]]
+        if foreign or any(node.node_tree.as_pointer() in doomed for node in instances):
+            recompiled.append(material)
+            released.extend(foreign)
+    _refuse_nla(recompiled)
+    for material in recompiled:
+        _name_socket_animation(material)
+    for node in released:
+        node.node_tree = None
     if doomed:
         bpy.data.batch_remove(list(doomed.values()))
     return len(doomed)
