@@ -169,7 +169,8 @@ def render_animation(scene, first, last):
     the scene's own overwrite switch is put back afterwards: a frame Blender skipped would meter nothing, and no frame
     after it would be stated.
     On a scene switched to temporal anti-aliasing (temporal.enabled) the frames resolve it under the state temporal.state
-    keys for the range, cleared when the render ends. Returns ``{frame: stops}``."""
+    keys for the range, cleared when the render ends. Returns ``{frame: stops}``; a frame of the range left unstated
+    fails the render once it ends."""
     stages = [stage for stage in material_builder.POST_STAGES if stage.installed(scene)]
     if not stages:
         raise RuntimeError("[exposure] scene {0} has no post stage installed: nothing meters its frames".format(scene.name))
@@ -208,6 +209,11 @@ def render_animation(scene, first, last):
         if not os.path.isfile(closing):
             raise RuntimeError("[exposure] the render stopped before frame {0} recorded its metering".format(last))
         os.remove(closing)
+        unstated = [frame for frame in range(first, last + 1) if frame not in exposures]
+        if unstated:
+            raise RuntimeError("[exposure] frames {0} were left unstated: render_post failed to state them from the frame "
+                               "before (its error is in the console), so they rendered under the exposure keyed before "
+                               "them".format(unstated))
     finally:
         scene.frame_start, scene.frame_end, scene.frame_step = kept[0], kept[1], kept[2]
         scene.render.use_overwrite = kept[4]

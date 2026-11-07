@@ -125,8 +125,9 @@ class RURI_OT_post_reset(bpy.types.Operator):
 class RURI_OT_render_exposure(bpy.types.Operator):
     bl_idname = "ruri.render_exposure"
     bl_label = "Render Animation"
-    bl_description = ("Render the scene's frames to its output path, each shaded and multiplied by the exposure the "
-                      "game's auto exposure adapts to. The materials that take the exposure back out (characters, "
+    bl_description = ("Render the scene's frames to its output path, over the output they already have whatever the "
+                      "scene's Overwrite switch says, each shaded and multiplied by the exposure the game's auto exposure "
+                      "adapts to. The materials that take the exposure back out (characters, "
                       "emissives that ignore it) read it from the scene, and the chain meters a frame only after they are "
                       "shaded: each frame is stated the exposure adapted from the frame before it toward what that frame "
                       "metered, at the level's adaptation speeds, as the game reads back an earlier frame. The exposure "
