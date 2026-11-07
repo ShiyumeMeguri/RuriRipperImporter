@@ -7,9 +7,12 @@ exposure a frame arrives at is adapted, not metered (UberPostPassUtils.AutoExpos
 moves from its previous value toward the target the histogram read back -- already clamped to the level's range -- by the
 level's up or down speed times the frame's delta time, so a cut or a change of light is followed over the next frames, not
 jumped to. The post stage meters each frame's target in the compositor, after every material has been shaded, so no frame
-can read its own; the build reads back an earlier frame's. A render driven here does the same while it renders: each
-frame is stated, before it is shaded, the exposure adapted from the frame before it toward the target that frame metered,
-and the post stage multiplies the frame by that stated exposure, the one its materials read. It renders as one animation,
+can read its own; the build reads back an earlier frame's. A render driven here does the same while it renders: once a
+frame is written, the next one is stated the exposure adapted from it toward the target it metered, and the post stage
+multiplies that frame by the stated exposure, the one its materials read. The state is keyed before Blender starts the
+frame because an animation render evaluates each frame for the compositor, whose driver reads the state, before it runs
+render_pre, and for the render engine, whose materials read it, after: a key inserted in render_pre is shaded on time but
+multiplied by the exposure of the frame before it. It renders as one animation,
 because a still render starts the renderer again for every frame and every render job compiles the scene's shaders again.
 The state is keys on the scene, so any later render of those frames reads the same state; it is the render's, not the
 level's, which is why it lives on the scene and not on the level's world (a material's view-layer attribute finds the
@@ -90,8 +93,9 @@ def stated(scene, frame):
 def state(scene, frame, stops):
     """State ``stops`` on ``scene`` for ``frame``: x = 2^stops, y = its inverse, the rest at their defaults, each written
     as its difference from the stacks' declared default and keyed constant from this frame on. Inserted as a key, which
-    a render running picks up for the frame it is about to shade; a key changed in place, even with its action tagged,
-    is not seen by that render."""
+    a running render reads from the next frame it starts; it starts a frame for the compositor before render_pre, so a
+    frame's state is keyed before that frame starts. A key changed in place, even with its action tagged, is not seen
+    by that render."""
     known = state_global()
     if known is None:
         raise RuntimeError("[exposure] no registered stack reads a post exposure state")
@@ -157,8 +161,9 @@ def _render_range(scene, first, last):
 def render_animation(scene, first, last):
     """Render frames ``first``..``last`` of ``scene`` to its output path, each shaded and multiplied by the exposure the
     build adapts to, and leave that exposure stated on the scene. The first frame keeps the exposure the scene states for
-    it, or the build's initial exposure of 1 when it states none; each later frame is stated, as it is about to be shaded,
-    the exposure adapted from the frame before it toward the target that frame metered, at the speeds the level states.
+    it, or the build's initial exposure of 1 when it states none; each later frame is stated, once the frame before it is
+    written and before Blender starts it, the exposure adapted from the frame before it toward the target that frame
+    metered, at the speeds the level states.
     On a scene switched to temporal anti-aliasing (temporal.enabled) the frames resolve it under the state temporal.state
     keys for the range, cleared when the render ends. Returns ``{frame: stops}``."""
     stages = [stage for stage in material_builder.POST_STAGES if stage.installed(scene)]
@@ -180,21 +185,21 @@ def render_animation(scene, first, last):
 
     def seed(scene_now, *_arguments):
         frame = scene_now.frame_current
-        if frame - 1 in exposures and frame not in exposures:
-            target = _metered(_record_of(stages, scene_now, frame - 1), frame - 1)
-            exposures[frame] = _adapted(exposures[frame - 1], target, speeds, delta)
-            state(scene_now, frame, exposures[frame])
+        if frame in exposures and frame + 1 not in exposures and frame < last:
+            target = _metered(_record_of(stages, scene_now, frame), frame)
+            exposures[frame + 1] = _adapted(exposures[frame], target, speeds, delta)
+            state(scene_now, frame + 1, exposures[frame + 1])
 
     try:
         for frame in range(first, last + 1):
             record = _record_of(stages, scene, frame)
             if os.path.exists(record):
                 os.remove(record)
-        bpy.app.handlers.render_pre.append(seed)
+        bpy.app.handlers.render_post.append(seed)
         try:
             _render_range(scene, first, last)
         finally:
-            bpy.app.handlers.render_pre.remove(seed)
+            bpy.app.handlers.render_post.remove(seed)
         closing = _record_of(stages, scene, last)
         if not os.path.isfile(closing):
             raise RuntimeError("[exposure] the render stopped before frame {0} recorded its metering".format(last))
