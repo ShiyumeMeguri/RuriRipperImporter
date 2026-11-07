@@ -152,9 +152,11 @@ def _adapted(current, target, speeds, delta):
 
 
 def _render_range(scene, first, last):
-    """One animation render of frames ``first``..``last``: the renderer starts once for the whole run. A still render
-    starts it again for every frame, which costs many times the frame itself."""
+    """One animation render of every frame ``first``..``last``: the renderer starts once for the whole run (a still
+    render starts it again for every frame, which costs many times the frame itself), and it overwrites the output a
+    frame already has: a frame skipped for having output runs no render_post."""
     scene.frame_start, scene.frame_end, scene.frame_step = first, last, 1
+    scene.render.use_overwrite = True
     bpy.ops.render.render(animation=True)
 
 
@@ -163,7 +165,9 @@ def render_animation(scene, first, last):
     build adapts to, and leave that exposure stated on the scene. The first frame keeps the exposure the scene states for
     it, or the build's initial exposure of 1 when it states none; each later frame is stated, once the frame before it is
     written and before Blender starts it, the exposure adapted from the frame before it toward the target that frame
-    metered, at the speeds the level states.
+    metered, at the speeds the level states. Every frame of the range is rendered, over any output it already has, and
+    the scene's own overwrite switch is put back afterwards: a frame Blender skipped would meter nothing, and no frame
+    after it would be stated.
     On a scene switched to temporal anti-aliasing (temporal.enabled) the frames resolve it under the state temporal.state
     keys for the range, cleared when the render ends. Returns ``{frame: stops}``."""
     stages = [stage for stage in material_builder.POST_STAGES if stage.installed(scene)]
@@ -181,7 +185,7 @@ def render_animation(scene, first, last):
         stage.record_exposure(scene, folder)
     kept_filter = temporal.state(scene, first, last, os.path.join(bpy.app.tempdir, "ruri_temporal_{0}".format(
         scene.name))) if temporal.enabled(scene) else None
-    kept = (scene.frame_start, scene.frame_end, scene.frame_step, scene.frame_current)
+    kept = (scene.frame_start, scene.frame_end, scene.frame_step, scene.frame_current, scene.render.use_overwrite)
 
     def seed(scene_now, *_arguments):
         frame = scene_now.frame_current
@@ -206,6 +210,7 @@ def render_animation(scene, first, last):
         os.remove(closing)
     finally:
         scene.frame_start, scene.frame_end, scene.frame_step = kept[0], kept[1], kept[2]
+        scene.render.use_overwrite = kept[4]
         scene.frame_set(kept[3])
         for stage in stages:
             stage.record_exposure(scene, "")
