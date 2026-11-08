@@ -638,6 +638,11 @@ class Clip:
         return float(self.meta.get("sampleRate") or 0.0)
 
     @property
+    def loop(self):
+        """Whether the source states the clip loops (its muscle clip's loop-time flag)."""
+        return bool(self.meta.get("loopTime"))
+
+    @property
     def channels(self):
         if self._channels is None:
             floats = (np.frombuffer(self.curves, dtype=np.float32) if self.curves

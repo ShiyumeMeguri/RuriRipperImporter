@@ -64,6 +64,8 @@ def export(statement, scene_name, root, product, families, extension, textures=N
 
     stated = statement.colliders
     written = []
+    offered = {}
+    placed_keys = set()
     placed = {}
     on_joints = set()
     report["colliders_on_joints"] = 0
@@ -89,12 +91,19 @@ def export(statement, scene_name, root, product, families, extension, textures=N
                                print_key, rig, parts)
             written.append(match)
             for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
-                made = animations.author(layout.animation(name, file_stem(clip.name)), identifier(clip.name), rig,
+                made = animations.author(layout.animation(name, animations.layer_stem(clip)), identifier(clip.name), rig,
                                          hierarchy, clip)
-                if made is not None:
-                    report.setdefault("animations", []).append(dict(made, character=name, clip=clip.name))
+                entry = dict(made, character=name, clip=clip.name, key=clip.key)
+                offered.setdefault(clip.key, clip)
+                if made["written"]:
+                    placed_keys.add(clip.key)
+                report.setdefault("animations" if made["written"] else "animation_misses", []).append(entry)
         placed[index] = match
     report["character_layers"] = len(written)
+    for key, clip in offered.items():
+        if key not in placed_keys:
+            carried = animations.author_carrier(layout.clip(animations.layer_stem(clip)), identifier(clip.name), clip)
+            report.setdefault("animation_carriers", []).append(dict(carried, clip=clip.name, key=key))
 
     pieces = {}
     by_signature = {}

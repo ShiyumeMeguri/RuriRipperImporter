@@ -13,7 +13,7 @@ from pxr import Gf, Sdf, Usd, UsdSkel, Vt
 
 from .. import statement as kernel_statement
 from . import stages
-from .names import Namer, identifier
+from .names import Namer, file_stem, identifier
 
 #: The rate a clip is sampled at when it states none.
 DEFAULT_RATE = 30.0
@@ -57,28 +57,37 @@ def _continuous(quaternions):
 
 
 def author(layer_path, name, rig, hierarchy, clip):
-    """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns counts of what it moves, or None when the
-    clip moves none of the rig's joints."""
+    """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns ``{"written", "unplaced", ...}``: whether a
+    layer was written, how many of the clip's curves landed on no joint of the rig by kind (a curve the layer cannot carry
+    is counted here rather than dropped silently), and when written the counts of what it moves."""
     matrix, vector_sign = _reflection()
     magnitude = np.abs(matrix)
-    rate = clip.sample_rate or DEFAULT_RATE
-    duration = clip.duration
-    times = (np.minimum(np.arange(int(np.ceil(duration * rate)) + 1) / rate, duration) if duration > 0
-             else np.zeros(1))
+    rate, duration, times = _sampling(clip)
     frames = len(times)
     joint_of_source = {source: joint for joint, source in enumerate(rig.sources)}
     moved = {}
+    unplaced = {}
     for kind in ("pos", "rot", "euler", "scale"):
         for channel in clip.of_kind(kind):
             joint = joint_of_source.get(channel.path)
             if joint is not None:
                 moved.setdefault(joint, {})[kind] = channel.sample(times)
+            else:
+                reason = kind if channel.path else kind + ":root"
+                unplaced[reason] = unplaced.get(reason, 0) + 1
     shapes = {}
     for channel in clip.of_kind("float"):
-        if channel.attribute.startswith(BLEND_SHAPE_PREFIX):
-            shapes[channel.attribute[len(BLEND_SHAPE_PREFIX):]] = channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT
+        if not channel.attribute.startswith(BLEND_SHAPE_PREFIX):
+            reason = "float:{0}".format(channel.class_id)
+            unplaced[reason] = unplaced.get(reason, 0) + 1
+        elif channel.path in joint_of_source:
+            shapes[(channel.path, channel.attribute[len(BLEND_SHAPE_PREFIX):])] = (
+                channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT)
+        else:
+            reason = "blend_shape:self" if not channel.path else "blend_shape:unmatched"
+            unplaced[reason] = unplaced.get(reason, 0) + 1
     if not moved and not shapes:
-        return None
+        return {"written": False, "unplaced": unplaced}
     stage = stages.create(layer_path, kernel_statement.USD, "Clip {0} on {1}".format(name, rig.sources[0] if rig.sources else ""))
     stage.SetTimeCodesPerSecond(rate)
     stage.SetStartTimeCode(0)
@@ -87,6 +96,8 @@ def author(layer_path, name, rig, hierarchy, clip):
     stage.SetDefaultPrim(animation.GetPrim())
     animation.GetPrim().CreateAttribute("ruri:sourceName", Sdf.ValueTypeNames.String, custom=True).Set(clip.name)
     animation.GetPrim().CreateAttribute("ruri:sourceKey", Sdf.ValueTypeNames.String, custom=True).Set(clip.key)
+    animation.GetPrim().CreateAttribute("ruri:clipLoop", Sdf.ValueTypeNames.Bool, custom=True).Set(bool(clip.loop))
+    animation.GetPrim().CreateAttribute("ruri:clipDuration", Sdf.ValueTypeNames.Double, custom=True).Set(float(duration))
     joints = sorted(moved)
     animation.CreateJointsAttr(Vt.TokenArray([rig.tokens[joint] for joint in joints]))
     translations = animation.CreateTranslationsAttr()
@@ -121,13 +132,82 @@ def author(layer_path, name, rig, hierarchy, clip):
         rotations.Set(Vt.QuatfArray([Gf.Quatf(float(w), Gf.Vec3f(float(x), float(y), float(z)))
                                      for x, y, z, w in columns_r[frame]]), code)
         scales.Set(Vt.Vec3hArray.FromNumpy(np.ascontiguousarray(columns_s[frame], dtype=np.float16)), code)
-    if shapes:
-        names = Namer()
-        tokens = [names.claim("shapes", identifier(shape)) for shape in shapes]
-        animation.CreateBlendShapesAttr(Vt.TokenArray(tokens))
-        weights = animation.CreateBlendShapeWeightsAttr()
-        stacked = np.stack([shapes[shape] for shape in shapes], axis=1)
-        for frame in range(frames):
-            weights.Set(Vt.FloatArray.FromNumpy(np.ascontiguousarray(stacked[frame], dtype=np.float32)), Usd.TimeCode(frame))
+    _write_shapes(animation, shapes, frames)
     stage.GetRootLayer().Save()
-    return {"joints": len(joints), "frames": frames, "blend_shapes": len(shapes), "rate": rate}
+    return {"written": True, "unplaced": unplaced, "joints": len(joints), "frames": frames, "blend_shapes": len(shapes),
+            "rate": rate}
+
+
+def _sampling(clip):
+    """``(rate, duration, times)``: the rate the clip is sampled at, its length and the sample times, the last being its end."""
+    rate = clip.sample_rate or DEFAULT_RATE
+    duration = clip.duration
+    times = (np.minimum(np.arange(int(np.ceil(duration * rate)) + 1) / rate, duration) if duration > 0
+             else np.zeros(1))
+    return rate, duration, times
+
+
+def _write_shapes(animation, shapes, frames):
+    """The blend shape weights of ``shapes`` (``{(renderer path, shape name): weights per frame}``) on ``animation``: the
+    USD arrays by unique token, and beside them the renderer path and the source's own name of each, which USD has no
+    place for."""
+    if not shapes:
+        return
+    names = Namer()
+    keys = list(shapes)
+    tokens = [names.claim("shapes", identifier(shape)) for _path, shape in keys]
+    animation.CreateBlendShapesAttr(Vt.TokenArray(tokens))
+    animation.GetPrim().CreateAttribute("ruri:blendShapePaths", Sdf.ValueTypeNames.StringArray, custom=True).Set(
+        Vt.StringArray([path for path, _shape in keys]))
+    animation.GetPrim().CreateAttribute("ruri:blendShapeSourceNames", Sdf.ValueTypeNames.StringArray, custom=True).Set(
+        Vt.StringArray([shape for _path, shape in keys]))
+    weights = animation.CreateBlendShapeWeightsAttr()
+    stacked = np.stack([shapes[key] for key in keys], axis=1)
+    for frame in range(frames):
+        weights.Set(Vt.FloatArray.FromNumpy(np.ascontiguousarray(stacked[frame], dtype=np.float32)), Usd.TimeCode(frame))
+
+
+def author_carrier(layer_path, name, clip):
+    """Write ``clip`` once, on no rig, for a clip that no rig could place anything of: what it says without a skeleton --
+    its identity, loop flag, length and blend shape curves with the renderer paths it authored them against -- and, as
+    ``ruri:unplaced``, how many curves it has that need a skeleton or a component this layer cannot carry (``kind=count``).
+    A clip with no curves at all is a pose of nothing and still has an identity a controller refers to."""
+    rate, duration, times = _sampling(clip)
+    frames = len(times)
+    unplaced = {}
+    for kind in ("pos", "rot", "euler", "scale"):
+        for channel in clip.of_kind(kind):
+            reason = kind if channel.path else kind + ":root"
+            unplaced[reason] = unplaced.get(reason, 0) + 1
+    shapes = {}
+    for channel in clip.of_kind("float"):
+        if channel.attribute.startswith(BLEND_SHAPE_PREFIX):
+            shapes[(channel.path, channel.attribute[len(BLEND_SHAPE_PREFIX):])] = (
+                channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT)
+        else:
+            reason = "float:{0}".format(channel.class_id)
+            unplaced[reason] = unplaced.get(reason, 0) + 1
+    stage = stages.create(layer_path, kernel_statement.USD, "Clip {0} on no rig".format(name))
+    stage.SetTimeCodesPerSecond(rate)
+    stage.SetStartTimeCode(0)
+    stage.SetEndTimeCode(frames - 1)
+    animation = UsdSkel.Animation.Define(stage, "/" + identifier(name))
+    stage.SetDefaultPrim(animation.GetPrim())
+    prim = animation.GetPrim()
+    prim.CreateAttribute("ruri:sourceName", Sdf.ValueTypeNames.String, custom=True).Set(clip.name)
+    prim.CreateAttribute("ruri:sourceKey", Sdf.ValueTypeNames.String, custom=True).Set(clip.key)
+    prim.CreateAttribute("ruri:clipLoop", Sdf.ValueTypeNames.Bool, custom=True).Set(bool(clip.loop))
+    prim.CreateAttribute("ruri:clipDuration", Sdf.ValueTypeNames.Double, custom=True).Set(float(duration))
+    animation.CreateJointsAttr(Vt.TokenArray([]))
+    _write_shapes(animation, shapes, frames)
+    if unplaced:
+        prim.CreateAttribute("ruri:unplaced", Sdf.ValueTypeNames.StringArray, custom=True).Set(
+            Vt.StringArray(["{0}={1}".format(reason, unplaced[reason]) for reason in sorted(unplaced)]))
+    stage.GetRootLayer().Save()
+    return {"written": True, "unplaced": unplaced, "joints": 0, "frames": frames, "blend_shapes": len(shapes), "rate": rate}
+
+
+def layer_stem(clip):
+    """The file name of ``clip``'s layer: its name for whoever reads the folder, and its key -- the one thing that tells
+    two clips of the same name apart -- for everything else."""
+    return "{0}__{1}".format(file_stem(clip.name), identifier(clip.key))
