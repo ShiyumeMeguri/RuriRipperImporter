@@ -18,6 +18,7 @@ CHARACTER_SUFFIX = "_postmodel"
 TEXTURES = "textures"
 ANIMATIONS = "animations"
 CLIPS = "dynamicassets/gameplay/animations/clips"
+AUDIO_CLIPS = "dynamicassets/gameplay/audioclips"
 CONTROLLERS = "dynamicassets/gameplay/animatorcontrollers"
 CUTSCENES = "dynamicassets/cutscene"
 
@@ -55,6 +56,10 @@ class Layout:
 
     def clip(self, stem):
         folder = os.path.join(self.base, *CLIPS.split("/"), stem)
+        return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def audio_clip(self, stem):
+        folder = os.path.join(self.base, *AUDIO_CLIPS.split("/"), stem)
         return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
 
     def controller(self, stem):

@@ -38,6 +38,8 @@ MATERIALS = "core.statement.materials"
 TEXTURES = "core.statement.textures"
 TEXTURE = "core.statement.texture"
 CLIPS = "core.statement.clips"
+AUDIOCLIPS = "core.statement.audioclips"
+AUDIOCLIP = "core.statement.audioclip"
 CONTROLLERS = "core.statement.controllers"
 ANIMATORS = "core.statement.animators"
 TIMELINES = "core.statement.timelines"
@@ -670,6 +672,42 @@ class Clip:
         return "<Clip {0}>".format(self.name)
 
 
+class AudioClip:
+    """One audio clip of a selection as the engine plays it: the channels, frequency and whole number of samples per
+    channel its sound bank states, the duration those make, and its Ogg Vorbis file ON DEMAND.
+
+    The file is fetched per clip, as a texture's pixels are: nothing is remembered here, because a selection's sounds
+    run to many megabytes and a host writes each one out and is done with it."""
+
+    __slots__ = ("key", "name", "archive", "channels", "frequency", "samples", "duration", "serialized_length", "format",
+                 "bytes", "_statement")
+
+    def __init__(self, row, statement):
+        self.key = row["audioclip"]
+        self.name = row["name"]
+        #: The archive the clip came out of, as the reader states it.
+        self.archive = row["cab"]
+        self.channels = int(row["channels"])
+        self.frequency = int(row["frequency"])
+        #: Whole samples per channel, from the sound bank's header.
+        self.samples = int(row["samples"])
+        #: Seconds: the sample count over the frequency, the way the game's own timeline takes a clip's length.
+        self.duration = float(row["duration"])
+        #: Seconds, as the clip itself serializes its length (single precision); for comparison only.
+        self.serialized_length = float(row["serialized_length"])
+        self.format = row["format"]
+        #: How many bytes the Ogg file is, stated without fetching it.
+        self.bytes = int(row["bytes"])
+        self._statement = statement
+
+    @property
+    def ogg(self):
+        return self._statement.payload(AUDIOCLIP, audioclip=self.key)
+
+    def __repr__(self):
+        return "<AudioClip {0} ({1} Hz, {2} ch, {3} samples)>".format(self.name, self.frequency, self.channels, self.samples)
+
+
 def source_host(paths, near=""):
     """The seed of the prefab rooted on the skeleton whose transform table covers these clip bindings
     best, or "" when none does. ``near`` is the archive the clips came from."""
@@ -915,6 +953,12 @@ class Statement:
         return self._rows(TEXTURES, lambda table: {
             table.cell(index, "texture"): Texture(table.row(index), self)
             for index in range(table.row_count)})
+
+    @property
+    def audioclips(self):
+        """The audio clips these seeds carry."""
+        return self._rows(AUDIOCLIPS, lambda table: [
+            AudioClip(table.row(index), self) for index in range(table.row_count)])
 
     @property
     def controllers(self):
