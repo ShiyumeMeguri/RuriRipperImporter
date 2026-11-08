@@ -12,6 +12,8 @@ refer to each other.
 ``statics``    the layer of one mesh with the materials it is drawn with
 ``characters`` the layer of one rig: its skeleton, its skinned meshes, their blend shapes
 ``geometry``   a mesh, a skin and a blend shape as USD prims
+``records``    a controller or any other record the source states about one asset, as the prims and ``ruri:`` attributes
+               of one layer
 ``materials``  a material as a preview surface and the source's own properties, and its textures
 ``names``      legal prim and file names, unique where they are looked up
 ``layout``     where each kind of layer lives on disk and how one layer reaches another

@@ -38,6 +38,8 @@ MATERIALS = "core.statement.materials"
 TEXTURES = "core.statement.textures"
 TEXTURE = "core.statement.texture"
 CLIPS = "core.statement.clips"
+CONTROLLERS = "core.statement.controllers"
+ANIMATORS = "core.statement.animators"
 SOURCE_SKELETON = "core.clip.source_skeleton"
 REPORT = "core.statement.report"
 
@@ -680,6 +682,41 @@ def source_host(paths, near=""):
         table.close()
 
 
+class Controller:
+    """An animator controller as the record the reader states for it: ``key`` is its identity, ``record`` the parsed
+    JSON (parameters, layers, state machines, states, transitions, conditions, blend trees)."""
+
+    __slots__ = ("key", "name", "archive", "record")
+
+    def __init__(self, row):
+        self.key = row["controller"]
+        self.name = row["name"]
+        self.archive = row["cab"]
+        self.record = json.loads(row["record"])
+
+    def __repr__(self):
+        return "<Controller {0}>".format(self.name)
+
+
+class Animator:
+    """An Animator component on a node: where it sits (the node's path), the controller it plays and the avatar it was
+    built with, by key, empty when it has none."""
+
+    __slots__ = ("path", "controller", "avatar", "enabled", "root_motion", "update_mode", "culling_mode")
+
+    def __init__(self, row):
+        self.path = row["path"]
+        self.controller = row["controller"]
+        self.avatar = row["avatar"]
+        self.enabled = bool(int(row["enabled"]))
+        self.root_motion = bool(int(row["root_motion"]))
+        self.update_mode = row["update_mode"]
+        self.culling_mode = row["culling_mode"]
+
+    def __repr__(self):
+        return "<Animator {0}>".format(self.path)
+
+
 class Report:
     __slots__ = ("seed", "what", "count", "detail")
 
@@ -858,6 +895,18 @@ class Statement:
         return self._rows(TEXTURES, lambda table: {
             table.cell(index, "texture"): Texture(table.row(index), self)
             for index in range(table.row_count)})
+
+    @property
+    def controllers(self):
+        """The animator controllers these seeds carry."""
+        return self._rows(CONTROLLERS, lambda table: [
+            Controller(table.row(index)) for index in range(table.row_count)])
+
+    @property
+    def animators(self):
+        """The Animator components these seeds place."""
+        return self._rows(ANIMATORS, lambda table: [
+            Animator(table.row(index)) for index in range(table.row_count)])
 
     @property
     def report(self):

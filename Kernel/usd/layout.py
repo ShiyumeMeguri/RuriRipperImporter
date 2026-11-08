@@ -18,6 +18,7 @@ CHARACTER_SUFFIX = "_postmodel"
 TEXTURES = "textures"
 ANIMATIONS = "animations"
 CLIPS = "dynamicassets/gameplay/animations/clips"
+CONTROLLERS = "dynamicassets/gameplay/animatorcontrollers"
 
 #: The two file formats a layer is written in, by extension.
 TEXT = "usda"
@@ -54,6 +55,14 @@ class Layout:
     def clip(self, stem):
         folder = os.path.join(self.base, *CLIPS.split("/"), stem)
         return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def controller(self, stem):
+        folder = os.path.join(self.base, *CONTROLLERS.split("/"), stem)
+        return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def scene_record(self, scene, name):
+        folder = os.path.join(self.base, *SCENES.split("/"), scene, name)
+        return os.path.join(folder, "{0}.{1}".format(name, self.extension))
 
     @staticmethod
     def textures(layer_path):
