@@ -40,6 +40,7 @@ TEXTURE = "core.statement.texture"
 CLIPS = "core.statement.clips"
 CONTROLLERS = "core.statement.controllers"
 ANIMATORS = "core.statement.animators"
+TIMELINES = "core.statement.timelines"
 SOURCE_SKELETON = "core.clip.source_skeleton"
 REPORT = "core.statement.report"
 
@@ -698,6 +699,24 @@ class Controller:
         return "<Controller {0}>".format(self.name)
 
 
+class Timeline:
+    """A timeline asset as the record the reader states for it: ``key`` is its identity, ``director`` the scene path of the
+    director that plays it (empty when none of the selection's directors does), ``record`` the parsed JSON (tracks, clips,
+    markers, bindings)."""
+
+    __slots__ = ("key", "name", "director", "archive", "record")
+
+    def __init__(self, row):
+        self.key = row["timeline"]
+        self.name = row["name"]
+        self.director = row["director"]
+        self.archive = row["cab"]
+        self.record = json.loads(row["record"])
+
+    def __repr__(self):
+        return "<Timeline {0}>".format(self.name)
+
+
 class Animator:
     """An Animator component on a node: where it sits (the node's path), the controller it plays and the avatar it was
     built with, by key, empty when it has none."""
@@ -795,7 +814,7 @@ class Statement:
 
     @classmethod
     def of(cls, seeds, basis=UNITY, detail=0, inactive=True, shadow_proxies=False,
-           roles=(), containers=(), colliders=False):
+           roles=(), containers=(), colliders=False, scripts=False):
         """Ask what these seeds are.
 
         ``detail`` is the level to keep and -1 every level; ``inactive`` keeps
@@ -803,13 +822,14 @@ class Statement:
         renderers that draw only into the shadow map; ``roles`` are texture-role
         layer files, later overriding earlier; ``containers`` are the image
         containers this host loads directly; ``colliders`` states the collision
-        volumes of the objects, which are otherwise left out."""
+        volumes of the objects, which are otherwise left out; ``scripts`` reads the layouts of the game's own
+        scripts, without which a timeline (a MonoBehaviour) has no fields to state."""
         seeds = [str(seed) for seed in (seeds if isinstance(seeds, (list, tuple, set))
                                         else [seeds]) if str(seed)]
         if not seeds:
             raise ValueError("a statement needs at least one seed")
         return cls({"seed": seeds, "basis": basis, "detail": detail,
-                    "inactive": inactive, "shadow_proxies": shadow_proxies, "colliders": colliders,
+                    "inactive": inactive, "shadow_proxies": shadow_proxies, "colliders": colliders, "scripts": scripts,
                     "roles": list(roles), "containers": list(containers)})
 
     @property
@@ -901,6 +921,12 @@ class Statement:
         """The animator controllers these seeds carry."""
         return self._rows(CONTROLLERS, lambda table: [
             Controller(table.row(index)) for index in range(table.row_count)])
+
+    @property
+    def timelines(self):
+        """The timeline assets the directors of these seeds play."""
+        return self._rows(TIMELINES, lambda table: [
+            Timeline(table.row(index)) for index in range(table.row_count)])
 
     @property
     def animators(self):
