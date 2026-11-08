@@ -14,6 +14,7 @@ refer to each other.
 ``geometry``   a mesh, a skin and a blend shape as USD prims
 ``records``    a controller or any other record the source states about one asset, as the prims and ``ruri:`` attributes
                of one layer
+``cinemachine`` the components of the camera package a scene's nodes carry, as records under those nodes of the scene layer
 ``audio``      an audio clip as one record layer and the Ogg Vorbis file beside it
 ``materials``  a material as a preview surface and the source's own properties, and its textures
 ``names``      legal prim and file names, unique where they are looked up

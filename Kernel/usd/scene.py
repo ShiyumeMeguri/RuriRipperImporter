@@ -11,6 +11,7 @@ from __future__ import annotations
 from pxr import Sdf, UsdGeom, UsdSkel
 
 from .. import statement as kernel_statement
+from . import cinemachine as cinemachine_module
 from . import colliders as collider_module
 from . import sources, stages, transforms
 from .layout import Layout
@@ -25,11 +26,13 @@ def _refer(prim, scene_layer, target_layer, target_root):
 
 
 def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, characters, pieces, colliders=None,
-           collision_pieces=None):
+           collision_pieces=None, cinemachine=None):
     """Write the scene ``scene_name`` to ``layer_path``. ``characters`` maps a rig root's node index to the
     written character, ``pieces`` a node index to the written piece it draws, ``colliders`` a node index to the
-    volumes it carries (a node below a rig root has none here: its rig holds them) and ``collision_pieces`` a
-    mesh key to the written piece holding it. Returns counts of what was written."""
+    volumes it carries (a node below a rig root has none here: its rig holds them), ``collision_pieces`` a
+    mesh key to the written piece holding it and ``cinemachine`` a node index to the components of the camera package
+    it carries (``cinemachine.by_node``; a node inside a rig cannot hold them, and one is refused). Returns counts of what
+    was written."""
     stage = stages.create(layer_path, kernel_statement.USD, "Scene {0}".format(scene_name))
     top_path = Sdf.Path("/" + identifier(scene_name))
     top = UsdGeom.Xform.Define(stage, top_path)
@@ -41,8 +44,10 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
     paths = {}
     colliders = colliders or {}
     collision_pieces = collision_pieces or {}
+    cinemachine = cinemachine or {}
     counts = {"prims": 1, "references": 0, "instanceable": 0, "characters": 0, "inside_rigs": 0, "colliders": 0,
-              "colliders_without_geometry": 0}
+              "colliders_without_geometry": 0, "cinemachine_nodes": 0, "cinemachine_components": 0}
+    stated = {"prims": 0, "attributes": 0}
     for node in hierarchy.nodes:
         index = node.index
         if covered[index] and index not in rig_roots:
@@ -55,6 +60,10 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
         sources.describe(prim, node, hierarchy.source_paths[index])
         paths[index] = path
         counts["prims"] += 1
+        if index in cinemachine:
+            cinemachine_module.author(stage, prim, cinemachine[index], names, stated)
+            counts["cinemachine_nodes"] += 1
+            counts["cinemachine_components"] += len(cinemachine[index])
         if index in rig_roots:
             character = characters[index]
             _refer(prim, layer_path, character.layer_path, character.root)
@@ -76,5 +85,11 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
                 counts["instanceable"] += collider.kind == "mesh"
             else:
                 counts["colliders_without_geometry"] += 1
+    lost = sorted(hierarchy.source_paths[index] for index in cinemachine if index not in paths)
+    if lost:
+        raise ValueError("components of the camera package sit on nodes inside a rig, which the scene layer does not write: "
+                         "{0}.".format(", ".join(lost)))
+    counts["cinemachine_prims"] = stated["prims"]
+    counts["cinemachine_attributes"] = stated["attributes"]
     stage.GetRootLayer().Save()
     return counts

@@ -43,6 +43,7 @@ AUDIOCLIP = "core.statement.audioclip"
 CONTROLLERS = "core.statement.controllers"
 ANIMATORS = "core.statement.animators"
 TIMELINES = "core.statement.timelines"
+CINEMACHINE = "core.statement.cinemachine"
 SOURCE_SKELETON = "core.clip.source_skeleton"
 REPORT = "core.statement.report"
 
@@ -774,6 +775,22 @@ class Animator:
         return "<Animator {0}>".format(self.path)
 
 
+class CinemachineComponent:
+    """A component of the camera package's own scripts on a node: ``path`` is the source path of the node it sits on (the
+    one the scene layer states the node by), ``class_name`` the class of its script, ``record`` the parsed JSON (whether it
+    is enabled, then every field the script serializes, under the name the script gives it)."""
+
+    __slots__ = ("path", "class_name", "record")
+
+    def __init__(self, row):
+        self.path = row["path"]
+        self.class_name = row["class"]
+        self.record = json.loads(row["record"])
+
+    def __repr__(self):
+        return "<CinemachineComponent {0} on {1}>".format(self.class_name, self.path)
+
+
 class Report:
     __slots__ = ("seed", "what", "count", "detail")
 
@@ -977,6 +994,13 @@ class Statement:
         """The Animator components these seeds place."""
         return self._rows(ANIMATORS, lambda table: [
             Animator(table.row(index)) for index in range(table.row_count)])
+
+    @property
+    def cinemachine(self):
+        """The components of the camera package's scripts these seeds place, which are stated only when the statement
+        was asked with ``scripts``; the reader refuses the table rather than leave a component out of it."""
+        return self._rows(CINEMACHINE, lambda table: [
+            CinemachineComponent(table.row(index)) for index in range(table.row_count)])
 
     @property
     def report(self):

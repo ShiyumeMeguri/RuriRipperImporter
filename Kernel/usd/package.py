@@ -15,6 +15,7 @@ import numpy as np
 
 from .. import statement as kernel_statement
 from . import animations, characters, rigs, scene, statics
+from . import cinemachine as cinemachine_module
 from .hierarchy import Hierarchy
 from .layout import Layout
 from .materials import TextureStore
@@ -44,11 +45,12 @@ def _carried(mesh, matrix):
     return moved
 
 
-def export(statement, scene_name, root, product, families, extension, textures=None, performances=None):
+def export(statement, scene_name, root, product, families, extension, textures=None, performances=None, cinemachine=None):
     """Write the statement as the tree of layers of ``extension`` under ``root``/assets/``product``. The
     statement must have been read in the usd basis. ``performances``, when given, is asked for the clips each new
     character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's.
-    Returns a dict of what was written."""
+    ``cinemachine``, when given, are the components of the camera package the scene carries (``Statement.cinemachine``, read
+    with ``scripts``), each written under the node it sits on in the scene layer. Returns a dict of what was written."""
     if statement.basis != kernel_statement.USD:
         raise ValueError("a statement is written to USD in the {0} basis, and this one is in {1}.".format(
             kernel_statement.USD, statement.basis))
@@ -57,6 +59,7 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     folders = Namer()
     textures = textures if textures is not None else TextureStore(statement)
     hierarchy = Hierarchy(statement.nodes)
+    components = cinemachine_module.by_node(cinemachine or (), hierarchy)
     rig_roots, covered = rigs.find(hierarchy, statement.meshes)
     report = {"extension": extension, "nodes": len(hierarchy.nodes), "depth": hierarchy.maximum_depth(),
               "roots": len(hierarchy.roots), "rigs": len(rig_roots), "rig_missing_meshes": 0,
@@ -149,7 +152,7 @@ def export(statement, scene_name, root, product, families, extension, textures=N
         if collider.node not in on_joints:
             placements.setdefault(collider.node, []).append(collider)
     report.update(scene.author(layout.scene(scene_name), scene_name, statement, hierarchy, set(rig_roots), covered,
-                               placed, pieces, placements, {**collision, **drawn}))
+                               placed, pieces, placements, {**collision, **drawn}, components))
     report["textures_written"] = textures.written
     report["textures_linked"] = textures.linked
     report["textures_copied"] = textures.copied

@@ -84,6 +84,16 @@ def _write_object(stage, prim, mapping, counts, path):
             counts["attributes"] += 1
 
 
+def attach(stage, parent, name, record, counts):
+    """Write ``record`` (a dict) as the child ``Scope`` ``name`` of the prim ``parent``, by the same five rules, for a record
+    that is one part of a layer rather than a layer of its own. ``counts`` tallies ``prims`` and ``attributes``. Returns
+    the prim."""
+    prim = stage.DefinePrim(parent.GetPath().AppendChild(name), "Scope")
+    counts["prims"] += 1
+    _write_object(stage, prim, record, counts, str(prim.GetPath()))
+    return prim
+
+
 def author(layer_path, record, description):
     """Write ``record`` (a dict) to ``layer_path``; the default prim is named after ``sourceName``. Returns the counts
     of prims and attributes written."""
