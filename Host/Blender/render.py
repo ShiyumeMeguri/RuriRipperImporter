@@ -21,7 +21,7 @@ from ...Kernel.app import layout as app_layout
 from ...Kernel.app import command as app_command
 from ...Kernel.app import state as app_state
 from ...Kernel import host as host_port
-from . import picture_view, rna
+from . import picture_view, rna, thumbnails
 
 _ALIGNMENTS = {app_layout.LEFT: "LEFT", app_layout.CENTER: "CENTER",
                app_layout.RIGHT: "RIGHT", app_layout.EXPAND: "EXPAND"}
@@ -98,6 +98,9 @@ def render(node, target, context):
     elif kind == app_layout.PICTURE:
         made = target
         picture_view.draw(target, spec["picture"], spec["window"], context)
+    elif kind == app_layout.THUMBNAIL_GRID:
+        made = target
+        thumbnails.draw(target, spec, context)
     elif kind == app_layout.NATIVE:
         made = target
         spec["draw"](target, context)
@@ -364,7 +367,8 @@ def operator_class(command):
         return settle(self, context, step_loader.run(load_steps(self, context)))
 
     namespace.update({"load_steps": load_steps, "status": status, "settle": settle,
-                      "execute": execute_inline, "failure": command.failure})
+                      "execute": execute_inline, "failure": command.failure,
+                      "cancel_message": command.cancel_message})
     return type("RURI_OT_" + name, (step_loader.ModalSteps, bpy.types.Operator), namespace)
 
 
@@ -398,6 +402,7 @@ def register():
 
 
 def unregister():
+    thumbnails.unregister()
     for made in reversed(_GENERATED):
         bpy.utils.unregister_class(made)
     _GENERATED.clear()

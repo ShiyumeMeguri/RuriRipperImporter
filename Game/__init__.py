@@ -62,15 +62,16 @@ class GameTab:
     does not get the tab AT ALL -- not a disabled one. A control that exists but
     cannot work is worse than one that is honestly missing."""
 
-    __slots__ = ("id", "label", "description", "_draw", "requires", "owner")
+    __slots__ = ("id", "label", "description", "_draw", "requires", "owner", "requires_map")
 
-    def __init__(self, tab_id, label, description, draw, requires=None):
+    def __init__(self, tab_id, label, description, draw, requires=None, requires_map=True):
         self.id = tab_id
         self.label = label
         self.description = description
         self._draw = draw
         self.requires = requires
         self.owner = None
+        self.requires_map = requires_map
 
     @property
     def available(self):
@@ -150,11 +151,11 @@ class GameModule:
     __slots__ = ("game_name", "label", "tabs", "sections", "face_retarget",
                  "secondary_motion", "shadow_proxies", "engine", "settings_schema",
                  "shaders", "all_shaders", "directory", "package", "_look", "_register",
-                 "_unregister")
+                 "_unregister", "source_ui")
 
     def __init__(self, game_name, label, tabs, register, unregister, sections=(),
                  face_retarget=None, secondary_motion=None, shadow_proxies=False, engine=None,
-                 settings_schema=None, shaders=None, all_shaders=None, look=None):
+                 settings_schema=None, shaders=None, all_shaders=None, look=None, source_ui=None):
         # The Unity productName this game's player builds under -- the install's own
         # word for itself, and the upstream decoder's GameName. Nothing translates it.
         self.game_name = game_name
@@ -175,6 +176,8 @@ class GameModule:
         # at all. So no option name is spelled anywhere on this side, and a decoder
         # that adds one needs no edit.
         self.settings_schema = settings_schema
+        # Optional generic source UI declaration; no provider-owned browser callbacks.
+        self.source_ui = source_ui
         # How this game states a face, if it states one at all. A clip whose facial
         # animation is baked into its bone tracks means nothing on another character's
         # rig, so the one clip path (Kernel.app.loading.perform) asks the game that owns

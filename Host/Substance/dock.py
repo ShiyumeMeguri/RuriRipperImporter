@@ -76,12 +76,16 @@ class _Steps(QtCore.QObject):
         self.command = one
         self.steps = steps
         self.pool = pool
+        self.cancelled = False
+        self.cancel_read = None
         self.read_done.connect(self.resume)
 
     def start(self):
         self.advance(None)
 
     def advance(self, sent):
+        if self.cancelled:
+            return
         try:
             step = self.steps.send(sent)
         except StopIteration as stop:
@@ -93,6 +97,7 @@ class _Steps(QtCore.QObject):
         if step.progress is not None:
             self.dock.set_progress(self.command.label, step.progress)
         if isinstance(step, app_command.Read):
+            self.cancel_read = step.cancel
             self.offload(step.fn)
             return
         # A Mark is a checkpoint: let the panel repaint, then carry on.
@@ -104,13 +109,28 @@ class _Steps(QtCore.QObject):
 
     @QtCore.Slot(object, object)
     def resume(self, result, error):
+        self.cancel_read = None
+        if self.cancelled:
+            return
         if error is not None:
             self.fail(error)
             return
         self.advance(result)
 
+    def cancel(self):
+        self.cancelled = True
+        if self.cancel_read is not None:
+            self.cancel_read()
+
+    def close(self):
+        self.cancelled = True
+        steps, self.steps = self.steps, None
+        if steps is not None:
+            steps.close()
+
     def finish(self, result):
         try:
+            self.close()
             self.command.settle(None, result)
         except Exception:
             self.fail(traceback.format_exc())
@@ -119,6 +139,10 @@ class _Steps(QtCore.QObject):
         self.dock.finished(self)
 
     def fail(self, detail):
+        try:
+            self.close()
+        except Exception:
+            detail += "\nWhile closing command steps:\n" + traceback.format_exc()
         self.dock.set_progress("", None)
         self.dock.report_error(self.command.failure, detail)
         self.dock.finished(self)
@@ -215,6 +239,7 @@ class RuriRipperDock(QtWidgets.QWidget):
         column.addStretch(1)
         column.addWidget(self._status)
         self._scroll.setWidget(body)
+        self._renderer.refresh_popovers()
 
     # -- where the reader is -----------------------------------------------
     def _reader_row(self):
@@ -288,6 +313,23 @@ class RuriRipperDock(QtWidgets.QWidget):
         self.set_status("{0}... {1:.0f}%".format(label, factor * 100.0))
 
     # -- commands ----------------------------------------------------------
+    def invoke_command(self, one, arguments):
+        """The same command path for widgets and timer-dispatched commands."""
+        if one.poll(None):
+            self._invoke(one, arguments)
+
+    def shutdown_commands(self):
+        """Signal cancellable reads before waiting for the single reader pool."""
+        for task in self._running:
+            task.cancel()
+        self._pool.waitForDone()
+        for task in tuple(self._running):
+            try:
+                task.close()
+            except Exception:
+                task.fail(traceback.format_exc())
+        self._running.clear()
+
     def _invoke(self, one, arguments):
         """Run a command, then repaint. ``None`` means a property was written --
         the state already changed and only the screen is behind."""

@@ -24,11 +24,15 @@ import bpy
 from mathutils import Matrix, Quaternion, Vector
 
 from ...Kernel import statement as kernel_statement
+from ...Kernel import extensions, host as host_port
 from . import derived_state, light_parameters, material_builder, renderer, rig_identity, shadow_casting
 
 #: The custom property a placed object carries its stated tag under, so a camera
 #: the game tagged is found again by what the game called it.
 TAG = "unity_tag"
+
+MATERIALISATION_STAGES = extensions.point(
+    "blender.materialisation_stages", "Projections of already stated scene facts after normal placement.")
 
 #: The collection the collision volumes of an import are gathered in, and the prefix of what each carries of its own.
 COLLIDERS = "Colliders"
@@ -153,6 +157,9 @@ class _Materialisation:
 
     # -- the run ------------------------------------------------------------
     def run(self):
+        environment = self.statement.scene_environment
+        if environment is not None:
+            host_port.current().apply_environment(self.context, environment, self.materials.load_image)
         roots = {root.node: root for root in self.statement.roots}
         for key in self._skeleton_keys():
             derived_state.announce(self._build_rig(key))
@@ -160,6 +167,8 @@ class _Materialisation:
             self._build_node(node, roots)
         self._build_colliders()
         self._stamp_light_frames()
+        for stage in MATERIALISATION_STAGES:
+            self.warnings.extend(stage(self.context, self.statement, self.built, self.materials, self.options))
         for entry in self.statement.report:
             self.warnings.append("{0} x{1}: {2}".format(entry.what, entry.count, entry.detail))
         for name, count in sorted(self.unread_parameters.items()):

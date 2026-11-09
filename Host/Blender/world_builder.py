@@ -22,6 +22,7 @@ statement's own geometry and lights.
 from __future__ import annotations
 
 import bpy
+import math
 import numpy as np
 
 from ...Kernel.math3d import coordinate
@@ -91,5 +92,148 @@ def build(context, coefficients, label):
     output = tree.nodes.new("ShaderNodeOutputWorld")
     tree.links.new(texture.outputs["Color"], background.inputs["Color"])
     tree.links.new(background.outputs["Background"], output.inputs["Surface"])
+    context.scene.world = world
+    return material_builder.rewire_capabilities()
+
+def source_directions(width, height, basis):
+    azimuth = (0.5 - (np.arange(width) + 0.5) / width) * 2 * np.pi
+    latitude = ((np.arange(height) + 0.5) / height - 0.5) * np.pi
+    a, b = np.meshgrid(azimuth, latitude)
+    directions = np.stack(
+        (np.cos(b) * np.cos(a), np.cos(b) * np.sin(a), np.sin(b)), axis=-1
+    )
+    return directions @ np.linalg.inv(basis).T
+
+
+def cube_lookup(directions):
+    """Unity/D3D faces +X,-X,+Y,-Y,+Z,-Z; returned UVs are bottom-left.
+    The reader deliberately keeps cubemap rows unflipped (unlike Texture2D).
+    """
+    d = np.asarray(directions)
+    axis = np.argmax(np.abs(d), axis=-1)
+    x, y, z = (d[..., i] for i in range(3))
+    major = np.maximum(np.max(np.abs(d), axis=-1), 1e-12)
+    face = axis * 2 + (np.take_along_axis(d, axis[..., None], axis=-1)[..., 0] < 0)
+    u = (
+        np.select(
+            (face == 0, face == 1, face == 2, face == 3, face == 4, face == 5),
+            (-z, z, x, x, x, -x),
+        )
+        / major
+    )
+    v = (
+        np.select(
+            (face == 0, face == 1, face == 2, face == 3, face == 4, face == 5),
+            (-y, -y, z, -z, -y, -y),
+        )
+        / major
+    )
+    return face.astype(int), (u + 1) * 0.5, (1 - v) * 0.5
+
+
+def panorama(faces, width, height, basis, rotation=0):
+    d = source_directions(width, height, basis)
+    angle = math.radians(rotation)
+    x, z = d[..., 0].copy(), d[..., 2].copy()
+    d[..., 0], d[..., 2] = (
+        math.cos(angle) * x - math.sin(angle) * z,
+        math.sin(angle) * x + math.cos(angle) * z,
+    )
+    face, u, v = cube_lookup(d)
+    result = np.zeros((height, width, 4), dtype=np.float32)
+    for index, image in enumerate(faces):
+        w, h = image.size
+        pixels = np.empty(w * h * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        pixels = pixels.reshape(h, w, 4)
+        # EXR face pixels arrive bottom-first in Blender. Bilinear sampling is
+        # clamped within a face; seam-aware cube filtering remains a limitation.
+        px, py = np.clip(u * w - 0.5, 0, w - 1), np.clip(v * h - 0.5, 0, h - 1)
+        ix, iy = px.astype(int), py.astype(int)
+        jx, jy = np.minimum(ix + 1, w - 1), np.minimum(iy + 1, h - 1)
+        fx, fy = (px - ix)[..., None], (py - iy)[..., None]
+        sampled = (pixels[iy, ix] * (1 - fx) + pixels[iy, jx] * fx) * (1 - fy) + (
+            pixels[jy, ix] * (1 - fx) + pixels[jy, jx] * fx
+        ) * fy
+        result[face == index] = sampled[face == index]
+    result[..., 3] = 1
+    return result
+
+
+def float_image(name, pixels):
+    h, w = pixels.shape[:2]
+    image = bpy.data.images.new(name, w, h, alpha=True, float_buffer=True)
+    image.colorspace_settings.name = "Non-Color"
+    image.pixels.foreach_set(np.asarray(pixels, dtype=np.float32).ravel())
+    image.file_format = "OPEN_EXR"
+    image.pack()
+    return image
+
+
+def cube_image(keys, images, basis, name, rotation=0, multiplier=(1, 1, 1), width=None):
+    """Project six declared +X,-X,+Y,-Y,+Z,-Z faces; no source-property interpretation."""
+    faces = [images(key) for key in keys]
+    if len(faces) != 6 or any(face is None for face in faces):
+        raise ValueError("A declared cubemap is missing one of its six images.")
+    width = width if width is not None else (2048 if faces[0].size[0] >= 512 else 512)
+    pixels = panorama(faces, width, width // 2, basis, rotation)
+    pixels[..., :3] *= np.asarray(multiplier, dtype=np.float32)
+    return float_image(name, pixels)
+
+
+def build_channels(context, environment, images):
+    """One resolved environment, before any material is built. Exposure/look remain user-owned."""
+    channels = environment["channels"]
+    resolved_images = {}
+    for value in channels.values():
+        if value is None:
+            continue
+        keys = value["faces"] if "faces" in value else [value["image"]]
+        if "faces" in value and len(keys) != 6:
+            raise ValueError("A declared cubemap requires exactly six images.")
+        for key in keys:
+            if key not in resolved_images:
+                resolved_images[key] = images(key)
+            if resolved_images[key] is None:
+                raise ValueError("A declared environment image is missing: " + key)
+    world = bpy.data.worlds.new(environment["label"])
+    world.use_nodes = True
+    tree = world.node_tree
+    tree.nodes.clear()
+    basis = np.asarray(material_builder.world_basis())
+    projected = {}
+
+    def channel(value, label):
+        background = tree.nodes.new("ShaderNodeBackground")
+        background.inputs["Color"].default_value = (0, 0, 0, 1)
+        if value is None:
+            return background.outputs[0]
+        if "faces" in value:
+            identity = (tuple(value["faces"]), value["rotation"], tuple(value["multiplier"]))
+            image = projected.get(identity)
+            if image is None:
+                image = cube_image(value["faces"], resolved_images.__getitem__, basis, label,
+                                   value["rotation"], value["multiplier"])
+                projected[identity] = image
+        else:
+            image = resolved_images[value["image"]]
+        texture = tree.nodes.new("ShaderNodeTexEnvironment")
+        texture.image = image
+        tree.links.new(texture.outputs["Color"], background.inputs["Color"])
+        background.inputs["Strength"].default_value = value["strength"]
+        return background.outputs[0]
+
+    path = tree.nodes.new("ShaderNodeLightPath")
+    glossy = tree.nodes.new("ShaderNodeMixShader")
+    tree.links.new(path.outputs["Is Glossy Ray"], glossy.inputs[0])
+    tree.links.new(channel(channels["diffuse"], "Authored diffuse environment"), glossy.inputs[1])
+    tree.links.new(channel(channels["glossy"], "Authored reflection environment"), glossy.inputs[2])
+    camera = tree.nodes.new("ShaderNodeMixShader")
+    tree.links.new(path.outputs["Is Camera Ray"], camera.inputs[0])
+    tree.links.new(glossy.outputs[0], camera.inputs[1])
+    tree.links.new(channel(channels["camera"], "Authored visible environment"), camera.inputs[2])
+    output = tree.nodes.new("ShaderNodeOutputWorld")
+    tree.links.new(camera.outputs[0], output.inputs["Surface"])
+    world["ruri_environment_source"] = environment["key"]
     context.scene.world = world
     return material_builder.rewire_capabilities()

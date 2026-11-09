@@ -26,6 +26,7 @@ import re
 
 import bpy
 
+from .shader_nodes import math_node, vector_node
 from . import linked_twins as _linked_twins
 from . import scratch as _scratch
 from ...Kernel import extensions
@@ -1520,6 +1521,10 @@ class MaterialBuilder:
         self._images = {}
         self._resident = None
 
+    def load_image(self, guid, non_color=False):
+        """A stated image through the existing document-aware image cache."""
+        return self._load_image(guid, non_color)
+
     def shader_display_name(self, props):
         """The shader a material names, as the shader asset calls itself. A stack
         claims by this and a report prints it."""
@@ -1633,25 +1638,70 @@ class MaterialBuilder:
 
     def _principled(self, props):
         roles = props.roles
-        # Rewrite a same-named material in place: a mesh binds its material by
-        # name, and a second datablock would take a .001 suffix and leave two.
-        material = bpy.data.materials.get(name_of(props)) or bpy.data.materials.new(name_of(props))
+        # Display names are not identities. The shared builder caches by Statement
+        # key; another world or an existing document may already use this name.
+        material = bpy.data.materials.new(name_of(props))
         material.use_nodes = True
         tree = material.node_tree
         tree.nodes.clear()
         output = tree.nodes.new("ShaderNodeOutputMaterial")
         output.location = (600, 0)
+        if roles.floats.get("surface_unlit", 0):
+            emission = tree.nodes.new("ShaderNodeEmission")
+            emission.inputs["Color"].default_value = roles.colors.get(
+                "base_color", (1, 1, 1, 1)
+            )
+            emission.inputs["Strength"].default_value = 1.0
+            tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+            _orphan_textures(self, tree, props, set())
+            material["ruri_surface_mapping"] = "declared unlit surface"
+            return material
         bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
         bsdf.location = (200, 0)
         tree.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
         claimed = set()
 
         base_node = self._wire_base_colour(tree, bsdf, roles, claimed)
+        self._wire_vertex_colour(tree, bsdf, roles)
         self._wire_opacity(material, tree, bsdf, roles, base_node)
         self._wire_normal(tree, bsdf, roles, claimed)
         self._wire_scalars(tree, bsdf, roles, claimed)
+        if roles.floats.get("surface_specular_workflow", 0):
+            f0 = self.specular_color(tree, props)
+            split = tree.nodes.new("ShaderNodeSeparateXYZ")
+            tree.links.new(f0, split.inputs[0])
+            maximum = math_node(tree, "MAXIMUM", math_node(tree, "MAXIMUM", split.outputs[0], split.outputs[1]), split.outputs[2])
+            denominator = math_node(tree, "MAXIMUM", maximum, 1e-6)
+            tree.links.new(vector_node(tree, "DIVIDE", f0, self._scalar_vector(tree, denominator)), bsdf.inputs["Specular Tint"])
+            root = math_node(tree, "SQRT", math_node(tree, "MINIMUM", math_node(tree, "MAXIMUM", maximum, 0), 0.99))
+            tree.links.new(math_node(tree, "DIVIDE", math_node(tree, "ADD", 1, root), math_node(tree, "SUBTRACT", 1, root)), bsdf.inputs["IOR"])
+            material["ruri_surface_limit"] = "Native BSDF specular tint is approximate; baked probe path uses source RGB F0."
         self._wire_emission(tree, bsdf, roles, claimed)
+        self._wire_surface_uv(tree, props)
         _orphan_textures(self, tree, props, claimed)
+        material["ruri_surface_mapping"] = (
+            "declared PBR surface"
+            if roles.floats.get("surface_profile_known", 0)
+            else "unclaimed source shader"
+        )
+        if roles.floats.get("surface_double_sided", 0):
+            material.use_backface_culling = False
+        if roles.floats.get("surface_brdf_approximate", 0):
+            material["ruri_surface_limit"] = (
+                "Static texture, vertex color and opacity restored; Unity lighting is approximated by Blender BSDF."
+            )
+        if roles.floats.get("blend_mode", 0) >= 2.5:
+            material["ruri_surface_limit"] = (
+                "Premultiplied source reflection/transmission is approximate; not original-shader parity."
+            )
+        if roles.floats.get("surface_indirect_unavailable", 0):
+            material["ruri_surface_limit"] = (
+                "Base surface restored; source emitter/global contribution is not evaluated. Authored lightmaps are applied separately."
+            )
+        if roles.floats.get("surface_height_unavailable", 0):
+            material["ruri_surface_limit"] = (
+                "Declared metallic/roughness channels mapped; height/parallax remains source metadata."
+            )
         return material
 
     def _wire_base_colour(self, tree, bsdf, roles, claimed):
@@ -1703,13 +1753,34 @@ class MaterialBuilder:
         clipped = roles.clipped
         opacity_texture, opacity_channel = roles.with_channel("opacity")
         base = roles.first("base_color")
-        named = (opacity_texture is not None and opacity_texture is base
-                 and opacity_channel == _ALPHA_CHANNEL)
-        if base_node is not None and (transparent or clipped or named):
+        named = (
+            opacity_texture is not None
+            and opacity_texture is base
+            and opacity_channel == _ALPHA_CHANNEL
+        )
+        tint_alpha = float(roles.colors.get("base_color", (1, 1, 1, 1))[3])
+        tint_alpha *= float(roles.floats.get("opacity_scale", 1.0))
+        color_only = bool(roles.floats.get("opacity_color_only", 0))
+        if transparent or clipped or named:
             cutoff = roles.floats.get("alpha_cutoff")
-            _enable_alpha_channel(base_node.image)
-            socket = base_node.outputs["Alpha"]
-            if clipped and cutoff is not None:
+            socket = None
+            if base_node is not None and not color_only:
+                enable_alpha_channel(base_node.image)
+                socket = base_node.outputs["Alpha"]
+                if tint_alpha != 1.0:
+                    multiply = tree.nodes.new("ShaderNodeMath")
+                    multiply.operation = "MULTIPLY"
+                    multiply.label = "Opacity �� tint alpha"
+                    multiply.inputs[1].default_value = tint_alpha
+                    tree.links.new(socket, multiply.inputs[0])
+                    socket = multiply.outputs["Value"]
+            if socket is None:
+                bsdf.inputs["Alpha"].default_value = (
+                    float(tint_alpha >= cutoff)
+                    if clipped and cutoff is not None
+                    else tint_alpha
+                )
+            elif clipped and cutoff is not None:
                 below = tree.nodes.new("ShaderNodeMath")
                 below.operation = "LESS_THAN"
                 below.location = (-250, -150)
@@ -1722,7 +1793,8 @@ class MaterialBuilder:
                 kept.inputs[0].default_value = 1.0
                 tree.links.new(below.outputs["Value"], kept.inputs[1])
                 socket = kept.outputs["Value"]
-            tree.links.new(socket, bsdf.inputs["Alpha"])
+            if socket is not None:
+                tree.links.new(socket, bsdf.inputs["Alpha"])
         try:
             material.surface_render_method = "BLENDED" if transparent else "DITHERED"
         except Exception:
@@ -1733,8 +1805,26 @@ class MaterialBuilder:
         if normal is None:
             return
         claimed.add(normal.name)
-        strength = float(roles.floats.get("normal_strength", 1.0) or 1.0)
-        image = self._load_image(normal.guid, non_color=True)
+        strength = float(roles.floats.get("normal_strength", 1.0))
+        if normal.encoding == "normal_unity":
+            image_key = (normal.guid, normal.encoding)
+            image = self._images.get(image_key)
+            if image is None:
+                data = self.statement.payload(
+                    "core.texture.bake", texture=normal.guid, operation=normal.encoding
+                )
+                name = normal.name + " decoded normal"
+                image = self._resident_image(name, data)
+                if image is None:
+                    image = _image_from_bytes(data, name, ".png")
+                    if image is not None:
+                        self._resident.setdefault(name, []).append(image)
+                if image is not None:
+                    image.colorspace_settings.name = "Non-Color"
+                    image["ruri_decoded_from_texture"] = normal.guid
+                    self._images[image_key] = image
+        else:
+            image = self._load_image(normal.guid, non_color=True)
         if image is None:
             return
         if normal.encoding == "hair_split":
@@ -1765,8 +1855,9 @@ class MaterialBuilder:
             # 1500 of 1663 measured materials), the setting lives on the shared
             # datablock, and the last writer wins -- so the whole game renders
             # dark with nothing anywhere to show for it.
-            reads_colour = any(channel != _ALPHA_CHANNEL
-                               for channel in packed.channels.values())
+            reads_colour = any(
+                channel != _ALPHA_CHANNEL for channel in packed.channels.values()
+            )
             image = self._load_image(packed.guid, non_color=reads_colour)
             if image is None:
                 continue
@@ -1777,7 +1868,19 @@ class MaterialBuilder:
                 channels.pop("roughness", None)
                 channels.pop("smoothness", None)
             got_metallic, got_roughness = _wire_packed(
-                tree, bsdf, image, packed.name, channels, (-400, -420 - index * 320))
+                tree,
+                bsdf,
+                image,
+                packed.name,
+                channels,
+                (-400, -420 - index * 320),
+                {
+                    "smoothness": float(roles.floats.get("smoothness_scale", 1.0)),
+                    "smoothness_map_is_roughness": float(
+                        roles.floats.get("smoothness_map_is_roughness", 0.0)
+                    ),
+                },
+            )
             metallic_wired = metallic_wired or got_metallic
             roughness_wired = roughness_wired or got_roughness
         if not metallic_wired and roles.floats.get("metallic") is not None:
@@ -1785,9 +1888,13 @@ class MaterialBuilder:
         if roughness_wired:
             return
         if roles.floats.get("roughness") is not None:
-            bsdf.inputs["Roughness"].default_value = float(roles.floats.get("roughness"))
+            bsdf.inputs["Roughness"].default_value = float(
+                roles.floats.get("roughness")
+            )
         elif roles.floats.get("smoothness") is not None:
-            bsdf.inputs["Roughness"].default_value = 1.0 - float(roles.floats.get("smoothness"))
+            bsdf.inputs["Roughness"].default_value = 1.0 - float(
+                roles.floats.get("smoothness")
+            )
 
     def _wire_emission(self, tree, bsdf, roles, claimed):
         """Emission is the map times its colour factor: a BLACK emission colour
@@ -1826,6 +1933,74 @@ class MaterialBuilder:
             bsdf.inputs["Emission Color"].default_value = (
                 float(colour[0]), float(colour[1]), float(colour[2]), 1.0)
             bsdf.inputs["Emission Strength"].default_value = 1.0
+
+
+    def specular_color(self, tree, props):
+        """Source RGB F0, not a metallic value or a grayscale specular mask."""
+        texture, _ = props.roles.with_channel("specular")
+        if texture is not None:
+            image = self._load_image(texture.guid)
+            if image is not None:
+                node = tree.nodes.new("ShaderNodeTexImage")
+                node.image = image
+                node.label = texture.name + ": source RGB F0"
+                self._wire_surface_uv(tree, props)
+                return node.outputs["Color"]
+        color = tree.nodes.new("ShaderNodeRGB")
+        color.label = "Source RGB F0"
+        color.outputs[0].default_value = props.roles.colors.get("surface_specular_color", (0.2, 0.2, 0.2, 1))
+        return color.outputs[0]
+
+    def _scalar_vector(self, tree, socket):
+        node = tree.nodes.new("ShaderNodeCombineXYZ")
+        for component in node.inputs:
+            tree.links.new(socket, component)
+        return node.outputs[0]
+
+    def _wire_vertex_colour(self, tree, bsdf, roles):
+        if not roles.floats.get("surface_vertex_color", 0):
+            return
+        color = tree.nodes.new("ShaderNodeVertexColor")
+        color.layer_name = "Color"
+        color.label = "Stated vertex color"
+        multiply = tree.nodes.new("ShaderNodeMixRGB")
+        multiply.blend_type = "MULTIPLY"
+        multiply.inputs[0].default_value = 1.0
+        multiply.label = "Base color �� vertex color"
+        base = bsdf.inputs["Base Color"]
+        if base.is_linked:
+            tree.links.new(base.links[0].from_socket, multiply.inputs[1])
+        else:
+            multiply.inputs[1].default_value = roles.colors.get("base_color", (1, 1, 1, 1))
+        tree.links.new(color.outputs["Color"], multiply.inputs[2])
+        tree.links.new(multiply.outputs[0], base)
+
+    def _wire_surface_uv(self, tree, props):
+        """Project the reader's resolved per-property UV transforms unchanged."""
+        by_st = {}
+        for image in list(tree.nodes):
+            if image.type != "TEX_IMAGE":
+                continue
+            prop = image.label.split(":", 1)[0]
+            stated = props.roles.colors.get("surface_uv:" + prop)
+            if stated is None:
+                continue
+            st = tuple(stated)
+            if st not in by_st:
+                uv = tree.nodes.new("ShaderNodeUVMap")
+                uv.uv_map = "UVMap"
+                scale = tree.nodes.new("ShaderNodeVectorMath")
+                scale.operation = "MULTIPLY"
+                scale.inputs[1].default_value = (st[0], st[1], 1)
+                scale.label = "Stated UV scale"
+                tree.links.new(uv.outputs[0], scale.inputs[0])
+                offset = tree.nodes.new("ShaderNodeVectorMath")
+                offset.operation = "ADD"
+                offset.inputs[1].default_value = (st[2], st[3], 0)
+                offset.label = "Stated UV offset"
+                tree.links.new(scale.outputs[0], offset.inputs[0])
+                by_st[st] = offset.outputs[0]
+            tree.links.new(by_st[st], image.inputs["Vector"])
 
 
 def name_of(props):
@@ -1871,7 +2046,7 @@ def _orphan_textures(builder, tree, props, claimed, origin=(-1100, 400)):
         node.location = (origin[0], origin[1] - index * 300)
 
 
-def _wire_packed(tree, bsdf, image, label, channels, location):
+def _wire_packed(tree, bsdf, image, label, channels, location, value_scales=None):
     """A texture whose channels carry scalar roles: metallic and roughness go
     straight to the BSDF, smoothness through 1 - x; occlusion, specular, opacity
     and height have no Principled socket and stay on the sheet, the node labelled
@@ -1880,16 +2055,25 @@ def _wire_packed(tree, bsdf, image, label, channels, location):
     node = tree.nodes.new("ShaderNodeTexImage")
     node.image = image
     node.location = (x, y)
-    node.label = "{0}: {1}".format(label, ", ".join(
-        "{0}={1}".format(role, _CHANNEL_NAMES[channel])
-        for role, channel in sorted(channels.items()) if 0 <= channel < 4))
+    node.label = "{0}: {1}".format(
+        label,
+        ", ".join(
+            "{0}={1}".format(role, _CHANNEL_NAMES[channel])
+            for role, channel in sorted(channels.items())
+            if 0 <= channel < 4
+        ),
+    )
     separate = tree.nodes.new("ShaderNodeSeparateColor")
     separate.location = (x + 300, y)
     tree.links.new(node.outputs["Color"], separate.inputs["Color"])
     if _ALPHA_CHANNEL in channels.values():
         _enable_alpha_channel(image)
-    outputs = {0: separate.outputs["Red"], 1: separate.outputs["Green"],
-               2: separate.outputs["Blue"], 3: node.outputs["Alpha"]}
+    outputs = {
+        0: separate.outputs["Red"],
+        1: separate.outputs["Green"],
+        2: separate.outputs["Blue"],
+        3: node.outputs["Alpha"],
+    }
     metallic = channels.get("metallic")
     if metallic in outputs:
         tree.links.new(outputs[metallic], bsdf.inputs["Metallic"])
@@ -1898,11 +2082,27 @@ def _wire_packed(tree, bsdf, image, label, channels, location):
     if roughness in outputs:
         tree.links.new(outputs[roughness], bsdf.inputs["Roughness"])
     elif smoothness in outputs:
+        socket = outputs[smoothness]
+        if (value_scales or {}).get("smoothness_map_is_roughness", 0):
+            decode = tree.nodes.new("ShaderNodeMath")
+            decode.operation = "SUBTRACT"
+            decode.label = "Source map is roughness: invert before smoothness scale"
+            decode.inputs[0].default_value = 1.0
+            tree.links.new(socket, decode.inputs[1])
+            socket = decode.outputs[0]
+        scale = float((value_scales or {}).get("smoothness", 1.0))
+        # Keep an explicit multiply, including scale=0, so the graph retains the
+        # declared operation rather than quietly substituting a default.
+        multiply = tree.nodes.new("ShaderNodeMath")
+        multiply.operation = "MULTIPLY"
+        multiply.label = "Smoothness scale"
+        multiply.inputs[1].default_value = scale
+        tree.links.new(socket, multiply.inputs[0])
         invert = tree.nodes.new("ShaderNodeMath")
         invert.operation = "SUBTRACT"
         invert.inputs[0].default_value = 1.0
         invert.location = (x + 300, y - 180)
-        tree.links.new(outputs[smoothness], invert.inputs[1])
+        tree.links.new(multiply.outputs["Value"], invert.inputs[1])
         tree.links.new(invert.outputs["Value"], bsdf.inputs["Roughness"])
     return "metallic" in channels, "roughness" in channels or "smoothness" in channels
 
@@ -2014,3 +2214,8 @@ def _wire_hair_split_normal(tree, bsdf, image, bump_scale, location):
     mapping.inputs["Strength"].default_value = 1.0
     tree.links.new(encoded.outputs["Vector"], mapping.inputs["Color"])
     tree.links.new(mapping.outputs["Normal"], bsdf.inputs["Normal"])
+
+
+def enable_alpha_channel(image):
+    """Expose an image channel as packed data through the host's existing alpha boundary."""
+    _enable_alpha_channel(image)

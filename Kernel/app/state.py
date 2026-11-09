@@ -47,13 +47,13 @@ class Field:
     __slots__ = ("key", "kind", "default", "label", "description", "subtype",
                  "minimum", "maximum", "soft_minimum", "soft_maximum",
                  "items", "element", "update", "getter", "setter", "live",
-                 "remembered")
+                 "remembered", "transient", "sensitive")
 
     def __init__(self, key, kind, default=None, label="", description="",
                  subtype="", minimum=None, maximum=None,
                  soft_minimum=None, soft_maximum=None,
                  items=None, element=None, update="", getter="", setter="",
-                 live=False, remembered=False):
+                 live=False, remembered=False, transient=False, sensitive=False):
         self.key = key
         self.kind = kind
         self.default = default
@@ -88,6 +88,14 @@ class Field:
         #: that dies with the process, so its driver writes exactly the fields
         #: marked here into its own settings file and puts them back at startup.
         self.remembered = remembered
+        # Transient values live only in the driver's process memory, never in
+        # document properties, preferences or operator arguments/history.
+        if sensitive and not transient:
+            raise ValueError("sensitive fields must be transient")
+        if transient and remembered:
+            raise ValueError("transient fields exclude the remembered option")
+        self.transient = transient
+        self.sensitive = sensitive
 
     @property
     def virtual(self):

@@ -40,6 +40,7 @@ LIST = "list"
 PROGRESS = "progress"
 PICTURE = "picture"
 NATIVE = "native"
+THUMBNAIL_GRID = "thumbnail_grid"
 
 LEFT = "LEFT"
 CENTER = "CENTER"
@@ -240,6 +241,17 @@ class Layout:
         surface for one, so a body asks that first."""
         self._child(PICTURE, picture=picture, window=window)
 
+    def thumbnail_grid(self, grid_id, entries, selected, command, columns=4):
+        """Image-first selectable tiles. Entries carry key/label/detail/values.
+
+        A key names an already-published host preview, not a URL or file path.
+        Hosts without a decoded image render the same selectable fallback tile.
+        """
+        if THUMBNAIL_GRIDS.get(grid_id) is None:
+            raise KeyError("No declared thumbnail grid: " + grid_id)
+        self._child(THUMBNAIL_GRID, grid=grid_id, entries=tuple(entries),
+                    selected=selected, command=command, columns=columns)
+
     def native(self, draw):
         """A part only THIS application has a surface for, drawn by its own renderer
         with its own widgets: ``draw(target, context)`` is handed the host's real
@@ -353,6 +365,13 @@ class Menu:
 #: Every surface a description opens by id, declared by the module that owns it. A host renders
 #: each of them from here and writes no body of its own.
 SURFACES = extensions.point("surfaces", "Surface id -> the popover or menu a description opens.")
+THUMBNAIL_GRIDS = extensions.point("thumbnail_grids", "Declared selectable preview-grid surfaces.")
+
+
+def declare_thumbnail_grid(grid_id, module):
+    """Declare before host registration, like the other UI surfaces."""
+    THUMBNAIL_GRIDS.add(grid_id, key=grid_id, module=module)
+    return grid_id
 
 
 def declare_popover(surface_id, label, draw, width=14):

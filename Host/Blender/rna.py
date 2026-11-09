@@ -12,7 +12,8 @@ Two Blender specifics this handles so no schema has to know them:
 * **A dynamic enum's items list must outlive the call.** Blender's callback
   hands its result to C, which keeps a pointer rather than a reference; a list
   that dies with the call leaves the enum pointing at freed strings. Every
-  returned list is therefore parked here, keyed by the field it belongs to.
+  distinct catalog is therefore retained by its callback for that callback's
+  entire lifetime, including catalogs superseded by a later refresh.
 * **An enum with no default.** ``default=`` must name one of the items, which a
   dynamic list cannot promise, so a schema that states none gets none.
 """
@@ -31,17 +32,25 @@ _SUBTYPES = {
     app_state.FACTOR: "FACTOR",
 }
 
-#: Last items list handed to Blender per (schema, field) -- see the module note.
-_enum_items = {}
+# Values behind transient RNA accessors, not values in RNA/ID properties. A
+# getter/setter plus SKIP_SAVE is intentional: SKIP_SAVE alone still gives RNA
+# a value that can leak into undo, copied scenes and document inspection.
+_TRANSIENT = {}
 
-
-def _enum_callback(schema, field, handler):
-    key = (schema.name, field.key)
+def _enum_callback(handler):
+    # Blender can still draw buttons pointing into a PREVIOUS callback result.
+    # Keep every distinct catalog, not just the latest one. Equal catalogs reuse
+    # the same list and strings, so ordinary redraws do not grow the cache.
+    # The registered callback owns this cache: unregistering a different panel
+    # cannot clear it, and releasing this callback releases its catalogs too.
+    catalogs = {}
 
     def items(self, context):
         produced = handler(self, context) or ()
-        _enum_items[key] = [tuple(entry) for entry in produced] or [("", "", "")]
-        return _enum_items[key]
+        signature = tuple(tuple(entry) for entry in produced) or (("", "", ""),)
+        if signature not in catalogs:
+            catalogs[signature] = list(signature)
+        return catalogs[signature]
 
     return items
 
@@ -62,6 +71,17 @@ def _keywords(field, schema, handlers):
         keywords["set"] = handlers.resolve(field.setter, field, schema)
     if field.live:
         keywords["options"] = {"TEXTEDIT_UPDATE"}
+    if field.transient:
+        if field.kind not in (app_state.STRING, app_state.BOOL, app_state.INT, app_state.FLOAT):
+            raise TypeError("transient fields require a scalar kind")
+        if not field.getter and not field.setter:
+            def slot(owner):
+                return (schema.name, field.key, owner.as_pointer())
+            keywords["get"] = lambda owner: _TRANSIENT.get(slot(owner), field.default)
+            keywords["set"] = lambda owner, value: _TRANSIENT.__setitem__(slot(owner), value)
+        keywords["options"] = set(keywords.get("options", ())) | {"SKIP_SAVE", "HIDDEN"}
+    if field.sensitive:
+        keywords["subtype"] = "PASSWORD"
     # A property with a getter stores nothing, so a default would be a value
     # nobody can ever read back -- Blender rejects the pair outright. A DYNAMIC
     # enum is rejected for the neighbouring reason: ``default=`` has to name one
@@ -70,7 +90,7 @@ def _keywords(field, schema, handlers):
     # whose records are plain values; here the first item stands in, which is what
     # the schema names anyway.
     dynamic_enum = field.kind == app_state.ENUM and isinstance(field.items, str)
-    if field.default is not None and not field.getter and not dynamic_enum:
+    if field.default is not None and not field.getter and not field.transient and not dynamic_enum:
         keywords["default"] = field.default
     return keywords
 
@@ -96,7 +116,7 @@ def property_for(field, schema, handlers, built):
     if field.kind == app_state.ENUM:
         if isinstance(field.items, str):
             keywords["items"] = _enum_callback(
-                schema, field, handlers.resolve(field.items, field, schema))
+                handlers.resolve(field.items, field, schema))
         else:
             keywords["items"] = [tuple(entry) for entry in field.items]
         return EnumProperty(**keywords)
@@ -170,7 +190,6 @@ class Registry:
     def unregister(self):
         for made in reversed(self.classes):
             bpy.utils.unregister_class(made)
-        _enum_items.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -227,4 +246,8 @@ def unregister_state(name):
         return
     if hasattr(bpy.types.Scene, name):
         delattr(bpy.types.Scene, name)
+    schema_names = {made.RURI_SCHEMA.name for made in registry.classes}
+    for slot in tuple(_TRANSIENT):
+        if slot[0] in schema_names:
+            del _TRANSIENT[slot]
     registry.unregister()

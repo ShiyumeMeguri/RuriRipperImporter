@@ -46,6 +46,7 @@ TIMELINES = "core.statement.timelines"
 CINEMACHINE = "core.statement.cinemachine"
 SOURCE_SKELETON = "core.clip.source_skeleton"
 REPORT = "core.statement.report"
+SCENE_LIGHTING = "core.statement.scene_lighting"
 
 #: Basis names the kernel converts geometry and transforms into. A host states
 #: which of them it IS; nothing on this side converts anything.
@@ -161,7 +162,7 @@ class Node:
     __slots__ = ("index", "parent", "name", "path", "kind", "active", "mesh",
                  "skeleton", "materials", "anchor", "position", "rotation", "scale",
                  "light", "camera", "tag", "shadows", "main_light_shadows", "two_sided_shadows", "object_parameters",
-                 "collection", "layer", "avatar")
+                 "collection", "layer", "avatar", "source_object")
 
     def __init__(self, row):
         self.index = int(row["node"])
@@ -221,6 +222,7 @@ class Node:
         #: The key of the avatar the node's animator is built with, which makes the node the
         #: root of a rig, or empty for a node that animates nothing.
         self.avatar = row["avatar"]
+        self.source_object = row["source_object"]
 
     @property
     def renders(self):
@@ -1007,6 +1009,25 @@ class Statement:
         return self._rows(REPORT, lambda table: [
             Report(table.row(index)) for index in range(table.row_count)])
 
+    @property
+    def scene_lighting(self):
+        return self._rows(SCENE_LIGHTING, lambda table: [
+            json.loads(table.cell(index, "json")) for index in range(table.row_count)])
+
+    @property
+    def scene_environment(self):
+        environments = {}
+        for record in self.scene_lighting:
+            execution = record["execution"]
+            if execution["environment_status"] == "ambiguous":
+                raise ValueError("This selection states multiple environments; import one world at a time.")
+            environment = execution["environment"]
+            if environment is not None:
+                environments[environment["key"]] = environment
+        if len(environments) > 1:
+            raise ValueError("This selection states different environments; import one world at a time.")
+        return next(iter(environments.values()), None)
+
     def clips(self, *, paths, avatar):
         """The clips these seeds carry, as the target they play on reads them. THERE IS NO
         READING A CLIP ON ITS OWN: READ THE TARGET'S SKELETON FIRST, THEN ITS CLIPS.
@@ -1103,15 +1124,16 @@ def _materials(table):
         elif kind == _VECTOR:
             material.colors[name] = [row["x"], row["y"], row["z"], row["w"]]
         elif kind == _ENCODING:
-            encodings[key][row["texture"]] = name
+            encodings[key][(row["property"], row["texture"])] = name
         elif kind == _ROLE:
             texture = row["texture"]
             if not texture:
                 values[key][name] = [row["x"], row["y"], row["z"], row["w"]]
                 continue
-            entry = next((one for one in textures[key] if one.guid == texture), None)
+            property_name = row["property"]
+            entry = next((one for one in textures[key] if one.guid == texture and one.name == property_name), None)
             if entry is None:
-                entry = TextureRole(_property_of(material, texture), texture)
+                entry = TextureRole(property_name, texture)
                 textures[key].append(entry)
             if row["x"] < 0:
                 entry.role = name
@@ -1121,15 +1143,6 @@ def _materials(table):
             unmapped[key].append(name)
     for key, material in found.items():
         for entry in textures[key]:
-            entry.encoding = encodings[key].get(entry.guid, "")
+            entry.encoding = encodings[key].get((entry.name, entry.guid), "")
         material.roles = Roles(textures[key], values[key], unmapped[key])
     return found
-
-
-def _property_of(material, texture):
-    """The material's own property name for a texture key -- what a node label
-    and an unmapped report are worded with."""
-    for name, key in material.textures.items():
-        if key == texture:
-            return name
-    return texture

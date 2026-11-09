@@ -1,0 +1,7296 @@
+"""Ruri Blender 材质栈运行时(生成物,勿手改)。
+
+本平台产物同批同 stamp(9462b7cfc2ed5ad7):每个生成栈一个 <栈名>.blend(模板节点组库,codegen 期
+headless 物化),外加包清单 RuriManifest.json(管线映射 pipeline + 全部栈清单 stacks;导入时把
+stacks 载入为 MANIFESTS,每条自带它的 blend 文件名与组名单),外加**全平台唯一的**本文件
+(平台 ruri_vrchat 的包入口)—— 运行时。
+
+生成的材质栈是文件里的普通数据:从产物取来的模板节点组(连同嵌套组与图)、材质编出来的树、中性图、顶点腿的树与修改器,
+一律随 .blend 存盘 —— 用户在组实例口上、修改器面板上拧的值就存在节点里,文件换一台电脑打开也是整套的。模板组与随组
+带进来的数据块都带这一代的 stamp(ruri_stamp);材质记录(ruri_uber_*)是口的镜像,换代时新一代照它重编、口上的值按
+参数名原样留下,只换内部节点。换代是显式的更新(宿主 shader_version.update),开文件不重编、不覆盖任何口。
+只有拷贝源、预算探针、link 材质的替身与后处理级(合成树按出图尺寸每次现建)是本会话的临时数据,经宿主的 scratch() 出生,
+存盘不带。
+
+包清单是同目录的 json,导入时用普通文件读取载入:插件 register() 跑在 Blender 的**受限上下文**里
+(bpy.data 此刻是 _RestrictData),读不了 .blend 里的任何东西,但读磁盘上的 json 不受限,
+宿主要在注册期拿 INTERFACE 建 PropertyGroup 照样拿得到。这一个 .py 也是不可省的下限:
+.blend 没法把自己注册进宿主。
+
+内核版本/stamp 对不上一律响亮拒绝,没有任何现场重建退路。
+"""
+import json
+import math
+import os
+import time
+
+import bpy
+
+RUNTIME_KERNEL = 'rvg1'
+
+if bpy.app.version < (5, 3, 0):
+    raise RuntimeError('[Ruri] 产物按 Blender 5.3 基准物化(EEVEE 原生灯节点:Light Info / '
+                       'Light Evaluation / Shadow Raycast / Light Accumulation);当前 %d.%d 没有这些节点。'
+                       % bpy.app.version[:2])
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RuriManifest.json'), encoding='utf-8') as manifest_stream:
+    MANIFESTS = json.load(manifest_stream)['stacks']
+
+OWN_SAMPLER = 'TEXTURE'
+OWN_SAMPLER_KEY = 'ruri_own_sampler'
+RENDER_FOOTPRINT_ATTRIBUTE = 'ruri_render_pixel_footprint'
+OVERLAY_OUTPUT_PREFIX = '__overlay__'
+OWN_SAMPLER_LENDER_SEPARATOR = ':'
+OWN_SAMPLER_WRAPS = ('repeat', 'clamp', 'mirror', 'mirroronce')
+OWN_SAMPLER_SOCKETS = ('__wrap_u', '__wrap_v', '__point')
+SCREEN_SOCKETS = ('screen_x', 'screen_y')
+VIEW_WINDOW = {'columns': ('ruri_view_window_0', 'ruri_view_window_1', 'ruri_view_window_2', 'ruri_view_window_3'), 'inverse_columns': ('ruri_view_window_inverse_0', 'ruri_view_window_inverse_1', 'ruri_view_window_inverse_2', 'ruri_view_window_inverse_3'), 'clip': 'ruri_view_clip', 'screen': 'ruri_view_screen'}
+MAP_UV_EXTENSIONS = {'EXTEND': 'Extend', 'REPEAT': 'Repeat', 'CLIP': 'Clip'}
+MAP_UV_FILTERS = {'Linear': 'Bilinear', 'Closest': 'Nearest'}
+
+def _sampler_lender(extension):
+    prefix = OWN_SAMPLER + OWN_SAMPLER_LENDER_SEPARATOR
+    if isinstance(extension, str) and extension.startswith(prefix):
+        return extension[len(prefix):]
+    return None
+
+
+GENERATED_FRAME_NAME = 'RuriGenerated'
+GENERATED_FRAME_LABEL = '此Shader为Ruri自循环管线生成的节点 请勿编辑'
+GENERATED_FRAME_LABEL_SIZE = 64
+
+
+def _frame_generated(tree):
+    frame = tree.nodes.get(GENERATED_FRAME_NAME)
+    if frame is None:
+        frame = tree.nodes.new('NodeFrame')
+        frame.name = GENERATED_FRAME_NAME
+        frame.label = GENERATED_FRAME_LABEL
+        frame.label_size = GENERATED_FRAME_LABEL_SIZE
+    orphans = [node for node in tree.nodes if node.parent is None and node.name != GENERATED_FRAME_NAME]
+    for node in orphans:
+        node.parent = frame
+
+
+MATH_ARITY = {
+    'ADD': 2,
+    'SUBTRACT': 2,
+    'MULTIPLY': 2,
+    'DIVIDE': 2,
+    'POWER': 2,
+    'LOGARITHM': 2,
+    'MINIMUM': 2,
+    'MAXIMUM': 2,
+    'LESS_THAN': 2,
+    'GREATER_THAN': 2,
+    'MODULO': 2,
+    'FLOORED_MODULO': 2,
+    'SNAP': 2,
+    'PINGPONG': 2,
+    'ARCTAN2': 2,
+    'MULTIPLY_ADD': 3,
+    'COMPARE': 3,
+    'SMOOTH_MIN': 3,
+    'SMOOTH_MAX': 3,
+    'WRAP': 3,
+    'SQRT': 1,
+    'INVERSE_SQRT': 1,
+    'ABSOLUTE': 1,
+    'EXPONENT': 1,
+    'SIGN': 1,
+    'ROUND': 1,
+    'FLOOR': 1,
+    'CEIL': 1,
+    'TRUNC': 1,
+    'FRACT': 1,
+    'RADIANS': 1,
+    'DEGREES': 1,
+    'SINE': 1,
+    'COSINE': 1,
+    'TANGENT': 1,
+    'SINH': 1,
+    'COSH': 1,
+    'TANH': 1,
+    'ARCSINE': 1,
+    'ARCCOSINE': 1,
+    'ARCTANGENT': 1,
+}
+
+VECT_ARITY = {
+    'ADD': (0, 1),
+    'SUBTRACT': (0, 1),
+    'MULTIPLY': (0, 1),
+    'DIVIDE': (0, 1),
+    'CROSS_PRODUCT': (0, 1),
+    'PROJECT': (0, 1),
+    'REFLECT': (0, 1),
+    'DOT_PRODUCT': (0, 1),
+    'DISTANCE': (0, 1),
+    'MODULO': (0, 1),
+    'SNAP': (0, 1),
+    'MINIMUM': (0, 1),
+    'MAXIMUM': (0, 1),
+    'POWER': (0, 1),
+    'MULTIPLY_ADD': (0, 1, 2),
+    'WRAP': (0, 1, 2),
+    'FACEFORWARD': (0, 1, 2),
+    'REFRACT': (0, 1, 3),
+    'SCALE': (0, 3),
+    'NORMALIZE': (0,),
+    'LENGTH': (0,),
+    'ABSOLUTE': (0,),
+    'SIGN': (0,),
+    'ROUND': (0,),
+    'FLOOR': (0,),
+    'CEIL': (0,),
+    'FRACTION': (0,),
+    'SINE': (0,),
+    'COSINE': (0,),
+    'TANGENT': (0,),
+}
+
+# 宿主世界基(真源世界 -> 宿主世界,行优先 b = M.u)。着色内核在真源世界系里算,运行时建的
+# 兑现物(灯方向、环境询问的法线/方向)经它进出,与生成期物化的模板组同一套约定。
+# 由栈清单声明,注册时与宿主模块核对;没声明就不该有任何世界量要换,碰到即响亮失败。
+_WORLD_BASIS = []
+
+
+def declare_world_basis(rows):
+    """栈清单里的世界基。多个栈声明必须一致 -- 一个会话只有一个宿主世界系。"""
+    if not rows:
+        return
+    stated = [[float(value) for value in row] for row in rows]
+    if _WORLD_BASIS and _WORLD_BASIS[0] != stated:
+        raise RuntimeError('[Ruri] 栈清单的宿主世界基互相矛盾: {0} vs {1}'.format(_WORLD_BASIS[0], stated))
+    _WORLD_BASIS[:] = [stated]
+
+
+def _world_basis():
+    if not _WORLD_BASIS:
+        raise RuntimeError('[Ruri] 要换世界系,但没有任何栈声明宿主世界基(host.world_basis)')
+    return _WORLD_BASIS[0]
+
+
+def _import_host(relative):
+    """清单点名的宿主模块是相对插件根的路径(Host.Blender.xxx):插件根叫什么由用户磁盘上的文件夹名决定,
+    生成物落在 Game/{游戏}/shader/{宿主}/,根就是这个包名里 .Game. 之前的部分。"""
+    import importlib
+    root = __package__.partition('.Game.')[0]
+    return importlib.import_module(root + '.' + relative)
+
+
+def _load_interface(folder, name):
+    """生成物自己的面板模块(同目录 <栈键>_ui.py):属性组注解与逐 part 的绘制代码都是生成的,宿主只提供控件库。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, os.path.join(folder, name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _host():
+    """宿主模块(清单的 host.registry_module,全平台同一个)。临时数据(scratch)的出生、清理与存盘守卫都住在那边:宿主自己
+    也造临时数据块(体积雾的物体、区域拾取的图),同一条规矩只许一处声明。"""
+    return _import_host(MANIFESTS[0]['host']['registry_module'])
+
+
+class G:
+    """材质树接线器(运行时只在本地材质平面建小规模兑现物;模板全在 .blend 里)。"""
+
+    def __init__(self, tree, is_group=False):
+        self.t = tree
+        self.is_group = is_group
+        self._sep_cache = {}
+        self._cse = {}
+        self._geo = None
+        self._texco = None
+        self._tbn = None
+
+    def _ck(self, *parts):
+        out = []
+        for p in parts:
+            if isinstance(p, bpy.types.NodeSocket):
+                out.append(p.as_pointer())
+            elif isinstance(p, (tuple, list)):
+                out.append(tuple(round(float(x), 9) for x in p))
+            elif isinstance(p, (int, float)):
+                out.append(round(float(p), 9))
+            else:
+                out.append(p)
+        return tuple(out)
+
+    def _nd(self, typ):
+        nd = self.t.nodes.new(typ)
+        mapping = getattr(nd, 'texture_mapping', None)
+        if mapping is not None:
+            # 宿主新建的纹理节点 TexMapping 不带单位阵标记,每次采样前多发一个恒等 mapping_mat4、占七个 node_tree
+            # uniform;整块超过显卡 UBO 上限(64KB)宿主就不建这块 UBO,材质里所有常量读 0。写一次平移触发重算即认出恒等。
+            mapping.translation = mapping.translation
+        return nd
+
+    def layout(self):
+        """整棵树按建树序一次摆成 40 列的网格,摆完收进生成框。宿主的每一次属性写(位置也算)都把整棵树重算一遍,
+        逐个节点写位置就是节点数 × 整棵树;foreach_set 一次写完、不触发树更新。生成框钉在原点:框里节点的位置
+        是相对框的,框占一格网格就把整片挪走。"""
+        nodes = self.t.nodes
+        flat = []
+        slot = 0
+        for node in nodes:
+            if node.name == GENERATED_FRAME_NAME:
+                flat.extend((0.0, 0.0))
+                continue
+            flat.extend(((slot % 40) * 200.0, -(slot // 40) * 240.0))
+            slot += 1
+        nodes.foreach_set('location', flat)
+        _frame_generated(self.t)
+
+    def _set(self, sock, v):
+        if isinstance(v, bpy.types.NodeSocket):
+            self.t.links.new(v, sock)
+            return
+        if not isinstance(v, (int, float)):
+            v = v[0] if sock.type not in ('RGBA', 'VECTOR') else v
+        if sock.type == 'RGBA':
+            value = (v, v, v, 1.0) if isinstance(v, (int, float)) else (v[0], v[1], v[2], 1.0)
+        elif sock.type == 'VECTOR':
+            value = (v, v, v) if isinstance(v, (int, float)) else (v[0], v[1], v[2])
+        elif sock.type == 'INT':
+            value = int(v)
+        elif sock.type == 'BOOLEAN':
+            value = bool(v)
+        else:
+            value = float(v)
+        # 与口上现值相同就不写:每写一次宿主都把整棵树重算一遍。
+        current = sock.default_value
+        same = tuple(current) == value if hasattr(current, '__len__') else current == value
+        if not same:
+            sock.default_value = value
+
+    def math(self, op, a, b=0.0, c=0.0, clamp=False):
+        # 三操作数算子必须显式设满(第三口默认 0.5);只读 1~2 个操作数的算子按表精确写。
+        n = MATH_ARITY.get(op, 3)
+        ops = (a, b, c)[:n]
+        k = ('m', op, bool(clamp), self._ck(*ops))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeMath')
+        nd.operation = op
+        nd.use_clamp = bool(clamp)
+        for i in range(n):
+            self._set(nd.inputs[i], ops[i])
+        self._cse[k] = nd.outputs[0]
+        return nd.outputs[0]
+
+    def vmath(self, op, a, b=(0.0, 0.0, 0.0), c=(0.0, 0.0, 0.0), s=1.0):
+        if op == 'SCALE' and isinstance(s, bpy.types.NodeSocket):
+            # 宿主给 VectorMath 的四个口都发 uniform(不读的也发):按插口缩放改乘广播向量,同式同舍入,少占一个向量。
+            if isinstance(a, (tuple, list)) and tuple(float(x) for x in a) == (1.0, 1.0, 1.0):
+                return self.bc(s)
+            return self.vmath('MULTIPLY', a, self.bc(s))
+        idx = VECT_ARITY.get(op, (0, 1, 2, 3))
+        vals = (a, b, c, s)
+        k = ('v', op, self._ck(*[vals[i] for i in idx]))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeVectorMath')
+        nd.operation = op
+        for i in idx:
+            self._set(nd.inputs[i], vals[i])
+        out = nd.outputs[1] if op in ('LENGTH', 'DOT_PRODUCT', 'DISTANCE') else nd.outputs[0]
+        self._cse[k] = out
+        return out
+
+    def mixf(self, fac, a, b):
+        # clamp_factor 默认 True 会钳 lerp 的 t,必须关。fac=0→a, 1→b。
+        k = ('mf', self._ck(fac, a, b))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeMix')
+        nd.data_type = 'FLOAT'
+        nd.clamp_factor = False
+        self._set(nd.inputs[0], fac)
+        self._set(nd.inputs[2], a)
+        self._set(nd.inputs[3], b)
+        self._cse[k] = nd.outputs[0]
+        return nd.outputs[0]
+
+    def mixv(self, fac, a, b):
+        k = ('mv', self._ck(fac, a, b))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeMix')
+        nd.data_type = 'VECTOR'
+        nd.factor_mode = 'UNIFORM'
+        nd.clamp_factor = False
+        self._set(nd.inputs[0], fac)
+        self._set(nd.inputs[4], a)
+        self._set(nd.inputs[5], b)
+        self._cse[k] = nd.outputs[1]
+        return nd.outputs[1]
+
+    def choosev(self, cond, a, b):
+        # 按 0/1 条件取一端(cond=0→a, 1→b),没选中那端零影响:DIVIDE 是 b≠0 ? a/b : 0 的三元式,死端的 Inf/NaN 不外泄。
+        keep_b = self.comb(cond, cond, cond)
+        other = self.math('SUBTRACT', 1.0, cond)
+        keep_a = self.comb(other, other, other)
+        return self.vmath('ADD', self.vmath('DIVIDE', a, keep_a), self.vmath('DIVIDE', b, keep_b))
+
+    def choosef(self, cond, a, b):
+        # choosev 的标量版。取一端不能用 mixf:GPU 的 mix 是 a + t·(b − a),一端是 1e30 这类缺席值时另一端被整个抵消成 0。
+        keep_a = self.math('SUBTRACT', 1.0, cond)
+        return self.math('ADD', self.math('DIVIDE', a, keep_a), self.math('DIVIDE', b, cond))
+
+    def clampn(self, x, mn=0.0, mx=1.0):
+        k = ('cl', self._ck(x, mn, mx))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeClamp')
+        self._set(nd.inputs[0], x)
+        self._set(nd.inputs[1], mn)
+        self._set(nd.inputs[2], mx)
+        self._cse[k] = nd.outputs[0]
+        return nd.outputs[0]
+
+    def sep(self, v):
+        key = v.as_pointer() if isinstance(v, bpy.types.NodeSocket) else None
+        if key is not None and key in self._sep_cache:
+            return self._sep_cache[key]
+        nd = self._nd('ShaderNodeSeparateXYZ')
+        self._set(nd.inputs[0], v)
+        r = (nd.outputs[0], nd.outputs[1], nd.outputs[2])
+        if key is not None:
+            self._sep_cache[key] = r
+        return r
+
+    def comb(self, x, y, z):
+        k = ('cb', self._ck(x, y, z))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeCombineXYZ')
+        self._set(nd.inputs[0], x)
+        self._set(nd.inputs[1], y)
+        self._set(nd.inputs[2], z)
+        self._cse[k] = nd.outputs[0]
+        return nd.outputs[0]
+
+    def bc(self, s):
+        if isinstance(s, (int, float)):
+            return (s, s, s)
+        return self.comb(s, s, s)
+
+    def vtrans(self, v, frm, to, kind='VECTOR'):
+        k = ('vt', frm, to, kind, self._ck(v))
+        hit = self._cse.get(k)
+        if hit is not None:
+            return hit
+        nd = self._nd('ShaderNodeVectorTransform')
+        nd.vector_type = kind
+        nd.convert_from = frm
+        nd.convert_to = to
+        # 按名取:5.3 起首个输入是只在内部着色树可用的 LightIndex,Vector 退到第二位。
+        self._set(nd.inputs['Vector'], v)
+        self._cse[k] = nd.outputs[0]
+        return nd.outputs[0]
+
+    def _basis(self, v, rows):
+        comps = self.sep(v)
+        parts = []
+        for row in rows:
+            total = None
+            for weight, comp in zip(row, comps):
+                if weight == 0.0:
+                    continue
+                term = comp if weight == 1.0 else self.math('MULTIPLY', comp, weight)
+                total = term if total is None else self.math('ADD', total, term)
+            parts.append(0.0 if total is None else total)
+        return self.comb(parts[0], parts[1], parts[2])
+
+    def b2u(self, v, point=False):
+        # 宿主世界 -> 真源世界:世界基的逆(正交,转置)。点与向量同式 -- 基里没有平移。
+        _ = point
+        rows = _world_basis()
+        return self._basis(v, [[rows[j][i] for j in range(3)] for i in range(3)])
+
+    def u2b(self, v):
+        return self._basis(v, _world_basis())
+
+    def geo(self):
+        if self._geo is None:
+            self._geo = self._nd('ShaderNodeNewGeometry')
+        return self._geo
+
+    def facing_sign(self):
+        """这一片元看到的是正面 +1、背面 -1 —— 真源光栅宿主的 VFACE。"""
+        hit = self._cse.get(('facing_sign',))
+        if hit is None:
+            hit = self.math('SUBTRACT', 1.0, self.math('MULTIPLY', self.geo().outputs['Backfacing'], 2.0))
+            self._cse[('facing_sign',)] = hit
+        return hit
+
+    def surface_normal(self):
+        """插值法线的原样(世界空间,不随被看到的是哪一面翻转)。宿主在背面把 Geometry 的法线整个取反
+        (EEVEE:eevee_surf_common 的 init_globals;Cycles:shader_setup 同样取反),真源光栅宿主不翻:
+        要不要按面翻、翻哪一条,是每个真源着色器自己拿 VFACE 决定的(有的只翻菲涅尔那一条,有的一条都不翻)。
+        这里乘 VFACE 翻回来,内核按真源自己的判断去翻。"""
+        hit = self._cse.get(('surface_normal',))
+        if hit is None:
+            hit = self.vmath('SCALE', self.geo().outputs['Normal'], s=self.facing_sign())
+            self._cse[('surface_normal',)] = hit
+        return hit
+
+    def texco(self):
+        if self._texco is None:
+            self._texco = self._nd('ShaderNodeTexCoord')
+        return self._texco
+
+    def attr(self, name):
+        nd = self._nd('ShaderNodeAttribute')
+        nd.attribute_name = name
+        return nd
+
+    def layer_attr(self, name):
+        nd = self._nd('ShaderNodeAttribute')
+        nd.attribute_type = 'VIEW_LAYER'
+        nd.attribute_name = name
+        return nd
+
+    def _tbn_axis(self, x, y, z, strength=1.0):
+        nd = self._nd('ShaderNodeNormalMap')
+        nd.space = 'TANGENT'
+        nd.uv_map = ''
+        self._set(nd.inputs['Strength'], strength)
+        self._set(nd.inputs['Color'], (x * 0.5 + 0.5, y * 0.5 + 0.5, z * 0.5 + 0.5))
+        return nd.outputs['Normal']
+
+    def tbn(self):
+        """(tangentWS, w) —— **宿主自己的**切线基,不读任何烘焙网格属性。
+
+        Normal Map 节点(TANGENT 空间、Strength=1)算的就是 normalize(T*x + B*y + N*z),
+        其中 T/B 是它按活动 UV 现算的 MikkTSpace 基,B 已经带着 bitangent_sign。所以喂
+        (1,0,0) 出来的是 T、喂 (0,1,0) 出来的是 B,两个都在世界空间。背面的片元上节点把整组基取反
+        (EEVEE 先翻 T 再用翻过的 N 叉出 B;Cycles 用原样的基算完再整个取反),T 与 B 同乘 VFACE
+        翻回原样,与 surface_normal 同一个口径。
+
+        w 取的是 **Unity 口径**,不是 Blender 口径:段图把 tangentWS 先换到 Unity 空间
+        (WORLD→OBJECT 的 VectorTransform + Y/Z 对调)**再**做 cross(N,T)*w。那次换轴是反射
+        (det = -1),叉积随之反号 ⇒ w_unity = -w_blender。所以这里反解写 cross(T,N):
+        w = sign(dot(cross(T,N), B)) == -sign(dot(cross(N,T), B))。
+        判据不是推导:在生成的段组里从 input_tangentWS 走一遍,第一跳就是那个
+        WORLD→OBJECT 的 VectorTransform,第三跳 CombineXYZ 之后才 CROSS_PRODUCT。
+
+        为什么不读属性:读属性要求每张网格事先烘好 ruri_tangent/ruri_tangent_sign,而
+        Attribute 节点**缺属性与读到零向量无法区分**,两者都静默把切线基压塌 —— 法线贴图
+        整条失效而一个字不报。改过拓扑的网格会保留属性名把新增 corner 填零,于是「属性在」
+        这个判据也跟着失效。基由宿主现算就没有这一类失效面,也不再有第二份切线真源。"""
+        if self._tbn is None:
+            tangent = self.vmath('SCALE', self._tbn_axis(1.0, 0.0, 0.0), s=self.facing_sign())
+            bitangent = self.vmath('SCALE', self._tbn_axis(0.0, 1.0, 0.0), s=self.facing_sign())
+            normal = self.surface_normal()
+            w = self.math('SIGN', self.vmath(
+                'DOT_PRODUCT', self.vmath('CROSS_PRODUCT', tangent, normal), bitangent))
+            self._tbn = (tangent, w)
+        return self._tbn
+
+    ENV_PREFILTER_TAPS = (
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.5), (-1.0, 0.0, 0.5), (0.0, 1.0, 0.5), (0.0, -1.0, 0.5),
+        (0.7071, 0.7071, 0.35), (-0.7071, 0.7071, 0.35),
+        (0.7071, -0.7071, 0.35), (-0.7071, -0.7071, 0.35),
+    )
+
+    def _env_tap(self, image, projection, spec, strength, direction):
+        if spec is not None:
+            vector_type, location, rotation, scale = spec
+            md = self._nd('ShaderNodeMapping')
+            md.vector_type = vector_type
+            md.inputs['Location'].default_value = location
+            md.inputs['Rotation'].default_value = rotation
+            md.inputs['Scale'].default_value = scale
+            self._set(md.inputs['Vector'], direction)
+            direction = md.outputs[0]
+        nd = self._nd('ShaderNodeTexEnvironment')
+        nd.image = image
+        nd.projection = projection
+        nd.interpolation = 'Linear'
+        self._set(nd.inputs[0], direction)
+        color = nd.outputs[0]
+        if strength != 1.0:
+            color = self.vmath('SCALE', color, s=strength)
+        return color
+
+    def env_image(self, image, direction, mip=None, spread=None):
+        """锥形预滤波的等距环境采样(mip 按真源 mip↔粗糙度式反解;两者皆无 = 锐反射单抽样)。"""
+        if mip is None and spread is None:
+            return (self._env_tap(image, 'EQUIRECTANGULAR', None, 1.0, direction), 1.0)
+        if spread is None:
+            roughness = self.math('POWER', 2.0, self.math('DIVIDE', self.math('SUBTRACT', mip, 5.0), 1.2))
+            spread = self.math('MINIMUM', self.math('MULTIPLY', roughness, roughness), 1.0)
+        _dx, _dy, dz = self.sep(direction)
+        polar = self.math('GREATER_THAN', self.math('ABSOLUTE', dz), 0.9)
+        tangent = self.vmath('NORMALIZE', self.mixv(
+            polar,
+            self.vmath('CROSS_PRODUCT', direction, (0.0, 0.0, 1.0)),
+            self.vmath('CROSS_PRODUCT', direction, (1.0, 0.0, 0.0))))
+        bitangent = self.vmath('NORMALIZE', self.vmath('CROSS_PRODUCT', direction, tangent))
+        total = None
+        weight_sum = 0.0
+        for offset_x, offset_y, weight in self.ENV_PREFILTER_TAPS:
+            if offset_x or offset_y:
+                offset = self.vmath('ADD',
+                                    self.vmath('SCALE', tangent, s=offset_x),
+                                    self.vmath('SCALE', bitangent, s=offset_y))
+                tap = self.vmath('NORMALIZE',
+                                 self.vmath('ADD', direction, self.vmath('SCALE', offset, s=spread)))
+            else:
+                tap = direction
+            sample = self._env_tap(image, 'EQUIRECTANGULAR', None, 1.0, tap)
+            total = (self.vmath('SCALE', sample, s=weight) if total is None
+                     else self.vmath('ADD', total, self.vmath('SCALE', sample, s=weight)))
+            weight_sum += weight
+        return (self.vmath('SCALE', total, s=1.0 / weight_sum), 1.0)
+
+
+# ==================== 图像纪律(全部踩过坑,逐条保命) ====================
+
+def _linear_to_srgb(c):
+    """_srgb_to_linear 的**精确逆**——两支都要对上,否则「作者值→uniform→作者值」的往返
+    在 HDR 段(≥1)不闭合,写回材质会每次都读出一个新数,依赖图永远脏。"""
+    c = float(c)
+    if c <= 0.0031308:
+        return 12.92 * c
+    if c < 1.0:
+        return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+    return c ** (1.0 / 2.2)
+
+
+def _srgb_to_linear(c):
+    """Unity 上传材质 Color 属性时做的那一次线性化(GammaToLinearSpace 逐字:≥1 走 2.2 次幂,
+    HDR 颜色的超一值域正靠这一支)。清单的 srgb_params 说哪些属性要过这里。"""
+    c = float(c)
+    if c <= 0.04045:
+        return c / 12.92
+    if c < 1.0:
+        return ((c + 0.055) / 1.055) ** 2.4
+    return c ** 2.2
+
+
+def _image_stored(image):
+    # pack() 是唯一能清 dirty 的合法手段,否则关文件弹「N 张图片未保存」。
+    try:
+        image.pack()
+    except Exception:
+        pass
+
+
+def _set_colorspace(image, want):
+    # 写色彩空间会丢弃并重建像素缓冲(generated 图被抹黑;真图失效全部使用者 = O(N²))。
+    # 唯一幂等写法 = 先比后写;每一处设色彩空间都必须走这里。
+    # 带 ruri_colorspace_stated 的图是宿主按**资产自己声明的**色彩空间定死的,槽语义不许改写它:
+    # 一张图可以同时挂在法线槽和自发光槽上,而色彩空间住在共享数据块上,按槽写就是后写的赢。
+    if image is None:
+        return
+    try:
+        if image.get('ruri_colorspace_stated'):
+            return
+    except Exception:
+        pass
+    try:
+        if image.colorspace_settings.name != want:
+            image.colorspace_settings.name = want
+    except Exception:
+        pass
+
+
+def _slot_of(image_name):
+    base, dot, tail = image_name.rpartition('.')
+    return base if dot and tail.isdigit() else image_name
+
+
+def _fix_two_channel_layout(real):
+    """BC5 类双通道容器(R恒白/G=B=X/A=Y)就地还原 R<-G;只对 Non-Color 调用。"""
+    if real.get('ruri_rg_layout_fixed'):
+        return
+    real['ruri_rg_layout_fixed'] = 1
+    try:
+        import numpy as _np
+        w, h = real.size
+        if w and h:
+            buf = _np.empty(w * h * 4, dtype=_np.float32)
+            real.pixels.foreach_get(buf)
+            px = buf.reshape(-1, 4)
+            if (float(px[:, 0].mean()) > 0.99 and float(px[:, 0].std()) < 0.02
+                    and float(px[:, 1].std()) > 1e-3
+                    and float(_np.abs(px[:, 1] - px[:, 2]).mean()) < 0.01):
+                px[:, 0] = px[:, 1]
+                real.pixels.foreach_set(buf)
+                real.update()
+                if real.packed_file is not None:
+                    real.pack()
+                print('[ruri-uber] {0}: 双通道导出布局已恢复 R<-G'.format(real.name), flush=True)
+    except Exception as exc:
+        print('[ruri-uber] {0} 通道布局检测失败: {1}'.format(real.name, exc), flush=True)
+
+
+def _swap_image(node, real, images):
+    # 色彩空间跟着占位图走(生成期按真源 .meta 定死);先比后写,见 _set_colorspace。
+    non_color = node.image is not None and node.image.colorspace_settings.name == 'Non-Color'
+    node.image = real
+    _set_colorspace(real, 'Non-Color' if non_color else 'sRGB')
+    if non_color:
+        _fix_two_channel_layout(real)
+    if node.get(OWN_SAMPLER_KEY):
+        _apply_own_sampler(node, _sampler_image(node, real, images))
+
+
+def _set_neutral_image(node, neutral, images):
+    # 清空一格 = 回落到割点自己声明的中性图;色彩空间已随中性图的键定死,采样状态按它(没有陈述 = 缺省)。
+    node.image = neutral
+    if node.get(OWN_SAMPLER_KEY):
+        _apply_own_sampler(node, _sampler_image(node, neutral, images))
+
+
+def _retire_materials(replaced, doomed=()):
+    """{旧材质: 新材质}(用户已经换到新的上,见 compile_all):旧的整批删掉,名字还给新的;doomed 是同一批要删的
+    别的数据块(量常量块用的拷贝)。删除整批一次 —— 逐张删每张都要把整个文件的 ID 引用走一遍(九千对象的关卡上
+    一遍约 80 ms)。换用户也别逐个槽去换:对象级槽每换一格,宿主都把全部对象的材质表重核一遍,九千格就是半分钟;
+    user_remap 一张一遍,不论持有者是谁。"""
+    if not replaced and not doomed:
+        return
+    # 名字先按新材质记下:整批删掉之后旧材质的 python 句柄全部失效,再拿它们当键就查不到了。
+    renames = [(new, old.name) for old, new in replaced.items()]
+    bpy.data.batch_remove(list(replaced) + list(doomed))
+    for new, name in renames:
+        new.name = name
+
+
+# 图节点上的这一格(名字住在 PythonTables.OwnSamplerKey):1 = 按自己绑的图采;槽名 = 借那个槽绑的图的采样器(真源 SAMPLE_TEXTURE2D(甲, sampler_乙))。
+
+
+def _sampler_image(node, real, images):
+    # 采样状态读哪张图:自带的读自己那张,借来的读借出槽那张(那一槽没绑图 = 它的中性占位,宿主缺省状态)。
+    lender = node.get(OWN_SAMPLER_KEY)
+    if isinstance(lender, str):
+        return (images or {}).get(lender)
+    return real
+# 宿主把贴图自己陈述的采样状态烙在图上(material_builder.SAMPLING_STATED_PROPERTY)。
+SAMPLING_STATED_PROPERTY = 'ruri_sampling'
+_NATIVE_EXTENSION = {'repeat': 'REPEAT', 'clamp': 'EXTEND', 'mirror': 'MIRROR'}
+
+
+def _own_sampler_state(image):
+    """(u 向寻址, v 向寻址, 是否点采样):图自己陈述的那份。没有陈述的图(用户自己的图、中性占位)
+    带的就是 Blender 图像自己的状态 —— 重复寻址、线性过滤 —— 不是替谁猜的值。"""
+    stated = image.get(SAMPLING_STATED_PROPERTY) if image is not None else None
+    if stated is None:
+        return OWN_SAMPLER_WRAPS[0], OWN_SAMPLER_WRAPS[0], False
+    return str(stated['wrap_u']), str(stated['wrap_v']), str(stated['filter']) == 'point'
+
+
+def _apply_own_sampler(node, image):
+    """片元图节点按绑定那张图自带的采样器设寻址与过滤。
+
+    两轴相同且图节点有原生等价(repeat/clamp/mirror):原生扩展方式,线性与点采样都精确。
+    其余组合逐轴在坐标上做寻址,图节点重复寻址,与顶点腿 own_sampler_fetch 同一套折法:点采样不取 mip,与硬件逐纹素相同;
+    线性过滤在第 0 级也相同,缩小到粗 mip 时贴着钳制边那半个粗纹素会混进对边 —— 图节点两轴共用一个扩展方式,这是它给得出的
+    最近答案,特效贴图常有 U 重复 V 钳制这一组,拒绝就是整张材质编不出来。"""
+    wrap_u, wrap_v, point = _own_sampler_state(image)
+    # 先比后写:宿主每写一次节点属性都把整棵树重算一遍,换图时这几格多半没变。
+    interpolation = 'Closest' if point else 'Linear'
+    if node.interpolation != interpolation:
+        node.interpolation = interpolation
+    native = _NATIVE_EXTENSION.get(wrap_u) if wrap_u == wrap_v else None
+    if native is not None:
+        if node.extension != native:
+            node.extension = native
+        _axis_addressing(node, None, None, image)
+        return
+    if node.extension != 'REPEAT':
+        node.extension = 'REPEAT'
+    _axis_addressing(node, wrap_u, wrap_v, image)
+
+
+AXIS_ADDRESSING_KEY = 'ruri_axis_addressing'
+
+
+def _axis_addressing(node, wrap_u, wrap_v, image):
+    """图节点坐标口前的逐轴寻址子图:重复原样、钳制夹到首末纹素中心、镜像按周期 2 折回再夹、
+    单次镜像取绝对值再夹(与顶点腿 own_sampler_fetch 逐式相同)。子图的节点都烙着图节点的名字,
+    换图时整段拆掉按新图的尺寸重建;wrap_u 为 None = 只拆不建,把原来的坐标源接回去。"""
+    tree = node.id_data
+    socket = node.inputs['Vector']
+    source = socket.links[0].from_socket if socket.links else None
+    stale = [one for one in tree.nodes if one.get(AXIS_ADDRESSING_KEY) == node.name]
+    if stale:
+        source = None
+        for one in stale:
+            if one.bl_idname == 'ShaderNodeSeparateXYZ' and one.inputs[0].links:
+                upstream = one.inputs[0].links[0].from_socket
+                if upstream.node.get(AXIS_ADDRESSING_KEY) != node.name:
+                    source = upstream
+    for one in stale:
+        tree.nodes.remove(one)
+    if wrap_u is None:
+        # 没拆掉什么就什么都不接:原来的坐标源还在口上,重接一遍只是白让宿主重算整棵树。
+        if stale and source is not None:
+            tree.links.new(source, socket)
+        return
+
+    def made(kind):
+        one = tree.nodes.new(kind)
+        one[AXIS_ADDRESSING_KEY] = node.name
+        one.location = (node.location.x - 220.0, node.location.y)
+        return one
+
+    def scalar(operation, a, b=None):
+        one = made('ShaderNodeMath')
+        one.operation = operation
+        for index, value in enumerate((a, b)):
+            if value is None:
+                continue
+            if isinstance(value, (int, float)):
+                one.inputs[index].default_value = float(value)
+            else:
+                tree.links.new(value, one.inputs[index])
+        return one.outputs[0]
+
+    if source is None:
+        source = made('ShaderNodeTexCoord').outputs['UV']
+    axes = made('ShaderNodeSeparateXYZ')
+    tree.links.new(source, axes.inputs[0])
+    wrapped = made('ShaderNodeCombineXYZ')
+    for axis, wrap in enumerate((wrap_u, wrap_v)):
+        coordinate = axes.outputs[axis]
+        half = 0.5 / max(float(image.size[axis]), 1.0)
+        if wrap == 'repeat':
+            result = coordinate
+        elif wrap == 'clamp':
+            result = scalar('MINIMUM', scalar('MAXIMUM', coordinate, half), 1.0 - half)
+        elif wrap == 'mirror':
+            folded = scalar('SUBTRACT', 1.0, scalar('ABSOLUTE', scalar('SUBTRACT', scalar(
+                'MULTIPLY', scalar('FRACT', scalar('MULTIPLY', coordinate, 0.5)), 2.0), 1.0)))
+            result = scalar('MINIMUM', scalar('MAXIMUM', folded, half), 1.0 - half)
+        elif wrap == 'mirroronce':
+            result = scalar('MINIMUM', scalar('MAXIMUM', scalar('ABSOLUTE', coordinate), half), 1.0 - half)
+        else:
+            raise RuntimeError('[ruri-uber] 贴图 {0} 陈述了未知的寻址 {1}'.format(image.name, wrap))
+        tree.links.new(result, wrapped.inputs[axis])
+    tree.links.new(wrapped.outputs[0], socket)
+    _frame_generated(tree)
+
+
+_NEUTRAL_IMAGES = {}
+
+
+def _neutral_image(rgb, alpha, non_color):
+    """1x1 图,颜色 = 割点自己声明的 neutral(缺图时该采到什么;与占位图的槽语义中性不是一回事)。
+    文件里的普通图,材质树的取点指着它、随文件存盘:名字编了全部参数,文件里已有同名同色的就是它,没有才建。"""
+    key = (tuple(round(float(c), 6) for c in rgb), round(float(alpha), 6), bool(non_color))
+    img = _NEUTRAL_IMAGES.get(key)
+    if img is not None:
+        try:
+            img.name
+            return img
+        except ReferenceError:
+            pass
+    name = 'RuriNeutral_{0:.3f}_{1:.3f}_{2:.3f}_{3:.3f}_{4}'.format(
+        key[0][0], key[0][1], key[0][2], key[1], 'nc' if non_color else 'srgb')
+    # 平色用 generated_color(不写 pixels:写像素置 dirty 且不进 .blend);sRGB 图按显示空间反编码。
+    color = (key[0][0] if non_color else _linear_to_srgb(key[0][0]),
+             key[0][1] if non_color else _linear_to_srgb(key[0][1]),
+             key[0][2] if non_color else _linear_to_srgb(key[0][2]),
+             key[1])
+    img = bpy.data.images.get(name)
+    if img is not None and img.library is None and img.get('ruri_placeholder') \
+            and all(abs(float(have) - float(want)) <= 1e-6 for have, want in zip(img.generated_color, color)):
+        _NEUTRAL_IMAGES[key] = img
+        return img
+    img = bpy.data.images.new(name, 1, 1, float_buffer=True, alpha=True)
+    _set_colorspace(img, 'Non-Color' if non_color else 'sRGB')
+    img.alpha_mode = 'CHANNEL_PACKED'
+    img.generated_color = color
+    img.update()
+    img['ruri_placeholder'] = 1
+    _NEUTRAL_IMAGES[key] = img
+    return img
+
+
+# ==================== 着色器常量块预算 ====================
+
+# 宿主编材质着色器时,每个节点的未接线值口(不可用的口、Math/VectorMath 没读的操作数口也算)各占 node_tree
+# 常量块里一个 uniform;整块超过显卡的 UBO 上限宿主就不建这块 UBO(gpu_uniform_buffer.cc),着色器照编、
+# 常量全读 0 —— 材质整片黑且零报错。上限 Python 查不到,取 N 卡 Vulkan 的 maxUniformBufferRange。
+NODE_TREE_UNIFORM_LIMIT = 65536
+_UNIFORM_SKIPPED = frozenset(('NodeFrame', 'NodeReroute'))
+_UNIFORM_SCALARS = frozenset(('VALUE', 'INT', 'BOOLEAN'))
+_UNIFORM_VECTORS = frozenset(('VECTOR', 'RGBA'))
+
+
+def _mix_inputs(node):
+    """Mix 只把当前数据类型用到的口编进着色器。"""
+    if node.data_type == 'FLOAT':
+        used = (0, 2, 3)
+    elif node.data_type == 'VECTOR':
+        used = (0 if node.factor_mode == 'UNIFORM' else 1, 4, 5)
+    else:
+        used = (0, 6, 7)
+    return [node.inputs[index] for index in used]
+
+
+def _uniform_slots(tree):
+    """内联后平树的 (标量口数, 向量口数)。"""
+    scalars = 0
+    vectors = 0
+    for node in tree.nodes:
+        if node.bl_idname in _UNIFORM_SKIPPED:
+            continue
+        sockets = _mix_inputs(node) if node.bl_idname == 'ShaderNodeMix' else node.inputs
+        for socket in sockets:
+            if socket.is_linked or socket.hide_value:
+                continue
+            if socket.type in _UNIFORM_SCALARS:
+                scalars += 1
+            elif socket.type in _UNIFORM_VECTORS:
+                vectors += 1
+    return scalars, vectors
+
+
+def node_tree_uniform_bytes(tree):
+    """一棵内联后平树的 node_tree 常量块字节数(std140:向量各占 16,标量先填向量的尾巴)。"""
+    scalars, vectors = _uniform_slots(tree)
+    return 16 * vectors + 4 * max(0, scalars - vectors)
+
+
+def _zone_copy(group, zone_copies):
+    """组的「每个 repeat zone 砍成一圈」的拷贝;组里(连同它嵌套的组)没有 zone = None。拷贝是临时数据,
+    按源组的 session_uid 记在 zone_copies 里:一个组一个会话只看一遍、只拷一次。"""
+    uid = group.session_uid
+    if uid not in zone_copies:
+        zoned = any(node.bl_idname == 'GeometryNodeRepeatInput'
+                    or (node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
+                        and _zone_copy(node.node_tree, zone_copies) is not None)
+                    for node in group.nodes)
+        copy = _host().scratch(group.copy()) if zoned else None
+        zone_copies[uid] = copy
+        if copy is not None:
+            _one_iteration(copy, zone_copies)
+    return zone_copies[uid]
+
+
+def _one_iteration(tree, zone_copies):
+    """把树里每个 repeat zone 砍成一圈:这棵树上的直接改,带 zone 的组换成它砍过的拷贝(见 _zone_copy)。"""
+    for node in tree.nodes:
+        if node.bl_idname == 'GeometryNodeRepeatInput':
+            iterations = node.inputs['Iterations']
+            for link in list(iterations.links):
+                tree.links.remove(link)
+            iterations.default_value = 1
+        elif node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None:
+            copy = _zone_copy(node.node_tree, zone_copies)
+            if copy is not None:
+                node.node_tree = copy
+
+
+def require_uniform_budget(mat, zone_copies, probes):
+    """量宿主真正编的那一份:材质树经内联器展开组、折叠常量、Switch 剪枝之后的平树。宿主编 EEVEE 时 repeat zone
+    保留成 GLSL 循环、体只编一份,Python 的内联器却把它整个展开 —— 所以量的是一份把每个 zone(材质树上的与组里的)
+    都砍成一圈的拷贝(初态是常量的项展开一圈会多占几格,量得偏多,落在保守的一边)。量用的材质拷贝记进 probes,
+    由调用方整批删:逐张删每张都要把整个文件的 ID 引用走一遍。"""
+    probe = _host().scratch(mat.copy())
+    probes.append(probe)
+    _one_iteration(probe.node_tree, zone_copies)
+    inlined = bpy.types.InlineShaderNodes.from_material(probe)
+    size = node_tree_uniform_bytes(inlined.node_tree)
+    del inlined
+    if size > NODE_TREE_UNIFORM_LIMIT:
+        raise RuntimeError('[Ruri] 材质 {0} 的着色器常量块约 {1} 字节,超过宿主 UBO 上限 {2}:宿主会不建这块常量,'
+                           '所有常量读 0、整片黑。生成的图要瘦下来。'.format(mat.name, size, NODE_TREE_UNIFORM_LIMIT))
+    return size
+
+
+# ==================== 灯:全部光照能力共用一套原生灯模板 ====================
+
+# 源管线逐灯参数的一个向量在灯上的属性名(按结果叶取名):宿主经 light_parameter_attributes() 取同一份去写。
+LIGHT_PARAMETER_ATTRIBUTE = 'ruri_light_{0}'
+# 渲染输出一个像素的世界尺寸的场景视层属性名住在 PythonTables.RenderFootprintAttribute:宿主按渲染相机与输出分辨率
+# 经 render_footprint_attributes() 取同一份名字去写,换镜头或分辨率只改值、不重接。
+# URP 给附加光的距离平方垫底值(Lighting.hlsl 的 max(dot(lightVector, lightVector), HALF_MIN))。
+HALF_MIN = 6.103515625e-05
+NATIVE_LIGHT_LABEL = 'RuriNativeLight'
+# 终色之外多发的那一份:同一条终色,但附加光循环没跑过(生成期 LightTaint.NoLoopFinal)。
+NO_LOOP_FINAL = '__color_noloop'
+# 终色之外多发的另一份:同一条终色,但一盏灯都没有(生成期 LightTaint.UnlitFinal);终色不读灯的入口不发它。
+UNLIT_FINAL = '__color_unlit'
+# 入口交给表面光泽瓣的那一份(与终色一样住在光循环里,只在主光那一圈进账);没有这个出口的入口只有漫反射一瓣。
+GLOSSY_FINAL = 'ret_glossyLight'
+
+# 基座三列的组输入名 —— 与物化脚本 RIG_BASIS_SOCKETS 同一个命名域(那边建组,这边接线)。
+RIG_BASIS_SOCKETS = ('_RuriRigBasis0', '_RuriRigBasis1', '_RuriRigBasis2')
+RIG_ATTR_LABEL = 'RuriRigBasisAttr'
+# 基座三列写在**对象**自定义属性上(逐对象 UBO,不弄脏材质树);Attribute 节点按 ["名"] 读。
+RIG_OBJECT_PROP = 'ruri_face_basis'
+# {对象名: (骨架名, 骨名)} —— push_rig_basis 的工作单,由 rig_apply 在接线时登记。
+# 它是**进程态**:重开文件就空了,而 .blend 里只留着上次写下的属性值 ⇒ 不重建就等于
+# 基座冻结在存盘那一刻,而且完全静默。所以 load_post 把 RIG_SCANNED 打回 False,
+# 下一次 push 现扫一次重建(扫一次,不是每帧扫)。
+RIG_DRIVEN = {}
+RIG_SCANNED = [False]
+
+
+# ==================== 能力兑现(身份 → 建图器 的唯一表) ====================
+
+def _find_native_node(g, type_name, attribute_name=None):
+    for node in g.t.nodes:
+        if node.bl_idname != type_name or node.label != NATIVE_LIGHT_LABEL:
+            continue
+        if attribute_name is not None and node.attribute_name != attribute_name:
+            continue
+        return node
+    node = g._nd(type_name)
+    node.label = NATIVE_LIGHT_LABEL
+    if attribute_name is not None:
+        node.attribute_type = 'LIGHT'
+        node.attribute_name = attribute_name
+    return node
+
+
+def _native_light(g):
+    """当前光循环这一圈的灯 —— **全部光照能力共用的唯一模板**(Blender 世界系),各能力的答案都是它的视图:
+    零驱动器、零灯表、零探针、零脚本写入,挪灯/转灯/换色由宿主自己的光循环当场带进来。这里交与位置无关的那几样:
+    灯心与颜色(Light Info)、主光身份(原生 is_sun:方向光走主光链,点光/聚光/面光走附加光链)。颜色乘进源管线灯表
+    按镜头距离给的那一份淡出(_camera_fade)。
+    灯节点一进图,codegen 就把整棵材质树包进光循环,按灯逐圈求值 —— 主光着色读这一圈的方向,所以也逐圈求值,
+    非方向光那几圈在出口与「循环没跑」的那份相减抵掉(见 _per_light_share)。
+    只许在兑现面的标记区里调(能力建图器 / 闭包):灯源节点与换算链都随兑现面一起回收重建,
+    树里任何时刻只有一条活链;同一次建图内按标签认领,不重复建源节点。"""
+    hit = g._cse.get(('native_light',))
+    if hit is not None:
+        return hit
+    info = _find_native_node(g, 'ShaderNodeLightInfo')
+    position = info.outputs['Position']
+    # Light Info.Power = 辐射强度/π;内核吃的是 color × intensity ⇒ 乘回 π。
+    scale = g.math('MULTIPLY', g.math('MULTIPLY', info.outputs['Power'], math.pi), _camera_fade(g, position))
+    answer = {
+        'position': position,
+        'color': g.vmath('SCALE', info.outputs['Color'], s=scale),
+        'is_main': _light_builtin(g, 'is_sun'),
+    }
+    g._cse[('native_light',)] = answer
+    return answer
+
+
+def _light_builtin(g, name):
+    """这一圈灯的原生属性(Attribute LIGHT 的内建名:is_sun / is_spot / cutoff_distance),读 Alpha 口:内建值四个分量
+    同值,Alpha 原样、Fac 是三分量的平均。"""
+    return _find_native_node(g, 'ShaderNodeAttribute', name).outputs['Alpha']
+
+
+def _light_range(g):
+    """这一圈灯在源管线里的范围。宿主在源管线的着色照不到任何东西之处剔除这盏灯(剔除盒最远的角与范围取近者,
+    再放宽到宿主光循环的阈值之外),影响距离 cutoff_distance 就设在那里,范围比它大的那一截记在灯的
+    LIGHT_RANGE_EXCESS_PROPERTY 上(四个分量同值,没有这一格的灯读零 = 范围就是影响距离);文件里没有一盏灯带这一格时
+    答影响距离本身,逐灯不读属性。"""
+    cutoff = _light_builtin(g, 'cutoff_distance')
+    if _host().LIGHT_RANGE_EXCESS_PROPERTY not in _host().carried_light_attributes():
+        return cutoff
+    excess = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_RANGE_EXCESS_PROPERTY).outputs['Alpha']
+    return g.math('ADD', cutoff, excess)
+
+
+def _camera_fade(g, light_position):
+    """源管线的灯表按镜头距离给这盏灯的那一份淡出,不画的灯为 0:saturate(1 + a - d²k) · saturate(1 + d²m - b),
+    d = 相机到灯心,(a, k, b, m) 是灯上宿主照关卡陈述写下的 LIGHT_FADE_PROPERTY(没有这一格的灯读全零 = 不淡出)。
+    相机位置 = 着色点 + 视向 × 视距,与灯无关,光循环外只算一次;淡出只随相机与灯心,视口里转镜头当场跟上。
+    文件里没有一盏灯带这一格时每盏灯读到的都是全零,淡出恒 1:答常量,逐灯不读属性、不算距离(灯带的参数种类变了由
+    宿主的能力状态重接,见 _scene_reads)。"""
+    if _host().LIGHT_FADE_PROPERTY not in _host().carried_light_attributes():
+        return 1.0
+    fade = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_FADE_PROPERTY)
+    a, k, b = g.sep(fade.outputs['Vector'])
+    m = fade.outputs['Alpha']
+    view = g._cse.get(('camera_position',))
+    if view is None:
+        distance = g._nd('ShaderNodeCameraData').outputs['View Distance']
+        view = g.vmath('MULTIPLY_ADD', g.geo().outputs['Incoming'], g.bc(distance), g.geo().outputs['Position'])
+        g._cse[('camera_position',)] = view
+    offset = g.vmath('SUBTRACT', view, light_position)
+    distance2 = g.vmath('DOT_PRODUCT', offset, offset)
+    far = g.math('MULTIPLY_ADD', distance2, g.math('MULTIPLY', k, -1.0), g.math('ADD', a, 1.0), clamp=True)
+    near = g.math('MULTIPLY_ADD', distance2, m, g.math('SUBTRACT', 1.0, b), clamp=True)
+    return g.math('MULTIPLY', far, near)
+
+
+def _light_evaluation(g, position):
+    """这一圈灯在一个位置上的原生 Light Evaluation:位置缺席 = 着色点(共享那一个原生节点);询问给了位置
+    (真源的附加光按沿法线外推一点的位置算)就在那里单建一个,同一位置只建一个。"""
+    if position is None:
+        return _find_native_node(g, 'ShaderNodeLightEvaluation')
+    at = g.u2b(position)
+    key = ('light_evaluation', g._ck(at))
+    node = g._cse.get(key)
+    if node is None:
+        node = g._nd('ShaderNodeLightEvaluation')
+        g._set(node.inputs['Position'], at)
+        g._cse[key] = node
+    return node
+
+
+def _cone_ramp(g, position):
+    """聚光锥在这个位置上的线性斜坡 t = saturate((cos θ - cos 外角/2) / (cos 内角/2 - cos 外角/2)),点光与方向光恒 1。
+    原生 Mask = 截止窗口 × smoothstep(t),两样乘在一起;同一条光线上离灯心 1/256 截止距离的那一点截止窗口恰为 1
+    ((1/256)⁴ 在单精度里被 1 吞掉)而方向不变,那里的 Mask 就是 smoothstep(t) 本身。反解 smoothstep:
+    t = ½ - sin(asin(1 - 2s) / 3)。"""
+    evaluation = _light_evaluation(g, position)
+    key = ('cone_ramp', evaluation.as_pointer())
+    hit = g._cse.get(key)
+    if hit is not None:
+        return hit
+    near = g._nd('ShaderNodeLightEvaluation')
+    step = g.math('MULTIPLY', _light_builtin(g, 'cutoff_distance'), 1.0 / 256.0)
+    g._set(near.inputs['Position'], g.vmath('SUBTRACT', _native_light(g)['position'],
+                                            g.vmath('SCALE', evaluation.outputs['Direction'], s=step)))
+    arc = g.math('ARCSINE', g.math('MULTIPLY_ADD', near.outputs['Mask'], -2.0, 1.0))
+    ramp = g.math('SUBTRACT', 0.5, g.math('SINE', g.math('DIVIDE', arc, 3.0)))
+    g._cse[key] = ramp
+    return ramp
+
+
+def _urp_attenuation(g, position):
+    """URP 附加光的衰减:截止窗口 × 锥斜坡² / max(d², HALF_MIN)(Lighting.hlsl 的 DistanceAttenuation × AngleAttenuation),
+    截止窗口 saturate(1 - (d²/范围²)²)²。原生 Mask = 影响窗口 × smoothstep(t) = 影响窗口 × t²(3 - 2t),影响距离就是范围时
+    影响窗口即截止窗口,除以 (3 - 2t) 就是窗口 × t²;文件里有灯带 LIGHT_RANGE_EXCESS_PROPERTY 时宿主可能在范围之内就剔除
+    (见 _light_range),窗口改按范围自己算、乘锥斜坡的平方。方向光 Mask、t、Distance 恒 1,范围无穷,答 1。"""
+    evaluation = _light_evaluation(g, position)
+    distance = evaluation.outputs['Distance']
+    distance2 = g.math('MULTIPLY', distance, distance)
+    falloff = g.math('MAXIMUM', distance2, HALF_MIN)
+    ramp = _cone_ramp(g, position)
+    if _host().LIGHT_RANGE_EXCESS_PROPERTY not in _host().carried_light_attributes():
+        return g.math('DIVIDE', evaluation.outputs['Mask'],
+                      g.math('MULTIPLY', g.math('MULTIPLY_ADD', ramp, -2.0, 3.0), falloff))
+    reach = _light_range(g)
+    factor = g.math('DIVIDE', distance2, g.math('MULTIPLY', reach, reach))
+    window = g.math('SUBTRACT', 1.0, g.math('MULTIPLY', factor, factor), clamp=True)
+    return g.math('DIVIDE', g.math('MULTIPLY', g.math('MULTIPLY', window, window), g.math('MULTIPLY', ramp, ramp)),
+                  falloff)
+
+
+def _light_axes(g):
+    """这一圈灯的三根轴(Blender 世界系):right = 灯的 +X、up = +Y、forward = -Z(Blender 的灯沿自己的 -Z 照)。
+    原生灯节点给不出灯的朝向:宿主在关卡陈述的灯上导入时烙下 LIGHT_FRAME_PROPERTY —— 世界旋转四元数的虚部
+    (x, y, z),实部取非负、按单位长还原 w = sqrt(1 - |xyz|²) —— 与剔除盒、cookie 矩形同属导入时的静态内容,
+    导入后再转这盏灯它不跟。没烙的灯读全零 = 单位旋转。读这三根轴的只有源管线的管光、雾聚光与 cookie,
+    三者都只在烙了逐灯参数的灯上成立。"""
+    hit = g._cse.get(('light_axes',))
+    if hit is not None:
+        return hit
+    rotation = _find_native_node(g, 'ShaderNodeAttribute', _host().LIGHT_FRAME_PROPERTY).outputs['Vector']
+    x, y, z = g.sep(rotation)
+    w = g.math('SQRT', g.math('MAXIMUM', g.math('SUBTRACT', 1.0, g.vmath('DOT_PRODUCT', rotation, rotation)), 0.0))
+    x2, y2, z2 = (g.math('ADD', component, component) for component in (x, y, z))
+    xx, yy, zz = g.math('MULTIPLY', x, x2), g.math('MULTIPLY', y, y2), g.math('MULTIPLY', z, z2)
+    xy, xz, yz = g.math('MULTIPLY', x, y2), g.math('MULTIPLY', x, z2), g.math('MULTIPLY', y, z2)
+    wx, wy, wz = g.math('MULTIPLY', w, x2), g.math('MULTIPLY', w, y2), g.math('MULTIPLY', w, z2)
+    right = g.comb(g.math('SUBTRACT', 1.0, g.math('ADD', yy, zz)), g.math('ADD', xy, wz), g.math('SUBTRACT', xz, wy))
+    up = g.comb(g.math('SUBTRACT', xy, wz), g.math('SUBTRACT', 1.0, g.math('ADD', xx, zz)), g.math('ADD', yz, wx))
+    forward = g.comb(g.math('MULTIPLY', g.math('ADD', xz, wy), -1.0), g.math('SUBTRACT', wx, yz),
+                     g.math('SUBTRACT', g.math('ADD', xx, yy), 1.0))
+    axes = (right, up, forward)
+    g._cse[('light_axes',)] = axes
+    return axes
+
+
+def _world_output(tree):
+    """EEVEE 取用的世界输出,选法同 Blender:目标是 EEVEE 的压过「全部」,同类里取活动的。"""
+    outputs = [nd for nd in tree.nodes if nd.type == 'OUTPUT_WORLD' and nd.target in ('ALL', 'EEVEE')]
+    return max(outputs, key=lambda nd: (nd.target == 'EEVEE', nd.is_active_output), default=None)
+
+
+def _world_unanswered(world, where, reason):
+    print('[ruri-cap] 世界 {0} 的 {1}:{2} → 环境答不出'.format(world.name, where, reason), flush=True)
+    return None
+
+
+def _world_background(scene):
+    """照明光线在世界里看到的 Background(无灯环境光与镜面环境的来源)。从世界输出的 Surface 顺着连线走:
+    混合着色器的 Fac 来自 Light Path 的 Is Camera Ray 时,Fac = 1 那一支只是相机直接看到的背景,照明光线
+    (Is Camera Ray = 0)走第一个 Shader 口。别的形状(没接、别的着色器、别的 Fac 来源)答不出并大声记账,
+    不按节点序猜一个。"""
+    world = getattr(scene, 'world', None)
+    if world is None or not world.use_nodes or world.node_tree is None:
+        return None
+    output = _world_output(world.node_tree)
+    if output is None:
+        return _world_unanswered(world, '世界输出', '没有 EEVEE 取用的世界输出')
+    socket = output.inputs['Surface']
+    for _ in range(len(world.node_tree.nodes)):
+        if not socket.is_linked:
+            return _world_unanswered(world, socket.node.name, '%s 没接' % socket.name)
+        node = socket.links[0].from_node
+        if node.type == 'BACKGROUND':
+            return node
+        if node.type != 'MIX_SHADER':
+            return _world_unanswered(world, node.name, '照明光线走到 %s,只认 Background 与按 Is Camera Ray 分流的混合着色器' % node.bl_idname)
+        factor = node.inputs['Fac']
+        origin = factor.links[0].from_socket if factor.is_linked else None
+        if origin is None or origin.node.type != 'LIGHT_PATH' or origin.identifier != 'Is Camera Ray':
+            return _world_unanswered(world, node.name, 'Fac 不是 Light Path 的 Is Camera Ray,两支怎么混答不出')
+        socket = node.inputs[1]
+    return _world_unanswered(world, output.name, '连线成环')
+
+
+def _world_sample(g, direction, spread):
+    """沿方向对当前世界环境取一次值(环境图复用其 Mapping;平色世界给常量,精确非近似)。Strength 与 Color
+    只认没接线的常量,或 Color 直连带图的环境纹理:口接着别的节点时默认值不是它的值,答不出,不读默认值。"""
+    scene = bpy.context.scene
+    bg = _world_background(scene)
+    if bg is None:
+        return None
+    if bg.inputs['Strength'].is_linked:
+        return _world_unanswered(scene.world, bg.name, 'Strength 接着别的节点')
+    strength = float(bg.inputs['Strength'].default_value)
+    color_in = bg.inputs['Color']
+    src = color_in.links[0].from_node if color_in.is_linked else None
+    if src is not None and (src.type != 'TEX_ENVIRONMENT' or src.image is None):
+        return _world_unanswered(scene.world, bg.name, 'Color 接着 %s,只认直连带图的环境纹理' % src.bl_idname)
+    if src is not None:
+        d = g.u2b(direction)
+        if src.inputs['Vector'].is_linked:
+            up = src.inputs['Vector'].links[0].from_node
+            if up.type == 'MAPPING':
+                md = g._nd('ShaderNodeMapping')
+                md.vector_type = up.vector_type
+                for key in ('Location', 'Rotation', 'Scale'):
+                    md.inputs[key].default_value = up.inputs[key].default_value[:]
+                g._set(md.inputs['Vector'], d)
+                d = md.outputs[0]
+        color, _alpha = g.env_image(src.image, d, spread=spread)
+        return g.vmath('SCALE', color, s=strength) if strength != 1.0 else color
+    c = color_in.default_value
+    return (float(c[0]) * strength, float(c[1]) * strength, float(c[2]) * strength)
+
+
+def _cap_ambient_irradiance(g, query, ctx):
+    """环境辐照 = 世界环境本身。询问要的是**不含任何灯**的环境光(真源的球谐)。
+
+    EEVEE 没有一条节点能答「不含灯」:Shader to RGB 走的是 forward_lighting_eval,每一盏灯的直接光
+    都在里面;光循环把 Shader to RGB 的上游整段提前到循环之前求值,循环里逐灯算出的量要到循环结束才
+    以闭包形式汇总,够不回那次求值;逐灯的漫反射系数(power_factor)同时乘在闭包求值与 Light
+    Accumulation 上,灯那一侧也没有只关掉闭包那一份的开关。所以减掉主光那一份之后,附加光的直接光
+    必然留在环境项里 —— 世界环境是宿主唯一给得出的无灯答案。"""
+    _ = ctx
+    normal = query.get('normal')
+    if normal is None:
+        return None
+    answer = _world_sample(g, normal, spread=1.0)
+    return None if answer is None else {'': answer}
+
+
+def _cap_specular_radiance(g, query, ctx):
+    _ = ctx
+    direction = query.get('direction')
+    if direction is None:
+        return None
+    roughness = query.get('roughness')
+    spread = None if roughness is None else g.math(
+        'MINIMUM', g.math('MULTIPLY', roughness, roughness), 1.0)
+    answer = _world_sample(g, direction, spread=spread)
+    return None if answer is None else {'': answer}
+
+
+def _cap_main_light(g, query, ctx):
+    """主方向光兑现:这一圈灯的原生方向(Light Evaluation 在着色点给的朝灯方向)与颜色,阴影(ShadowAttenuation)
+    同是这一圈的原生量。哪一圈算主光由出口的身份门裁决(原生 is_sun):别的圈按别的灯算出的主光那一份在出口与
+    「循环没跑」的那份相减抵掉,只有方向光那一圈进账。距离衰减与阴影衰减恒 1 是这条能力自己的语义(URP 的
+    GetMainLight:距离衰减是 unity_LightData.z,没被剔除就是 1;无参形不带阴影),不是降级。"""
+    _ = (query, ctx)
+    return {
+        'direction': g.b2u(_light_evaluation(g, None).outputs['Direction']),
+        'color': _native_light(g)['color'],
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _first_sun(scene):
+    """场景里的第一盏太阳灯(scene.objects 的序)。几何节点树里没有灯节点,主光只能指定一盏:取第一个 sun。"""
+    return next((obj for obj in scene.objects if obj.type == 'LIGHT' and obj.data.type == 'SUN'), None)
+
+
+def _vertex_main_light(tree, scene, swap_yz):
+    """几何节点里的主方向光:第一个 sun 相对本物体的变换(Object Info 相对模式,与顶点腿读相机同一套约定:
+    物体空间当世界),朝灯方向 = 灯的 +Z 轴(太阳朝 -Z 照),再换到 Unity 轴。灯一转几何跟着重算(依赖图原生,
+    不经脚本刷新)。几何树读不到灯的数据,颜色没有原生等价物 —— 明说答不出(None),口停在缺席值上;距离衰减与阴影衰减
+    恒 1 是这条能力自己的语义(与片元腿同答)。场景里没有 sun = 答不出:空的 Object 槽会给出单位变换,不能当方向用。"""
+    sun = _first_sun(scene)
+    if sun is None:
+        return None
+    info = tree.nodes.new('GeometryNodeObjectInfo')
+    info.transform_space = 'RELATIVE'
+    info.inputs['Object'].default_value = sun
+    toward = tree.nodes.new('FunctionNodeTransformDirection')
+    toward.inputs['Direction'].default_value = (0.0, 0.0, 1.0)
+    tree.links.new(info.outputs['Transform'], toward.inputs['Transform'])
+    unit = tree.nodes.new('ShaderNodeVectorMath')
+    unit.operation = 'NORMALIZE'
+    tree.links.new(toward.outputs[0], unit.inputs[0])
+    return {
+        'direction': swap_yz(unit.outputs[0]),
+        'distanceAttenuation': 1.0,
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+        'color': None,
+    }
+
+
+def _shadow_raycast(g, position):
+    """这一圈灯的原生 Shadow Raycast。询问带位置就在那个位置求值(真源把采样点沿光向推过一段时,推过的位置
+    就是询问),同一个位置只建一个节点 —— 主光与附加光的阴影问的常是同一点;不带位置 = 着色点本身,用共享的
+    原生节点(真源的 shadowCoord 是管线私产,不参与询问)。"""
+    if position is None:
+        return _find_native_node(g, 'ShaderNodeShadowRaycast')
+    at = g.u2b(position)
+    key = ('shadow_raycast', g._ck(at))
+    raycast = g._cse.get(key)
+    if raycast is None:
+        raycast = g._nd('ShaderNodeShadowRaycast')
+        g._set(raycast.inputs['Position'], at)
+        g._cse[key] = raycast
+    return raycast
+
+
+def _cap_shadow_attenuation(g, query, ctx):
+    """这一圈灯的阴影衰减:原生 Shadow Raycast —— 虚拟阴影图 + 光追,逐灯、带柔度。
+    主光的询问在出口按主光身份门进账,答的就是方向光那一圈;附加光的询问住在附加光循环里
+    (URP 的 AdditionalLightRealtimeShadow),每一圈答的就是那一圈的灯。"""
+    _ = ctx
+    shadow, _g, _b = g.sep(_shadow_raycast(g, query.get('position')).outputs['Color'])
+    return {'': shadow}
+
+
+def _cap_screen_space_occlusion(g, query, ctx):
+    """屏幕空间遮蔽:宿主自己的环境光遮蔽节点 —— EEVEE 在它的深度层级里做地平线扫描。
+    作用半径与末端幂次是询问给的管线那一趟的形状;询问没给半径就答不出那一趟,停在缺席值上。
+    询问给了屏幕半径上限(像素)时,作用半径不超过这一像素深度上那么多个输出像素:一个输出像素的世界尺寸 = 正交项 +
+    透视项 × 视深,两项在场景的 RENDER_FOOTPRINT_ATTRIBUTE 上。法线缺席 = 着色点自己的法线。"""
+    _ = ctx
+    radius = query.get('radius')
+    if radius is None:
+        return None
+    pixel_radius = query.get('pixel_radius')
+    if pixel_radius is not None:
+        orthographic, perspective, _unused = g.sep(g.layer_attr(RENDER_FOOTPRINT_ATTRIBUTE).outputs['Vector'])
+        depth = g._nd('ShaderNodeCameraData').outputs['View Z Depth']
+        footprint = g.math('ADD', orthographic, g.math('MULTIPLY', perspective, depth))
+        radius = g.math('MINIMUM', radius, g.math('MULTIPLY', pixel_radius, footprint))
+    occlusion = g._nd('ShaderNodeAmbientOcclusion')
+    g._set(occlusion.inputs['Distance'], radius)
+    normal = query.get('normal')
+    if normal is not None:
+        g._set(occlusion.inputs['Normal'], g.u2b(normal))
+    answer = occlusion.outputs['AO']
+    power = query.get('power')
+    if power is not None:
+        answer = g.math('POWER', answer, power)
+    return {'': answer}
+
+
+def _cap_shadow_caster_pass(g, query, ctx):
+    """这一片元是不是在往阴影图里画:EEVEE 的阴影趟跑的就是这张材质图,Light Path 的 Is Shadow Ray 在那一趟答 1。"""
+    _ = (query, ctx)
+    return {'': g._nd('ShaderNodeLightPath').outputs['Is Shadow Ray']}
+
+
+def _cap_additional_light_count(g, query, ctx):
+    """附加光盏数:恒 1。宿主的光循环已经在逐灯转圈,内核的附加光循环因此只需要
+    在**每一圈**里跑一次体 —— 那一圈的灯就是这一盏。盏数不接灯节点,循环结构才与灯无关。"""
+    _ = (g, query, ctx)
+    return {'': 1.0}
+
+
+def _cap_punctual_light(g, query, ctx):
+    """第 index 盏点光/聚光本身:宿主光循环这一圈的灯,index 恒 0(盏数恒 1,见 _cap_additional_light_count)。
+    灯心、颜色、锥斜坡(在询问给的位置上)与是不是聚光全是原生量,范围见 _light_range,三根轴是导入时烙下的朝向
+    (见 _light_axes);源内核拿它们按自己的衰减窗口、锥角平方、管光与 cookie 去算。镜面倍率答 1,与 URP 宿主同答:
+    原生光循环读不到灯的 Specular 滑杆,它只乘在 Light Accumulation 的光泽口上。方向光那一圈颜色乘零 —— 它不是点光,
+    贡献走主光链。"""
+    _ = ctx
+    light = _native_light(g)
+    right, up, forward = _light_axes(g)
+    return {
+        'position': g.b2u(light['position'], point=True),
+        'color': g.vmath('SCALE', light['color'], s=g.math('SUBTRACT', 1.0, _light_builtin(g, 'is_sun'))),
+        'range': _light_range(g),
+        'cone': _cone_ramp(g, query.get('position')),
+        'spot': _light_builtin(g, 'is_spot'),
+        'right': g.b2u(right),
+        'up': g.b2u(up),
+        'forward': g.b2u(forward),
+        'specular': 1.0,
+    }
+
+
+def _cap_source_light_parameters(g, query, ctx):
+    """第 index 盏灯带着的源管线逐灯参数:宿主光循环这一圈的灯上、宿主照关卡陈述写下的那几个向量属性,
+    index 恒 0。每个向量是 LIGHT 型属性 LIGHT_PARAMETER_ATTRIBUTE.format(结果叶),宿主从 light_parameter_attributes()
+    取同一份名字去写;全零的向量宿主不写,读回来一样是全零(结构体按「全零 = 宿主的一盏普通灯」编码)。
+    文件里没有一盏灯带的那个向量,每盏灯读到的都是全零:答常量零,逐灯不读属性,依赖它的盒、管光、cookie 那几支
+    在着色器编译期整段折掉。"""
+    _ = query
+    results = ctx['results']
+    carried = _host().carried_light_attributes()
+    answer = {}
+    for leaf, vector in results.items():
+        if not vector:
+            continue
+        if LIGHT_PARAMETER_ATTRIBUTE.format(leaf) not in carried:
+            answer[leaf] = (0.0, 0.0, 0.0)
+            if leaf + '_w' in results:
+                answer[leaf + '_w'] = 0.0
+            continue
+        node = _find_native_node(g, 'ShaderNodeAttribute', LIGHT_PARAMETER_ATTRIBUTE.format(leaf))
+        answer[leaf] = node.outputs['Vector']
+        if leaf + '_w' in results:
+            answer[leaf + '_w'] = node.outputs['Alpha']
+    return answer
+
+
+def _cap_additional_light(g, query, ctx):
+    """第 index 盏附加光:就是宿主光循环这一圈的灯,index 恒 0;方向与衰减在询问给的位置上求。
+    主光那一圈把距离衰减乘零 —— 它的贡献走主光链,绝不能在附加光项里再进账一遍。
+    阴影衰减恒 1:附加光不投影(内核无参附加光的语义)。"""
+    _ = ctx
+    position = query.get('position')
+    light = _native_light(g)
+    return {
+        'direction': g.b2u(_light_evaluation(g, position).outputs['Direction']),
+        'color': light['color'],
+        'distanceAttenuation': g.math('MULTIPLY', _urp_attenuation(g, position),
+                                      g.math('SUBTRACT', 1.0, light['is_main'])),
+        'shadowAttenuation': 1.0,
+        'layerMask': 1.0,
+    }
+
+
+def _cap_additional_light_kind(g, query, ctx):
+    """第 index 盏附加光的灯型(0 方向光 / 1 点光,URP 位置记录 w 的同一编码):这一圈灯的原生 is_sun 取反。"""
+    _ = (query, ctx)
+    return {'': g.math('SUBTRACT', 1.0, _light_builtin(g, 'is_sun'))}
+
+
+# 询问身后不透明面的部件,每个顶点离它立着的那张面有多高:点属性 (高度 米·世界尺度, 1, 0),宿主导入时量好
+# (_prepare_surface_height),兑现面(_cap_opaque_distance_behind)读它。第二格恒 1 是「量过」的记号:属性缺席
+# 读到的全零因此是能力的缺席语义「身后无物」,而不是「面就在脚下」—— 后者会让询问它的部件整片消失。
+# 高度按原值存、不存倒数:片元上的值是三个顶点的线性插值,毛根贴着面、高度近零,倒数一插值整片都被当成贴在面上。
+SURFACE_HEIGHT_ATTRIBUTE = 'ruri_surface_height'
+# 混合材质问身后那张面时原生 Raycast 的射程(米):远过任何关卡,光线停在第一张不透明面上;精度不随射程变(实测 1e5 与
+# 200 的命中距离逐位相同),没打到 = 视野里身后无物。
+OPAQUE_BEHIND_REACH = 1.0e5
+
+
+def _cap_opaque_distance_behind(g, query, ctx):
+    """身后的不透明面。材质图读不到深度缓冲,答案从这一点立在哪张面上来:宿主导入时给询问它的
+    部件量好每个顶点离它立着的那张面的高度,着色点把那张面当成以询问给的法线为法向、在它下方这个高度处的
+    局部平面 —— 视线沿 -Incoming 穿过去要走 高度 / (Incoming · 法线),线性深度再乘 (-Incoming · 相机前向)。
+    视线背着那张面(Incoming · 法线 ≤ 0)时它不在身后,没量过的网格(记号读 0)不知道身后有什么,
+    两者都答能力自声明的缺席值。
+
+    询问给的法线是插值法线的原样(见 G.surface_normal),这一点立着的那张面本来就不随毛片被看到的是哪一面
+    翻转。相机前向在宿主的相机空间里是 +Z:Vector Transform 从相机空间出发时先把 Z 取反
+    (node_shader_vector_transform 的 invert_z,照 Cycles 的相机系)。
+
+    混合(BLENDED)的材质不进 EEVEE 的深度缓冲:从询问的那一点沿相机穿过它的视线往里投一条原生 Raycast,
+    打到的就是深度缓冲在这一像素存的那张不透明面(实测到毫米),深度差 = 命中距离 × 视线在相机前向上的分量;
+    没打到 = 身后无物,答能力缺席值。写深度的材质把自己身后挡住了,屏幕空间的光线看不见,仍按立着的那张面答。"""
+    material = ctx.get('material')
+    if material is not None and material.surface_render_method == 'BLENDED':
+        position = query.get('position')
+        origin = g.geo().outputs['Position'] if position is None else g.u2b(position)
+        camera = g.vtrans((0.0, 0.0, 0.0), 'CAMERA', 'WORLD', 'POINT')
+        ray = g.vmath('NORMALIZE', g.vmath('SUBTRACT', origin, camera))
+        raycast = g._nd('ShaderNodeRaycast')
+        g._set(raycast.inputs['Position'], origin)
+        g._set(raycast.inputs['Direction'], ray)
+        g._set(raycast.inputs['Length'], OPAQUE_BEHIND_REACH)
+        forward = g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD')
+        deeper = g.math('MULTIPLY', raycast.outputs['Hit Distance'], g.vmath('DOT_PRODUCT', ray, forward))
+        nothing = float(ctx['absent'][''][0])
+        return {'': g.choosef(raycast.outputs['Is Hit'], nothing, deeper)}
+    normal = query.get('surface_normal')
+    if normal is None:
+        return None
+    incoming = g.geo().outputs['Incoming']
+    rise = g.vmath('DOT_PRODUCT', incoming, g.u2b(normal))
+    forward = g.vtrans((0.0, 0.0, 1.0), 'CAMERA', 'WORLD')
+    deepening = g.math('MULTIPLY', g.vmath('DOT_PRODUCT', incoming, forward), -1.0)
+    height, measured, _unused = g.sep(g.attr(SURFACE_HEIGHT_ATTRIBUTE).outputs['Vector'])
+    through = g.math('DIVIDE', g.math('MULTIPLY', height, deepening), g.math('MAXIMUM', rise, 1e-6))
+    behind = g.math('MULTIPLY', g.math('GREATER_THAN', rise, 0.0), g.math('GREATER_THAN', measured, 0.5))
+    nothing = float(ctx['absent'][''][0])
+    return {'': g.choosef(behind, nothing, through)}
+
+
+def _prepare_surface_height(obj, asking, ground):
+    """_cap_opaque_distance_behind 的宿主数据:asking 槽上每个顶点离它立着的那张面有多高,写成点属性
+    SURFACE_HEIGHT_ATTRIBUTE = (高度, 1, 0)(米)。
+
+    询问它的几何是立在面上的卡:每张 asking 面上离 ground 那些面最低的顶点是这张面的根,过根、以顶点法线为法向的平面
+    就是它立着的那张面 —— 高度 = (顶点 − 根) · 顶点法线 + 根离面的有符号距离;一个顶点落在几张面上时取根最低的那一张。
+    距离带符号(沿最近那张面的法线,扎进面里为负):毛根常常扎在绒面底下半毫米到一毫米多,当成正的就把整片毛
+    抬高了两倍那么多。符号只在最近那张面与顶点法线同向时才算数 —— 那才是它立着的面;最近的是背着它的面
+    (绒球下沿挨着的编绳)时符号说的是别的部件的里外,取无符号距离,这样的顶点也不当根:垂下来的毛梢挨着
+    编绳比毛根挨着绒面还近,拿它当根,整片毛就落到根平面底下两三厘米。
+    根按单张面找,不按连成一块的整片找:毛片常常连成绕着绒球的一整圈,一圈只有一个根,圈另一边的顶点全落到根平面
+    底下。也不取每个顶点各自离 ground 的最近距离:毛片挨着别的部件时(绒球下沿贴着编绳),最近的是那个部件,
+    不是毛根底下的绒面,整片毛就被当成贴在面上。法线取网格的角法线,宿主插值给片元的就是它。ground 是本物体上
+    本栈认领的其余着色表面,描边壳、投影代理这些不着色的不算 —— 它们在真源里不是毛根身后的那张面。
+
+    量的是 rest 网格经物体矩阵落到世界的几何:蒙皮带着顶点连同这个值一起走,毛片与它立着的面一起形变,
+    离面的高度不变,所以只在导入时量一次、逐帧零成本。其余顶点写全零(没量过 = 身后无物),没有部件读它。"""
+    import numpy as _np
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    mesh = obj.data
+    count = len(mesh.vertices)
+    local = _np.empty(count * 3, dtype=_np.float64)
+    mesh.vertices.foreach_get('co', local)
+    matrix = _np.array(obj.matrix_world, dtype=_np.float64)
+    world = local.reshape(-1, 3) @ matrix[:3, :3].T + matrix[:3, 3]
+    polygon_count = len(mesh.polygons)
+    material_index = _np.empty(polygon_count, dtype=_np.int32)
+    mesh.polygons.foreach_get('material_index', material_index)
+    loop_start = _np.empty(polygon_count, dtype=_np.int32)
+    mesh.polygons.foreach_get('loop_start', loop_start)
+    loop_total = _np.empty(polygon_count, dtype=_np.int32)
+    mesh.polygons.foreach_get('loop_total', loop_total)
+    corner_vertex = _np.empty(len(mesh.loops), dtype=_np.int32)
+    mesh.loops.foreach_get('vertex_index', corner_vertex)
+    heights = _np.zeros((count, 3), dtype=_np.float32)
+    grounded = _np.isin(material_index, list(ground))
+    standing = _np.isin(material_index, list(asking))
+    if grounded.any() and standing.any():
+        corner_normal = _np.empty(len(mesh.loops) * 3, dtype=_np.float64)
+        mesh.corner_normals.foreach_get('vector', corner_normal)
+        corner_normal = corner_normal.reshape(-1, 3) @ _np.linalg.inv(matrix[:3, :3])
+        faces = [corner_vertex[start:start + total].tolist()
+                 for start, total in zip(loop_start[grounded], loop_total[grounded])]
+        tree = BVHTree.FromPolygons(world.tolist(), faces)
+        normals = _np.zeros((count, 3), dtype=_np.float64)
+        spans = list(zip(loop_start[standing].tolist(), loop_total[standing].tolist()))
+        for start, total in spans:
+            _np.add.at(normals, corner_vertex[start:start + total], corner_normal[start:start + total])
+        lengths = _np.linalg.norm(normals, axis=1)
+        normals /= _np.maximum(lengths, 1e-30)[:, None]
+        clearance = {}
+        grounded_on = set()
+        for vertex in _np.unique(_np.concatenate([corner_vertex[start:start + total]
+                                                   for start, total in spans])).tolist():
+            point = Vector(world[vertex])
+            location, face_normal, _index, distance = tree.find_nearest(point)
+            if location is None:
+                continue
+            if face_normal.dot(Vector(normals[vertex])) > 0.0:
+                clearance[vertex] = (point - location).dot(face_normal)
+                grounded_on.add(vertex)
+            else:
+                clearance[vertex] = distance
+        anchor = {}
+        for start, total in spans:
+            corners = corner_vertex[start:start + total].tolist()
+            known = [vertex for vertex in corners if vertex in clearance]
+            if not known:
+                continue
+            rooted = [vertex for vertex in known if vertex in grounded_on] or known
+            root = min(rooted, key=clearance.get)
+            for vertex in corners:
+                held = anchor.get(vertex)
+                if held is None or clearance[root] < clearance[held]:
+                    anchor[vertex] = root
+        for vertex, root in anchor.items():
+            height = float(_np.dot(world[vertex] - world[root], normals[vertex])) + clearance[root]
+            heights[vertex] = (height, 1.0, 0.0)
+    attribute = mesh.attributes.get(SURFACE_HEIGHT_ATTRIBUTE)
+    if attribute is not None and (attribute.domain != 'POINT' or attribute.data_type != 'FLOAT_VECTOR'):
+        mesh.attributes.remove(attribute)
+        attribute = None
+    if attribute is None:
+        attribute = mesh.attributes.new(SURFACE_HEIGHT_ATTRIBUTE, 'FLOAT_VECTOR', 'POINT')
+    attribute.data.foreach_set('vector', heights.ravel())
+
+
+# 能力身份 → 建图器(EEVEE 一条腿)。表里查不到 = 宿主没有原生等价物:什么都不接,
+# socket 停在能力自声明缺席值上并大声记账 —— 绝不静默落中性数。
+CAP_BUILDERS = {
+    'AmbientIrradiance': _cap_ambient_irradiance,
+    'SpecularRadiance': _cap_specular_radiance,
+    'MainLight': _cap_main_light,
+    'ShadowAttenuation': _cap_shadow_attenuation,
+    'ShadowCasterPass': _cap_shadow_caster_pass,
+    'AdditionalLightCount': _cap_additional_light_count,
+    'AdditionalLight': _cap_additional_light,
+    'PunctualLight': _cap_punctual_light,
+    'SourceLightParameters': _cap_source_light_parameters,
+    'AdditionalLightKind': _cap_additional_light_kind,
+    'OpaqueDistanceBehind': _cap_opaque_distance_behind,
+    'ScreenSpaceOcclusion': _cap_screen_space_occlusion,
+}
+
+# 答案读世界内容的能力(见 _world_sample):部件问了它们,换世界才要重接兑现面。
+WORLD_READING_CAPS = frozenset(('AmbientIrradiance', 'SpecularRadiance'))
+
+# 答案按文件里的灯带不带某一格属性建的能力(见 _camera_fade、_cap_source_light_parameters):灯带的参数种类变了才要重接。
+LIGHT_STATE_READING_CAPS = frozenset(('MainLight', 'AdditionalLight', 'PunctualLight', 'SourceLightParameters'))
+
+# 能力身份 → 建图器(几何节点一条腿,顶点腿):(树, 场景, Y/Z 对调) → {叶: 接口 socket | 常量 | None(这一叶答不出)};
+# 整个返回 None = 本场景答不出。表里查不到 = 什么都不接,口停在能力自声明缺席值上并大声记账。
+CAP_VERTEX_BUILDERS = {
+    'MainLight': _vertex_main_light,
+}
+
+# 能力身份 → 逐物体的宿主数据准备(兑现面读的网格属性由它写):(物体, 询问它的槽, 本物体其余着色槽)。
+# 只在导入那一刻跑(apply_vertex_stage),量的是网格自己的几何事实。
+CAP_PREPARERS = {
+    'OpaqueDistanceBehind': _prepare_surface_height,
+}
+
+# ==================== 栈(每个 .blend 产物一个;全部知识来自内嵌清单) ====================
+
+def _mixed(a):
+    return {k: list(v) for k, v in dict(a or {}).items()}
+
+
+# 随绑定真图走的表列:显式 LOD 槽的纹素域尺寸 __size<槽> = (w, h, 1, 0),以及引擎按绑定纹理
+# 自动下发的 <槽>_TexelSize = (1/w, 1/h, w, h)(不是材质属性;宿主不填就停在 0)。
+TEXEL_SIZE_SUFFIX = '_TexelSize'
+SIZE_ROW_PREFIX = '__size'
+
+# 组实例上参数口的类型 → 它在 inputs 平铺数组(foreach_get/foreach_set 的那一份)里占几个数。
+PARAM_SOCKET_WIDTHS = {'VALUE': 1, 'VECTOR': 3}
+
+# 宿主给节点输入口的动画与驱动写的路径:nodes["节点名"].inputs[口序].default_value(节点名按 RNA 转义)。
+ANIMATED_SOCKET_PATH = r'nodes\["((?:[^"\\]|\\.)*)"\]\.inputs\[(\d+)\]\.default_value'
+
+# 节点输入口上曲线与驱动的路径,口按序(宿主自己写的形)或按名(换代时暂存的形,见 _name_socket_animation)。
+INPUT_SOCKET_PATH = r'^nodes\["((?:[^"\\]|\\.)*)"\]\.inputs\[(?:(\d+)|"((?:[^"\\]|\\.)*)")\](.*)$'
+NODE_PATH = r'^nodes\["((?:[^"\\]|\\.)*)"\]'
+
+
+def _tree_animation_owners(material):
+    """动画能指到材质图里节点口上的两份动画数据,与它们的路径从哪里开始说图:图自己的(从 nodes 起)、材质的(从 node_tree. 起)。"""
+    return ((material.node_tree, ''), (material, 'node_tree.'))
+
+
+def _slot_curves(data):
+    """一份动画数据里动作分给它那一槽的曲线(动作是库里的就没有可改的)。"""
+    from bpy_extras import anim_utils
+    if data.action is None or data.action_slot is None or data.action.library is not None:
+        return []
+    bag = anim_utils.action_get_channelbag_for_slot(data.action, data.action_slot)
+    return list(bag.fcurves) if bag is not None else []
+
+
+def _instance_key(node):
+    """组实例在它那张材质图里的身份:段序(ruri_inst)或循环体的 (循环, 序)(ruri_zone、ruri_binst),照记录重编不变。"""
+    if node.bl_idname != 'ShaderNodeGroup':
+        return None
+    if node.get('ruri_inst') is not None:
+        return ('inst', int(node['ruri_inst']))
+    if node.get('ruri_zone') is not None:
+        return ('zone', str(node['ruri_zone']), int(node['ruri_binst']))
+    return None
+
+
+def _name_socket_animation(material):
+    """组实例输入口上的曲线与驱动改按口名写:模板组退役、组节点没了树,宿主按口序删掉指着那些口的曲线与驱动
+    (node_socket.cc refresh_node_sockets_animation_inout),按口名写的不在它删的范围里;照记录重编(Stack.recompile)
+    再按口名接回新图的口序。返回改写了几条。"""
+    import re
+    tree = material.node_tree
+    named = 0
+    for owner, prefix in _tree_animation_owners(material):
+        data = owner.animation_data
+        if data is None:
+            continue
+        for curve in list(data.drivers) + _slot_curves(data):
+            if not curve.data_path.startswith(prefix):
+                continue
+            found = re.match(INPUT_SOCKET_PATH, curve.data_path[len(prefix):])
+            if found is None or found.group(2) is None:
+                continue
+            node = tree.nodes.get(bpy.utils.unescape_identifier(found.group(1)))
+            index = int(found.group(2))
+            if node is None or _instance_key(node) is None or index >= len(node.inputs):
+                continue
+            curve.data_path = '{0}nodes["{1}"].inputs["{2}"]{3}'.format(
+                prefix, bpy.utils.escape_identifier(node.name), bpy.utils.escape_identifier(node.inputs[index].name),
+                found.group(4))
+            named += 1
+    return named
+
+
+def _socket_path(path, prefix, old_tree, new_tree):
+    """一条动画路径在照记录重编出来的新图上的写法。不说图里节点的原样留;组实例的输入口按实例身份(_instance_key)与口名找
+    新图的口序,身份对上的实例没有这个口就取新图里唯一带这个口的实例;别的节点要新图里有同名同类的节点,说口序的还要同序的口
+    同名,才原样留。找不到返回 None。"""
+    import re
+    if not path.startswith(prefix) or not path[len(prefix):].startswith('nodes['):
+        return path
+    tail = path[len(prefix):]
+    found = re.match(INPUT_SOCKET_PATH, tail)
+    named = re.match(NODE_PATH, tail)
+    node = old_tree.nodes.get(bpy.utils.unescape_identifier(named.group(1))) if named is not None else None
+    if node is None:
+        return None
+    if found is None:
+        twin = new_tree.nodes.get(node.name)
+        return path if twin is not None and twin.bl_idname == node.bl_idname else None
+    if found.group(2) is not None:
+        index = int(found.group(2))
+        if index >= len(node.inputs):
+            # 旧口已经没了:与别的材质共用的动作里,这条已经按那张新图改写过,新图上接得上就原样留。
+            socket = 'nodes["{0}"].inputs[{1}]'.format(named.group(1), index)
+            return path if new_tree.path_resolve(socket, False) is not None else None
+        name = node.inputs[index].name
+    else:
+        index = None
+        name = bpy.utils.unescape_identifier(found.group(3))
+    key = _instance_key(node)
+    if key is None:
+        twin = new_tree.nodes.get(node.name)
+        if index is None or twin is None or twin.bl_idname != node.bl_idname or index >= len(twin.inputs) \
+                or twin.inputs[index].name != name:
+            return None
+        return path
+    carriers = [other for other in new_tree.nodes
+                if _instance_key(other) is not None and any(socket.name == name for socket in other.inputs)]
+    chosen = next((other for other in carriers if _instance_key(other) == key), None)
+    if chosen is None and len(carriers) == 1:
+        chosen = carriers[0]
+    if chosen is None:
+        return None
+    at = next(position for position, socket in enumerate(chosen.inputs) if socket.name == name)
+    return '{0}nodes["{1}"].inputs[{2}]{3}'.format(prefix, bpy.utils.escape_identifier(chosen.name), at, found.group(4))
+
+
+def _refuse_nla(materials):
+    """NLA 轨道照记录重编带不过去(重编整张换新,留在旧材质上就是丢):有的就在动任何东西之前响亮拒绝。"""
+    held = [material.name for material in materials
+            if any(owner.animation_data is not None and len(owner.animation_data.nla_tracks)
+                   for owner, _prefix in _tree_animation_owners(material))]
+    if held:
+        raise RuntimeError('[ruri-uber] 这几张材质的动画有 NLA 轨道,照记录重编带不过去,先把轨道烘回动作:{0}'.format(held))
+
+
+def _carry_animation(old, new):
+    """照记录重编时旧材质(与它的图)的动画搬到新材质(与新图)上:同一个动作与槽,槽里的曲线与驱动按 _socket_path 改写路径,
+    驱动变量指着旧材质的改指新材质。新图上没有着落的那几条响亮记下、不带。"""
+    retarget = {old.as_pointer(): new}
+    dropped = []
+    for (source, prefix), (target, _same) in zip(_tree_animation_owners(old), _tree_animation_owners(new)):
+        data = source.animation_data
+        if data is None or (data.action is None and not len(data.drivers)):
+            continue
+        carried = target.animation_data_create()
+        if data.action is not None:
+            carried.action = data.action
+            if data.action_slot is not None:
+                carried.action_slot = data.action_slot
+            for curve in _slot_curves(data):
+                path = _socket_path(curve.data_path, prefix, old.node_tree, new.node_tree)
+                if path is None:
+                    dropped.append(curve.data_path)
+                elif path != curve.data_path:
+                    curve.data_path = path
+        for driver in data.drivers:
+            path = _socket_path(driver.data_path, prefix, old.node_tree, new.node_tree)
+            if path is None:
+                dropped.append(driver.data_path)
+                continue
+            copy = carried.drivers.from_existing(src_driver=driver)
+            copy.data_path = path
+            for variable in copy.driver.variables:
+                for variable_target in variable.targets:
+                    if variable_target.id is not None and variable_target.id.as_pointer() in retarget:
+                        variable_target.id = retarget[variable_target.id.as_pointer()]
+    if dropped:
+        print('[ruri-uber] !! {0} 照记录重编后这几条动画路径在新图上没有着落,不带过去:{1}'.format(old.name, dropped), flush=True)
+
+
+def _image_row_slot(row_name):
+    if row_name.startswith(SIZE_ROW_PREFIX):
+        return row_name[len(SIZE_ROW_PREFIX):]
+    if row_name.endswith(TEXEL_SIZE_SUFFIX):
+        return row_name[:-len(TEXEL_SIZE_SUFFIX)]
+    return None
+
+
+def _image_row_value(row_name, image):
+    width, height = float(image.size[0]), float(image.size[1])
+    if row_name.startswith(SIZE_ROW_PREFIX):
+        return [width, height, 1.0, 0.0]
+    return [1.0 / width, 1.0 / height, width, height]
+
+
+_LINKED = {}
+
+# 本会话已经报过的别代材质:(所在文件, 那一代的 stamp),每样只报一次。
+_OTHER_GENERATIONS = set()
+
+# 一次 append 能把哪几类数据块一并带进来:模板组嵌套的组、组里图节点绑的图、几何组里指到的材质与物体。
+_APPENDED_KINDS = ('node_groups', 'images', 'materials', 'textures', 'objects', 'collections', 'meshes', 'texts')
+
+# 认得出、但没有表面可画的那一类(反壳描边的壳 / 只写模板的代理 / 面部阴影代理面片)。
+# 与「不认领」是两码事:不认领会掉回宿主那张不透明的兜底材质,而这些代理面片就贴在角色身上。
+NON_SHADING = object()
+
+# Unity BlendMode 的引擎序:清单里真源 pass 的混合因子、材质属性里的混合值都按它记。
+(BLEND_ZERO, BLEND_ONE, BLEND_DST_COLOR, BLEND_SRC_COLOR, BLEND_ONE_MINUS_DST_COLOR, BLEND_SRC_ALPHA,
+ BLEND_ONE_MINUS_SRC_COLOR, BLEND_DST_ALPHA, BLEND_ONE_MINUS_DST_ALPHA, BLEND_SRC_ALPHA_SATURATE,
+ BLEND_ONE_MINUS_SRC_ALPHA) = range(11)
+# 原样兑现的两种:源 α 的 over 与不透明。乘法帧另走带色透射;其余按「源 × A + 帧 × T」拆。
+OVER_BLENDS = ((BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA), (BLEND_ONE, BLEND_ZERO))
+MULTIPLY_BLENDS = ((BLEND_ZERO, BLEND_SRC_COLOR), (BLEND_DST_COLOR, BLEND_ZERO))
+
+
+def _alive(block):
+    # 缓存的是数据块引用,被释放后再碰是 ReferenceError 而不是 None —— 必须判活。
+    if block is None:
+        return False
+    try:
+        block.name
+    except ReferenceError:
+        return False
+    return True
+
+
+def _pointers():
+    return {block.as_pointer() for kind in _APPENDED_KINDS for block in getattr(bpy.data, kind)}
+
+
+def _plain(value):
+    """ID 属性的值拷成纯 python(组 → dict、数组 → list),好写到另一个数据块上。"""
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+    if hasattr(value, 'to_list'):
+        return value.to_list()
+    return value
+
+
+def _local_group(name):
+    group = bpy.data.node_groups.get(name)
+    return group if group is not None and group.library is None else None
+
+
+def _nested_groups(roots):
+    """这几张组连同一层层嵌套进来的本地组(去重)。"""
+    found = {}
+    pending = list(roots)
+    while pending:
+        group = pending.pop()
+        if group.as_pointer() in found:
+            continue
+        found[group.as_pointer()] = group
+        pending.extend(node.node_tree for node in group.nodes
+                       if node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
+                       and node.node_tree.library is None)
+    return list(found.values())
+
+
+def _make_room(held):
+    """请求的模板组名被不带 stamp 的本地组占着(旧版打包进文件时抹了 stamp 的、用户自己做的同名组):它们不是哪一代,是别的数据块
+    占了产物的名字 —— 连同嵌套进来的组改名让位并烙上 ruri_displaced,新取的才叫得上这个名字。谁在用它们不碰:用到它们的材质
+    没有本栈的 stamp 组,是图不完整的材质,由 compile_all 照记录重编、旧的一起退役(见 _drop_displaced)。"""
+    for group in _nested_groups([group for group in held.values() if group is not None]):
+        group['ruri_displaced'] = 1
+        group.name = group.name + ' (displaced)'
+
+
+def _drop_displaced():
+    """让位的旧组:用到它们的材质被换走之后没人用的整批删(上层先删,下层的用户数随之归零),仍有人用的留着。"""
+    pending = [group for group in bpy.data.node_groups
+               if group.library is None and group.get('ruri_displaced') is not None]
+    progress = True
+    while progress:
+        progress = False
+        for group in list(pending):
+            if group.users == 0:
+                pending.remove(group)
+                bpy.data.node_groups.remove(group)
+                progress = True
+
+
+def _kept_group(blend_path, stamp, wanted, name, adopt, owner):
+    """材质栈的模板组:住在本文件里的普通数据块,随文件存盘 —— 材质树的组实例、顶点腿修改器、用户在它们口上拧过的值
+    都指着这些组,文件换一台电脑打开也是整套的。文件里已有本栈这一代(stamp 对得上)的整套组就直接用;一个都没有,
+    首次真用才从产物 append 一整套进来(register() 期 bpy.data 还是 _RestrictData,不能早取),嵌套组与图一次带进来、
+    一律打上 stamp 与栈键 ruri_stack(换代时凭栈键整批清,不碰别的栈)。文件里是别代的、或缺了几个,响亮拒绝:换代是显式的更新(shader_version.update:
+    先把口上的值记回记录,清掉这一代,再照记录重编),取组的路上不偷换;没有 stamp 的同名本地组不是哪一代(旧版打包进文件时抹了 stamp 的、用户自己做的),不拒绝,见 _make_room。这一次带进来的数据块交给 adopt 认领一次。"""
+    table = _LINKED.get(blend_path)
+    if table is not None and all(_alive(group) for group in table.values()):
+        got = table.get(name)
+        if got is not None:
+            return got
+    requested = list(dict.fromkeys(wanted))
+    held = {wanted_name: _local_group(wanted_name) for wanted_name in requested}
+    if any(group is not None and group.get('ruri_stamp') is not None for group in held.values()):
+        other = sorted(wanted_name for wanted_name, group in held.items()
+                       if group is not None and group.get('ruri_stamp') != stamp)
+        absent = sorted(wanted_name for wanted_name, group in held.items() if group is None)
+        if other or absent:
+            raise RuntimeError(
+                '[ruri-uber] 文件里 {0} 的模板组不是整套当前这一代(stamp {1}):别代 {2},缺 {3} —— 先更新着色器'
+                '(更新保留每个口上的值,只换内部节点)'.format(blend_path, stamp, other, absent))
+        _LINKED[blend_path] = held
+        got = held.get(name)
+        if got is None:
+            raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
+        return got
+    _make_room(held)
+    before = _pointers()
+    # 🔴 `dst.node_groups = <list>` 之后 Blender **就地把那个列表的内容换成数据块**:名字先快照,
+    # 给 Blender 一份独立的列表,按位次配对。
+    with bpy.data.libraries.load(blend_path, link=False) as (source, target):
+        absent = [n for n in requested if n not in source.node_groups]
+        if absent:
+            raise RuntimeError('[ruri-uber] 产物 {0} 缺模板组 {1}:请重新 codegen(无现场重建退路)'.format(
+                blend_path, absent))
+        target.node_groups = list(requested)
+    loaded = list(target.node_groups)
+    if len(loaded) != len(requested):
+        raise RuntimeError('[ruri-uber] 产物 {0} append 回来 {1} 组,请求 {2} 组:配对不上,拒绝接线'.format(
+            blend_path, len(loaded), len(requested)))
+    appended = [block for kind in _APPENDED_KINDS for block in getattr(bpy.data, kind)
+                if block.as_pointer() not in before]
+    table = {}
+    for wanted_name, group in zip(requested, loaded):
+        if group is None:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} append 失败'.format(blend_path, wanted_name))
+        stamped = group.get('ruri_stamp')
+        if stamped != stamp:
+            raise RuntimeError(
+                '[ruri-uber] {0}: 组 {1} 的 stamp {2} ≠ 运行时 {3},产物不同批,请重新 codegen'.format(
+                    blend_path, wanted_name, stamped, stamp))
+        if group.name != wanted_name:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} 取回来叫 {2}:名字被 link 进来的同名组占着'.format(
+                blend_path, wanted_name, group.name))
+        table[wanted_name] = group
+    # append 在每个数据块上留一条指回产物文件的弱引用(带着本机的绝对路径存进用户的 .blend):清空,文件里不留来路。
+    for block in appended:
+        block['ruri_stamp'] = stamp
+        block['ruri_stack'] = owner
+        weak = block.library_weak_reference
+        if weak is not None:
+            weak.filepath = ''
+            weak.id_name = ''
+    for group in loaded:
+        group.use_fake_user = True
+    _LINKED[blend_path] = table
+    adopt(appended)
+    got = table.get(name)
+    if got is None:
+        raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
+    return got
+
+
+def _session_group(blend_path, stamp, wanted, name, adopt, owner):
+    """后处理级的模板组:从产物 append 进本会话,连同这一次带进来的每个数据块一律是本会话的临时数据(运行时,存盘
+    不带):它们的唯一用户是场景的合成树,合成树按出图尺寸与图链开关每次开文件现建,模板组随它现取。首次真用才取:
+    register() 期 bpy.data 还是 _RestrictData。本模块这一生里取一次,开文件换了整个
+    Main、或取过的组有哪张没了(复位场景清掉没人用的图链组)就再取一次。同名的别的数据块让出名字,新取的才叫得上
+    这个名字 —— 按名寻址的地方(合成树找主入口)撞上别的就是两代混建;还有人用的那张先把用户换到新取的这一份上
+    再删(场景树上装着的主入口照样挂着,删了它就是一个没有组的节点)。这一次带进来的数据块交给 adopt 认领一次。"""
+    table = _LINKED.get(blend_path)
+    if table is not None and all(_alive(group) for group in table.values()):
+        got = table.get(name)
+        if got is not None:
+            return got
+    requested = list(dict.fromkeys(wanted))
+    displaced = {}
+    for wanted_name in requested:
+        taken = bpy.data.node_groups.get(wanted_name)
+        if taken is not None and taken.library is None:
+            if taken.users:
+                taken.name = wanted_name + ' (displaced)'
+                displaced[wanted_name] = taken
+            else:
+                bpy.data.node_groups.remove(taken)
+    before = _pointers()
+    # 🔴 `dst.node_groups = <list>` 之后 Blender **就地把那个列表的内容换成数据块**:名字先快照,
+    # 给 Blender 一份独立的列表,按位次配对。
+    with bpy.data.libraries.load(blend_path, link=False) as (source, target):
+        absent = [n for n in requested if n not in source.node_groups]
+        if absent:
+            raise RuntimeError('[ruri-uber] 产物 {0} 缺模板组 {1}:请重新 codegen(无现场重建退路)'.format(
+                blend_path, absent))
+        target.node_groups = list(requested)
+    loaded = list(target.node_groups)
+    if len(loaded) != len(requested):
+        raise RuntimeError('[ruri-uber] 产物 {0} append 回来 {1} 组,请求 {2} 组:配对不上,拒绝接线'.format(
+            blend_path, len(loaded), len(requested)))
+    scratch = _host().scratch
+    appended = []
+    for kind in _APPENDED_KINDS:
+        for block in getattr(bpy.data, kind):
+            if block.as_pointer() not in before:
+                scratch(block)
+                block['ruri_stack'] = owner
+                appended.append(block)
+    table = {}
+    for wanted_name, group in zip(requested, loaded):
+        if group is None:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} append 失败'.format(blend_path, wanted_name))
+        stamped = group.get('ruri_stamp')
+        if stamped != stamp:
+            raise RuntimeError(
+                '[ruri-uber] {0}: 组 {1} 的 stamp {2} ≠ 运行时 {3},产物不同批,请重新 codegen'.format(
+                    blend_path, wanted_name, stamped, stamp))
+        if group.name != wanted_name:
+            raise RuntimeError('[ruri-uber] 产物 {0} 的模板组 {1} 取回来叫 {2}:名字被 link 进来的同名组占着'.format(
+                blend_path, wanted_name, group.name))
+        table[wanted_name] = group
+    for wanted_name, old in displaced.items():
+        old.user_remap(table[wanted_name])
+        bpy.data.node_groups.remove(old)
+    _LINKED[blend_path] = table
+    adopt(appended)
+    got = table.get(name)
+    if got is None:
+        raise RuntimeError('[ruri-uber] 模板组 {0} 不在产物 {1} 里'.format(name, blend_path))
+    return got
+
+
+class Stack:
+    def __init__(self, folder, manifest):
+        # 本栈的 .blend 与本运行时同批出货、同目录:名字来自清单,不猜也不扫。
+        self.path = os.path.join(folder, manifest['blend'])
+        self.group_names = manifest['group_names']
+        self.m = manifest
+        self._vtx_seen = {}
+        self._mirrors = {}
+        names = manifest['names']
+        self.PANEL_KEY = names['panel_key']
+        self.PANEL_TITLE = names['panel_title']
+        self.PROPERTIES = {row['name']: row for row in manifest.get('properties') or []}
+        self.TEXTURE_ROWS = {name: row for name, row in self.PROPERTIES.items() if row['kind'] == 'TEXTURE'}
+        self.SCHEMA_DEFAULTS = manifest.get('schema_defaults') or {}
+        self.UI = _load_interface(folder, manifest['ui']) if manifest.get('ui') else None
+        self.PART_META = manifest.get('part_meta') or {}
+        self.NON_SHADING = set(manifest.get('non_shading') or [])
+        self.HOST_SHADOW_CASTERS = manifest['host_shadow_casters']
+        self.SHADOW_CLIP_SWITCHES = manifest.get('shadow_clip_switches')
+        # 游戏词汇 → 风格词汇。清单里记的是 风格名 → 游戏名(声明面朝着图的口),
+        # 这里翻过来存:材质自述时报的是游戏名,要按它查。
+        self.SOURCE_NAMES = {game: uniform for uniform, game
+                             in (manifest.get('source_names') or {}).items()}
+        self.GLOBALS = manifest.get('globals') or {}
+        self.KNOWN_PARTS = set(manifest.get('known_parts') or [])
+        self.DEFAULT_PART = manifest.get('default_part') or ''
+        cull = manifest.get('cull') or {}
+        self.CULL_PROPERTY = cull.get('property') or ''
+        self.CULL_FIXED = float(cull.get('fixed', 2.0))
+        self.CULL_TWO_SIDED = cull.get('two_sided')
+        self.STAMP = manifest['stamp']
+        self.TEMPLATE_MAT = names['template_mat']
+        self.VTX_MODIFIER = names['vtx_modifier']
+        self.VTX_TREE_PREFIX = names['vtx_tree_prefix']
+        self.MATERIAL_NAME = names['material_name']
+        self.ST_SLOT = names.get('st_slot', '_BaseMap')
+        self.ST_NODE = names.get('st_node', 'RuriBaseMapST')
+        self.VERTEX_PARTS = manifest.get('vertex_parts') or {}
+        self.VERTEX_GATES = manifest.get('vertex_gates') or {}
+        self.VERTEX_ANSWERS = manifest.get('vertex_host_answers') or {}
+        # 作者值住 sRGB 的属性名(见清单同名键)。快照恒是 .mat 里的原值,线性化只发生在
+        # 「值 → uniform」那一步,与 Unity 上传时做的那次是同一件事。
+        self.SRGB_PARAMS = set(manifest.get('srgb_params') or [])
+        self.RIG = manifest.get('rig') or {'bone': '', 'attr': '', 'parts': []}
+        self.host = manifest.get('host') or {}
+        declare_world_basis(self.host.get('world_basis'))
+        self.post = manifest.get('post')
+        self.sky = manifest.get('sky')
+        self.engine_global_sources = manifest.get('engine_global_sources') or {}
+        self.scene_time = manifest.get('scene_time') or {}
+        self.object_attributes = manifest.get('object_attributes') or {}
+        self.texel_sizes = manifest.get('texel_sizes') or {}
+        self.level_images = manifest.get('level_images') or {}
+        if manifest.get('kernel') != RUNTIME_KERNEL:
+            raise RuntimeError('[ruri-uber] 栈 {0} 的内核 {1} ≠ 运行时 {2},请重新 codegen(禁兼容,无退路)'.format(
+                self.PANEL_KEY, manifest.get('kernel'), RUNTIME_KERNEL))
+        self._param_rows = {}
+        self._param_slots = {}
+        self._budgeted = set()
+        self._zone_copies = {}
+        # 整批照记录重编期间量常量块用的材质拷贝攒在这里,收尾与旧材质一起删(见 compile_all);None = 量完即删。
+        self._probes = None
+
+    def part(self, part):
+        """part 的接线面:段、跨段、终点、割点、循环、参数行与 Switch 条件读到的参数。"""
+        return self.m['parts'][part]
+
+    # ---- 取模板面(产物即库;缺组响亮拒绝,零现场重建退路) ----
+
+    def group(self, name):
+        fetch = _kept_group if self.post is None else _session_group
+        return fetch(self.path, self.STAMP, self.group_names, name, self._adopt_level_images, self.PANEL_KEY)
+
+    def _adopt_level_images(self, appended):
+        """产物组里关卡图的取点绑的是物化时的占位图(一个槽一张):一次 user_remap 把它的全部用户换到宿主按关卡建的
+        那一张上(全场共享,不随材质变),不逐节点写 —— 每写一个节点宿主就把整棵大组重算一遍。占位图随后删掉。"""
+        placeholders = [block for block in appended if isinstance(block, bpy.types.Image)
+                        and block.get('ruri_placeholder') and _slot_of(block.name) in self.level_images]
+        for image in placeholders:
+            image.user_remap(self._level_image(_slot_of(image.name)))
+        if placeholders:
+            bpy.data.batch_remove(placeholders)
+        # 取点标了「自带采样器」的关卡图:寻址与过滤是宿主陈述在那张图上的状态,换上真图之后才知道。
+        for group in appended:
+            if not isinstance(group, bpy.types.NodeTree):
+                continue
+            for node in group.nodes:
+                if node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) and node.image is not None:
+                    _apply_own_sampler(node, node.image)
+
+    # ==================== 材质参数(材质 = 组输入上的常量) ====================
+
+    def _param_index(self, part):
+        """part 的参数行按名 → 行序(参数值矩阵按这个序排)。"""
+        index = self._param_rows.get(part)
+        if index is None:
+            index = {row[0]: at for at, row in enumerate(self.part(part)['params'])}
+            self._param_rows[part] = index
+        return index
+
+    def _param_matrix(self, part, floats, st, colors):
+        """这张材质每一行参数的 uniform 值,按行序一行四分量:声明缺省,记录覆写,再补 Unity 上传时那一次
+        sRGB→linear(缺省与覆写走同一条,两者都是作者值;alpha 不参与,颜色的第四分量从来不是色度)。"""
+        import numpy as np
+        merged = dict(floats or {})
+        for prop, value in (st or {}).items():
+            merged[prop + '_ST'] = value
+        merged.update(colors or {})
+        rows = self.part(part)['params']
+        matrix = np.zeros((len(rows), 4), dtype=np.float64)
+        for at, (name, kind, declared, declared_w) in enumerate(rows):
+            vector = matrix[at]
+            if kind == 'F':
+                vector[0] = declared[0]
+            else:
+                vector[0:3] = declared
+                vector[3] = declared_w
+            value = merged.get(name)
+            if value is not None:
+                if kind == 'F':
+                    try:
+                        vector[0] = float(value)
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    spread = ([float(x) for x in value] + [0.0] * 4 if hasattr(value, '__len__')
+                              else [float(value)] * 3 + [0.0])
+                    vector[0:4] = spread[0:4]
+            if name in self.SRGB_PARAMS:
+                for channel in range(1 if kind == 'F' else 3):
+                    vector[channel] = _srgb_to_linear(vector[channel])
+        return matrix
+
+    def _record_matrix(self, mat):
+        return self._param_matrix(mat.get('ruri_uber_part', ''), dict(mat.get('ruri_uber_floats') or {}),
+                                  _mixed(mat.get('ruri_uber_st')), _mixed(mat.get('ruri_uber_colors')))
+
+    @staticmethod
+    def _record_values(mat):
+        """材质记录里的值行(作者值)与图槽(图按会话身份),可比形态:镜像里记一份,依赖图那一拍拿它判断记录是不是被别处改过。"""
+        return {'floats': {k: _plain(v) for k, v in dict(mat.get('ruri_uber_floats') or {}).items()},
+                'colors': _mixed(mat.get('ruri_uber_colors')),
+                'st': _mixed(mat.get('ruri_uber_st')),
+                'images': {slot: getattr(image, 'session_uid', None)
+                           for slot, image in dict(mat.get('ruri_uber_images') or {}).items()}}
+
+    def _param_targets(self, node, part):
+        """组实例的参数口在 inputs 平铺数组里的位置:(平铺长度, 目标下标, 值矩阵平铺下标, 目标所在的口序)。按 (组树, part)
+        算一次;session_uid 在一个会话里不复用。"""
+        import numpy as np
+        group = node.node_tree
+        key = (group.session_uid, part)
+        targets = self._param_slots.get(key)
+        if targets is not None:
+            return targets
+        index = self._param_index(part)
+        kinds = {row[0]: row[1] for row in self.part(part)['params']}
+        destinations = []
+        sources = []
+        sockets = []
+        width = 0
+        for at, socket in enumerate(node.inputs):
+            size = PARAM_SOCKET_WIDTHS.get(socket.type)
+            if size is None:
+                raise RuntimeError('[ruri-uber] 组 {0} 的输入 {1} 是 {2} 口:参数一次写完只认数值口'.format(
+                    group.name, socket.name, socket.type))
+            name = socket.name
+            lanes = ()
+            if name in index:
+                row = index[name]
+                lanes = range(size)
+            elif name.endswith('_w') and kinds.get(name[:-2]) == 'V4':
+                row = index[name[:-2]]
+                lanes = (3,)
+            for offset, lane in enumerate(lanes):
+                destinations.append(width + offset)
+                sources.append(row * 4 + lane)
+                sockets.append(at)
+            width += size
+        targets = (width, np.array(destinations, dtype=np.int64), np.array(sources, dtype=np.int64),
+                   np.array(sockets, dtype=np.int64))
+        self._param_slots[key] = targets
+        return targets
+
+    @staticmethod
+    def _animated_sockets(tree):
+        """树上被动画或驱动接管的输入口 {(节点名, 口序)}:它们的值归动画,播放时每一帧都在变,不是谁拧的。"""
+        from bpy_extras import anim_utils
+        data = tree.animation_data
+        if data is None:
+            return set()
+        curves = list(data.drivers)
+        bound = [(data.action, data.action_slot)] + [(strip.action, strip.action_slot) for track in data.nla_tracks
+                                                     for strip in track.strips]
+        for action, slot in bound:
+            if action is not None and slot is not None:
+                bag = anim_utils.action_get_channelbag_for_slot(action, slot)
+                if bag is not None:
+                    curves.extend(bag.fcurves)
+        import re
+        taken = set()
+        for curve in curves:
+            found = re.match(ANIMATED_SOCKET_PATH, curve.data_path)
+            if found is not None:
+                taken.add((bpy.utils.unescape_identifier(found.group(1)), int(found.group(2))))
+        return taken
+
+    @staticmethod
+    def _generated(node):
+        """材质树里本栈建的组实例(各段与循环体):指着带 stamp 的模板组。用户自己拖进来的组不带 stamp,不是。"""
+        return node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None \
+            and node.node_tree.get('ruri_stamp') is not None
+
+    def apply_params(self, mat):
+        """材质记录 → 它图里的全部参数口(各段与循环体的组实例、显式 LOD 采样的纹素域尺寸),值写成常量:宿主内联
+        时只读参数的算式整块折掉,Switch 只留走到的那一支。只在编图的那一刻走这一条(导入、图不完整的材质、换代时
+        照记录重建;开文件不走,口上的值随文件存着):此后口是真源,改哪一行只写哪一行(_publish),记录跟着口走
+        (sync_material_inputs)。组实例的口
+        一次写完(foreach_set 不逐口触发树更新)。写完记下镜像,量一次内联后的常量块(同一结构只量一次)。"""
+        import numpy as np
+        part = mat.get('ruri_uber_part', '')
+        tree = mat.node_tree
+        if tree is None or part not in self.m['parts']:
+            return
+        matrix = self._record_matrix(mat)
+        values = matrix.ravel()
+        index = self._param_index(part)
+        for node in tree.nodes:
+            if self._generated(node):
+                width, destinations, sources, _sockets = self._param_targets(node, part)
+                if not len(destinations):
+                    continue
+                flat = np.empty(width, dtype=np.float32)
+                node.inputs.foreach_get('default_value', flat)
+                flat[destinations] = values[sources]
+                node.inputs.foreach_set('default_value', flat)
+            elif (node.bl_idname == 'ShaderNodeCombineXYZ' and node.label.startswith(SIZE_ROW_PREFIX)
+                  and node.label in index):
+                extent = matrix[index[node.label]]
+                for axis in range(3):
+                    if node.inputs[axis].default_value != float(extent[axis]):
+                        node.inputs[axis].default_value = float(extent[axis])
+        tree.update_tag()
+        mat.update_tag()
+        self._remember_inputs(mat)
+        self._require_budget(mat, matrix)
+
+    def _require_budget(self, mat, matrix=None):
+        """常量块预算量的是内联后的着色器:参数是常量,只读参数的算式折掉、Switch 剪枝,余下的常量各占一格。
+        内联出来的结构只取决于材质树(模板与兑现面)和 Switch 条件读到的参数取值 —— 同一结构只量一次。"""
+        part = mat.get('ruri_uber_part', '')
+        if part not in self.m['parts'] or mat.node_tree is None:
+            return
+        if matrix is None:
+            matrix = self._record_matrix(mat)
+        index = self._param_index(part)
+        switches = tuple(tuple(float(x) for x in matrix[index[name]]) for name in self.part(part)['switch_params'])
+        tree = mat.node_tree
+        key = (part, len(tree.nodes), len(tree.links), switches)
+        if key in self._budgeted:
+            return
+        probes = [] if self._probes is None else self._probes
+        try:
+            require_uniform_budget(mat, self._zone_copies, probes)
+        finally:
+            if self._probes is None:
+                bpy.data.batch_remove(probes)
+        self._budgeted.add(key)
+
+    # ==================== 割点兑现 ====================
+
+    @staticmethod
+    def _size_row(slot):
+        return SIZE_ROW_PREFIX + slot
+
+    def _image_rows(self, part, images):
+        """本 part 随绑定真图走的表列取值;没绑图的槽不给值(留在表列缺省)。"""
+        rows = {}
+        for row_name, _kind, _declared, _declared_w in self.part(part)['params']:
+            slot = _image_row_slot(row_name)
+            real = None if slot is None else (images or {}).get(slot)
+            if real is not None and real.size[0] and real.size[1]:
+                rows[row_name] = _image_row_value(row_name, real)
+        return rows
+
+    def _teximage(self, g, fetch, image, images, force_closest=False):
+        nd = g._nd('ShaderNodeTexImage')
+        nd.label = fetch['slot']
+        nd.width = 260
+        lender = _sampler_lender(fetch['extension'])
+        if fetch['extension'] == OWN_SAMPLER or lender is not None:
+            nd[OWN_SAMPLER_KEY] = lender if lender is not None else 1
+            _apply_own_sampler(nd, _sampler_image(nd, image, images))
+        else:
+            nd.extension = fetch['extension']
+            if fetch['point']:
+                nd.interpolation = 'Closest'
+        if force_closest:
+            nd.interpolation = 'Closest'
+        nd.image = image
+        if image is not None:
+            _set_colorspace(image, 'Non-Color' if fetch['non_color'] else 'sRGB')
+            if fetch['non_color']:
+                _fix_two_channel_layout(image)
+        return nd
+
+    def _texel_extent(self, g, part, fetch, image):
+        """显式 LOD 采样的纹素域尺寸落在一枚标签为 __size<槽> 的 CombineXYZ 上,实例按这张材质绑的真图写(apply_params)。
+        行按 part 查:同名槽跨 part 各有各的行。"""
+        row_name = self._size_row(fetch['slot'])
+        if row_name not in self._param_index(part):
+            raise RuntimeError('[ruri-uber] part {0} 的显式 LOD 割点 {1} 没有纹素域尺寸行:产物与清单脱节'.format(
+                part, fetch['slot']))
+        extent = (float(image.size[0]), float(image.size[1]), 1.0)
+        node = g._nd('ShaderNodeCombineXYZ')
+        node.label = row_name
+        for axis in range(3):
+            node.inputs[axis].default_value = extent[axis]
+        return node.outputs[0]
+
+    def _sample(self, g, part, fetch, image, uv, images):
+        """割点采样语义兑现:隐式形 = 单 TexImage(mip 交 EEVEE);显式 LOD 形 = 四角 Closest 手工双线性,
+        纹素域尺寸随材质绑的真图写成常量(见 _texel_extent)。"""
+        if image is None:
+            return None, None, None
+        if fetch['derivative_mip'] or not image.size[0] or not image.size[1]:
+            nd = self._teximage(g, fetch, image, images)
+            g._set(nd.inputs['Vector'], uv)
+            return nd.outputs['Color'], nd.outputs['Alpha'], nd
+        size = self._texel_extent(g, part, fetch, image)
+        u, v, _w = g.sep(uv)
+        extents = size[:2] if isinstance(size, tuple) else g.sep(size)[:2]
+        axes = []
+        for coordinate, extent in zip((u, v), extents):
+            texel = g.math('MULTIPLY_ADD', coordinate, extent, -0.5)
+            base = g.math('FLOOR', texel)
+            axes.append((g.math('SUBTRACT', texel, base),
+                         g.math('DIVIDE', g.math('ADD', base, 0.5), extent),
+                         g.math('DIVIDE', g.math('ADD', base, 1.5), extent)))
+        (fx, u0, u1), (fy, v0, v1) = axes
+        taps = []
+        for tap_v in (v0, v1):
+            for tap_u in (u0, u1):
+                nd = self._teximage(g, fetch, image, images, force_closest=True)
+                # 二维采样不读 z:接一个现成的值,免得常量块为它再占一格。
+                g._set(nd.inputs['Vector'], g.comb(tap_u, tap_v, tap_u))
+                taps.append(nd)
+        top = g.mixv(fx, taps[0].outputs['Color'], taps[1].outputs['Color'])
+        bot = g.mixv(fx, taps[2].outputs['Color'], taps[3].outputs['Color'])
+        top_a = g.mixf(fx, taps[0].outputs['Alpha'], taps[1].outputs['Alpha'])
+        bot_a = g.mixf(fx, taps[2].outputs['Alpha'], taps[3].outputs['Alpha'])
+        return g.mixv(fy, top, bot), g.mixf(fy, top_a, bot_a), taps[0]
+
+    @staticmethod
+    def _feed(g, heads, sock, color, alpha):
+        # 🔴 颜色与 alpha 是**两片独立的答案叶**,必须各自寻址。段化 + 死代码消除之后,
+        # 一个段完全可能只保留其中一片(只消费 alpha、颜色被裁),此时「颜色口不在就跳过」
+        # 会把 alpha 一并漏喂 —— 它静默停在声明缺省 1.0 上,baseAlpha 恒 1,整张材质发白。
+        for name, value in ((sock, color), (sock + '_alpha', alpha)):
+            if value is None:
+                continue
+            for c in heads:
+                # 容缺按名寻址:不是每段都有这片叶;但「接口在却取不到」必须炸,防名字错静默。
+                head = c.inputs.get(name)
+                if head is None:
+                    if any(i.identifier == name or i.name == name
+                           for i in c.node_tree.interface.items_tree):
+                        raise RuntimeError('[ruri] 接口有 %s 却取不到 socket:接线面与组树脱节' % name)
+                    continue
+                g._set(head, value)
+
+    @staticmethod
+    def _wire_crossings(g, insts, rows):
+        # 跨段活跃值:段 a 的 X 输出接段 b 的 X 输入。结构性存在,缺一头即拒绝。
+        for name, _vec, frm, to in rows:
+            src = insts[frm].outputs.get(name)
+            dst = insts[to].inputs.get(name)
+            if src is None or dst is None:
+                raise RuntimeError('[ruri] 跨段接口 %s 缺失(段 %d -> %d):产物与清单脱节' % (name, frm, to))
+            g._set(dst, src)
+
+    def _wire_fetch(self, g, part, insts, fetch, image, images):
+        src = insts[fetch['depth']]
+        heads = insts[fetch['depth'] + 1:]
+        if fetch['env']:
+            if image is None:
+                return None
+            mip = src.outputs[fetch['sock'] + '_mip'] if fetch['mip'] else None
+            color, alpha = g.env_image(image, src.outputs[fetch['sock'] + '_dir'], mip)
+            self._feed(g, heads, fetch['sock'], color, alpha)
+            return None
+        color, alpha, anchor = self._sample(g, part, fetch, image, src.outputs[fetch['sock'] + '_uv'], images)
+        self._feed(g, heads, fetch['sock'], color, alpha)
+        return anchor
+
+    def _wire_capability(self, g, insts, cap, ctx):
+        """环境询问兑现:按能力查 CAP_BUILDERS。答不出 = 什么都不接,
+        socket 停在能力自声明缺席值上,大声记一笔;半份询问/半份答案一律炸。"""
+        src = insts[cap['depth']]
+        heads = insts[cap['depth'] + 1:]
+        builder = CAP_BUILDERS.get(cap['cap'])
+        if builder is None:
+            print('[ruri-cap] {0} 无原生等价物 → 缺席值'.format(cap['cap']), flush=True)
+            return
+        query = {}
+        for name in cap['query']:
+            out = src.outputs.get(cap['sock'] + '_' + name)
+            if out is None:
+                raise RuntimeError('[ruri-cap] {0}: 询问 socket {1}_{2} 不在组接口上'.format(
+                    cap['cap'], cap['sock'], name))
+            query[name] = out
+        before = set(n.as_pointer() for n in g.t.nodes)
+        answer = builder(g, query, dict(ctx, results=cap['results'], absent=cap['absent']))
+        if answer is None:
+            print('[ruri-cap] {0} 本场景答不出 → 缺席值'.format(cap['cap']), flush=True)
+            return
+        for nd in g.t.nodes:
+            if nd.as_pointer() not in before:
+                nd['ruri_cap'] = cap['cap']
+        missing = [leaf for leaf in cap['results'] if leaf not in answer]
+        if missing:
+            raise RuntimeError('[ruri-cap] {0}: 建图器少答了结果叶 {1}'.format(cap['cap'], missing))
+        for leaf, value in answer.items():
+            name = cap['sock'] + ('_' + leaf if leaf else '')
+            for c in heads:
+                s = c.inputs.get(name)
+                if s is not None:
+                    g._set(s, value)
+
+    def level_global_bases(self):
+        """本栈从关卡世界取值的引擎全局:名 → (陈述者, 缺省)。陈述者是配方来源 —— level_global 由关卡的环境相位陈述,
+        volume_global 由相机所在的体积栈陈述 —— 宿主按它分组核对「要么全给要么不给」;按「值 - 缺省」写,生成的组在里面
+        读回再加缺省。"""
+        return {name: (spec['src'], [float(value) for value in spec['base']])
+                for name, spec in (self.engine_global_sources or {}).items()}
+
+    def scene_time_scales(self):
+        """本栈读的时钟全局:名 → 四个分量各是场景秒数的几倍。宿主写成场景属性,读回不用再加缺省。"""
+        return {name: [float(value) for value in scales] for name, scales in self.scene_time.items()}
+
+    def object_attribute_bases(self):
+        """本栈逐物体读的引擎全局及各自缺省:宿主按物体写「值 - 缺省」的自定义属性,组里读回再加缺省。"""
+        return {name: [float(value) for value in base] for name, base in (self.object_attributes or {}).items()}
+
+    def texel_size_bases(self):
+        """本栈读的「图名_TexelSize」及各自缺省:随关卡原尺寸建的关卡图每次按载荷改尺寸,宿主就把
+        (1/宽, 1/高, 宽, 高) 按「值 - 缺省」写成视图层属性,组里读回再加缺省。"""
+        return {name: [float(value) for value in base] for name, base in (self.texel_sizes or {}).items()}
+
+    def _wire_zone(self, g, insts, zone, images, inst_sink, part, ctx):
+        feed = insts[zone['depth']]
+        heads = insts[zone['depth'] + 1:]
+        zin = g._nd('GeometryNodeRepeatInput')
+        zout = g._nd('GeometryNodeRepeatOutput')
+        zin.pair_with_output(zout)
+        zout.repeat_items.clear()
+        for item, is_vec in zone['states']:
+            zout.repeat_items.new('VECTOR' if is_vec else 'FLOAT', item)
+        g._set(zin.inputs['Iterations'], feed.outputs[zone['sock'] + '_it'])
+        for item, _is_vec in zone['states']:
+            out = feed.outputs.get(zone['sock'] + '_s_' + item)
+            if out is not None:
+                g._set(zin.inputs[item], out)
+        binsts = []
+        for i, body_name in enumerate(zone['bodies']):
+            b = g._nd('ShaderNodeGroup')
+            b.node_tree = self.group(body_name)
+            binsts.append(b)
+            inst_sink.append(b)
+            b['ruri_zone'] = zone['sock']
+            b['ruri_binst'] = i
+            for item, _is_vec in zone['states']:
+                sock = b.inputs.get('s_' + item)
+                if sock is not None:
+                    g._set(sock, zin.outputs[item])
+            for rname, _is_vec in zone['reads']:
+                sock = b.inputs.get('r_' + rname)
+                out = feed.outputs.get(zone['sock'] + '_r_' + rname)
+                if sock is not None and out is not None:
+                    g._set(sock, out)
+        self._wire_crossings(g, binsts, zone['body_crossings'])
+        for c in zone['capabilities']:
+            self._wire_capability(g, binsts, c, ctx)
+        for f in zone['fetches']:
+            src = binsts[f['depth']]
+            heads_b = binsts[f['depth'] + 1:]
+            image = images.get(f['slot']) if images else None
+            if f['env']:
+                if image is None:
+                    continue
+                mip = src.outputs[f['sock'] + '_mip'] if f['mip'] else None
+                color, alpha = g.env_image(image, src.outputs[f['sock'] + '_dir'], mip)
+                self._feed(g, heads_b, f['sock'], color, alpha)
+                continue
+            color, alpha, _anchor = self._sample(g, part, f, image, src.outputs[f['sock'] + '_uv'], images)
+            self._feed(g, heads_b, f['sock'], color, alpha)
+        for item, seat in zone['body_finals'].items():
+            out = binsts[seat[0]].outputs.get('o_' + item)
+            if out is not None:
+                g._set(zout.inputs[item], out)
+        for c in heads:
+            for item, _is_vec in zone['states']:
+                sock = c.inputs.get(zone['sock'] + '_o_' + item)
+                if sock is not None:
+                    g._set(sock, zout.outputs[item])
+
+    # ==================== 材质装配 ====================
+
+    ANCHOR_SLOTS = ('_BaseColorMap', '_BaseMap', '_MainTex')
+
+    CULL_LABEL = 'RuriCull'
+    SHADOW_CULL_LABEL = 'RuriShadowCull'
+
+    def _cull_transparency(self, g, cull, outline_fac):
+        """剔除面的透明度(1 = 这一面整个不画)。它直接乘进 alpha,不再另起一级 MixShader:
+        少一个闭包混合与一个 Transparent BSDF,而且 alpha 口的直接生产者永远是一个 Math 节点 ——
+        宿主的灯链接校验按「先遇到谁」给节点打标志,MixShader 的因子口排在两个 Shader 口前面,
+        alpha 若直接来自吃灯答案的那段组,那段组会先经因子口被打成「只够到出口」,整条灯链随之
+        判非法(codegen 对非法入链的节点 need_exec=0,材质丢主光);隔一个 Math 节点,它就先经
+        Light Accumulation 那一支被遇到。
+
+        剔除哪一面(Unity CullMode:0 不剔、1 剔正面、2 剔背面)是逐材质的渲染状态,住在一枚 RuriCull 值节点上、
+        实例化时照材质写:模板不按它分叉 —— 同一 part 的正反剔除共用一份模板,开文件少建一半模板图。三种各算一支,
+        按值取一支;因子恒为 0 或 1、三支都有限,插值逐位等于被取的那一支。
+
+        阴影图拿这张图再跑一遍的家族:真源的 ShadowCaster 趟有自己的 Cull 词,阴影趟取 RuriShadowCull 那一份;渲染器声明
+        两面都投影(物体属性 SHADOW_TWO_SIDED_PROPERTY)时不剔除。Backfacing 在宿主的阴影趟按灯的视角答。"""
+        cgeo = g._nd('ShaderNodeNewGeometry')
+        bf = cgeo.outputs['Backfacing']
+        mode = g._nd('ShaderNodeValue')
+        mode.label = self.CULL_LABEL
+        mode.outputs[0].default_value = float(cull)
+        culled = mode.outputs[0]
+        if self.HOST_SHADOW_CASTERS:
+            shadow_mode = g._nd('ShaderNodeValue')
+            shadow_mode.label = self.SHADOW_CULL_LABEL
+            shadow_mode.outputs[0].default_value = float(cull)
+            two_sided = g._nd('ShaderNodeAttribute')
+            two_sided.attribute_type = 'OBJECT'
+            two_sided.attribute_name = _host().SHADOW_TWO_SIDED_PROPERTY
+            casting = g.math('MULTIPLY', shadow_mode.outputs[0], g.math('SUBTRACT', 1.0, two_sided.outputs['Fac']))
+            culled = g.mixf(g._nd('ShaderNodeLightPath').outputs['Is Shadow Ray'], culled, casting)
+        front = g.math('SUBTRACT', 1.0, bf)
+        back = g.math('ABSOLUTE', g.math('SUBTRACT', bf, outline_fac))
+        neither = g.math('MULTIPLY', outline_fac, front)
+        culls_front = g.math('COMPARE', culled, 1.0, 0.25)
+        culls_back = g.math('COMPARE', culled, 2.0, 0.25)
+        return g.mixf(culls_front, g.mixf(culls_back, neither, back), front)
+
+    def _set_cull(self, mat, cull, shadow_cull):
+        """实例照自己的剔除写那几枚值节点(见 _cull_transparency);与模板里那份相同就不写。"""
+        wanted = {self.CULL_LABEL: cull}
+        if self.HOST_SHADOW_CASTERS:
+            wanted[self.SHADOW_CULL_LABEL] = shadow_cull
+        for label, value in wanted.items():
+            node = next((one for one in mat.node_tree.nodes if one.label == label), None)
+            if node is None:
+                raise RuntimeError('[ruri-uber] 材质 {0} 的图里没有剔除值节点 {1}'.format(mat.name, label))
+            if node.outputs[0].default_value != float(value):
+                node.outputs[0].default_value = float(value)
+
+    def _declare_shadow_pass(self, mat):
+        """真源 ShadowCaster 趟落到宿主的原生状态。那一趟只有一个 Cull 状态和材质开着的裁切,一个裁切都没开的材质没有片元要算:
+        use_backface_culling_shadow 就是它的 Cull Back;use_transparent_shadow 一关,宿主拿缺省深度着色器画(eevee_shader.cc:1513),
+        最终渲染也不用每采样重画它盖到的阴影页(eevee_shadow.cc:769)。还要跑图的只有:开了裁切的,混合的(透射是连续值),
+        剔正面的(原生只能剔背面),被两面投影的渲染器用着的(逐物体的判断只有图里读得到,见 _cull_transparency)。
+        家族不进宿主阴影图时这一趟缺省没人画;用户打开了对象的投影开关(见 apply_vertex_stage)也只要轮廓,不跑图。"""
+        if not self.HOST_SHADOW_CASTERS:
+            if mat.use_transparent_shadow:
+                mat.use_transparent_shadow = False
+            return
+        part = mat.get('ruri_uber_part', '')
+        if self.SHADOW_CLIP_SWITCHES is None or part not in self.PART_META:
+            return
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        shadow_cull = self._record_shadow_cull(self.PART_META[part], floats, mat.name)
+        clips = any(float(self._record_float(floats, switch) or 0.0) > 0.5 for switch in self.SHADOW_CLIP_SWITCHES)
+        runs_graph = (clips or mat.surface_render_method == 'BLENDED' or shadow_cull == 1.0
+                      or mat.get(_host().SHADOW_PER_OBJECT_PROPERTY) is not None)
+        culls_back = not runs_graph and shadow_cull == 2.0
+        if mat.use_transparent_shadow != runs_graph:
+            mat.use_transparent_shadow = runs_graph
+        if mat.use_backface_culling_shadow != culls_back:
+            mat.use_backface_culling_shadow = culls_back
+
+    def _declare_camera_pass(self, mat):
+        """真源上屏那一趟的 Cull 是光栅化状态:剔背面或不剔时,宿主原生的 use_backface_culling 就是它(与图里 Backfacing
+        读的是同一个 gl_FrontFacing),用不着经透射把那一面抹掉;经透射抹的背面照样进双面 G-buffer 子通道,深度恰好等于正面
+        处会写下覆盖率 0 的黑闭包(eevee_pipeline.cc:734 的 DEPTH_EQUAL)。表面混合节点的透射口一连上 Transparent BSDF,宿主
+        就把整张材质记成透明(node_shader_bsdf_transparent.cc:33),预通道从此用不上缺省深度着色器(eevee_shader.cc:1513),
+        每张材质多编一到两遍整棵树。所以只有真要靠图来透的材质才连它:带描边壳的 part(壳的正面要逐片元剔)、剔正面的(原生只能剔
+        背面)、抖动 alpha 的 part、混合的、开了裁切的、阴影趟要跑图的(见 _declare_shadow_pass,须先于本函数)。其余的断开
+        透射、交给原生剔除;覆盖率那一支照旧乘进闭包,栅格化下来的片元覆盖率恒为 1。"""
+        nt = mat.node_tree
+        if nt is None:
+            return
+        seat = next((node for node in nt.nodes if node.label == self.SURFACE_MIX_LABEL), None)
+        through = next((node for node in nt.nodes if node.label == self.SURFACE_THROUGH_LABEL), None)
+        part = mat.get('ruri_uber_part', '')
+        meta = self.PART_META.get(part)
+        if seat is None or through is None or meta is None or part not in self.m['parts']:
+            return
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        cull = self._record_cull(meta, floats, mat.name)
+        clips = self.SHADOW_CLIP_SWITCHES is None or any(
+            float(self._record_float(floats, switch) or 0.0) > 0.5 for switch in self.SHADOW_CLIP_SWITCHES)
+        graph_cull = bool(self.part(part).get('outline') or meta.get('stochastic_alpha') or clips or cull == 1.0
+                          or mat.surface_render_method == 'BLENDED' or mat.use_transparent_shadow)
+        transmission = seat.inputs[0]
+        linked = any(link.from_node == through for link in transmission.links)
+        if graph_cull and not linked:
+            nt.links.new(through.outputs[0], transmission)
+        elif not graph_cull and linked:
+            for link in list(transmission.links):
+                nt.links.remove(link)
+        culls_back = not graph_cull and cull == 2.0
+        if mat.use_backface_culling != culls_back:
+            mat.use_backface_culling = culls_back
+
+    def build_material(self, mat, part=None, opaque=True, blend=None, cull=2.0, images=None):
+        part = part or self.DEFAULT_PART
+        spec = self.part(part)
+        # 渲染方式先于建图落在这张材质上(唯一写点;实例是模板拷贝,随之继承):能力兑现按它选解法,
+        # 混合材质不进深度缓冲,问身后那张面要走原生 Raycast。
+        mat.surface_render_method = self._render_method(part, opaque, blend)
+        nt = mat.node_tree
+        nt.nodes.clear()
+        g = G(nt, is_group=False)
+        # 原生灯节点与它们的换算链全部由兑现面(能力答案 / 闭包)在各自的标记区里建,不在这里预建:
+        # 预建的那份不带 ruri_cap,重接时留下来变成悬空的灯链,校验器按灯节点的标志把它连同活链
+        # 一起判非法,codegen 就把活链的下游节点整个禁掉 —— 实测重接后材质丢主光。
+        insts = []
+        for name in spec['segments']:
+            grp = g._nd('ShaderNodeGroup')
+            grp.node_tree = self.group(name)
+            grp.width = 320
+            insts.append(grp)
+        geo = g.geo()
+        tc = g.texco()
+        tan_ws, tan_w = g.tbn()
+        col = g.attr('Color')
+        uv1 = self._texcoord_node(g, 'input_texcoord1')
+        uv2 = self._texcoord_node(g, 'input_texcoord2')
+        stmap = g._nd('ShaderNodeMapping')
+        stmap.label = self.ST_NODE
+        g._set(stmap.inputs['Vector'], tc.outputs['UV'])
+        olattr = g._nd('ShaderNodeAttribute')
+        olattr.attribute_name = 'ruri_outline'
+        os_sep = g._nd('ShaderNodeSeparateXYZ')
+        g._set(os_sep.inputs['Vector'], tc.outputs['Object'])
+        os_comb = g._nd('ShaderNodeCombineXYZ')
+        g._set(os_comb.inputs['X'], os_sep.outputs['X'])
+        g._set(os_comb.inputs['Y'], os_sep.outputs['Z'])
+        g._set(os_comb.inputs['Z'], os_sep.outputs['Y'])
+        wires = {
+            '_RuriOutlineShellGate': olattr.outputs['Fac'],
+            'input_uv': stmap.outputs['Vector'],
+            'input_uv1': uv1.outputs['UV'],
+            'input_uv2': uv2.outputs['UV'],
+            'input_normalWS': g.surface_normal(),
+            'input_positionWS': geo.outputs['Position'],
+            'input_positionOS': os_comb.outputs['Vector'],
+            'input_tangentWS': tan_ws,
+            'input_tangentWS_w': tan_w,
+            'input_color': col.outputs['Color'],
+            'input_color_w': col.outputs['Alpha'],
+            'facing': g.facing_sign(),
+        }
+        for grp in insts:
+            for s in grp.inputs:
+                if s.name in wires:
+                    g._set(s, wires[s.name])
+        self._wire_crossings(g, insts, spec['crossings'])
+        all_insts = list(insts)
+        # 建图序事后从节点表恢复不出来:实例序与 part 名建的时候就烙上(重接按 depth 取实例)。
+        for i, grp in enumerate(insts):
+            grp['ruri_inst'] = i
+        mat['ruri_uber_part'] = part
+        # 栈身份烙在**建图处**(唯一写点;实例化是模板拷贝,自带继承)。判据不能用 ruri_uber_part:
+        # 那个键每个生成栈都写,拿它认领就是一张材质被 N 个栈同时认领。模板材质同样要烙 ——
+        # 不烙则重接面(换灯/换世界)认不出自己刚建的模板。
+        mat['ruri_uber_stack'] = self.PANEL_KEY
+        anchor = None
+        for f in spec['fetches']:
+            image = images.get(f['slot']) if images else None
+            nd = self._wire_fetch(g, part, insts, f, image, images)
+            if nd is not None and nd.image is not None:
+                if anchor is None or (f['slot'] in self.ANCHOR_SLOTS and (anchor.label not in self.ANCHOR_SLOTS)):
+                    anchor = nd
+        for c in spec['capabilities']:
+            self._wire_capability(g, insts, c, {'material': mat})
+        for z in spec['zones']:
+            self._wire_zone(g, insts, z, images, all_insts, part, {'material': mat})
+        if anchor is not None:
+            nt.nodes.active = anchor
+            anchor.select = True
+        finals = spec['finals']
+        self._wire_overlays(g, insts, finals)
+        color_sock = self._final_color(insts, finals)
+        alpha_sock = self._final_socket(insts, finals, 'ret_gBuffer0_w')
+        clip_sock = self._final_socket(insts, finals, '__clip')
+        cull_fac = self._cull_transparency(g, cull, olattr.outputs['Fac'])
+        outp = g._nd('ShaderNodeOutputMaterial')
+        self._wire_outline(g, mat, part, spec, images, olattr.outputs['Fac'], outp)
+        mat[self.BLEND_KEY] = list(blend) if blend is not None else []
+        if blend in MULTIPLY_BLENDS:
+            # 乘法帧(真源的 Blend Zero SrcColor):内核终色**就是乘数**,这一趟没有任何受光项
+            # (真源只写 baseColor,alpha 不参与那条混合方程)⇒ 出口只有一枚带颜色的 Transparent BSDF,
+            # 剔除面把颜色透成白(乘 1 = 不动背景)。
+            #
+            # 🔴 不许再串一级 MixShader:实测(真材质 + 白底)哪怕因子恒 0、只取 Transparent 那一支,
+            # 宿主也把整片算成**不透明黑**;把出口直接接到 Transparent BSDF 上,同一棵树立刻给出
+            # 正确的乘数(0.6558,0.2532,0.4231,与真源公式逐位一致)。乘法帧因此不建闭包也不需要灯节点,
+            # 但前提是终色真的无灯 —— 见生成期 UntaintLightFreeFinals(能力答案与灯循环两条都要换掉)。
+            tr = g._nd('ShaderNodeBsdfTransparent')
+            if color_sock is not None:
+                g._set(tr.inputs['Color'], g.choosev(cull_fac, color_sock, (1.0, 1.0, 1.0)))
+            g._set(outp.inputs[0], tr.outputs[0])
+            g.layout()
+            return all_insts
+        keep = g.math('SUBTRACT', 1.0, cull_fac)
+        # 表面 = AddShader(透射, 闭包):片元盖住帧的那一份(覆盖率)乘进闭包的输入(见 _wire_closure),
+        # 透射由 Transparent BSDF 的颜色给。与「MixShader(覆盖率, 透射, 闭包)」的透射、闭包份额逐项相等,
+        # 但**不许用 MixShader**:EEVEE 把灯节点包进逐灯的循环,而 MixShader 给闭包的权重是在循环外算的,
+        # 因子只要是算出来的(不是常量)循环里就读成 0 —— 整片表面的光全没了。实测墙面:同一个恒 1 的
+        # 因子,常量给 0.20,从节点算出来给 0;把覆盖率移进闭包输入后就是 0.20。
+        if blend is None or blend in OVER_BLENDS:
+            coverage = keep if (opaque or alpha_sock is None) else g.math('MULTIPLY', alpha_sock, keep)
+            if clip_sock is not None:
+                coverage = g.math('MULTIPLY', coverage, clip_sock)
+            coverage = self._coverage(g, coverage)
+            through = g._nd('ShaderNodeBsdfTransparent')
+            through.label = self.SURFACE_THROUGH_LABEL
+            g._set(through.inputs['Color'], g.vmath('SUBTRACT', (1.0, 1.0, 1.0), coverage))
+        else:
+            # 其余混合按「源 × A + 帧 × T」拆:A 乘进闭包的输入(见 _wire_closure),T 是透射色。
+            # 剔除面与 clip 掉的片元整个不改帧(= 纯透射):覆盖率之外的那份透射恒 1。
+            coverage = keep if clip_sock is None else g.math('MULTIPLY', keep, clip_sock)
+            coverage = self._coverage(g, coverage)
+            through = g._nd('ShaderNodeBsdfTransparent')
+            through.label = self.SURFACE_THROUGH_LABEL
+            g._set(through.inputs['Color'], g.mixv(
+                coverage, (1.0, 1.0, 1.0), self._blend_transmission(g, blend, color_sock, alpha_sock)))
+        seat = g._nd('ShaderNodeAddShader')
+        seat.label = self.SURFACE_MIX_LABEL
+        seat[self.CLOSURE_SEAT_KEY] = 1
+        g._set(seat.inputs[0], through.outputs[0])
+        g._set(seat.inputs[1], self._wire_closure(g, mat, insts, finals, alpha_sock, coverage))
+        g._set(outp.inputs[0], seat.outputs[0])
+        g.layout()
+        return all_insts
+
+    def _wire_overlays(self, g, insts, finals):
+        """覆盖型能力的询问(出口名以 OVERLAY_OUTPUT_PREFIX 开头)逐像素存成同名 AOV,留给后处理追踪完再合成。
+        一律按颜色 AOV 存(视层按颜色登记,标量接进颜色口铺满三通道,读它的第一个通道)。"""
+        for name in sorted(finals):
+            if not name.startswith(OVERLAY_OUTPUT_PREFIX):
+                continue
+            socket = self._final_socket(insts, finals, name)
+            if socket is None:
+                raise RuntimeError('[ruri-uber] 覆盖询问 {0} 不在组接口上'.format(name))
+            node = g._nd('ShaderNodeOutputAOV')
+            node.aov_name = name
+            g._set(node.inputs['Color'], socket)
+
+    # 描边视图段吃的顶点入口口名,与几何树的那一份(vertex_inputs)同源同口径:物体空间、宿主轴,切线 w 取 Unity 口径。
+    OUTLINE_INPUTS = ('input_positionOS', 'input_normalOS', 'input_tangentOS', 'input_tangentOS_w', 'input_texcoord',
+                      'input_texcoord1', 'input_texcoord2', 'input_color', 'input_color_w')
+
+    # 顶点入口的 UV 通道 → 网格 UV 层名;空名 = 默认 UV(活动渲染层),与 Blender 节点的空名同一约定,不依赖网格怎么命名。
+    TEXCOORD_LAYERS = {'input_texcoord': '', 'input_texcoord1': 'UV1', 'input_texcoord2': 'UV2'}
+    # 描边沿这一层外扩:切线空间平滑法线的 XY。第三套 UV 的含义各变体不同,描边不直接读它(搬进这一层的时机见 _own_outline_normal)。
+    OUTLINE_NORMAL_LAYER = 'OutlineNormal'
+
+    def _texcoord_node(self, g, input_name):
+        node = g._nd('ShaderNodeUVMap')
+        node.uv_map = self.TEXCOORD_LAYERS[input_name]
+        return node
+
+    def _texcoord_layer_name(self, obj, input_name):
+        layer_name = self.TEXCOORD_LAYERS[input_name]
+        if layer_name:
+            return layer_name
+        for layer in obj.data.uv_layers:
+            if layer.active_render:
+                return layer.name
+        return ''
+
+    def _wire_outline(self, g, mat, part, spec, images, shell, output):
+        """描边视图段:真源描边趟的顶点入口落在材质的位移出口上,宿主在顶点着色阶段逐视图求值 —— 视矩阵是正在画的那个
+        视图的,投影与像素数是宿主陈述在这个物体上的那个视图的。转视角只动 GPU,几何树一次都不重算。
+
+        位移只落在壳上(几何树复制出来、ruri_outline = 1 的那一份),整段关在一个循环区里,次数 = ruri_outline ×
+        (1 - Backfacing):本体顶点一次都不跑。片元阶段宿主为凹凸再求一遍位移,看得见的片元要么是本体(标记 0)要么是
+        壳的背面(Backfacing 1),同样一次都不跑 —— 位移不动任何一个看得见的片元的法线,也不花它一分钱;顶点阶段的
+        Backfacing 恒 0。顶点输入只把原样读数经循环区的状态项送进去,由它们派生的一切(物体空间法线、切线基、取点、
+        反投影)都在区里。"""
+        view = spec.get('outline')
+        if not view:
+            return
+        insts = []
+        for index, name in enumerate(view['segments']):
+            grp = g._nd('ShaderNodeGroup')
+            grp.node_tree = self.group(name)
+            grp.width = 320
+            grp['ruri_outline_inst'] = index
+            insts.append(grp)
+        wanted = [name for name in self.OUTLINE_INPUTS if any(grp.inputs.get(name) is not None for grp in insts)]
+        raw = self._outline_reads(g, wanted)
+        zin = g._nd('GeometryNodeRepeatInput')
+        zout = g._nd('GeometryNodeRepeatOutput')
+        zin.pair_with_output(zout)
+        zout.repeat_items.clear()
+        for key, (_socket, is_vec) in raw.items():
+            zout.repeat_items.new('VECTOR' if is_vec else 'FLOAT', key)
+        zout.repeat_items.new('VECTOR', 'offset')
+        front = g.math('SUBTRACT', 1.0, g.geo().outputs['Backfacing'])
+        g._set(zin.inputs['Iterations'], g.math('ROUND', g.math('MULTIPLY', shell, front)))
+        for key, (socket, _is_vec) in raw.items():
+            g._set(zin.inputs[key], socket)
+        inside = self._outline_inputs(g, {key: zin.outputs[key] for key in raw}, wanted)
+        for grp in insts:
+            for name in wanted:
+                sock = grp.inputs.get(name)
+                if sock is not None:
+                    g._set(sock, inside[name])
+        self._wire_crossings(g, insts, view['crossings'])
+        for fetch in view['fetches']:
+            self._wire_fetch(g, part, insts, fetch, images.get(fetch['slot']) if images else None, images)
+        seg, _vec = view['finals']['position']
+        x, y, z = g.sep(insts[seg].outputs['position'])
+        placed = g.vtrans(g.comb(x, z, y), 'OBJECT', 'WORLD', 'POINT')
+        g._set(zout.inputs['offset'], g.vmath('SUBTRACT', placed, g.geo().outputs['Position']))
+        g._set(output.inputs['Displacement'], zout.outputs['offset'])
+        mat.displacement_method = 'BOTH'
+
+    def _outline_reads(self, g, wanted):
+        """顶点入口要的原样读数(循环区的状态项):名 → (socket, 是否向量)。只读,不派生。"""
+        raw = {}
+        if 'input_positionOS' in wanted:
+            raw['position'] = (g.texco().outputs['Object'], True)
+        if {'input_normalOS', 'input_tangentOS', 'input_tangentOS_w'} & set(wanted):
+            raw['normal'] = (g.geo().outputs['Normal'], True)
+        if {'input_tangentOS', 'input_tangentOS_w'} & set(wanted):
+            raw['unit'] = (1.0, False)
+        for name in self.TEXCOORD_LAYERS:
+            if name in wanted:
+                node = self._texcoord_node(g, name)
+                if name == 'input_texcoord2':
+                    node.uv_map = self.OUTLINE_NORMAL_LAYER
+                raw[name] = (node.outputs['UV'], True)
+        if {'input_color', 'input_color_w'} & set(wanted):
+            color = g.attr('Color')
+            raw['color'] = (color.outputs['Color'], True)
+            raw['alpha'] = (color.outputs['Alpha'], False)
+        return raw
+
+    def _outline_inputs(self, g, reads, wanted):
+        """循环区里由原样读数派生的顶点入口:法线与切线从世界换回物体空间(宿主轴,单位长),切线基照 tbn 的做法取
+        Normal Map 的两根轴(强度口吃区里的 1,节点因此落在区里),w 取 Unity 口径。"""
+        out = {}
+        if 'input_positionOS' in wanted:
+            out['input_positionOS'] = reads['position']
+        if 'input_normalOS' in wanted:
+            out['input_normalOS'] = g.vmath('NORMALIZE', g.vtrans(reads['normal'], 'WORLD', 'OBJECT', 'NORMAL'))
+        if {'input_tangentOS', 'input_tangentOS_w'} & set(wanted):
+            tangent = g._tbn_axis(1.0, 0.0, 0.0, reads['unit'])
+            bitangent = g._tbn_axis(0.0, 1.0, 0.0, reads['unit'])
+            out['input_tangentOS'] = g.vmath('NORMALIZE', g.vtrans(tangent, 'WORLD', 'OBJECT', 'VECTOR'))
+            out['input_tangentOS_w'] = g.math('SIGN', g.vmath(
+                'DOT_PRODUCT', g.vmath('CROSS_PRODUCT', tangent, reads['normal']), bitangent))
+        for name in self.TEXCOORD_LAYERS:
+            if name in wanted:
+                out[name] = reads[name]
+        if 'input_color' in wanted:
+            out['input_color'] = reads['color']
+        if 'input_color_w' in wanted:
+            out['input_color_w'] = reads['alpha']
+        return out
+
+    def _coverage(self, g, coverage):
+        """覆盖率落在一枚带标记的节点上:重接闭包时从这里取回同一个覆盖率(它不属于闭包,重接不重建)。"""
+        node = g._nd('ShaderNodeMath')
+        node.operation = 'ADD'
+        node.label = self.SURFACE_COVERAGE_LABEL
+        g._set(node.inputs[0], coverage)
+        node.inputs[1].default_value = 0.0
+        return node.outputs[0]
+
+    @staticmethod
+    def _blend_transmission(g, blend, color_sock, alpha_sock):
+        """T:帧留下多少(逐通道)。目标因子直接给一份;源因子里乘到帧上的那部分(DstColor /
+        OneMinusDstColor)挪过来,因为 源 × 帧 = 帧 × 源。帧的 alpha 宿主没有,读它的因子拒产。"""
+        src, dst = blend
+        if dst == BLEND_ZERO:
+            kept = (0.0, 0.0, 0.0)
+        elif dst == BLEND_ONE:
+            kept = (1.0, 1.0, 1.0)
+        elif dst == BLEND_SRC_ALPHA:
+            kept = g.vmath('SCALE', (1.0, 1.0, 1.0), s=alpha_sock)
+        elif dst == BLEND_ONE_MINUS_SRC_ALPHA:
+            kept = g.vmath('SCALE', (1.0, 1.0, 1.0), s=g.math('SUBTRACT', 1.0, alpha_sock))
+        elif dst == BLEND_SRC_COLOR:
+            kept = color_sock
+        elif dst == BLEND_ONE_MINUS_SRC_COLOR:
+            kept = g.vmath('SUBTRACT', (1.0, 1.0, 1.0), color_sock)
+        else:
+            raise RuntimeError('[ruri-uber] 目标因子 {0} 读帧自己的颜色/alpha,宿主的透射兑现不了'.format(dst))
+        if src == BLEND_DST_COLOR:
+            return g.vmath('ADD', kept, color_sock)
+        if src == BLEND_ONE_MINUS_DST_COLOR:
+            return g.vmath('SUBTRACT', kept, color_sock)
+        return kept
+
+    @staticmethod
+    def _blend_emission_scale(g, blend, color_sock, alpha_sock):
+        """A:源自己乘上的那一份,(是否向量, 值);None = 1。源因子读帧的部分已挪进 T。"""
+        if blend is None or blend in OVER_BLENDS:
+            return None
+        src = blend[0]
+        if src in (BLEND_ONE, BLEND_ONE_MINUS_DST_COLOR):
+            return None
+        if src in (BLEND_ZERO, BLEND_DST_COLOR):
+            return (False, 0.0)
+        if src == BLEND_SRC_ALPHA:
+            return (False, alpha_sock)
+        if src == BLEND_ONE_MINUS_SRC_ALPHA:
+            return (False, g.math('SUBTRACT', 1.0, alpha_sock))
+        if src == BLEND_SRC_COLOR:
+            return (True, color_sock)
+        if src == BLEND_ONE_MINUS_SRC_COLOR:
+            return (True, g.vmath('SUBTRACT', (1.0, 1.0, 1.0), color_sock))
+        raise RuntimeError('[ruri-uber] 源因子 {0} 读帧自己的 alpha,宿主的透射兑现不了'.format(src))
+
+    @staticmethod
+    def _final_socket(insts, finals, name):
+        seat = finals.get(name)
+        return None if seat is None else insts[seat[0]].outputs.get(name)
+
+    def _final_color(self, insts, finals):
+        """终色就是 ret_gBuffer0 这一个出口:生成期按灯分账(无灯 / 循环没跑两份孪生)只对它做,出口不许拿别的口顶替。"""
+        return self._final_socket(insts, finals, 'ret_gBuffer0')
+
+    def _wire_closure(self, g, mat, insts, finals, alpha_sock=None, coverage_sock=None):
+        """表面闭包是兑现面的一部分(Emission + Light Accumulation):与能力答案一样打 ruri_cap 标记、
+        重接时整块回收重建。
+
+        材质记着的混合若让源乘上一份 A(SrcAlpha One 之类),A 在这里乘进闭包的输入并随闭包一起
+        打标记:两个闭包都对输入线性(逐灯求和),先乘后求和与真源的「源 × A」逐位同值。光泽瓣同样乘。
+        A 读源色的(SrcColor 一类)无灯那一份按无灯终色取 A:它在光循环之外求值,不许读灯。"""
+        before = set(n.as_pointer() for n in g.t.nodes)
+        color_sock = self._final_color(insts, finals)
+        unlit_sock = self._final_socket(insts, finals, UNLIT_FINAL)
+        blend = self._stored_blend(mat)
+        lit_scale = None if color_sock is None else self._blend_emission_scale(g, blend, color_sock, alpha_sock)
+        unlit_scale = lit_scale
+        if unlit_sock is not None and lit_scale is not None and lit_scale[0]:
+            unlit_scale = self._blend_emission_scale(g, blend, unlit_sock, alpha_sock)
+
+        def weighted(sock, scale):
+            if sock is None:
+                return None
+            if scale is not None:
+                vector, value = scale
+                sock = g.vmath('MULTIPLY', sock, value) if vector else g.vmath('SCALE', sock, s=value)
+            if coverage_sock is not None:
+                sock = g.vmath('SCALE', sock, s=coverage_sock)
+            return sock
+
+        surface = self._surface_closure(
+            g, weighted(color_sock, lit_scale),
+            weighted(self._final_socket(insts, finals, NO_LOOP_FINAL), lit_scale),
+            weighted(unlit_sock, unlit_scale),
+            weighted(self._final_socket(insts, finals, GLOSSY_FINAL), lit_scale))
+        for nd in g.t.nodes:
+            if nd.as_pointer() not in before:
+                nd['ruri_cap'] = self.CLOSURE_CAP
+        return surface
+
+    def _per_light_share(self, g, lit, unlit, noloop):
+        """这一圈灯该进多少账。宿主的光循环对**每一盏灯**把整棵树跑一遍,不读灯的那一份(环境、自发光……)
+        已在循环之外经 Emission 进过账(见 _surface_closure)。
+
+        方向光那一圈(原生 is_sun)交「终色 − 无灯终色」= 按这盏灯算的主光着色(附加光项在那一圈被身份门乘零,
+        不会与主光重复);其余每一圈交「终色 − 同一条终色但附加光循环没跑过」—— 正好是这盏灯自己的附加光贡献,
+        同圈里那些与它无关的项(按这盏灯算出来的主光着色、环境、自发光)在相减时逐位抵消,不必知道内核怎么把那一项
+        合进去。
+
+        没有附加光循环的 part 发不出后一份终色,只在方向光那一圈进账(点光对它本来就没贡献)。"""
+        is_main = _native_light(g)['is_main']
+        main = g.vmath('SUBTRACT', lit, unlit)
+        if noloop is None:
+            return g.vmath('SCALE', main, s=is_main)
+        return g.choosev(is_main, g.vmath('SUBTRACT', lit, noloop), main)
+
+    def _surface_closure(self, g, lit, noloop, unlit, glossy):
+        """表面闭包(各份都已乘好混合与覆盖率)。不读灯的那一份 —— 无灯终色,终色不读灯时就是终色本身 —— 经
+        Emission 在光循环之外只交一次,视图里一盏灯都没有(材质预览默认不用场景灯)时材质照样显示它;读灯的部分进
+        Light Accumulation:灯节点一进图整棵树就按灯逐圈求值,Diffuse Light = 这一圈灯自己那一份(见 _per_light_share),
+        Diffuse Color 恒 1:内核终色已经是完整着色,不再乘任何反照率。入口交了光泽一份(GLOSSY_FINAL)就进 Glossy Light,
+        只在方向光那一圈进账(宿主在这个口上原生乘灯的 Specular 滑杆);打开漫反射 / 光泽光照通道的视图层按瓣分开读,
+        不读灯的那一份落在自发光通道。两个闭包实测都不钳值,HDR 原样通过。"""
+        closures = []
+        once = lit if unlit is None else unlit
+        if once is not None:
+            emission = g._nd('ShaderNodeEmission')
+            g._set(emission.inputs['Color'], once)
+            closures.append(emission.outputs[0])
+        diffuse = None if (lit is None or unlit is None) else self._per_light_share(g, lit, unlit, noloop)
+        if diffuse is not None or glossy is not None:
+            accumulation = g._nd('ShaderNodeLightAccumulation')
+            accumulation.label = NATIVE_LIGHT_LABEL
+            accumulation.inputs['Diffuse Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+            if diffuse is not None:
+                g._set(accumulation.inputs['Diffuse Light'], diffuse)
+            if glossy is not None:
+                accumulation.inputs['Glossy Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+                g._set(accumulation.inputs['Glossy Light'], g.vmath('SCALE', glossy, s=_native_light(g)['is_main']))
+            closures.append(accumulation.outputs['Shader'])
+        if not closures:
+            nothing = g._nd('ShaderNodeEmission')
+            nothing.inputs['Color'].default_value = (0.0, 0.0, 0.0, 1.0)
+            return nothing.outputs[0]
+        if len(closures) == 1:
+            return closures[0]
+        both = g._nd('ShaderNodeAddShader')
+        g._set(both.inputs[0], closures[0])
+        g._set(both.inputs[1], closures[1])
+        return both.outputs[0]
+
+    # ==================== 模板材质 + 实例化(唯一的逐材质路径) ====================
+
+    TEMPLATE_KEY = 'ruri_uber_template'
+    STAMP_KEY = 'ruri_uber_stamp'
+    SURFACE_MIX_LABEL = 'RuriSurfaceMix'
+    SURFACE_COVERAGE_LABEL = 'RuriSurfaceCoverage'
+    # 表面混合节点透射那一口上的 Transparent BSDF(见 _declare_camera_pass)。
+    SURFACE_THROUGH_LABEL = 'RuriSurfaceThrough'
+    # 闭包落在表面混合节点(AddShader)的哪一个口。
+    CLOSURE_SEAT_KEY = 'ruri_closure_input'
+    # 材质兑现时用的真源混合因子 [源, 目标](Unity BlendMode 值);空 = 家族缺省的 over / 不透明。
+    BLEND_KEY = 'ruri_uber_blend'
+    CLOSURE_CAP = 'closure'
+
+    def _stored_blend(self, mat):
+        stored = mat.get(self.BLEND_KEY)
+        if stored is None:
+            raise RuntimeError('[ruri-uber] 材质 {0} 没记混合因子(旧产物),请重新导入'.format(mat.name))
+        stored = [int(x) for x in stored]
+        return tuple(stored) if stored else None
+
+    # ==================== 跨应用参数共享的自述 ====================
+    # 参数行分三个桶存,而着色器只有一套平的 uniform 名字 —— 差异只有 ST 的 `_ST` 后缀
+    # (桶键是槽名 `_BaseMap`,uniform 是 `_BaseMap_ST`)。这条规则的真源在这里,所以
+    # 由材质**自述**带走:任何跨应用的搬运者读这一条就能把行摊平成着色器词汇,不必认识
+    # ruri_uber_* 一个字。搬运者自己抄一张桶表 = 第二处真源,加一个桶就静默丢一整类值。
+    # ruri_uber_images 不在行里:图不是 uniform,是通道,走各宿主自己的贴图路由。
+    SHADING_KEY = 'ruri_shading'
+    SHADING_ROW = {
+        'ruri_uber_floats': '{0}',
+        'ruri_uber_colors': '{0}',
+        'ruri_uber_st': '{0}_ST',
+    }
+
+    def _declare_shading(self, mat):
+        """本材质说清楚:它讲谁的着色器词汇、是哪个变体、行与图各在哪、图的通道里装着什么。
+
+        贴图那半是给别的应用看的:本腿按槽名逐通道原样采,不需要语义;而"这张图该进
+        Painter 的哪个通道"只能由 [TexturePacking] 自述回答 —— 槽名是游戏词汇
+        (_BumpMap 与 _NormalMap 同义不同名),按名猜必错且静默。带本材质这一形态会采的
+        每个槽,绑没绑图都算:别处画了一张这边还空着的图,要有地方接进来;已绑哪些看记录本身。"""
+        packing = self.m.get('packing') or {}
+        bound = dict(mat.get('ruri_uber_images') or {})
+        part = str(mat.get('ruri_uber_part', ''))
+        sampled = set(bound)
+        if part in self.m['parts']:
+            sampled.update(fetch['slot'] for fetch in self._part_fetches(self.part(part)))
+        # 本腿把 part 编译成各自的树,所以这个值在这边是编译期常量、不是参数行里的一项。
+        # 别的宿主把整族编译成一个着色器,靠一个 uniform 选分支;它取缺省 0 = 整张脸按
+        # Standard 渲,而且零报错。所以照实报出来,让它随行一起走。
+        constants = {}
+        variant_uniform = self.m.get('variant_uniform') or ''
+        variant_value = (self.m.get('variant_values') or {}).get(part)
+        if variant_uniform and variant_value is not None:
+            constants[variant_uniform] = variant_value
+        # 行里存的是**作者值**(游戏 Properties 的 [Gamma] 那一族),而着色器读的是线性值 ——
+        # 本腿在 _param_matrix 里补那一次 srgb→linear。别的应用拿到的是同一份作者值,不补就
+        # 整条颜色链差一条 gamma 曲线,而且两边名字全对得上、一个字都不报。
+        # 只列本材质行里真有的那些,不整份 SRGB_PARAMS 抄过去。
+        gamma = sorted(
+            name for name in self.SRGB_PARAMS
+            if name in (mat.get('ruri_uber_floats') or {})
+            or name in (mat.get('ruri_uber_colors') or {}))
+        # 材质关键字的取值就是它在本材质上的那个 0/1 uniform(建图时按材质自己的关键字表写入)。
+        floats = mat.get('ruri_uber_floats') or {}
+        for keyword in self.m.get('material_keywords') or ():
+            constants[keyword] = float(floats.get(keyword, 0.0))
+        mat[self.SHADING_KEY] = {
+            'shader': self.PANEL_KEY,
+            # 着色器身份:风格参数面的散列,Substance 腿把同值写在着色器清单里。相等 ⇒ 两边是同一个
+            # 着色器,整行参数原样搬;不等 ⇒ 只有同名参数敢搬。只有画材质的栈声明它(后处理栈不画材质、
+            # 清单里也就没有),所以在这里读,不在构造时读。
+            'identity': self.m['identity'],
+            'constants': constants,
+            'gamma': gamma,
+            # 本栈的着色器叫什么。别的应用拿它去自己的货架上找同名着色器 —— 各腿的产物同名
+            # 是配方 MaterialName 决定的(Substance 腿产出 <MaterialName>.glsl),不是巧合;
+            # 找不到就响亮地说,不静默把参数喂给一个别的着色器。
+            'name': self.MATERIAL_NAME,
+            'variant': str(mat.get('ruri_uber_part', '')),
+            'values': dict(self.SHADING_ROW),
+            'images': {
+                'group': 'ruri_uber_images',
+                'packing': {slot: packing[slot] for slot in sorted(sampled) if slot in packing},
+            },
+            # 引擎全局:本着色器从场景的世界上读的那些量,各带缺省。宿主在世界上记「值 - 缺省」,图里读回再加缺省;
+            # 别的应用照这张表取本场景此刻的实际值。它们不跟材质走,却决定材质画成什么样 —— 别处的着色器实例
+            # 只认自己存下的那份,换一代缺省它也不动,两边就各按各的环境色与阴影强度画。
+            'engine': {name: list(base) for name, (_statement, base) in self.level_global_bases().items()},
+        }
+
+    def render_footprint_attributes(self):
+        """本栈读渲染像素世界尺寸的场景视层属性:询问了屏幕半径上限的遮蔽要它,天空的立方体采样按屏幕导数选 mip 也要它;
+        宿主按渲染相机写上去。"""
+        if self.m.get('render_footprint'):
+            return [RENDER_FOOTPRINT_ATTRIBUTE]
+        for part in self.m['parts'].values():
+            for cap in list(part['capabilities']) + [cap for zone in part['zones'] for cap in zone['capabilities']]:
+                if cap['cap'] == 'ScreenSpaceOcclusion' and 'pixel_radius' in cap['query']:
+                    return [RENDER_FOOTPRINT_ATTRIBUTE]
+        return []
+
+    # 顶点树上的这一格 = 这个物体有描边壳,它的材质在位移出口里读视图窗口。
+    VIEW_READER_KEY = 'ruri_view_reader'
+
+    def view_window_attributes(self):
+        """本栈读「正在画的那个视图」的物体属性(描边视图段):投影四列与其逆四列、近远裁剪与正交、像素宽高,名字见
+        VIEW_WINDOW。宿主按用户在看的视口、渲染时按渲染相机写到读它的物体上;没有视图段的栈什么都不读。"""
+        if any(part.get('outline') for part in self.m['parts'].values()):
+            return VIEW_WINDOW
+        return None
+
+    def view_window_readers(self, scene):
+        """读视图窗口的物体:本栈的顶点腿给了描边壳的那些。宿主在开文件、撤销、新壳建成之后问一次,不逐拍扫。"""
+        found = []
+        for obj in scene.objects:
+            if obj.type != 'MESH':
+                continue
+            modifier = obj.modifiers.get(self.VTX_MODIFIER)
+            tree = modifier.node_group if modifier is not None else None
+            if tree is not None and tree.get(self.VIEW_READER_KEY):
+                found.append(obj)
+        return found
+
+    def light_parameter_attributes(self):
+        """本栈逐灯读的源管线参数:每个向量在灯上的属性名,按结构体的字段序 —— 也就是关卡陈述逐灯给出那几个向量的次序。
+        宿主导入灯时按这份名字写上去;没有 SourceLightParameters 询问的栈不读任何参数。"""
+        found = []
+        for part in self.m['parts'].values():
+            for cap in list(part['capabilities']) + [cap for zone in part['zones'] for cap in zone['capabilities']]:
+                if cap['cap'] != 'SourceLightParameters':
+                    continue
+                names = [LIGHT_PARAMETER_ATTRIBUTE.format(leaf) for leaf, vector in cap['results'].items() if vector]
+                if found and names != found:
+                    raise RuntimeError('[ruri-cap] 本栈两处灯参数询问的向量不一致:{0} 与 {1}'.format(found, names))
+                found = names
+        return found
+
+    def level_image_layouts(self):
+        """本栈读的关卡图(3D 纹理、带 mip 的纹理数组、uniform 数据表)及其铺法,宿主据此建图、铺格、填边。"""
+        return dict(self.level_images)
+
+    def _level_image(self, slot):
+        """关卡图:全场共享一张图(引擎全局,不随材质变)。图只有宿主一个建造者 —— 它也是写像素的那个,
+        两处各建一份,尺寸/格式/色彩空间迟早分叉。"""
+        return getattr(self._host_module(), self.host['volume_image_fn'])(self.level_images[slot])
+
+    def _template_images(self, part):
+        """模板建满全部采样槽;没绑真图的槽 = 颜色 == 该割点 neutral 的 1x1 图
+        (与直建路缺图语义逐位等价;占位图的槽语义中性不是一回事,拿错整脸黑,实锤)。"""
+        rows = [fetch for fetch in self._part_fetches(self.part(part)) if not fetch['env']]
+        out = {}
+        for fetch in rows:
+            if fetch['slot'] in out:
+                continue
+            out[fetch['slot']] = _neutral_image(
+                fetch['neutral'], fetch['neutral_alpha'], fetch['non_color'])
+        return out
+
+    @staticmethod
+    def _part_fetches(spec):
+        """一个 part 在材质上的全部取点:片元段的、循环体的、描边视图段的。"""
+        rows = list(spec['fetches'])
+        for zone in spec['zones']:
+            rows.extend(zone['fetches'])
+        rows.extend((spec.get('outline') or {}).get('fetches') or ())
+        return rows
+
+    def _template(self, part, opaque, blend):
+        """模板按 (part, 透明形态, 混合) 分;剔除不分(实例自己写 RuriCull,见 _cull_transparency),参数与开关不分
+        (实例写成组输入的常量,宿主内联时按它折叠与剪枝,见 apply_params)。"""
+        name = '{0}{1} {2}b{3}'.format(self.TEMPLATE_MAT, part, int(bool(opaque)),
+                                       '-' if blend is None else '{0}.{1}'.format(*blend))
+        tpl = bpy.data.materials.get(name)
+        if tpl is not None and tpl.get(self.STAMP_KEY) == self.STAMP and tpl.node_tree is not None:
+            return tpl
+        # 模板只是实例的拷贝源,本会话的临时数据:本模块这一生建的那张认 stamp;同名的别的(上一次注册留下的)清掉重建。
+        # 实例是拷贝,不是它的用户。
+        if tpl is not None:
+            bpy.data.materials.remove(tpl)
+        tpl = _host().scratch(bpy.data.materials.new(name))
+        if tpl.node_tree is None:
+            tpl.use_nodes = True
+        begun = time.perf_counter()
+        self.build_material(tpl, part=part, opaque=opaque, blend=blend, images=self._template_images(part))
+        tpl[self.STAMP_KEY] = self.STAMP
+        tpl[self.TEMPLATE_KEY] = 1
+        print('[ruri-uber] 模板 {0}:{1} 节点 {2} 连线,建图 {3:.1f} s'.format(
+            name, len(tpl.node_tree.nodes), len(tpl.node_tree.links), time.perf_counter() - begun), flush=True)
+        return tpl
+
+    def _render_method(self, part, opaque, blend):
+        """EEVEE 的透明解法必须跟着 build_material 的 alpha 判据走(同一个 opaque)。
+
+        opaque ⇒ alpha 恒 1(或 clip 出来的 0/1 二值),'DITHERED' 保住真深度、景深与光追,
+        二值 alpha 下不产生任何抖动噪点。非 opaque ⇒ alpha 是连续值,'DITHERED' 会把它按
+        蓝噪声随机取舍,收敛前满屏噪点(视口里尤其难看)—— 真源那趟就是 Blend 混合,
+        'BLENDED' 才是等价物。乘法帧(Blend Zero SrcColor)是带颜色的 Transparent BSDF,
+        拆开的混合(加色、预乘……)是透射加闭包,同理只能走 BLENDED。**判据只许在这里算一次**:早先渲染方式读 part 的 Transparent 声明、
+        alpha 读材质的 _SurfaceType,两套判据一分岔,_SurfaceType=1 却落在非透明 part 的件
+        (如 CharacterNPR 的半透明裙摆)就是连续 alpha 配抖动解法 = 噪点透明。
+
+        壳堆是这条规则的例外,而且是宿主能力差异不是参数选择:BLENDED 不写深度、不做逐片元
+        排序,几十层自我重叠的壳一旦绘制序翻转,合成就地变不透明 —— 渲染出来是一圈硬边亮楔子,
+        且对任何 fur 参数都不响应(实测 24 层壳逐一消融 _FurCutoffEnd/_FurEdgeFade/_UseBumpMap/
+        _FurNoise 全无变化,换成 DITHERED 当场干净);真源本身就是抖动裁切的 part 同理,它的 alpha 是覆盖率。
+        两者都按 part 自己的 StochasticAlpha 声明认。"""
+        if self.PART_META.get(part, {}).get('stochastic_alpha'):
+            return 'DITHERED'
+        return 'DITHERED' if (opaque and (blend is None or blend in OVER_BLENDS)) else 'BLENDED'
+
+    def _aim_active_texture(self, tree, images):
+        """激活贴图是不跑着色树时看这张材质的入口:Workbench 的 Texture 颜色读它,贴图绘制也落在它上面。基础色可能住在
+        ANCHOR_SLOTS 的任何一个槽,算数的是这张材质真绑了图的那个。模板里全是中性占位,拷过来的激活节点只知道槽序,
+        落在没绑图的槽上就是整片白。"""
+        for slot in self.ANCHOR_SLOTS:
+            if images.get(slot) is None:
+                continue
+            for node in tree.nodes:
+                if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == slot:
+                    if tree.nodes.active is not None:
+                        tree.nodes.active.select = False
+                    tree.nodes.active = node
+                    node.select = True
+                    return
+
+    def instantiate(self, name, part, images=None, opaque=True, blend=None, cull=2.0, shadow_cull=2.0):
+        """一张材质 = 模板拷贝 + 贴图指针 + 剔除值;参数由调用方写完记录后经 apply_params 写成常量。零建图。
+        灯上的那一格(主光身份、朝向)不在这里烙:新材质进场是派生态调度器的一件事实,那一批落地时刷一次。"""
+        tpl = self._template(part, opaque, blend)
+        # 模板是临时数据,拷出来的实例是文件里的材质:记录与编出来的树一并随文件存盘。
+        mat = _host().content(tpl.copy())
+        mat.name = name
+        self._set_cull(mat, cull, shadow_cull)
+        for key in (self.TEMPLATE_KEY, self.STAMP_KEY):
+            if key in mat:
+                del mat[key]
+        swapped = 0
+        if images and mat.node_tree is not None:
+            for nd in mat.node_tree.nodes:
+                if nd.type != 'TEX_IMAGE':
+                    continue
+                real = images.get(_slot_of(nd.label or ''))
+                if real is not None:
+                    _swap_image(nd, real, images)
+                    swapped += 1
+            self._aim_active_texture(mat.node_tree, images)
+        # 随绑定真图走的表列(模板按占位图建);漏了 ramp/LUT 的 UV 整体错位。
+        sizes = self._image_rows(part, images)
+        if sizes:
+            merged = _mixed(mat.get('ruri_uber_colors'))
+            merged.update(sizes)
+            mat['ruri_uber_colors'] = merged
+        # 基座骨播种。落在这里而不是 build_material:模板按 part 共享,基座骨是逐材质的自定义属性,
+        # 不是模板的一部分。
+        rig_prop = self.RIG.get('prop') or ''
+        if rig_prop and part in set(self.RIG.get('parts') or []):
+            mat[rig_prop] = self.RIG.get('bone') or ''
+        return mat, swapped
+
+    # ==================== provider ====================
+
+    # 材质记录:导入时从游戏材质写下,此后是这张材质输入的镜像(口与图一改就记回,见 sync_material_inputs)—— 换代与
+    # 图不完整时照它重编(见 _compile),别的应用(拉回贴图与参数的插件)读写的也是这一份。
+    RECORD_KEYS = ('ruri_uber_part', 'ruri_uber_images', 'ruri_uber_floats', 'ruri_uber_colors', 'ruri_uber_st',
+                   'ruri_uber_disabled_passes', 'ruri_uber_shader_passes', 'ruri_uber_shader_guid', 'ruri_uber_shader')
+    # 上一版产物写在实例上、如今不再由实例带着的键:照记录重编时不带过去。
+    SUPERSEDED_KEYS = ('ruri_uber_stamp', 'ruri_param_col', 'ruri_uber_signature', 'ruri_closure_engine',
+                       'ruri_main_light')
+
+    def _record_float(self, floats, source_name):
+        """记录里一条真源属性的值:记录按图的词汇存(见 _projected),真源 pass 的状态词与剔除开关说的是游戏词汇。"""
+        return floats.get(self.SOURCE_NAMES.get(source_name, source_name))
+
+    def _pass_word(self, word, floats, what, material):
+        """真源 pass 的一个状态词:定值原样,[属性] 取材质记录里的值。"""
+        kind, value = word
+        if kind == 'fixed':
+            return int(value)
+        stated = self._record_float(floats, value)
+        if stated is None:
+            raise RuntimeError('[ruri-uber] 材质 {0} 没有 {1}:真源 pass 的 {2} 取它的值'.format(
+                material, value, what))
+        return int(round(float(stated)))
+
+    def _record_blend(self, meta, floats, material):
+        """(源因子, 目标因子);part 没照抄真源的 Blend 行 = None(家族缺省)。"""
+        words = meta.get('blend')
+        if not words:
+            return None
+        return tuple(self._pass_word(word, floats, 'Blend', material) for word in words)
+
+    def _record_cull(self, meta, floats, material):
+        declared = meta.get('cull')
+        if declared:
+            return float(self._pass_word(declared, floats, 'Cull', material))
+        if self.CULL_TWO_SIDED:
+            switch = self.CULL_TWO_SIDED['property']
+            stated = self._record_float(floats, switch)
+            if stated is None:
+                raise RuntimeError('[ruri-uber] 材质 {0} 没有 {1}:本家族的剔除取这个双面开关'.format(
+                    material, switch))
+            return float(self.CULL_TWO_SIDED['on' if round(float(stated)) != 0 else 'off'])
+        if not self.CULL_PROPERTY:
+            return self.CULL_FIXED
+        value = self._record_float(floats, self.CULL_PROPERTY)
+        if value is None:
+            print('[ruri-uber] !! {0} 未声明 {1},按双面渲染'.format(
+                material, self.CULL_PROPERTY), flush=True)
+            return 0.0
+        return float(value)
+
+    def _record_shadow_cull(self, meta, floats, material):
+        """真源 ShadowCaster 趟的剔除;part 没照抄那一趟的 Cull 行 = 与上屏的趟同一份。"""
+        declared = meta.get('shadow_cull')
+        if declared:
+            return float(self._pass_word(declared, floats, 'ShadowCull', material))
+        return self._record_cull(meta, floats, material)
+
+    @staticmethod
+    def _shader_name(builder, props):
+        return builder.shader_display_name(props)
+
+    def _variant(self, builder, props):
+        """(part 名, part id);非本风格返回 None。认领判据 = m_Shader 身份,属性指纹判变体已废除禁回退。"""
+        name = self._shader_name(builder, props)
+        if name is None:
+            ref = props.shader_ref if isinstance(props.shader_ref, dict) else {}
+            print('[ruri-uber] !! 0DAY: material {0} 的 m_Shader {1}/{2} 解析不出自称名 —— 拒绝按指纹猜,交宿主兜底'
+                  .format(props.name, ref.get('guid'), ref.get('fileID')), flush=True)
+            return None
+        if name in self.NON_SHADING:
+            return NON_SHADING
+        fallback = None
+        for part, meta in self.PART_META.items():
+            if meta['shader'] != name and name not in meta['aliases']:
+                continue
+            disc = meta['discriminator']
+            if disc is None:
+                fallback = (part, meta['id'])
+            elif props.floats.get(disc):
+                return (part, meta['id'])
+        return fallback
+
+    def _load_images(self, builder, props):
+        images = {}
+        load = getattr(builder, self.host.get('load_image_fn', '_load_image'))
+        for name, guid in props.textures.items():
+            img = load(guid)
+            if img is None:
+                print('[ruri-uber] !! {0}: texture {1} guid={2} LOAD FAILED'.format(
+                    props.name, name, guid), flush=True)
+                continue
+            try:
+                if img.alpha_mode != 'CHANNEL_PACKED':
+                    img.alpha_mode = 'CHANNEL_PACKED'
+            except Exception:
+                pass
+            images[name] = img
+        return images
+
+    def _projected(self, table):
+        """把材质自述的一张表从游戏的词汇翻成本图的词汇。
+
+        两边天然同名的游戏没有对照表,这里是恒等、原样交回,一次拷贝都不做。有对照的只改名字、
+        值一个不动;没列进对照的名字原样留着 —— 图上没有它的口,本来就读不到,丢掉反而让面板上
+        「这张材质到底带了什么」少一截。同名相撞时声明过的那条赢:游戏拿同一个拼法装了别的东西
+        (鸣潮的材质里真有一条叫 _BumpMap 的槽,指的是特效流动图),让它压掉译过来的才是错的。"""
+        if not self.SOURCE_NAMES:
+            return table
+        renamed = {name: value for name, value in table.items() if name not in self.SOURCE_NAMES}
+        renamed.update({self.SOURCE_NAMES[name]: value for name, value in table.items()
+                        if name in self.SOURCE_NAMES})
+        return renamed
+
+    def _invisible(self, builder, props):
+        """真源里**不着色**的那几张 —— 反壳描边的壳、只写模板的代理、把面部阴影投到脖子上的
+        那张面片 —— 认领下来,交出一张完全透明的材质。
+
+        它们在游戏里靠一整套渲染状态存在,本身没有表面可画。以前这里返回 None(「不认领」),
+        于是它们掉回宿主的 Principled，变成一块**不透明的灰**；而这些代理面片就贴在角色身上，
+        脸前面那张把整张脸盖没了（实测莫宁的 Face_FS 就是这样）。「认得出」和「画成灰块」
+        是两回事：认得出就得负责说它不可见。"""
+        name = props.name or self.MATERIAL_NAME
+        mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+        mat.use_nodes = True
+        tree = mat.node_tree
+        tree.nodes.clear()
+        output = tree.nodes.new('ShaderNodeOutputMaterial')
+        clear = tree.nodes.new('ShaderNodeBsdfTransparent')
+        tree.links.new(clear.outputs[0], output.inputs['Surface'])
+        _frame_generated(tree)
+        try:
+            mat.surface_render_method = 'BLENDED'
+        except (AttributeError, TypeError):
+            pass
+        mat.use_backface_culling = False
+        mat['ruri_uber_stack'] = self.PANEL_KEY
+        mat['ruri_uber_part'] = ''
+        mat['ruri_uber_shader'] = self._shader_name(builder, props) or ''
+        print('[ruri-uber] {0} 用 {1}(非着色代理),按不可见认领'.format(
+            name, mat['ruri_uber_shader']), flush=True)
+        return mat
+
+    def provider(self, builder, props):
+        resolved = self._variant(builder, props)
+        if resolved is NON_SHADING:
+            return self._invisible(builder, props)
+        if resolved is None:
+            return None
+        part_name, _part_id = resolved
+        name = props.name or self.MATERIAL_NAME
+        # 认领(_variant)读的是材质**自己**的事实,所以吃原样的 props;从这里往下都是记录,一律先翻成图的词汇。
+        images = self._projected(self._load_images(builder, props))
+        floats = dict(self._projected(props.floats))
+        # 材质关键字只认材质自己的关键字表:引擎按它选变体,检视面开关与它可以不一致。
+        stated_keywords = set(getattr(props, 'keywords', ()) or ())
+        for keyword in self.m.get('material_keywords') or ():
+            floats[keyword] = 1.0 if keyword in stated_keywords else 0.0
+        # 家族声明透明的 part 在记录里就记成透明:_SurfaceType == 1 才吃 alpha(gBuffer0.w 是 materialFlags
+        # 不是不透明度,接错皮肤隐形)。
+        if self.PART_META[part_name]['transparent']:
+            floats['_SurfaceType'] = 1.0
+        ref = props.shader_ref
+        record = {
+            'ruri_uber_part': part_name,
+            'ruri_uber_images': dict(images),
+            'ruri_uber_floats': {key: float(value) for key, value in floats.items()},
+            'ruri_uber_colors': {key: [float(x) for x in value] for key, value in self._projected(props.colors).items()},
+            'ruri_uber_st': {key: [float(x) for x in value] for key, value in self._projected(props.texture_st).items()},
+            'ruri_uber_disabled_passes': list(getattr(props, 'disabled_passes', ())),
+            # 这张材质的 shader 画哪几趟:引擎按 LightMode 标签认一趟(无标签的认 Name),材质按同一个词关它。
+            'ruri_uber_shader_passes': [str(light_mode or pass_name)
+                                        for pass_name, light_mode in getattr(props, 'shader_passes', ())],
+            'ruri_uber_shader_guid': str(ref.get('guid', '')) if isinstance(ref, dict) else '',
+            'ruri_uber_shader': self._shader_name(builder, props) or '',
+        }
+        resident = self._resident_material(props, record)
+        if resident is not None:
+            return resident
+        mat = self._compile(name, record)
+        # 同名旧材质只改名让位,不删:宿主缓存攥着数据块,删了 = 悬垂指针 ReferenceError。
+        stale = bpy.data.materials.get(name)
+        if stale is not None and stale is not mat:
+            stale.name = name + '.old'
+            mat.name = name
+        return mat
+
+    def _resident_material(self, props, record):
+        """文件里已经有的这张材质:宿主烙着同一来源键、本栈这一代编的完整图、记录与这次陈述出的逐格相等(随绑定真图走的
+        颜色行只比陈述里有的那几列)。真源里一份材质资产不论被多少预制体引用都只有一份,文件的每一次导入都是其中一次引用;
+        记录不等(口被拧过、游戏换了版本)或别代编的都不是它,照常新编,同名的让位。"""
+        key = str(getattr(props, 'key', '') or '')
+        if not key:
+            return None
+        colors = record['ruri_uber_colors']
+        for mat in bpy.data.materials:
+            if mat.library is not None or mat.get(_host().SOURCE_KEY_PROPERTY) != key or self._own_compiled(mat) is None:
+                continue
+            held = _plain(mat.get('ruri_uber_colors')) or {}
+            if any(_plain(mat.get(field)) != value for field, value in record.items() if field != 'ruri_uber_colors'):
+                continue
+            if all(held.get(name) == value for name, value in colors.items()):
+                return mat
+        return None
+
+    def _compile(self, name, record):
+        """一张材质按它的记录编出来:模板拷贝 + 贴图 + 参数常量。导入、append 进来还没有图的材质、换代走同一条。
+        编出来的图连同它指着的模板组随文件存盘,口上的值就是用户拧的那一份 —— 记录是口的镜像:换代时先把口上的值记回
+        记录(settle_inputs),新一代照记录编出来,口上的值按参数名原样留下。混合、透明形态与剔除面都由记录里的材质值
+        加当前产物的声明现算,不另记。"""
+        part = record['ruri_uber_part']
+        meta = self.PART_META[part]
+        floats = dict(record['ruri_uber_floats'])
+        images = {}
+        for slot, image in record['ruri_uber_images'].items():
+            # 记录里的图是图本身:记录是内容,它就是图的用户,存盘才把只有记录认得、这一形态又不采的图带上。
+            if not isinstance(image, bpy.types.Image):
+                raise RuntimeError('[ruri-uber] 材质 {0} 的记录在槽 {1} 绑的不是一张图({2}):图被删了,或是按名字记图的'
+                                   '旧记录 —— 重新导入它'.format(name, slot, image))
+            images[slot] = image
+        blend = self._record_blend(meta, floats, name)
+        if blend is None:
+            opaque = floats.get('_SurfaceType', 0.0) < 0.5 and not meta['transparent']
+        else:
+            opaque = blend == (BLEND_ONE, BLEND_ZERO)
+        mat, swapped = self.instantiate(name, part, images=images, opaque=opaque, blend=blend,
+                                        cull=self._record_cull(meta, floats, name),
+                                        shadow_cull=self._record_shadow_cull(meta, floats, name))
+        bst = record['ruri_uber_st'].get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
+        for node in mat.node_tree.nodes:
+            if node.label == self.ST_NODE:
+                # 先比后写:多数材质就是模板那份单位变换,白写一次宿主就把整棵树重算一遍。
+                scale = (float(bst[0]), float(bst[1]), 1.0)
+                location = (float(bst[2]), float(bst[3]), 0.0)
+                if tuple(node.inputs['Scale'].default_value) != scale:
+                    node.inputs['Scale'].default_value = scale
+                if tuple(node.inputs['Location'].default_value) != location:
+                    node.inputs['Location'].default_value = location
+        # 颜色行照记录,随绑定真图走的表列也一样(记录是口的镜像,口上的值只认口自己);记录里没有的那几列(导入那一刻,
+        # 或新一代多读了一列)才按这次绑上的图算(instantiate),换图时它们跟着新图重算(panel_write_image)。
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        colors.update({key: [float(x) for x in value] for key, value in _mixed(record['ruri_uber_colors']).items()})
+        for key, value in record.items():
+            mat[key] = value
+        mat['ruri_uber_colors'] = colors
+        self._declare_shading(mat)
+        self._declare_shadow_pass(mat)
+        self._declare_camera_pass(mat)
+        self.apply_params(mat)
+        print('[ruri-uber] {0}: shader={1} part={2} images={3}'.format(
+            name, record['ruri_uber_shader'], part, swapped), flush=True)
+        return mat
+
+    def _compiled(self, mat):
+        """这张材质的图是完整的:树里有本栈建的组实例(指着带 stamp 的模板组),且没有一个组节点是空的(模板组被删了、
+        或这份文件是没把组存进去的版本存的,组节点没有树、一个口都不剩)。用户自己拖进来的组不带 stamp,不算数也不挡。
+        不完整的照记录编;完整的原样用,不论它是哪一代 —— 换代是显式的更新。"""
+        tree = mat.node_tree
+        if tree is None:
+            return False
+        generated = False
+        for node in tree.nodes:
+            if node.bl_idname != 'ShaderNodeGroup':
+                continue
+            if node.node_tree is None:
+                return False
+            generated = generated or node.node_tree.get('ruri_stamp') is not None
+        return generated
+
+    def recompile(self, mat):
+        """照记录重编一张材质:新编一张,把别处写在旧材质上的内容(基座骨名、来源键……)与它和它的图上的动画(_carry_animation)
+        带过去;调用方拿新的整批顶替旧的。记录缺格 = 不是生成栈写下的材质,响亮拒绝,不猜。link 进来的材质编的是本会话的替身,
+        它的动画是库里的,不搬。"""
+        missing = [key for key in self.RECORD_KEYS if key not in mat]
+        if missing:
+            raise RuntimeError('[ruri-uber] 材质 {0} 的记录缺 {1}:重新导入它'.format(mat.name, missing))
+        record = {key: _plain(mat[key]) for key in self.RECORD_KEYS}
+        if mat.library is None:
+            _refuse_nla([mat])
+        new = self._compile(mat.name, record)
+        compiled = set(self.RECORD_KEYS) | set(self.SUPERSEDED_KEYS) | {
+            'ruri_uber_stack', self.BLEND_KEY, self.SHADING_KEY}
+        for key in mat.keys():
+            if key not in compiled:
+                new[key] = _plain(mat[key])
+        if mat.library is None:
+            _carry_animation(mat, new)
+        return new
+
+    def compile_all(self):
+        """宿主 load pass(开文件、着色栈刚载入、有材质从别的文件 append 进来):本栈认领、图还不完整的每张材质照记录
+        重编,新编的顶替旧的(旧的全部用户换到新的上),旧的删掉、名字还给新的。图完整的材质(存盘时连组一起存下的)
+        一张不碰 —— 口上的值就是文件里的值。link 进来的材质记录是库文件的内容、本文件从不写它:库里存的图是完整的就直接
+        用;库是没把组存进去的版本存的,就照它的记录编成本会话的替身(临时数据,不落盘),用户交宿主指到替身上,存盘时
+        宿主让文件照旧指着库里那张。返回新编的材质。"""
+        claimed = [mat for mat in bpy.data.materials
+                   if mat.get('ruri_uber_stack') == self.PANEL_KEY and mat.get('ruri_uber_part')
+                   and mat.get(self.TEMPLATE_KEY) is None]
+        pending = [mat for mat in claimed if mat.library is None and not self._compiled(mat)]
+        linked = [mat for mat in claimed if mat.library is not None and not self._compiled(mat)
+                  and not _host().twinned(mat)]
+        if not pending and not linked:
+            return []
+        # 旧材质的死树不在这里清空:清空会给它打依赖图更新标记,紧接着整批删掉,下一拍的依赖图更新里就留着一个
+        # 原件已释放的条目,读它 .original 的处理器当场崩(实测)。
+        replaced = {}
+        twins = []
+        failed = []
+        self._probes = []
+        try:
+            for mat in pending:
+                try:
+                    new = self.recompile(mat)
+                except Exception as exc:
+                    failed.append('{0}: {1}'.format(mat.name, exc))
+                    continue
+                # 编好一张换一张:这一刻文件里的大树只有已经编好的那些,换用户那一遍走得最短。
+                mat.user_remap(new)
+                replaced[mat] = new
+            for mat in linked:
+                try:
+                    twin = _host().scratch(self.recompile(mat))
+                except Exception as exc:
+                    failed.append('{0}: {1}'.format(mat.name_full, exc))
+                    continue
+                twins.append((mat, twin))
+        finally:
+            probes, self._probes = self._probes, None
+        _retire_materials(replaced, probes)
+        _drop_displaced()
+        alive = {material.session_uid for material in bpy.data.materials}
+        for retired in [key for key in self._mirrors if key not in alive]:
+            del self._mirrors[retired]
+        _host().adopt_twins(twins)
+        if twins:
+            print('[ruri-uber] {0} 张 link 进来的材质照库里的记录编成替身(临时数据,不落盘)'.format(len(twins)), flush=True)
+        if failed:
+            raise RuntimeError('[ruri-uber] {0} 张材质照记录编不出来:{1}'.format(len(failed), failed))
+        return list(replaced.values()) + [twin for _mat, twin in twins]
+
+    @staticmethod
+    def _scene_reads(spec):
+        """部件的兑现面按场景里的哪几样内容建答案:读世界内容的能力读 world,按文件里的灯带不带某一格属性答常量的读 lights。
+        两样都不读的部件,场景状态怎么变这张材质一个节点都不用碰。"""
+        rows = list(spec['capabilities'])
+        for zone in spec['zones']:
+            rows.extend(zone['capabilities'])
+        reads = set()
+        for row in rows:
+            if row['cap'] in WORLD_READING_CAPS:
+                reads.add('world')
+            if row['cap'] in LIGHT_STATE_READING_CAPS:
+                reads.add('lights')
+        return frozenset(reads)
+
+    def _generations(self, mat):
+        """这张材质的图由哪几代编出来:树里本栈组实例指着的模板组上烙的 stamp。"""
+        return {node.node_tree.get('ruri_stamp') for node in mat.node_tree.nodes
+                if node.bl_idname == 'ShaderNodeGroup' and node.node_tree is not None
+                and node.node_tree.get('ruri_stamp') is not None}
+
+    def _own_compiled(self, mat):
+        """本栈这一代编出的完整材质的部件名,别的一律 None。能力表(割点、询问口、结果叶)是这一代的,只对这一代的图成立;
+        别代的图照它那一代的答案画,换代是显式的更新,所以这里认出来就大声记一笔(每个文件每代一次),不拿这一代的表去套。"""
+        part = mat.get('ruri_uber_part')
+        if part is None or part not in self.m['parts'] or mat.node_tree is None:
+            return None
+        if mat.get('ruri_uber_stack') != self.PANEL_KEY:
+            return None
+        if not self._compiled(mat):
+            return None
+        generations = self._generations(mat)
+        if generations != {self.STAMP}:
+            seen = (mat.library.filepath if mat.library is not None else '', tuple(sorted(generations)))
+            if seen not in _OTHER_GENERATIONS:
+                _OTHER_GENERATIONS.add(seen)
+                print('[ruri-cap] {0}的材质是别代编的(stamp {1},本代 {2}),如 {3}:照它那一代的答案画、不重接;'
+                      '更新那份文件的着色器后才按当下场景重接'.format(
+                          seen[0] or '本文件', '/'.join(seen[1]), self.STAMP, mat.name), flush=True)
+            return None
+        return part
+
+    def capability_reads(self, mat):
+        """宿主问这张材质的兑现面读场景里的哪几样(world、lights):宿主只拿这几样的摘要判它过没过期。不是本栈这一代编的
+        完整材质答 None,宿主按全部几样判。"""
+        part = self._own_compiled(mat)
+        if part is None:
+            return None
+        return self._scene_reads(self.part(part))
+
+    def rewire_capabilities(self, mat):
+        """重接兑现面(换世界、灯带的参数种类变了之后):只回收 ruri_cap 标记的节点,图本体与参数一概不碰。部件的答案不读
+        场景状态就没有可重接的;读哪几样宿主照 capability_reads 只比那几样,所以工程用自己的世界链接别的文件的关卡时,
+        只读灯带的关卡材质开文件不重接。只重接本栈这一代编的图(见 _own_compiled)。"""
+        part = self._own_compiled(mat)
+        if part is None:
+            # 兑现面是编出来的图的一部分:图还不完整的材质(模板组没存进文件)没有可重接的,编它时按当下的场景接。
+            return False
+        spec = self.part(part)
+        if not self._scene_reads(spec):
+            return False
+        nt = mat.node_tree
+        # 重接期间把出口摘下来,收尾再接回:宿主的灯链接校验在每次改链时跑,并且用上一次的判定
+        # 决定这次遍历走哪些链接;闭包还没重建时灯节点经 alpha 够得到出口却够不到 Light Accumulation,
+        # 那一拍判非法后会一直留在树里(codegen 对非法入链的节点 need_exec=0,材质丢主光)。
+        # 出口不接,途中没有任何东西够得到出口,收尾那一次校验与建图时完全一样。
+        output = next((n for n in nt.nodes if n.bl_idname == 'ShaderNodeOutputMaterial'), None)
+        surface_from = None
+        if output is not None and output.inputs['Surface'].is_linked:
+            surface_from = output.inputs['Surface'].links[0].from_socket
+            nt.links.remove(output.inputs['Surface'].links[0])
+        for stale in [n for n in nt.nodes if n.get('ruri_cap') is not None]:
+            nt.nodes.remove(stale)
+        ordered = sorted((n for n in nt.nodes if n.get('ruri_inst') is not None),
+                         key=lambda n: int(n['ruri_inst']))
+        if not ordered:
+            raise RuntimeError('[ruri-cap] 材质 {0} 无实例序标记(旧产物),请重新导入'.format(mat.name))
+        g = G(nt, is_group=False)
+        ctx = {'material': mat}
+        for row in spec['capabilities']:
+            self._wire_capability(g, ordered, row, ctx)
+        # 体内割点(灯住这儿):按 (zone, 序) 找回体实例链再接,漏掉 = 循环里的兑现面永不回来。
+        for zone in spec['zones']:
+            if not zone['capabilities']:
+                continue
+            binsts = sorted((n for n in nt.nodes if n.get('ruri_zone') == zone['sock']),
+                            key=lambda n: int(n['ruri_binst']))
+            if not binsts:
+                raise RuntimeError('[ruri-cap] 材质 {0} 的循环 {1} 无体实例标记,请重新导入'.format(
+                    mat.name, zone['sock']))
+            for row in zone['capabilities']:
+                self._wire_capability(g, binsts, row, ctx)
+        # 乘法帧没有闭包(出口就是一枚带颜色的 Transparent BSDF,见 build_material),没什么可重接的。
+        if self._stored_blend(mat) not in MULTIPLY_BLENDS:
+            seat = next((n for n in nt.nodes if n.label == self.SURFACE_MIX_LABEL), None)
+            coverage = next((n for n in nt.nodes if n.label == self.SURFACE_COVERAGE_LABEL), None)
+            if seat is None or seat.get(self.CLOSURE_SEAT_KEY) is None or coverage is None:
+                raise RuntimeError('[ruri-cap] 材质 {0} 无表面混合/覆盖率标记(旧产物),请重新导入'.format(mat.name))
+            g._set(seat.inputs[int(seat[self.CLOSURE_SEAT_KEY])], self._wire_closure(
+                g, mat, ordered, spec['finals'], self._final_socket(ordered, spec['finals'], 'ret_gBuffer0_w'),
+                coverage.outputs[0]))
+        if surface_from is not None:
+            nt.links.new(surface_from, output.inputs['Surface'])
+        g.layout()
+        self._require_budget(mat)
+        # 纯数据写不触发依赖图,必须自己打脏标记,否则 EEVEE 继续用旧编译结果。
+        nt.update_tag()
+        mat.update_tag()
+        return True
+
+    # ==================== 顶点腿(几何节点) ====================
+
+    def _material_images(self, mat):
+        """顶点树换图真源:①记录里的全量图(含只有顶点腿消费的槽);②材质树兜底。"""
+        images = {}
+        for slot, img in dict(mat.get('ruri_uber_images') or {}).items():
+            if img is not None:
+                images[slot] = img
+
+        def walk(tree, depth=0):
+            if depth > 4 or tree is None:
+                return
+            for nd in tree.nodes:
+                if nd.type == 'TEX_IMAGE' and nd.image is not None:
+                    images.setdefault(_slot_of(nd.label or nd.name or nd.image.name), nd.image)
+                elif nd.type == 'GROUP':
+                    walk(nd.node_tree, depth + 1)
+        if mat.node_tree is not None:
+            walk(mat.node_tree)
+        return images
+
+    @staticmethod
+    def _mat_meta(mat):
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        st = _mixed(mat.get('ruri_uber_st'))
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        return floats, st, colors
+
+    def _fill_uniform_sockets(self, node, floats, st, colors):
+        """raw 直灌顶点组实例:socket 名 = 游戏属性名(V4 = vec+_w 对)。
+        sRGB 属性在这里也补线性化 —— 顶点腿与片元腿读的是同一个 uniform,两条腿不许各说各话。"""
+
+        def cvt(name, value):
+            return _srgb_to_linear(value) if name in self.SRGB_PARAMS else float(value)
+
+        for sock in node.inputs:
+            name = sock.name
+            if name.endswith('_w'):
+                base = name[:-2]
+                if base.endswith('_ST') and base[:-3] in st:
+                    sock.default_value = float(st[base[:-3]][3])
+                elif base in colors:
+                    sock.default_value = float(colors[base][3])
+                continue
+            if name.endswith('_ST') and name[:-3] in st:
+                v = st[name[:-3]]
+                sock.default_value = (float(v[0]), float(v[1]), float(v[2]))
+            elif name in colors:
+                v = colors[name]
+                sock.default_value = (cvt(name, v[0]), cvt(name, v[1]), cvt(name, v[2]))
+            elif name in floats:
+                try:
+                    sock.default_value = cvt(name, floats[name])
+                except (TypeError, ValueError):
+                    pass
+
+    def _rig_basis_armature(self, obj):
+        if not self.RIG.get('bone'):
+            return None
+        arm = next((m.object for m in obj.modifiers
+                    if m.type == 'ARMATURE' and m.object is not None), None)
+        if arm is None and obj.parent is not None and obj.parent.type == 'ARMATURE':
+            arm = obj.parent
+        return arm
+
+    def rig_bone_of(self, mat):
+        """这张材质的基座骨,说的是 **Unity 骨名**。运行期唯一真源 = 材质自己的键
+        (instantiate 按清单播种,面板改的也是它);清单值只是种子,不在这里当兜底读。"""
+        return str(mat.get(self.RIG.get('prop') or '') or '')
+
+    def _rig_identity_api(self, key):
+        """宿主那份骨骼身份 API(None = 配方没声明)。身份编码只有宿主一个读者,
+        生成物经这一个口子问它,不自己再解一遍那份编码。"""
+        module = self.host.get('rig_identity_module') or ''
+        fn = self.host.get(key) or ''
+        if not module or not fn:
+            return None
+        return getattr(_import_host(module), fn)
+
+    def rig_resolve_bone(self, arm, unity_name):
+        """Unity 骨名 → 本 rig 当下的 Blender 骨名('' = 这副骨架没有这根)。
+        身份烙在骨上、改名碰不到,所以这条翻译在改过名的 rig 上照样成立。"""
+        api = self._rig_identity_api('rig_bone_fn')
+        if api is None or arm is None or not unity_name:
+            return ''
+        return api(arm, unity_name) or ''
+
+    def rig_apply(self, mat, arm, obj):
+        """基座接到材质:三列读**对象自定义属性**,由 push_rig_basis 每帧写。
+
+        为什么不是驱动器:驱动器写 shader socket = 每帧弄脏整棵材质树,实测视口
+        **468.7ms/帧(2.1fps) vs 52.7ms(19fps),8.89 倍**。对象自定义属性走逐对象 UBO,
+        不碰材质树,实测与静态基线同档(0.80x)。这与「handler 推 socket 不行」是同一条纪律。
+        为什么不是几何点属性:那会把 uniform 塞进几何管线,描边一关基座就跟着没(本次根因)。
+        接不上就说出来,socket 留在组缺省 = 单位阵。"""
+        tree = mat.node_tree
+        if tree is None:
+            return False
+        instances = [grp for grp in self._panel_insts(mat)
+                     if grp.inputs.get(RIG_BASIS_SOCKETS[0]) is not None]
+        if not instances:
+            return False
+        unity_bone = self.rig_bone_of(mat)
+        bone_name = self.rig_resolve_bone(arm, unity_bone)
+        if arm is None or not bone_name:
+            print('[ruri-rig] !! {0}: 基座接不上(骨架={1} 记的骨={2} 解析={3})—— 留在绑定姿势'
+                  .format(mat.name, getattr(arm, 'name', None), unity_bone or '(空)',
+                          bone_name or '(这副骨架没有)'), flush=True)
+            return False
+        self._rig_clear(mat)
+        g = G(tree, is_group=False)
+        for index in range(3):
+            node = g._nd('ShaderNodeAttribute')
+            node.attribute_type = 'OBJECT'
+            node.attribute_name = '["{0}{1}"]'.format(RIG_OBJECT_PROP, index)
+            node.label = RIG_ATTR_LABEL + str(index)
+            for grp in instances:
+                sock = grp.inputs.get(RIG_BASIS_SOCKETS[index])
+                if sock is not None:
+                    tree.links.new(node.outputs['Vector'], sock)
+        _frame_generated(tree)
+        RIG_DRIVEN[obj.name] = (arm.name, bone_name)
+        return True
+
+    def _rig_clear(self, mat):
+        """幂等:本桥在这张材质上留下的一切先撤干净再接。
+
+        判据放宽到 `RuriRig` 前缀(不只当前那批标签):这座桥换过送值通道,旧通道留下的
+        节点与**挂在它们 socket 上的驱动器**必须一起走 —— 驱动器是每帧弄脏材质树的那个
+        8.89 倍,漏掉一张材质就等于漏掉整帧。删节点会连带删掉它 socket 上的驱动器。动画数据块里只剩空壳才收:
+        动作(口上打的关键帧)、别的驱动、NLA 轨道都不是这座桥的。"""
+        tree = mat.node_tree
+        for node in [n for n in tree.nodes if (n.label or '').startswith('RuriRig')]:
+            tree.nodes.remove(node)
+        animation = tree.animation_data
+        if animation is not None and animation.action is None and not len(animation.drivers) \
+                and not len(animation.nla_tracks):
+            tree.animation_data_clear()
+
+    def rig_rescan(self):
+        """重建 push 工作单。**重开文件后它是空的** —— 工作单是进程态,而 .blend 里
+        只存着上次写下的属性值;没人重建就等于基座冻结在存盘那一刻(静默)。
+        所以 load_post 必须叫一次,判据从场上的材质真值现算,不依赖任何记忆。"""
+        rig_parts = set(self.RIG.get('parts') or [])
+        if not rig_parts:
+            return 0
+        found = 0
+        for obj in bpy.context.scene.objects:
+            if obj.type != 'MESH' or obj.data is None:
+                continue
+            mats = [slot.material for slot in obj.material_slots
+                    if slot.material is not None and slot.material.get('ruri_uber_stack') == self.PANEL_KEY
+                    and slot.material.get('ruri_uber_part') in rig_parts]
+            if not mats:
+                continue
+            arm = self._rig_basis_armature(obj)
+            bone_name = self.rig_resolve_bone(arm, self.rig_bone_of(mats[0]))
+            if arm is not None and bone_name:
+                RIG_DRIVEN[obj.name] = (arm.name, bone_name)
+                RIG_SCANNED[0] = True
+                found += 1
+        return found
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def push_rig_basis(*_args):
+        """把基座骨的世界增量 W = A·Pose·Rest⁻¹·A⁻¹(A = 骨架世界矩阵)的三列写到对象上。**逐对象 UBO,不碰材质树**。
+
+        值没变就不写 —— 写属性会给对象打脏标记,在 depsgraph handler 里无条件写会自激。
+        列在真源世界系里(声明的世界基 B:宿主 = B·真源,真源增量 = Bᵀ·W·B),与 UNITY_MATRIX_M 的列语义同源。
+        增量必须先在世界系里取再换轴:在骨架空间里取、按固定轴序换,只在骨架恰好保持导入那一转偏航时成立,
+        骨架在场景里转了向,头的俯仰与侧倾就被换到别的轴上。"""
+        import mathutils
+        if not RIG_SCANNED[0]:
+            RIG_SCANNED[0] = True
+            for stack in STACKS:
+                if stack.post is None and (stack.RIG.get('parts') or []):
+                    stack.rig_rescan()
+        if not RIG_DRIVEN:
+            return
+        # 🔴 姿势解算的结果住在**求值副本**上;原始数据块的 pose_bone.matrix 只有在有人
+        # 调过 view_layer.update() 之后才被刷回。在 depsgraph handler 里读原始副本 =
+        # 读到上一次的姿势 ⇒ 载入时看着对(那一拍刚好是文件里的姿势),交互拖骨之后
+        # 基座就再也不动 —— 表现成"坐标系不实时更新"。所以这里必须走 depsgraph。
+        depsgraph = next((a for a in _args if isinstance(a, bpy.types.Depsgraph)), None)
+        if depsgraph is None:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+        basis = mathutils.Matrix(_world_basis())
+        for obj_name, (arm_name, bone_name) in list(RIG_DRIVEN.items()):
+            obj = bpy.data.objects.get(obj_name)
+            arm = bpy.data.objects.get(arm_name)
+            if obj is None or arm is None:
+                RIG_DRIVEN.pop(obj_name, None)
+                continue
+            evaluated_armature = arm.evaluated_get(depsgraph)
+            pose = evaluated_armature.pose.bones.get(bone_name)
+            if pose is None:
+                continue
+            armature_world = evaluated_armature.matrix_world.to_3x3()
+            delta = (armature_world @ pose.matrix.to_3x3() @ pose.bone.matrix_local.to_3x3().inverted()
+                     @ armature_world.inverted())
+            rotation = basis.transposed() @ delta @ basis
+            # 🔴 着色器读的是**求值副本**上的属性。本 handler 跑在 depsgraph_update_post,
+            # 那一拍的求值副本已经建好了 —— 只写原始副本 = 画面永远慢一拍;而"值没变就不写"
+            # 的守卫又让它不再重新打脏标记,于是**永远追不上**(实测求值副本差到 1.99)。
+            # 所以本帧绘制读哪份就写哪份:求值副本每次都写,原始副本只在变了时写(它是
+            # 存盘种子,也是下一次求值的来源;无条件写会打脏标记自激)。
+            evaluated_object = obj.evaluated_get(depsgraph)
+            for index in range(3):
+                value = tuple(rotation.col[index].normalized())
+                key = RIG_OBJECT_PROP + str(index)
+                try:
+                    evaluated_object[key] = value
+                except Exception:
+                    pass
+                previous = obj.get(key)
+                if previous is None or max(abs(previous[k] - value[k]) for k in range(3)) > 1e-6:
+                    obj[key] = value
+
+    # socket 数据类型 → 组接口 socket 类型(Blender 的类型对照,不是内容词汇)
+    VTX_INTERFACE_SOCKET = {'VALUE': 'NodeSocketFloat', 'INT': 'NodeSocketInt',
+                            'BOOLEAN': 'NodeSocketBool', 'VECTOR': 'NodeSocketVector',
+                            'RGBA': 'NodeSocketColor', 'IMAGE': 'NodeSocketImage'}
+
+    @staticmethod
+    def _vtx_same(a, b):
+        """两个 socket 值等不等。数据块比身份,数比值 —— 只有它说「不等」才算用户动过。"""
+        if isinstance(a, bpy.types.ID) or isinstance(b, bpy.types.ID) or a is None or b is None:
+            return a is b
+        if hasattr(a, '__len__') != hasattr(b, '__len__'):
+            return False
+        if hasattr(a, '__len__'):
+            va, vb = list(a), list(b)
+            return len(va) == len(vb) and all(abs(float(x) - float(y)) <= 1e-6
+                                              for x, y in zip(va, vb))
+        return abs(float(a) - float(b)) <= 1e-6
+
+    def _vtx_knob_rows(self):
+        """顶点腿上哪些 socket 是旋钮:问参数面。它是「能拧什么」的唯一声明(生成自
+        [ShaderProperty]),顶点腿不过是同一批 uniform 的另一条消费腿,不在宿主侧另立名单。
+        贴图行按它的 _ST 认;余下的(varying / 视图基轴 / 屏幕尺寸 / 管线常量)不是旋钮。"""
+        rows = {}
+        for row in self._panel_rows():
+            rows[row['name']] = row
+            if row['kind'] == 'TEXTURE':
+                rows[row['name'] + '_ST'] = row
+        return rows
+
+    def _vtx_expected(self, mat, template_name, name, images=None):
+        """这一格「材质当下说的值」。**材质快照是唯一真源**:片元腿、顶点腿、修改器面板
+        三个消费面都从它派生,所以播种与「用户动过没有」的判据共用这一个函数,不可能各说各话。
+        快照没声明的落模板接口缺省(codegen 定的那个;贴图槽即中性占位图)。"""
+        floats, st, colors = self._mat_meta(mat)
+        if name.endswith('_ST') or name.endswith('_ST_w'):
+            tail = name.endswith('_ST_w')
+            value = st.get(name[:-5] if tail else name[:-3])
+            if value is not None:
+                return float(value[3]) if tail else (float(value[0]), float(value[1]), float(value[2]))
+        elif name.endswith('_w'):
+            value = colors.get(name[:-2])
+            if value is not None:
+                return float(value[3])
+        elif name in colors:
+            srgb = name in self.SRGB_PARAMS
+            return tuple(_srgb_to_linear(v) if srgb else float(v) for v in list(colors[name])[0:3])
+        elif name in floats:
+            value = float(floats[name])
+            return _srgb_to_linear(value) if name in self.SRGB_PARAMS else value
+        else:
+            image = (self._material_images(mat) if images is None else images).get(name)
+            if image is not None:
+                return image
+        return self._vtx_template_default(template_name, name)
+
+    def _vtx_template_default(self, template_name, name):
+        """模板接口上那一格的缺省 —— codegen 说了算的那个值。读文件里这棵树实例化的那张模板组:判断已有的树被拧过
+        没有,参照只能是播种它的那一代;建树取组那条路(self.group)会整套 append、也拒绝别代的文件,判据用不上它。"""
+        if not template_name:
+            return None
+        for item in _local_group(template_name).interface.items_tree:
+            if item.item_type != 'PANEL' and item.in_out == 'INPUT' and item.name == name:
+                value = getattr(item, 'default_value', None)
+                return tuple(value) if hasattr(value, '__len__') and not isinstance(value, str) else value
+        return None
+
+    @staticmethod
+    def _vtx_own_samplers(node, images):
+        """顶点模板里「贴图自带采样器」那几个槽的逐实例口:按这一格绑定的图自己陈述的寻址与过滤灌
+        (模板共享,状态随图走,见物化脚本 own_sampler_fetch)。images 没提到的槽不动;提到而为 None
+        (清空回落中性占位)= 占位图自己的状态。"""
+        for sock in node.inputs:
+            for axis, suffix in enumerate(OWN_SAMPLER_SOCKETS):
+                if not sock.name.endswith(suffix) or sock.name[:-len(suffix)] not in images:
+                    continue
+                wrap_u, wrap_v, point = _own_sampler_state(images[sock.name[:-len(suffix)]])
+                value = (OWN_SAMPLER_WRAPS.index(wrap_u), OWN_SAMPLER_WRAPS.index(wrap_v), int(point))[axis]
+                if sock.default_value != value:
+                    sock.default_value = value
+
+    def _vtx_expose(self, tree, group_input, node, mat, knobs, panels, template_name, state,
+                    images):
+        """把这个组实例上的材质旋钮抬到**修改器接口**,一材质一段。
+
+        为什么不能就留在组实例的 socket 缺省上:这棵树是幂等换血重建的(相机一动、对象一进场
+        都会重建,见 derived_state 的 vertex 级),在节点编辑器里拧的值下一拍就没。
+        抬到接口后值住在修改器实例上;而**值本身仍然只有材质一处真源** —— 播种从材质来,
+        在面板上拧动由 sync_vertex_knobs 写回材质,两个方向都过 panel_write*。"""
+        for sock in node.inputs:
+            if sock.is_linked:
+                continue
+            socket_type = self.VTX_INTERFACE_SOCKET.get(sock.type)
+            row = knobs.get(sock.name[:-2] if sock.name.endswith('_w') else sock.name)
+            if socket_type is None or row is None:
+                continue
+            panel = panels.get(mat.name)
+            if panel is None:
+                panel = tree.interface.new_panel(mat.name)
+                panels[mat.name] = panel
+            item = tree.interface.new_socket(name=sock.name, in_out='INPUT',
+                                             socket_type=socket_type, parent=panel)
+            item.description = row['label']
+            if row['kind'] == 'SLIDER' and sock.type == 'VALUE' and not sock.name.endswith('_w'):
+                item.min_value = float(row['min'])
+                item.max_value = float(row['max'])
+            value = self._vtx_expected(mat, template_name, sock.name, images)
+            try:
+                item.default_value = value
+            except (TypeError, ValueError):
+                pass
+            key = mat.name + '|' + sock.name
+            state['keys'][item.identifier] = key
+            state['templates'][item.identifier] = template_name
+            state['values'][item.identifier] = value
+            wire = next((o for o in group_input.outputs if o.identifier == item.identifier), None)
+            if wire is not None:
+                tree.links.new(wire, sock)
+
+    def _outline_switch_of(self, part):
+        return str(self.PART_META.get(part, {}).get('outline_switch') or '')
+
+    def _vtx_switch(self, tree, group_input, mat, name, enabled, panels, state):
+        """描边壳在这个材质这一格上的开关口:修改器接口上一个布尔,值住在修改器上、材质记录是它的真源(与旋钮同一套键)。"""
+        panel = panels.get(mat.name)
+        if panel is None:
+            panel = tree.interface.new_panel(mat.name)
+            panels[mat.name] = panel
+        item = tree.interface.new_socket(name=name, in_out='INPUT', socket_type='NodeSocketBool', parent=panel)
+        row = self.PROPERTIES.get(name)
+        item.description = row['label'] if row else name
+        item.default_value = bool(enabled)
+        key = mat.name + '|' + name
+        state['keys'][item.identifier] = key
+        state['templates'][item.identifier] = ''
+        state['values'][item.identifier] = bool(enabled)
+        state['switches'].append(item.identifier)
+        return next(o for o in group_input.outputs if o.identifier == item.identifier)
+
+    @staticmethod
+    def _vtx_outline_flags(mod, tree):
+        """只做描边壳的树:开关口全关时修改器整个关掉(视口与渲染),任何一个开着就开 —— 描边开关在修改器栈上看得见,
+        关着的描边也不付几何求值。还管着位移的树不碰:关了它位移就没了。"""
+        if mod is None or not tree.get('ruri_outline_only'):
+            return
+        ports = [getattr(mod.properties.inputs, str(identifier), None) for identifier in (tree.get('ruri_outline_ports') or [])]
+        on = any(bool(port.value) for port in ports if port is not None)
+        if mod.show_viewport != on:
+            mod.show_viewport = on
+        if mod.show_render != on:
+            mod.show_render = on
+
+    def _vtx_panel_write(self, mat, values):
+        """材质改了几个 uniform({口名: 值})→ 推到全部修改器上那几格。旋钮抬到接口之后,写组实例的 socket
+        缺省是**无效**的(那一格被组输入占线),值住在修改器实例上。
+        推给**所有**对象:同一张材质挂在几个对象上时,它们说的必须是同一件事。对象整场只走一遍。
+        值没变就不写 —— 脚本写端口要 update_tag,无条件写会在 depsgraph handler 里自激。"""
+        if not values:
+            return
+        keyed = {mat.name + '|' + name: value for name, value in values.items()}
+        for obj in bpy.data.objects:
+            mod = obj.modifiers.get(self.VTX_MODIFIER)
+            tree = getattr(mod, 'node_group', None) if mod is not None else None
+            if tree is None:
+                continue
+            written = False
+            for identifier, mapped in dict(tree.get('ruri_vtx_keys') or {}).items():
+                if str(mapped) not in keyed:
+                    continue
+                value = keyed[str(mapped)]
+                port = getattr(mod.properties.inputs, str(identifier), None)
+                if port is not None and isinstance(port.value, bool):
+                    value = bool(value)
+                if port is None or self._vtx_same(port.value, value):
+                    continue
+                try:
+                    port.value = value
+                except (TypeError, ValueError):
+                    continue
+                written = True
+            if written:
+                self._vtx_outline_flags(mod, tree)
+                obj.update_tag()
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def sync_vertex_knobs(_scene, depsgraph):
+        """修改器面板上拧动的值 → 写回材质。
+
+        为什么必须写回而不是就地留着:顶点腿与片元腿读的是**同一批 uniform**。值只留在修改器上,
+        同一张 `_FurDirMap` 就会「壳长变了而毛发遮罩没变」,同一材质挂两个对象也永远对不上 ——
+        两条都是画面上看得见、日志里一声不响的错。Blender 不给修改器输入改动回调,所以只能在
+        依赖图落定后按材质真值比对;相等就什么都不做(无条件写会自激)。"""
+        for stack in STACKS:
+            if stack.post is None:
+                stack.vtx_writeback(depsgraph)
+
+    @staticmethod
+    def _vtx_plain(value):
+        """端口值的可比形态:数据块按名字,向量按元组,标量原样。"""
+        if isinstance(value, bpy.types.ID):
+            return value.name_full
+        if hasattr(value, '__len__') and not isinstance(value, str):
+            return tuple(value)
+        return value
+
+    def vtx_writeback(self, depsgraph):
+        # 这条挂在 depsgraph_update_post 上,每一拍都必须便宜:播放动画、推相机时几何每拍都在重算,而拧
+        # 旋钮是偶发的。所以只看**这一拍被更新**的对象,每个端口只在值与上一次见到的不同(= 有人拧过)
+        # 时才去和材质真值比;参数面 600 行的字典与材质图走查都推迟到真有一格被拧过之后。
+        rows = None
+        seen = self._vtx_seen
+        for update in depsgraph.updates:
+            if not isinstance(update.id, bpy.types.Object):
+                continue
+            obj = update.id.original
+            # 库里的对象只读:修改器面板拧不动、材质也写不回去,比对只会为它把本栈整套模板组拉进本文件。
+            if obj.library is not None:
+                continue
+            mod = obj.modifiers.get(self.VTX_MODIFIER)
+            tree = getattr(mod, 'node_group', None) if mod is not None else None
+            if tree is None:
+                continue
+            keys = {str(k): str(v) for k, v in dict(tree.get('ruri_vtx_keys') or {}).items()}
+            if not keys:
+                continue
+            inputs = mod.properties.inputs
+            port_of = {}
+            identifier_of = {}
+            dialed = []
+            for identifier, key in keys.items():
+                port = getattr(inputs, identifier, None)
+                if port is None:
+                    continue
+                port_of[key] = port
+                identifier_of[key] = identifier
+                value = self._vtx_plain(port.value)
+                marker = (obj.session_uid, identifier)
+                if seen.get(marker) == value:
+                    continue
+                seen[marker] = value
+                dialed.append(key)
+            if not dialed:
+                continue
+            if rows is None:
+                rows = {row['name']: row for row in self._panel_rows()}
+            templates = {str(k): str(v) for k, v in dict(tree.get('ruri_vtx_templates') or {}).items()}
+            images_of = {}
+            for key in dialed:
+                port = port_of[key]
+                mat_name, _sep, prop = key.partition('|')
+                mat = bpy.data.materials.get(mat_name)
+                if mat is None or not self.panel_claims(mat):
+                    continue
+                if mat_name not in images_of:
+                    images_of[mat_name] = self._material_images(mat)
+                if self._vtx_same(port.value, self._vtx_expected(
+                        mat, templates.get(identifier_of[key]), prop, images_of[mat_name])):
+                    continue
+                self._vtx_commit(mat, rows, prop, port_of)
+                self._vtx_outline_flags(mod, tree)
+                _host().material_inputs_changed(mat)
+
+    def _vtx_commit(self, mat, rows, prop, port_of):
+        """一格被拧动 → 经材质面板那三条写路落回材质。走 panel_write* 而不是自己写快照:
+        sRGB 还原、_ST 的三个消费面、换图时的中性图回落与两通道布局都住在那三个函数里,
+        绕过它们就是在宿主侧造第二处真源。"""
+        def value_of(name):
+            port = port_of.get(mat.name + '|' + name)
+            return None if port is None else port.value
+
+        if prop.endswith('_ST') or prop.endswith('_ST_w'):
+            slot = prop[:-5] if prop.endswith('_ST_w') else prop[:-3]
+            row = rows.get(slot)
+            vector = value_of(slot + '_ST')
+            if row is None or vector is None:
+                return
+            tail = value_of(slot + '_ST_w')
+            offset_y = self._author_row(mat, slot + '_ST')[3] if tail is None else float(tail)
+            self.panel_write_st(mat, row, (float(vector[0]), float(vector[1])), (float(vector[2]), offset_y))
+            return
+        row = rows.get(prop)
+        if row is not None and row['kind'] == 'TEXTURE':
+            self.panel_write_image(mat, row, value_of(prop))
+            return
+        base = prop[:-2] if prop.endswith('_w') and prop[:-2] in rows else prop
+        row = rows.get(base)
+        if row is None:
+            return
+        srgb = base in self.SRGB_PARAMS
+
+        def authored(v):
+            return _linear_to_srgb(float(v)) if srgb else float(v)
+
+        if row['kind'] in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
+            scalar = value_of(base)
+            if scalar is not None:
+                self.panel_write(mat, row, authored(scalar))
+            return
+        vector = value_of(base)
+        if vector is None:
+            return
+        tail = value_of(base + '_w')
+        self.panel_write(mat, row, [authored(vector[0]), authored(vector[1]), authored(vector[2])]
+                         + ([] if tail is None else [float(tail)]))
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def sync_material_inputs(_scene, depsgraph):
+        """材质的输入这一拍被谁改了 → 落到同一份值的其余各面。
+
+        口是唯一真源:组实例的参数口、主贴图的平铺节点、贴图节点上的图,它们连同模板组随文件存盘,开文件原样在。材质
+        记录(ruri_uber_*)是它们的镜像:换代与图不完整时照它重编,别的应用(拉回贴图与参数的插件、脚本)读写的也是这
+        一份。所以两个方向各认一次:记录被别处改了的行与槽落到口上,口在编辑器里被直接改了的记回记录、并推给同一行
+        的其余各面(别的组实例、顶点腿修改器口);同一拍两边改了同一行,记录那一边是明说要写的,它赢。Blender 改口只给材质的节点树发
+        更新,不给材质;改记录的按约定给材质打 update_tag —— 两样各只在它那一种更新里比。每一拍都必须便宜:只看这一拍
+        被更新、本栈认领的材质,与镜像相同就什么都不做。"""
+        stated = {}
+        trees = set()
+        for update in depsgraph.updates:
+            block = update.id
+            if isinstance(block, bpy.types.Material):
+                stated[block.original.session_uid] = block.original
+            elif isinstance(block, bpy.types.ShaderNodeTree):
+                trees.add(block.original.session_uid)
+        edited = {}
+        if trees:
+            for material in bpy.data.materials:
+                if material.node_tree is not None and material.node_tree.session_uid in trees:
+                    edited[material.session_uid] = material
+        touched = dict(edited)
+        touched.update(stated)
+        for stack in STACKS:
+            if stack.post is None:
+                for key, material in touched.items():
+                    if stack.panel_claims(material):
+                        stack.sync_inputs(material, record=key in stated, nodes=key in edited)
+
+    def settle_inputs(self):
+        """本栈认领的每一张材质跑一遍 sync_inputs:存盘前、换代前、本栈注销前,编辑器里改过而这一拍还没记回的口全部
+        记回 —— 记录是口的镜像,换代时新一代照它重编,口上的值按参数名原样留下。"""
+        for material in [material for material in bpy.data.materials if self.panel_claims(material)]:
+            self.sync_inputs(material)
+
+    def _baseline_from_record(self, material):
+        """第一次见到的材质(开了存着它的文件、插件刚重载)的镜像基线:取「照记录该有的口值」,不取此刻的口。口上的值是
+        用户存下的那一份,与它不同(存盘时本插件不在、文件在别处被改过)就当场被认作编辑记回记录 —— 口是真源。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        lanes = {}
+        if material.node_tree is not None and part in self.m['parts']:
+            values = self._record_matrix(material).ravel()
+            for node in material.node_tree.nodes:
+                if self._generated(node):
+                    _width, _destinations, sources, _sockets = self._param_targets(node, part)
+                    lanes[node.as_pointer()] = values[sources].astype(np.float32)
+        return {'record': self._record_values(material), 'lanes': lanes}
+
+    def sync_inputs(self, material, record=True, nodes=True):
+        """见 sync_material_inputs:record 比记录与镜像,nodes 比口与镜像。库里的材质本文件写不了,模板材质没有谁的
+        输入;图不完整的(模板组没存进文件)没有口可比,由 compile_all 照记录重编;第一次见到的以记录为基线(见
+        _baseline_from_record)。"""
+        if material.library is not None or material.get(self.TEMPLATE_KEY) is not None or not self._compiled(material):
+            return
+        mirror = self._mirrors.get(material.session_uid)
+        if mirror is None:
+            mirror = self._mirrors[material.session_uid] = self._baseline_from_record(material)
+        stated, restated = self._record_changes(material, mirror['record']) if record else (set(), set())
+        edited, swapped = self._input_changes(material, mirror['lanes']) if nodes else ({}, {})
+        for name in stated:
+            edited.pop(name, None)
+        for slot in restated:
+            swapped.pop(slot, None)
+        if not (stated or restated or edited or swapped):
+            return
+        bound = dict(material.get('ruri_uber_images') or {})
+        for slot in restated:
+            self.panel_write_image(material, self.TEXTURE_ROWS[slot], bound.get(slot))
+        for slot, image in swapped.items():
+            self.panel_write_image(material, self.TEXTURE_ROWS[slot], image)
+        if edited:
+            self._write_record(material, edited)
+        if stated or edited:
+            self._publish(material, set(stated) | set(edited))
+        _host().material_inputs_changed(material)
+
+    def _remember_inputs(self, material):
+        """镜像:这张材质此刻的记录(值行与图槽)与各组实例上参数口的值 —— 下一拍拿它们判断是哪一边被改了。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        lanes = {}
+        if material.node_tree is not None and part in self.m['parts']:
+            for node in material.node_tree.nodes:
+                if self._generated(node):
+                    width, destinations, _sources, _sockets = self._param_targets(node, part)
+                    flat = np.empty(width, dtype=np.float32)
+                    node.inputs.foreach_get('default_value', flat)
+                    lanes[node.as_pointer()] = flat[destinations]
+        self._mirrors[material.session_uid] = {'record': self._record_values(material), 'lanes': lanes}
+
+    def _record_changes(self, material, remembered):
+        """记录里与镜像不同的值行(行名)与图槽:别处(别的应用、脚本)改写了记录。"""
+        recorded = self._record_values(material)
+        if recorded == remembered:
+            return set(), set()
+        names = set()
+        for bucket, spelling in (('floats', '{0}'), ('colors', '{0}'), ('st', '{0}_ST')):
+            old, new = remembered[bucket], recorded[bucket]
+            names.update(spelling.format(key) for key in set(old) | set(new) if old.get(key) != new.get(key))
+        old, new = remembered['images'], recorded['images']
+        slots = {slot for slot in set(old) | set(new) if old.get(slot) != new.get(slot) and slot in self.TEXTURE_ROWS}
+        return names, slots
+
+    def _input_changes(self, material, lanes):
+        """口上与镜像不同的那几格,树只走一遍:组实例的参数口(按行拼回作者值,这一实例没带的分量取记录)、主贴图平铺
+        节点的缩放与偏移(同一行组实例上也改了的,组实例的赢)、贴图节点上的图(中性占位图 = 没绑)。被动画或驱动接管的
+        口不算:它们的值归动画,每一帧都在变,记回去就是每帧改记录、每帧重编着色器。
+        返回 ({行名: 作者值}, {槽: 图})。"""
+        import numpy as np
+        part = material.get('ruri_uber_part', '')
+        values = {}
+        swapped = {}
+        if part not in self.m['parts']:
+            return values, swapped
+        rows = self.part(part)['params']
+        bound = dict(material.get('ruri_uber_images') or {})
+        animated = self._animated_sockets(material.node_tree)
+        linear = None
+        stmap = None
+        for node in material.node_tree.nodes:
+            if self._generated(node):
+                seen = lanes.get(node.as_pointer())
+                if seen is None:
+                    continue
+                width, destinations, sources, sockets = self._param_targets(node, part)
+                flat = np.empty(width, dtype=np.float32)
+                node.inputs.foreach_get('default_value', flat)
+                held = flat[destinations]
+                if len(held) != len(seen):
+                    continue
+                moved = (held != seen) & ~(np.isnan(held) & np.isnan(seen))
+                frozen = [at for name, at in animated if name == node.name]
+                free = ~np.isin(sockets, frozen) if frozen else np.ones(len(sockets), dtype=bool)
+                moved &= free
+                if not moved.any():
+                    continue
+                if linear is None:
+                    linear = self._record_matrix(material)
+                for row in sorted(set((sources[moved] // 4).tolist())):
+                    name, kind = rows[row][0], rows[row][1]
+                    if name in values:
+                        continue
+                    vector = [float(component) for component in linear[row]]
+                    carried = (sources // 4 == row) & free
+                    for lane, value in zip((sources[carried] % 4).tolist(), held[carried].tolist()):
+                        vector[lane] = value
+                    values[name] = self._authored(name, kind, vector)
+            elif node.label == self.ST_NODE:
+                stmap = node
+            elif node.type == 'TEX_IMAGE':
+                slot = _slot_of(node.label or '')
+                if slot not in self.TEXTURE_ROWS or slot in swapped or slot in self.level_images:
+                    continue
+                shown = node.image
+                if shown is not None and shown.get('ruri_placeholder'):
+                    shown = None
+                if shown != bound.get(slot):
+                    swapped[slot] = shown
+        if stmap is not None and not any((stmap.name, at) in animated for at, socket in enumerate(stmap.inputs)
+                                         if socket.name in ('Scale', 'Location')):
+            stated = _mixed(material.get('ruri_uber_st')).get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
+            scale = stmap.inputs['Scale'].default_value
+            location = stmap.inputs['Location'].default_value
+            mapped = [float(scale[0]), float(scale[1]), float(location[0]), float(location[1])]
+            if np.any(np.array(mapped, dtype=np.float32) != np.array(stated, dtype=np.float32)):
+                values.setdefault(self.ST_SLOT + '_ST', mapped)
+        return values, swapped
+
+    def _authored(self, name, kind, vector):
+        """一行口上的值(线性)→ 作者值:_param_matrix 那一次 sRGB→linear 的逆,alpha 不参与。"""
+        srgb = name in self.SRGB_PARAMS
+        if kind == 'F':
+            return _linear_to_srgb(vector[0]) if srgb else vector[0]
+        return [_linear_to_srgb(component) if srgb else component for component in vector[:3]] + [vector[3]]
+
+    def _author_row(self, mat, name):
+        """一个四分量行此刻的作者值:记录说了取记录(颜色桶先于平铺桶,与 _param_matrix 同序),没说取声明缺省。"""
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        value = colors.get(name)
+        if value is None and name.endswith('_ST'):
+            value = _mixed(mat.get('ruri_uber_st')).get(name[:-3])
+        if value is None:
+            value = self._param_declared(mat.get('ruri_uber_part', '')).get(name) or []
+        return ([float(component) for component in value] + [0.0] * 4)[:4]
+
+    @staticmethod
+    def _write_record(mat, values):
+        """{行名: 作者值} 记进记录的值桶:标量进 floats,四分量进 colors;平铺行(<槽>_ST)记在 st 的槽名下,颜色桶里
+        已有同名行的除外(_param_matrix 先认颜色桶)。"""
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        st = _mixed(mat.get('ruri_uber_st'))
+        for name, value in values.items():
+            if not hasattr(value, '__len__'):
+                floats[name] = float(value)
+            elif name.endswith('_ST') and name not in colors:
+                st[name[:-3]] = [float(component) for component in value]
+            else:
+                colors[name] = [float(component) for component in value]
+        mat['ruri_uber_floats'] = floats
+        mat['ruri_uber_colors'] = colors
+        mat['ruri_uber_st'] = st
+
+    def _land(self, mat, values):
+        """{参数行名: 作者值} → 记进记录(口的镜像),再写到读这几行的每一个面(_publish)。面板、顶点腿旋钮、编辑器里
+        直接改的口都落在这一条上,只写给出的这几行。"""
+        self._write_record(mat, values)
+        self._publish(mat, values)
+
+    def _publish(self, mat, names):
+        """记录里这几行 → 读它们的每一个面,只写这几行:各段与循环体组实例上的参数口、纹素域尺寸节点、主贴图平铺节点、
+        剔除值节点、顶点腿修改器口;随后材质自述、常量块预算与镜像跟上。"""
+        import numpy as np
+        names = set(names)
+        part = mat.get('ruri_uber_part', '')
+        tree = mat.node_tree
+        if names and tree is not None and part in self.m['parts']:
+            matrix = self._record_matrix(mat)
+            values = matrix.ravel()
+            index = self._param_index(part)
+            wanted = np.array(sorted(index[name] for name in names if name in index), dtype=np.int64)
+            st_row = self.ST_SLOT + '_ST'
+            for node in tree.nodes:
+                if self._generated(node):
+                    width, destinations, sources, _sockets = self._param_targets(node, part)
+                    chosen = np.isin(sources // 4, wanted)
+                    if not chosen.any():
+                        continue
+                    flat = np.empty(width, dtype=np.float32)
+                    node.inputs.foreach_get('default_value', flat)
+                    flat[destinations[chosen]] = values[sources[chosen]]
+                    node.inputs.foreach_set('default_value', flat)
+                elif (node.bl_idname == 'ShaderNodeCombineXYZ' and node.label.startswith(SIZE_ROW_PREFIX)
+                      and node.label in names and node.label in index):
+                    extent = matrix[index[node.label]]
+                    for axis in range(3):
+                        if node.inputs[axis].default_value != float(extent[axis]):
+                            node.inputs[axis].default_value = float(extent[axis])
+                elif node.label == self.ST_NODE and st_row in names:
+                    stated = _mixed(mat.get('ruri_uber_st')).get(self.ST_SLOT) or [1.0, 1.0, 0.0, 0.0]
+                    scale = (float(stated[0]), float(stated[1]), 1.0)
+                    location = (float(stated[2]), float(stated[3]), 0.0)
+                    if tuple(node.inputs['Scale'].default_value) != scale:
+                        node.inputs['Scale'].default_value = scale
+                    if tuple(node.inputs['Location'].default_value) != location:
+                        node.inputs['Location'].default_value = location
+            if names & self._cull_names(part):
+                floats = dict(mat.get('ruri_uber_floats') or {})
+                self._set_cull(mat, self._record_cull(self.PART_META[part], floats, mat.name),
+                               self._record_shadow_cull(self.PART_META[part], floats, mat.name))
+            tree.update_tag()
+            mat.update_tag()
+        self._vtx_panel_write(mat, self._vertex_values(mat, names))
+        self._remember_inputs(mat)
+        self._declare_shading(mat)
+        self._declare_shadow_pass(mat)
+        self._declare_camera_pass(mat)
+        self._require_budget(mat)
+
+    def _vertex_values(self, mat, names):
+        """这几行推给顶点腿修改器口的值,与 _param_matrix 同一套线性化:四分量行是向量口加 _w 口,标量行一个口;记录没说的
+        行不推。"""
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        st = _mixed(mat.get('ruri_uber_st'))
+        ports = {}
+        for name in names:
+            srgb = name in self.SRGB_PARAMS
+            vector = colors.get(name)
+            if vector is None and name.endswith('_ST'):
+                vector = st.get(name[:-3])
+            if vector is not None:
+                spread = ([float(component) for component in vector] + [0.0] * 4)[:4]
+                ports[name] = tuple(_srgb_to_linear(component) if srgb else component for component in spread[:3])
+                ports[name + '_w'] = spread[3]
+            elif name in floats:
+                scalar = float(floats[name])
+                ports[name] = _srgb_to_linear(scalar) if srgb else scalar
+        return ports
+
+    def _cull_names(self, part):
+        """剔除值节点读的记录键(图的词汇):part 照抄的真源 Cull 状态词里的属性、家族的双面开关、家族的剔除属性。"""
+        stated = set()
+        for word in ('cull', 'shadow_cull'):
+            declared = self.PART_META.get(part, {}).get(word)
+            if declared and declared[0] != 'fixed':
+                stated.add(declared[1])
+        if self.CULL_TWO_SIDED:
+            stated.add(self.CULL_TWO_SIDED['property'])
+        if self.CULL_PROPERTY:
+            stated.add(self.CULL_PROPERTY)
+        return {self.SOURCE_NAMES.get(name, name) for name in stated}
+
+    def _stack_slots(self, obj):
+        """这个对象上属于本栈的材质槽 (槽号, 材质),按槽上**实际生效**的材质认:挂在对象层的材质(库覆盖的
+        网格数据换不了材质,只能挂对象层)与数据层的一样算。描边克隆不算 —— 它是产物不是输入。"""
+        return [(i, slot.material) for i, slot in enumerate(obj.material_slots)
+                if slot.material is not None and slot.material.get('ruri_uber_part') in self.KNOWN_PARTS
+                and slot.material.get('ruri_uber_stack') == self.PANEL_KEY
+                and not slot.material.get('ruri_outline_clone')]
+
+    def _asks(self, part, capability):
+        """这个 part 的片元(连同循环体)有没有这条环境询问 —— 按完整模板认,它是各签名的超集。"""
+        spec = self.m['parts'][part]
+        rows = list(spec['capabilities']) + [row for zone in spec['zones'] for row in zone['capabilities']]
+        return any(row['cap'] == capability for row in rows)
+
+    @staticmethod
+    def _screen_size(scene):
+        """真源 _ScreenParams 的前两格:真实输出像素(分辨率 × 百分比)。"""
+        scale = scene.render.resolution_percentage / 100.0
+        return {SCREEN_SOCKETS[0]: float(scene.render.resolution_x) * scale,
+                SCREEN_SOCKETS[1]: float(scene.render.resolution_y) * scale}
+
+    def _write_screen_sockets(self, node, screen):
+        """把输出像素数灌进一个组实例,返回有没有真写。**按 socket 在不在决定写不写** ——
+        组接口是图自己决定的,按名硬索引会在没有那一格的组上 KeyError。值没变不写:
+        这条也跑在重灌路径上,无条件写会打依赖图脏标记然后自激。"""
+        written = False
+        for sock in node.inputs:
+            if sock.name not in SCREEN_SOCKETS:
+                continue
+            value = float(screen[sock.name])
+            if self._vtx_same(sock.default_value, value):
+                continue
+            sock.default_value = value
+            written = True
+        return written
+
+    def push_screen_size(self, objects=None, camera=None):
+        """输出设置或相机变了 → 只把像素数重灌进**已经存在**的顶点树(相机本身树里现读,camera 不用)。
+
+        它不建树、不建修改器,更不按材质现值重判一次描边 —— 那个判断只属于从游戏导入的那一刻。
+        按现值实时重判的代价是用户删掉的修改器会在下一次推镜头时自己长回来,而画面上没有
+        任何东西说明是谁加的。"""
+        screen = self._screen_size(bpy.context.scene)
+        done = 0
+        for obj in (objects if objects is not None else bpy.data.objects):
+            mod = obj.modifiers.get(self.VTX_MODIFIER)
+            tree = getattr(mod, 'node_group', None) if mod is not None else None
+            if tree is None:
+                continue
+            touched = False
+            for node in tree.nodes:
+                if node.get('ruri_vtx_mat') is None:
+                    continue
+                if self._write_screen_sockets(node, screen):
+                    touched = True
+            if touched:
+                obj.update_tag()
+                done += 1
+        return done
+
+    @staticmethod
+    def _drawn_into_views(obj):
+        """对象会不会出现在任何一幅画面里:相机直视、漫反射、镜面、透射、体积散射,任何一种可见就算。"""
+        return (obj.visible_camera or obj.visible_diffuse or obj.visible_glossy
+                or obj.visible_transmission or obj.visible_volume_scatter)
+
+    def apply_rig_basis(self, objects=None):
+        """脸部基座:把**当下骨名**接进材质,再把值推一次。只碰材质节点与对象自定义属性,
+        一个几何节点都不碰(rig_apply 的 docstring 写着为什么基座不是几何点属性)—— 所以
+        骨改个名不该让谁凭空长出一个修改器。"""
+        rig_parts = set(self.RIG.get('parts') or [])
+        if not rig_parts:
+            return 0
+        done = 0
+        for obj in (objects if objects is not None else bpy.context.scene.objects):
+            if obj.type != 'MESH' or obj.data is None:
+                continue
+            mats = [m for _slot, m in self._stack_slots(obj) if m['ruri_uber_part'] in rig_parts]
+            if not mats:
+                continue
+            arm = self._rig_basis_armature(obj)
+            for mat in mats:
+                self.rig_apply(mat, arm, obj)
+            done += 1
+        # 基座的**值**推一次。接线刚在上面做完,但值一直只由依赖图 / 帧变化两个 handler 推
+        # —— 那两个在 --background 里一次都不响,于是脸上的 UNITY_MATRIX_M 列全读到
+        # 「属性不存在」= 0,头部朝向塌成零向量,SDF 取样整个错位,脸就是黑的。
+        self.push_rig_basis()
+        return done
+
+    def _answer_vertex_capabilities(self, tree, node, part, scene, swap_yz, answers):
+        """顶点腿上的环境询问兑现:组上的答案口按能力查 CAP_VERTEX_BUILDERS,在这个物体自己的树上接宿主的原生等价物。
+        查不到 / 场景里答不出 = 什么都不接,口停在能力自声明的缺席值上并大声记一笔;建图器明说答不了的叶
+        (值为 None)同样记一笔。同一棵树里一个能力只建一次,几个组实例共用同一批答案。"""
+        for row in self.VERTEX_ANSWERS.get(part) or []:
+            cap = row['cap']
+            if cap not in answers:
+                builder = CAP_VERTEX_BUILDERS.get(cap)
+                if builder is None:
+                    print('[ruri-cap] {0} 几何节点里无原生等价物 → 缺席值'.format(cap), flush=True)
+                    answers[cap] = {}
+                else:
+                    answer = builder(tree, scene, swap_yz)
+                    if answer is None:
+                        print('[ruri-cap] {0} 本场景答不出(几何节点)→ 缺席值'.format(cap), flush=True)
+                        answer = {}
+                    missing = [leaf for leaf in row['results'] if answer and leaf not in answer]
+                    if missing:
+                        raise RuntimeError('[ruri-cap] {0}: 几何节点建图器少答了结果叶 {1}'.format(cap, missing))
+                    answers[cap] = answer
+            for leaf, value in answers[cap].items():
+                sock = node.inputs.get(row['sock'] + ('_' + leaf if leaf else ''))
+                if sock is None:
+                    continue
+                if value is None:
+                    print('[ruri-cap] {0}.{1} 几何节点里无原生等价物 → 缺席值'.format(cap, leaf or '(值)'), flush=True)
+                elif isinstance(value, bpy.types.NodeSocket):
+                    tree.links.new(value, sock)
+                else:
+                    sock.default_value = value
+
+    def _own_outline_normal(self, obj, outline_slots):
+        """描边读 OUTLINE_NORMAL_LAYER。游戏的网格把平滑法线烘在第三套 UV 里,那一层只在描边走平均法线的材质上才是这个含义,
+        所以只给这样的对象按原样搬一份,原层不动;已有这一层的不碰(自己的网格由烘焙工具写),没有来源的等烘焙。"""
+        mesh = obj.data
+        uv_layers = mesh.uv_layers
+        source_name = self.TEXCOORD_LAYERS['input_texcoord2']
+        if self.OUTLINE_NORMAL_LAYER in uv_layers or source_name not in uv_layers or mesh.library is not None:
+            return
+        if not any(float(self._mat_meta(mat)[0].get('_OutlineAverageNormal', 1.0)) > 0.5 for _slot, mat, _on in outline_slots):
+            return
+        import numpy as _np
+        values = _np.empty(2 * len(mesh.loops), dtype=_np.float32)
+        uv_layers[source_name].data.foreach_get('uv', values)
+        uv_layers.new(name=self.OUTLINE_NORMAL_LAYER).data.foreach_set('uv', values)
+
+    def _vertex_moves(self, mat):
+        """part 的顶点腿在材质关键字全关时恒等(清单 vertex_gates 记着这条腿读的关键字):这张材质一个都没开就不挪,
+        不值得一棵逐帧求值的树;其余 part 的腿无条件有位移。"""
+        gate = self.VERTEX_GATES.get(mat['ruri_uber_part'])
+        if gate is None:
+            return True
+        floats, _st, _colors = self._mat_meta(mat)
+        return any(float(floats.get(name, 0.0)) > 0.5 for name in gate)
+
+    def _wire_vertex_clock(self, tree, node):
+        """顶点腿的时钟全局:几何节点读不到着色树用的那条视图层属性,这棵树自己接场景时间(帧 × fps_base / fps,同一个量),
+        按配方 SceneTime 的系数乘到口上。组上没有这个口 = 这条腿不读时钟,一个节点都不加。"""
+        seconds = None
+        for name, scales in self.scene_time.items():
+            vector = node.inputs.get(name)
+            alone = node.inputs.get(name + '_w')
+            if vector is None and alone is None:
+                continue
+            if seconds is None:
+                seconds = tree.nodes.new('GeometryNodeInputSceneTime').outputs['Seconds']
+            if vector is not None and any(scales[:3]):
+                scaled = tree.nodes.new('ShaderNodeVectorMath')
+                scaled.operation = 'SCALE'
+                scaled.inputs[0].default_value = scales[:3]
+                tree.links.new(seconds, scaled.inputs['Scale'])
+                tree.links.new(scaled.outputs[0], vector)
+            if alone is not None and scales[3]:
+                scaled = tree.nodes.new('ShaderNodeMath')
+                scaled.operation = 'MULTIPLY'
+                scaled.inputs[1].default_value = scales[3]
+                tree.links.new(seconds, scaled.inputs[0])
+                tree.links.new(scaled.outputs[0], alone)
+
+    def apply_vertex_stage(self, objects, camera=None):
+        """壳层位移 + 反壳描边的壳(同树虚拟几何;壳往外挪多少在材质的位移出口里逐视图算,见 _wire_outline)。
+        **唯一的生成途径 = 从游戏读材质、造出这批对象的那一刻**:objects 只能是导入刚造出来的对象,没有「整场景」、
+        没有开文件重填、没有手动重建 —— 拓扑的判据(这张材质有没有描边 pass、宽度是不是 0)说的是导入那一刻的游戏真值,
+        之后任何时候按材质现值重判都是凭空长修改器。树与修改器随文件存盘,重开文件原样在,修改器面板上拧的值也在;换代时
+        由 shader_version.update 对挂着旧树的对象重新调一次。
+
+        读相机的壳层位移在树里现读活动相机,输出像素数变了只重灌那两格(push_screen_size),骨改名了只重接基座
+        (apply_rig_basis),两条都不进这里。camera 是宿主契约里的参数,树里读的是场景的活动相机。"""
+        scene = bpy.context.scene
+        screen = self._screen_size(scene)
+        done = 0
+        linked = []
+        for obj in objects:
+            if obj.type != 'MESH' or obj.data is None:
+                continue
+            if obj.library is not None:
+                # 库的数据不许指派本会话的树(Blender 静默不认),它画原始网格:要顶点腿的对象在本文件得是本地对象。
+                if obj.modifiers.get(self.VTX_MODIFIER) is not None:
+                    linked.append(obj.name_full)
+                continue
+            slots = self._stack_slots(obj)
+            # 家族声明本栈的对象不进宿主阴影图(卡通着色经 ShadowAttenuation 自己求遮蔽)才关,且只在导入造出对象时定:
+            # 已经挂着顶点树的是换代重调,原生的投影开关此后是用户的(忽略主光阴影的片子要她投到地上),不许关回去。
+            # 其余家族投不投影由导入时的游戏数据定(shader 有没有启用的 ShadowCaster 趟),这里不碰。
+            if slots and not self.HOST_SHADOW_CASTERS and obj.visible_shadow and obj.modifiers.get(self.VTX_MODIFIER) is None:
+                obj.visible_shadow = False
+            # 只进阴影图的渲染器(导入时按游戏的 ShadowsOnly 关掉了全部非阴影可见性)一个像素都画不出:
+            # 真源只给它跑投影趟,壳与描边建出来也没人看得见,只是白付每一次几何重算。
+            if not self._drawn_into_views(obj):
+                slots = []
+            vert_slots = [(i, m) for i, m in slots if m['ruri_uber_part'] in self.VERTEX_PARTS and self._vertex_moves(m)]
+            for capability, prepare in CAP_PREPARERS.items():
+                asking = [slot for slot, mat in slots if self._asks(mat['ruri_uber_part'], capability)]
+                if asking:
+                    prepare(obj, asking, [slot for slot, _mat in slots if slot not in asking])
+
+            def _outline_state(mat):
+                # 拓扑判据三连:①材质**自己的 shader**(导入陈述里的 pass 表)有一趟,标签在该 part 声明的描边标签之列;
+                # ②宽度>0;③_BaseColor.a>0。标签按 part 声明而不是按字样猜:同一 part 认领的几份 shader 把同一趟描边挂在
+                # 不同标签下。①不能省:disabledShaderPasses 只记材质**主动关掉**的 pass,shader 本就没有描边 pass 的部件
+                # (CharacterNPR_VFX)不在里面,而它的 _OutlineWidth 是换 shader 时留下的历史键。
+                # 材质把这趟关掉与否:part 声明了开关属性 = 只定开关口的初值(关着的描边也留着壳的拓扑,面板上一勾才有东西可开);
+                # 没声明 = 关掉就没有壳。返回 None = 没有壳,否则是开关初值。
+                part = mat['ruri_uber_part']
+                declared = {str(t).lower() for t in (self.PART_META[part].get('outline') or [])}
+                present = {str(t).lower() for t in (mat.get('ruri_uber_shader_passes') or [])}
+                if not declared & present:
+                    return None
+                floats, _s, colors = self._mat_meta(mat)
+                base_a = colors.get('_BaseColor', [1, 1, 1, 1])[3]
+                if not (float(floats.get('_OutlineWidth', 0.0)) > 0.0 and float(base_a) > 0.0):
+                    return None
+                disabled = {str(p).lower() for p in (mat.get('ruri_uber_disabled_passes') or [])}
+                enabled = bool((declared & present) - disabled)
+                switch = self._outline_switch_of(part)
+                if switch and switch in floats:
+                    enabled = float(floats[switch]) > 0.5
+                if switch and switch not in floats:
+                    self._write_record(mat, {switch: 1.0 if enabled else 0.0})
+                return enabled if switch or enabled else None
+
+            outline_slots = []
+            for slot_index, slot_material in slots:
+                outline = _outline_state(slot_material)
+                if outline is not None:
+                    outline_slots.append((slot_index, slot_material, outline))
+            # 顶点腿**只为几何而存在**。没有壳位移也没有描边 ⇒ 这个对象根本不该有修改器。
+            if not vert_slots and not outline_slots:
+                continue
+            self._own_outline_normal(obj, outline_slots)
+            tree_name = self.VTX_TREE_PREFIX + obj.name
+            old = bpy.data.node_groups.get(tree_name)
+            mod = obj.modifiers.get(self.VTX_MODIFIER)
+            knobs = self._vtx_knob_rows()
+            state = {'keys': {}, 'templates': {}, 'values': {}, 'switches': []}
+            panels = {}
+            if old is not None:
+                bpy.data.node_groups.remove(old)
+            mt = bpy.data.node_groups.new(tree_name, 'GeometryNodeTree')
+            mt.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+            mt.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+            gin = mt.nodes.new('NodeGroupInput')
+            gout = mt.nodes.new('NodeGroupOutput')
+
+            def nd(t_):
+                return mt.nodes.new(t_)
+
+            def nattr(name, dtype):
+                a = nd('GeometryNodeInputNamedAttribute')
+                a.data_type = dtype
+                a.inputs['Name'].default_value = name
+                return a.outputs['Attribute']
+
+            mat_idx = nattr('material_index', 'INT')
+
+            def slot_sel(slot):
+                eq = nd('ShaderNodeMath')
+                eq.operation = 'COMPARE'
+                mt.links.new(mat_idx, eq.inputs[0])
+                eq.inputs[1].default_value = float(slot)
+                eq.inputs[2].default_value = 0.5
+                return eq.outputs[0]
+
+            def swap_yz(sock):
+                sep = nd('ShaderNodeSeparateXYZ')
+                mt.links.new(sock, sep.inputs[0])
+                comb = nd('ShaderNodeCombineXYZ')
+                mt.links.new(sep.outputs[0], comb.inputs[0])
+                mt.links.new(sep.outputs[2], comb.inputs[1])
+                mt.links.new(sep.outputs[1], comb.inputs[2])
+                return comb.outputs[0]
+
+            answers = {}
+            tbn_cache = []
+            uv_names = {name: self._texcoord_layer_name(obj, name) for name in self.TEXCOORD_LAYERS}
+
+            def uv_tangent(swap):
+                uv = nattr(uv_names['input_texcoord'], 'FLOAT_VECTOR')
+                if swap:
+                    sep = nd('ShaderNodeSeparateXYZ')
+                    mt.links.new(uv, sep.inputs[0])
+                    comb = nd('ShaderNodeCombineXYZ')
+                    mt.links.new(sep.outputs[1], comb.inputs[0])
+                    mt.links.new(sep.outputs[0], comb.inputs[1])
+                    uv = comb.outputs[0]
+                node = nd('GeometryNodeUVTangent')
+                node.inputs['Method'].default_value = 'Exact'
+                mt.links.new(uv, node.inputs['UV'])
+                return node.outputs['Tangent']
+
+            def tangent_basis():
+                """(tangentOS, w) —— 宿主按 UV 现算的切线基,零烘焙属性。
+
+                喂对调过的 UV 得到 v 方向的切线,符号由此反解。取的是 **Unity 口径**的 w:
+                顶点段图把 tangentOS 先 Y/Z 对调换到 Unity 空间再用,那次换轴是反射
+                (det = -1),叉积随之反号 ⇒ w_unity = -w_blender,所以写 cross(T,N) 而不是
+                cross(N,T)。读属性那条老路要求每张网格
+                事先烘好 ruri_tangent/ruri_tangent_sign,而 Named Attribute **缺属性与读到
+                零向量无法区分**,改过拓扑的网格会保留属性名把新增 corner 填零 —— 切线基
+                静默塌掉而一个字不报。"""
+                if not tbn_cache:
+                    tangent = uv_tangent(False)
+                    tangent_v = uv_tangent(True)
+                    normal = nd('GeometryNodeInputNormal').outputs['Normal']
+                    cross = nd('ShaderNodeVectorMath')
+                    cross.operation = 'CROSS_PRODUCT'
+                    mt.links.new(tangent, cross.inputs[0])
+                    mt.links.new(normal, cross.inputs[1])
+                    dot = nd('ShaderNodeVectorMath')
+                    dot.operation = 'DOT_PRODUCT'
+                    mt.links.new(cross.outputs['Vector'], dot.inputs[0])
+                    mt.links.new(tangent_v, dot.inputs[1])
+                    sign = nd('ShaderNodeMath')
+                    sign.operation = 'SIGN'
+                    mt.links.new(dot.outputs['Value'], sign.inputs[0])
+                    tbn_cache.append((tangent, sign.outputs['Value']))
+                return tbn_cache[0]
+
+            color_cache = []
+
+            def vertex_color():
+                """(rgb, a) —— 与片元腿同一个 'Color' 属性:同一个 uniform 两条腿不许各读各的。"""
+                if not color_cache:
+                    attribute = nattr('Color', 'FLOAT_COLOR')
+                    separate = nd('FunctionNodeSeparateColor')
+                    mt.links.new(attribute, separate.inputs['Color'])
+                    color_cache.append((attribute, separate.outputs['Alpha']))
+                return color_cache[0]
+
+            wire_cache = {}
+
+            def vertex_inputs():
+                """顶点入口的几何输入(属性与片元腿同源):壳层组与描边组吃同一份。几何节点的字段在
+                消费它的那个节点上求值,同一个输入节点接给几个组各自按自己那一段几何取值。"""
+                if not wire_cache:
+                    wire_cache.update({
+                        'input_positionOS': nd('GeometryNodeInputPosition').outputs['Position'],
+                        'input_normalOS': nd('GeometryNodeInputNormal').outputs['Normal'],
+                        'input_tangentOS': tangent_basis()[0],
+                        'input_tangentOS_w': tangent_basis()[1],
+                        'input_texcoord': nattr(uv_names['input_texcoord'], 'FLOAT_VECTOR'),
+                        'input_texcoord1': nattr(uv_names['input_texcoord1'], 'FLOAT_VECTOR'),
+                        'input_texcoord2': nattr(uv_names['input_texcoord2'], 'FLOAT_VECTOR'),
+                        'input_color': vertex_color()[0],
+                        'input_color_w': vertex_color()[1]})
+                return wire_cache
+
+            def wire_vertex_inputs(node):
+                for sock in node.inputs:
+                    src = vertex_inputs().get(sock.name)
+                    if src is not None:
+                        mt.links.new(src, sock)
+
+            geo = gin.outputs[0]
+            # ① 壳层位移(共享模板 + 逐实例灌值,选区 = 材质槽;贴图与旋钮抬到修改器接口)。
+            for slot, mat in vert_slots:
+                part = mat['ruri_uber_part']
+                template_name = self.VERTEX_PARTS[part]
+                gn = nd('GeometryNodeGroup')
+                gn.node_tree = self.group(template_name)
+                gn['ruri_vtx_mat'] = mat.name
+                floats, st, colors = self._mat_meta(mat)
+                self._fill_uniform_sockets(gn, floats, st, colors)
+                wire_vertex_inputs(gn)
+                self._write_screen_sockets(gn, screen)
+                self._answer_vertex_capabilities(mt, gn, part, scene, swap_yz, answers)
+                self._wire_vertex_clock(mt, gn)
+                self._vtx_expose(mt, gin, gn, mat, knobs, panels, template_name, state,
+                                 self._material_images(mat))
+                self._vtx_own_samplers(gn, self._material_images(mat))
+                out_sock = gn.outputs.get('position')
+                if out_sock is None:
+                    continue
+                sp = nd('GeometryNodeSetPosition')
+                mt.links.new(geo, sp.inputs['Geometry'])
+                mt.links.new(slot_sel(slot), sp.inputs['Selection'])
+                mt.links.new(swap_yz(out_sock), sp.inputs['Position'])
+                geo = sp.outputs['Geometry']
+            # ② 反壳描边 = 同树虚拟几何:本体原样复制一份、删无描边面、写 ruri_outline 面属性,作为**实例**并进本体的几何集。
+            #    不实现化:两张不同网格 Join 要把整份顶点组逐组搬一遍(实测 929 组的身体每帧 94 ms,实例 0.9 ms),
+            #    而壳在修改器栈末尾,之后没人读顶点组。实例几何的面属性与物体属性材质照样读得到。
+            #    这里只有壳的拓扑:它往外挪多少是按正在画的那个视图算的,落在材质的位移出口上(描边视图段),
+            #    宿主在顶点着色阶段逐视图求值 —— 这棵树不读相机,转视角一次都不重算。
+            if outline_slots:
+                keep = None
+                for slot, slot_material, enabled in outline_slots:
+                    sel = slot_sel(slot)
+                    switch = self._outline_switch_of(slot_material['ruri_uber_part'])
+                    if switch:
+                        gate = nd('ShaderNodeMath')
+                        gate.operation = 'MULTIPLY'
+                        mt.links.new(sel, gate.inputs[0])
+                        mt.links.new(self._vtx_switch(mt, gin, slot_material, switch, enabled, panels, state), gate.inputs[1])
+                        sel = gate.outputs[0]
+                    if keep is None:
+                        keep = sel
+                    else:
+                        mx = nd('ShaderNodeMath')
+                        mx.operation = 'MAXIMUM'
+                        mt.links.new(keep, mx.inputs[0])
+                        mt.links.new(sel, mx.inputs[1])
+                        keep = mx.outputs[0]
+                drop = nd('ShaderNodeMath')
+                drop.operation = 'SUBTRACT'
+                drop.inputs[0].default_value = 1.0
+                mt.links.new(keep, drop.inputs[1])
+                dg = nd('GeometryNodeDeleteGeometry')
+                dg.domain = 'FACE'
+                mt.links.new(gin.outputs[0], dg.inputs['Geometry'])
+                mt.links.new(drop.outputs[0], dg.inputs['Selection'])
+                sa = nd('GeometryNodeStoreNamedAttribute')
+                sa.data_type = 'FLOAT'
+                sa.domain = 'FACE'
+                sa.inputs['Name'].default_value = 'ruri_outline'
+                sa.inputs['Value'].default_value = 1.0
+                mt.links.new(dg.outputs['Geometry'], sa.inputs['Geometry'])
+                shell = nd('GeometryNodeGeometryToInstance')
+                mt.links.new(sa.outputs['Geometry'], shell.inputs[0])
+                jn = nd('GeometryNodeJoinGeometry')
+                mt.links.new(geo, jn.inputs[0])
+                mt.links.new(shell.outputs[0], jn.inputs[0])
+                geo = jn.outputs['Geometry']
+            mt.links.new(geo, gout.inputs[0])
+            _frame_generated(mt)
+            mt['ruri_vtx_keys'] = state['keys']
+            mt['ruri_vtx_templates'] = state['templates']
+            mt['ruri_outline_only'] = 0 if vert_slots else 1
+            mt['ruri_outline_ports'] = list(state['switches'])
+            if outline_slots:
+                mt[self.VIEW_READER_KEY] = 1
+            if mod is None:
+                mod = obj.modifiers.new(self.VTX_MODIFIER, 'NODES')
+            mod.node_group = mt
+            # 自身网格的实例在编辑模式下会让 Blender 5.3 的 UV 编辑器解引用空的编辑笼崩溃(画实例的临时物体继承了
+            # 本体的 data_orig 与编辑模式,求值结果却被清空);实现化要付 6 倍求值,所以带描边壳的树不进编辑模式求值。
+            mod.show_in_editmode = not outline_slots
+            # 换树时 Blender 按 identifier 顺延旧值,而 identifier 与「哪个材质的哪个属性」
+            # 没有关系 —— 逐格显式写回,别让上一棵树的序号决定这一棵树的值。
+            for identifier, value in state['values'].items():
+                port = getattr(mod.properties.inputs, identifier, None)
+                if port is None:
+                    continue
+                try:
+                    port.value = value
+                except (TypeError, ValueError):
+                    pass
+            self._vtx_outline_flags(mod, mt)
+            # 脚本写修改器输入**不打依赖图标记**(实测 5.2.1:连 view_layer.update() 都刷不出来,
+            # 只有 update_tag 才让求值副本跟上)。UI 拖滑块走的是另一条,不受影响。
+            obj.update_tag()
+            done += 1
+            print('[ruri-vertex] {0}: shell x{1} outline x{2} knob x{3}'.format(
+                obj.name, len(vert_slots), len(outline_slots), len(state['keys'])), flush=True)
+        # 建出或拆掉的树可能多了或少了描边壳:读视图窗口的物体变了,宿主下一次写窗口前重新问一遍。
+        if linked:
+            print('[ruri-vertex] !! {0} 个 link 进来的对象挂着顶点腿,库的数据挂不上本会话的树,画的是原始网格 —— '
+                  '把它们换成本地对象(数据照旧 link):{1}'.format(len(linked), linked[:8]), flush=True)
+        _host().view_window_readers_changed()
+        return done
+
+    # ==================== 材质参数面板(读写路径;面板本体由宿主统一画) ====================
+
+    def _panel_rows(self):
+        return self.PROPERTIES.values()
+
+    def _panel_insts(self, mat):
+        nt = mat.node_tree
+        if nt is None:
+            return []
+        return sorted((n for n in nt.nodes if n.get('ruri_inst') is not None),
+                      key=lambda n: int(n['ruri_inst']))
+
+    def _panel_vertex_nodes(self, mat):
+        """这张材质在顶点腿上的组实例。身份烙在实例上(建的时候写的),不靠「克隆组按材质命名」
+        这种把身份编进名字的老办法 —— 模板现在是**共享**的,名字里没有材质。"""
+        nodes = []
+        for obj in bpy.data.objects:
+            mod = obj.modifiers.get(self.VTX_MODIFIER)
+            tree = getattr(mod, 'node_group', None) if mod is not None else None
+            if tree is None:
+                continue
+            for node in tree.nodes:
+                if node.get('ruri_vtx_mat') == mat.name:
+                    nodes.append(node)
+        return nodes
+
+    def panel_claims(self, mat):
+        # 判据 = 栈身份烙印(ruri_uber_part 每个栈都写,拿它当判据 = 一张材质被 N 个栈同时认领)。
+        return mat is not None and mat.get('ruri_uber_stack') == self.PANEL_KEY
+
+    def panel_rig(self, mat, armature=None):
+        """基座骨这一行(None = 这张材质的 part 不用这座桥)。宿主交活骨架,生成物答
+        「这张材质记的是哪根骨(Unity 身份)、在这副骨架上现在叫什么」。"""
+        prop = self.RIG.get('prop') or ''
+        if not prop or mat.get('ruri_uber_part') not in set(self.RIG.get('parts') or []):
+            return None
+        unity = self.rig_bone_of(mat)
+        return {
+            'prop': prop,
+            'label': self.RIG.get('label') or prop,
+            'unity': unity,
+            'bone': self.rig_resolve_bone(armature, unity),
+            'declared': self.RIG.get('bone') or '',
+        }
+
+    def panel_write_rig(self, mat, armature, bone_name):
+        """选了一根活骨 → 记它的 **Unity 身份**,再给用这张材质的对象重接基座。
+
+        存 Blender 骨名等于把这条绑定做成「改一次名就断且毫无痕迹」的东西,所以没有身份
+        印记的骨直接拒收并说明白 —— 返回 (成功?, 说给用户听的话)。"""
+        prop = self.RIG.get('prop') or ''
+        if not prop:
+            return False, '本栈没有骨骼基座桥。'
+        if not bone_name:
+            mat[prop] = ''
+            return True, '已清空基座骨:这张材质回到绑定姿势基。'
+        api = self._rig_identity_api('rig_unity_name_fn')
+        unity = api(armature, bone_name) or '' if (api is not None and armature is not None) else ''
+        if not unity:
+            return False, "骨 '{0}' 没有导入器的身份印记,记下来改一次名就断 —— 换一根导入器建的骨。".format(bone_name)
+        mat[prop] = unity
+        users = [o for o in bpy.context.scene.objects
+                 if o.type == 'MESH' and o.data is not None
+                 and any(slot.material is mat for slot in o.material_slots)]
+        self.apply_rig_basis(objects=users)
+        return True, "基座骨 = {0}(Unity 身份 {1}),已给 {2} 个对象重接基座。".format(
+            bone_name, unity, len(users))
+
+    def panel_write(self, mat, row, value):
+        """面板值 → 这一行(作者值,与 Unity 检视面同一个数)经 _land 落进记录与读它的每一个面,别的行一格不碰。
+        向量行只写给出的分量:没给的(三分量颜色的 alpha、顶点腿上没有 _w 口的那一格)照这张材质此刻的值。"""
+        name = row['name']
+        kind = row['kind']
+        if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
+            self._land(mat, {name: (1.0 if value else 0.0) if kind == 'SWITCH' else float(value)})
+            return
+        given = [float(component) for component in value][:4]
+        self._land(mat, {name: given + self._author_row(mat, name)[len(given):]})
+
+    def _slot_neutral(self, part, slot):
+        """这一槽没绑图时该采到什么:割点自己声明的中性图(与建材质时缺图的槽逐位等价)。"""
+        if part not in self.m['parts']:
+            return None
+        for fetch in self._part_fetches(self.part(part)):
+            if fetch['slot'] == slot and not fetch['env']:
+                return _neutral_image(fetch['neutral'], fetch['neutral_alpha'], fetch['non_color'])
+        return None
+
+    def panel_write_image(self, mat, row, image):
+        """贴图槽换图;清空 = 回落中性占位。没绑图的槽走导入期同一条 _wire_fetch/_sample 建线链。"""
+        name = row['name']
+        part = mat.get('ruri_uber_part', '')
+        target = image
+        imgs = dict(mat.get('ruri_uber_images') or {})
+        if image is None:
+            imgs.pop(name, None)
+        else:
+            imgs[name] = image
+        mat['ruri_uber_images'] = imgs
+        bound = dict(imgs)
+        neutral = self._slot_neutral(part, name) if target is None else None
+        slot_rows = ([r[0] for r in self.part(part)['params'] if _image_row_slot(r[0]) == name]
+                     if part in self.m['parts'] else [])
+        if slot_rows:
+            cols = _mixed(mat.get('ruri_uber_colors'))
+            fresh = self._image_rows(part, {name: target} if target is not None else {})
+            for row_name in slot_rows:
+                if row_name in fresh:
+                    cols[row_name] = fresh[row_name]
+                else:
+                    cols.pop(row_name, None)
+            mat['ruri_uber_colors'] = cols
+
+        def swap(tree, depth=0):
+            if tree is None or depth > 4 or tree.library is not None:
+                return
+            for node in tree.nodes:
+                if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                    if target is not None:
+                        _swap_image(node, target, bound)
+                    elif neutral is not None:
+                        _set_neutral_image(node, neutral, bound)
+                elif node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) == name:
+                    # 别的槽借这一槽的采样器:借出的图换了,借用方的寻址与过滤跟着换。
+                    _apply_own_sampler(node, target)
+                elif node.type == 'GROUP':
+                    swap(node.node_tree, depth + 1)
+
+        swapped = [0]
+        if mat.node_tree is not None:
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and _slot_of(node.label or '') == name:
+                    if target is not None:
+                        _swap_image(node, target, bound)
+                        swapped[0] += 1
+                    elif neutral is not None:
+                        _set_neutral_image(node, neutral, bound)
+                elif node.type == 'TEX_IMAGE' and node.get(OWN_SAMPLER_KEY) == name:
+                    _apply_own_sampler(node, target)
+                elif node.type == 'GROUP':
+                    swap(node.node_tree, 1)
+        if not swapped[0] and target is not None and image is not None and mat.node_tree is not None \
+                and part in self.m['parts']:
+            g = G(mat.node_tree, is_group=False)
+            ordered = self._panel_insts(mat)
+            spec = self.part(part)
+            for fetch in spec['fetches']:
+                if fetch['slot'] == name and not fetch['env']:
+                    self._wire_fetch(g, part, ordered, fetch, target, bound)
+            for zone in spec['zones']:
+                zone_rows = [f for f in zone['fetches'] if f['slot'] == name and not f['env']]
+                if not zone_rows:
+                    continue
+                binsts = sorted((n for n in mat.node_tree.nodes if n.get('ruri_zone') == zone['sock']),
+                                key=lambda n: int(n['ruri_binst']))
+                if not binsts:
+                    continue
+                for fetch in zone_rows:
+                    src = binsts[fetch['depth']]
+                    heads = binsts[fetch['depth'] + 1:]
+                    color, alpha, _anchor = self._sample(g, part, fetch, target,
+                                                         src.outputs[fetch['sock'] + '_uv'], bound)
+                    self._feed(g, heads, fetch['sock'], color, alpha)
+            _frame_generated(mat.node_tree)
+        if mat.node_tree is not None:
+            self._aim_active_texture(mat.node_tree, bound)
+        # 顶点腿的槽:模板是共享的,**不许**往它的图节点上写(那是所有材质共用的一份)。
+        # 这里只借模板接口那格的中性占位图判色彩空间,值本身经修改器端口落到本材质那一格。
+        for group_node in self._panel_vertex_nodes(mat):
+            self._vtx_own_samplers(group_node, {name: target})
+            sub = group_node.node_tree
+            if sub is None or target is None:
+                continue
+            for item in sub.interface.items_tree:
+                if item.item_type == 'PANEL' or item.in_out != 'INPUT' or item.name != name:
+                    continue
+                holder = getattr(item, 'default_value', None)
+                non_color = (holder is not None and hasattr(holder, 'colorspace_settings')
+                             and holder.colorspace_settings.name == 'Non-Color')
+                _set_colorspace(target, 'Non-Color' if non_color else 'sRGB')
+                if non_color:
+                    _fix_two_channel_layout(target)
+        self._vtx_panel_write(mat, {name: target})
+        self._publish(mat, slot_rows)
+
+    def panel_write_st(self, mat, row, tiling, offset):
+        """平铺/偏移 → 这一槽的 <槽>_ST 行经 _land 落进记录与它的三个消费面(着色组的 _ST 参数口、顶点期 uv 变换节点、
+        顶点树修改器口)。"""
+        self._land(mat, {row['name'] + '_ST': [float(tiling[0]), float(tiling[1]), float(offset[0]), float(offset[1])]})
+
+    @staticmethod
+    def _panel_bound_images(mat):
+        """{槽: 图}:材质自己的图节点只建在材质树顶层(_teximage;循环体也在同一棵树里),模板组里只有占位图 ——
+        不下钻组。整棵树只走一遍,同槽取第一枚绑了真图的。"""
+        found = {}
+        if mat.node_tree is None:
+            return found
+        for node in mat.node_tree.nodes:
+            if node.type != 'TEX_IMAGE':
+                continue
+            img = node.image
+            if img is not None and not img.get('ruri_placeholder'):
+                found.setdefault(_slot_of(node.label or ''), img)
+        return found
+
+    def _param_declared(self, part):
+        """part 各参数行的声明缺省(作者值,四分量);面板上记录没说的那几格显示它。"""
+        if part not in self.m['parts']:
+            return {}
+        return {name: [float(declared[0]), float(declared[1]), float(declared[2]), float(declared_w)]
+                for name, _kind, declared, declared_w in self.part(part)['params']}
+
+    def panel_read(self, mat):
+        """面板上每一格的当前值:记录说了取记录,没说取图上声明的缺省,再没有取这个 part 的材质模式缺省 —— 都是作者值。"""
+        values, images, st_out = {}, {}, {}
+        if not self._panel_insts(mat) or self.UI is None:
+            return {'values': values, 'images': images, 'st': st_out}
+        part = mat.get('ruri_uber_part', '')
+        declared = self._param_declared(part)
+        schema = self.SCHEMA_DEFAULTS.get(part) or {}
+        floats = dict(mat.get('ruri_uber_floats') or {})
+        st = _mixed(mat.get('ruri_uber_st'))
+        colors = _mixed(mat.get('ruri_uber_colors'))
+        bound = dict(mat.get('ruri_uber_images') or {})
+        transformed = set(self.UI.TRANSFORMED)
+        in_tree = None
+        for name in self.UI.NAMES:
+            row = self.PROPERTIES[name]
+            kind = row['kind']
+            if kind == 'TEXTURE':
+                img = bound.get(name)
+                if img is None:
+                    if in_tree is None:
+                        in_tree = self._panel_bound_images(mat)
+                    img = in_tree.get(name)
+                images[name] = img
+                if name in transformed:
+                    value = st.get(name) or declared.get(name + '_ST')
+                    if value is not None:
+                        st_out[name] = (value[0], value[1], value[2], value[3])
+                continue
+            if kind in ('SWITCH', 'VALUE', 'SLIDER', 'INT', 'CHOICE'):
+                value = floats.get(name)
+                if value is None and name in declared:
+                    value = declared[name][0]
+                if value is None and name in schema:
+                    value = schema[name][0]
+                if value is None:
+                    continue
+                values[name] = (bool(value > 0.5) if kind == 'SWITCH'
+                                else int(value) if kind == 'INT' else float(value))
+            else:
+                value = colors.get(name) or declared.get(name) or schema.get(name)
+                if value is None:
+                    continue
+                spread = (list(value) + [0.0] * 4)[:row.get('display', row['size'])]
+                values[name] = tuple(float(x) for x in spread)
+        return {'values': values, 'images': images, 'st': st_out}
+    # ==================== 天空栈(清单 sky 段) ====================
+
+    # 天空栈自己建的节点都烙这一格:重建只拆自己的,认不得的节点一个不碰。
+    SKY_MARK = 'ruri_sky_stage'
+
+    def sky_entry(self, suffix):
+        """清单里一个入口的行:组名、颜色与 alpha 出口名、绘制行名(draw_row:源管线判定这一入口画不画的天空数据行,
+        行的 x 为 1 画、0 不画)、组输入口(每口 {name, size, default},default 的分量数恰等于 size)。"""
+        return self.sky['entries'][suffix]
+
+    def sky_layers(self):
+        """游戏的绘制层序:每层 {entries: 互斥的入口后缀, blend: Replace | Alpha}。"""
+        return self.sky['layers']
+
+    def _sky_release(self, world, tree, output):
+        """拆掉上一次建的相机支,把世界输出的 Surface 还给它下面那一支照明。认得的形状只有两种:Surface 直接连着 Background
+        (宿主的球谐背景,没建过天空),或连着本栈烙过印的混合着色器(它的第一个 Shader 口就是照明支)。别的形状拒绝:
+        不是宿主的照明支就不替它挑。"""
+        socket = output.inputs['Surface']
+        head = socket.links[0].from_node if socket.is_linked else None
+        if head is not None and head.get(self.SKY_MARK):
+            lighting = head.inputs[1]
+            if not lighting.is_linked:
+                raise RuntimeError('[ruri-sky] 世界 {0} 上天空的相机支底下没有照明支:认不得这棵树,拒绝重建'.format(world.name))
+            tree.links.new(lighting.links[0].from_socket, socket)
+        for node in [node for node in tree.nodes if node.get(self.SKY_MARK)]:
+            tree.nodes.remove(node)
+        if not socket.is_linked or socket.links[0].from_node.type != 'BACKGROUND':
+            raise RuntimeError('[ruri-sky] 世界 {0} 的 Surface 不是可保留的 Background:天空只接在宿主的照明背景旁边,'
+                               '照明由它答(球谐与辐照),天空只是相机看到的那一支'.format(world.name))
+        return socket.links[0].from_socket
+
+    def build_sky_world(self, world, chosen):
+        """在 world 上装出天空,不替换世界:世界输出原先连着的 Background 是照明支(宿主的球谐背景),原样留着;
+        新建 Mix Shader(Fac = Light Path 的 Is Camera Ray,Shader 1 = 照明支,Shader 2 = 天空的 Background),
+        相机直接看到天空,照明光线走照明支。重复调用只换本栈自己的相机支。世界没有节点树或 Surface 不是 Background 就拒绝。
+        chosen = 每层选中的入口后缀(None = 这一层不画),长度与 sky_layers() 相同。Replace 层盖住下面的层;
+        Alpha 层是游戏的云趟混合状态 SrcAlpha / OneMinusSrcAlpha:颜色 = 本层色 · alpha + 下层色 · (1 - alpha)。
+        返回 {入口后缀: 组节点},宿主据此给各组的材质参数与关键字口赋值。"""
+        layers = self.sky_layers()
+        if len(chosen) != len(layers):
+            raise RuntimeError('[ruri-sky] 层数 {0} 与所选 {1} 不符'.format(len(layers), len(chosen)))
+        if not world.use_nodes or world.node_tree is None:
+            raise RuntimeError('[ruri-sky] 世界 {0} 没有节点树:宿主的球谐 Background 要先在'.format(world.name))
+        tree = world.node_tree
+        output = _world_output(tree)
+        if output is None:
+            raise RuntimeError('[ruri-sky] 世界 {0} 没有 EEVEE 取用的世界输出'.format(world.name))
+        lighting = self._sky_release(world, tree, output)
+
+        def made(kind, label):
+            node = tree.nodes.new(kind)
+            node[self.SKY_MARK] = 1
+            node.label = label
+            return node
+
+        radiance = None
+        nodes = {}
+        for index, (layer, suffix) in enumerate(zip(layers, chosen)):
+            if suffix is None:
+                continue
+            if suffix not in layer['entries']:
+                raise RuntimeError('[ruri-sky] 第 {0} 层没有入口 {1}(可选 {2})'.format(index, suffix, layer['entries']))
+            row = self.sky_entry(suffix)
+            node = made('ShaderNodeGroup', suffix)
+            node.node_tree = self.group(row['group'])
+            nodes[suffix] = node
+            color = node.outputs[row['color_out']]
+            if radiance is None or layer['blend'] == 'Replace':
+                radiance = color
+                continue
+            mix = made('ShaderNodeMix', 'Layer {0}'.format(index))
+            mix.data_type = 'RGBA'
+            mix.blend_type = 'MIX'
+            tree.links.new(node.outputs[row['alpha_out']], mix.inputs['Factor'])
+            tree.links.new(radiance, mix.inputs['A'])
+            tree.links.new(color, mix.inputs['B'])
+            radiance = mix.outputs['Result']
+        if radiance is None:
+            raise RuntimeError('[ruri-sky] 没有选中任何入口')
+        sky = made('ShaderNodeBackground', 'Sky')
+        sky.inputs['Strength'].default_value = 1.0
+        tree.links.new(radiance, sky.inputs['Color'])
+        path = made('ShaderNodeLightPath', 'Camera Ray')
+        gate = made('ShaderNodeMixShader', 'Camera Branch')
+        tree.links.new(path.outputs['Is Camera Ray'], gate.inputs['Fac'])
+        tree.links.new(lighting, gate.inputs[1])
+        tree.links.new(sky.outputs['Background'], gate.inputs[2])
+        tree.links.new(gate.outputs['Shader'], output.inputs['Surface'])
+        return nodes
+
+    def sky_branches(self):
+        """文件里每个本地世界上本栈建的相机支:[(世界, 每层选中的入口后缀或 None, {后缀: {口名: 值}})]。天空组是随文件存盘的
+        模板组,口上的值就是真值(没有别的记录),换代前按口名记下,清掉旧一代之后 rebuild_sky_branches 照着用这一代重建。
+        组口上有曲线、驱动或 NLA 就在动任何东西之前拒绝:重建带不过去。"""
+        import re
+        found = []
+        for world in bpy.data.worlds:
+            tree = world.node_tree
+            if world.library is not None or tree is None:
+                continue
+            entries = {node.label: node for node in tree.nodes
+                       if node.bl_idname == 'ShaderNodeGroup' and node.get(self.SKY_MARK)}
+            if not entries:
+                continue
+            names = {node.name for node in entries.values()}
+            for owner, prefix in ((tree, ''), (world, 'node_tree.')):
+                data = owner.animation_data
+                if data is None:
+                    continue
+                if len(data.nla_tracks):
+                    raise RuntimeError('[ruri-sky] 世界 {0} 的节点树有 NLA 轨道:天空换代重建带不过去,先把轨道烘回动作'.format(
+                        world.name))
+                for curve in list(data.drivers) + _slot_curves(data):
+                    hit = re.match(NODE_PATH, curve.data_path[len(prefix):]) if curve.data_path.startswith(prefix) else None
+                    if hit is not None and bpy.utils.unescape_identifier(hit.group(1)) in names:
+                        raise RuntimeError('[ruri-sky] 世界 {0} 的天空组口上有动画 {1}:换代重建带不过去,拒绝'.format(
+                            world.name, curve.data_path))
+            chosen = []
+            for layer in self.sky_layers():
+                present = [suffix for suffix in layer['entries'] if suffix in entries]
+                chosen.append(present[0] if present else None)
+            values = {}
+            for suffix, node in entries.items():
+                values[suffix] = {}
+                for socket in node.inputs:
+                    if hasattr(socket, 'default_value'):
+                        value = socket.default_value
+                        values[suffix][socket.name] = tuple(value) if hasattr(value, '__len__') else value
+            found.append((world, chosen, values))
+        return found
+
+    def rebuild_sky_branches(self, found):
+        """照 sky_branches 记下的,在旧一代清掉之后用这一代的模板组重建每个世界的相机支,组口的值按口名写回:新一代新增的口
+        取缺省,去掉的口不读。返回重建了几个世界。"""
+        for world, chosen, values in found:
+            nodes = self.build_sky_world(world, chosen)
+            for suffix, node in nodes.items():
+                stated = values.get(suffix, {})
+                for socket in node.inputs:
+                    if socket.name in stated and hasattr(socket, 'default_value'):
+                        socket.default_value = stated[socket.name]
+        return len(found)
+    # ==================== 合成器后处理级(kind = post 的栈) ====================
+    # Blender 5.2 契约(真渲染实测,写错是静默全黑):渲染结果只能由组内 CompositorNodeRLayers 取,
+    # 出口走 NodeGroupOutput;喂组输入 socket 拿到的是全 0。
+
+    POST_SAVED_KEY = 'ruri_post_saved_state'
+
+    def _post_remember(self, scene):
+        if self.POST_SAVED_KEY in scene:
+            return
+        previous = scene.compositing_node_group
+        scene[self.POST_SAVED_KEY] = {
+            'group': previous.name if previous is not None else '',
+            'use_compositing': scene.render.use_compositing,
+            'view_transform': scene.view_settings.view_transform,
+            'look': scene.view_settings.look,
+        }
+
+    def installed(self, scene):
+        """本会话装在这个场景上的本级:场景的合成树就是本级建的那棵(临时数据,存盘不带,开文件时由派生阶段现装)。"""
+        tree = bpy.data.node_groups.get(self.post['scene_tree'])
+        return tree is not None and tree.is_runtime_data and scene.compositing_node_group is tree
+
+    def stage_node(self, scene):
+        tree = scene.compositing_node_group
+        return self._stage_in(tree) if tree is not None else None
+
+    def _stage_in(self, tree):
+        """树里本级的主入口:建树时第四枚就是它,按树序找到即停。"""
+        for node in tree.nodes:
+            if node.bl_idname == 'CompositorNodeGroup' and node.node_tree is not None \
+                    and node.node_tree.name == self.post['group']:
+                return node
+        return None
+
+    def extra_inputs(self):
+        """颜色之外、由宿主驱动的输入口名(内核形参顺序)。"""
+        return list(self.post.get('extra_in') or [])
+
+    def extra_images(self):
+        """内核贴图形参对应的组图像口名(内核形参顺序)。"""
+        return list(self.post.get('images') or [])
+
+    def grades(self, scene):
+        """这一级调的画面在不在这个场景里:场景里有本配方材质栈建的材质。一个会话装着几个游戏的栈时,
+        合成树只有一棵,凭这一条挑,不凭谁最后装。"""
+        stacks = set(self.post.get('grades') or ())
+        for obj in scene.objects:
+            for slot in getattr(obj, 'material_slots', ()):
+                material = slot.material
+                if material is not None and material.get('ruri_uber_stack') in stacks:
+                    return True
+        return False
+
+    POST_IMAGE_KEY = 'ruri_post_image'
+
+    def set_images(self, scene, images):
+        """按 extra_images() 往本级组的图像口接图。images[口名] = (宽, 高, 逐纹素 RGBA 浮点平铺)。纹素是关卡的
+        数据,记在关卡的世界上随文件走;图是临时数据,每次建树时按记下的纹素现建(_wire_images)。模板组不烙任何图。
+        缺一口就拒绝,理由同 set_extra。"""
+        names = self.extra_images()
+        missing = [name for name in names if name not in images]
+        if missing:
+            raise KeyError('[ruri-post] 本级要图像口 {0},缺 {1}'.format(names, missing))
+        if not self.installed(scene):
+            raise RuntimeError('[ruri-post] 场景上没装本级 {0}:先装本级再接图'.format(self.post['group']))
+        stored = {}
+        for name in names:
+            width, height, texels = images[name]
+            if len(texels) != width * height * 4:
+                raise ValueError('[ruri-post] 图像口 {0} 给了 {1} 个分量,{2}x{3} RGBA 要 {4} 个'.format(
+                    name, len(texels), width, height, width * height * 4))
+            stored[name] = {'size': [int(width), int(height)], 'texels': [float(texel) for texel in texels]}
+        self._store(scene, self.POST_IMAGES_KEY, stored)
+        self._wire_images(scene)
+        return len(names)
+
+    def _wire_images(self, scene):
+        """按场景记下的纹素现建本级的图像口图(逐场景一张,Non-Color 浮点,临时数据)接到主入口上;没记过的口留着
+        模板组自己的缺省。"""
+        node = self.stage_node(scene)
+        tree = scene.compositing_node_group
+        stored = self._stored(scene, self.POST_IMAGES_KEY)
+        for name in self.extra_images():
+            entry = stored.get(name)
+            if entry is None:
+                continue
+            width, height = (int(value) for value in entry['size'])
+            image_name = '{0} {1} {2}'.format(self.post['group'], name, scene.name)
+            image = bpy.data.images.get(image_name)
+            if image is not None:
+                bpy.data.images.remove(image)
+            image = _host().scratch(bpy.data.images.new(image_name, width, height, alpha=True, float_buffer=True,
+                                                        is_data=True))
+            image.colorspace_settings.name = 'Non-Color'
+            image.pixels.foreach_set([float(texel) for texel in entry['texels']])
+            # 改了像素不 update,合成器读到的还是旧缓冲(实测全 0)。打成浮点包只为撤销与关文件不喊「图像未保存」。
+            image.update()
+            image.file_format = 'OPEN_EXR'
+            _image_stored(image)
+            source = next((candidate for candidate in tree.nodes
+                           if candidate.bl_idname == 'CompositorNodeImage'
+                           and candidate.get(self.POST_IMAGE_KEY) == name), None)
+            if source is None:
+                source = tree.nodes.new('CompositorNodeImage')
+                source[self.POST_IMAGE_KEY] = name
+                source.label = name
+            source.image = image
+            tree.links.new(source.outputs['Image'], node.inputs[name])
+        _frame_generated(tree)
+
+    POST_CHAIN_KEY = 'ruri_post_chain'
+    # 渲染结果拆三通道再拼成向量的那一枚:没有替换场景色的链时主入口的颜色口接它。
+    POST_PACK_KEY = 'ruri_post_scene_color'
+    # 记下的本级输入(内容,随文件走;合成树是临时数据,每次按它们现建),各按本级的组名分格:
+    # 关卡写的宿主输入 {输入名: 分量}、关卡给的图像口纹素 —— 关卡的数据,住在关卡的世界上(与关卡全局量同处,
+    # 用着关卡世界的场景看到的是同一份);面板上拧得与关卡不一样的主入口口 {口名: 分量} 是这个场景自己的。
+    POST_VALUES_KEY = 'ruri_post_values'
+    POST_KNOBS_KEY = 'ruri_post_knobs'
+    POST_IMAGES_KEY = 'ruri_post_images'
+    POST_SIZE_KEY = 'ruri_post_size'
+    LEVEL_KEYS = (POST_VALUES_KEY, POST_IMAGES_KEY)
+
+    def _holder(self, scene, key):
+        if key not in self.LEVEL_KEYS:
+            return scene
+        if key in scene:
+            raise RuntimeError('[ruri-post] 场景 {0} 把关卡陈述的调色记在场景上(旧格式):它住在关卡的世界上 —— '
+                               '重新导入关卡'.format(scene.name))
+        return scene.world
+
+    def _stored(self, scene, key):
+        """记下的本级那一格(POST_VALUES_KEY / POST_KNOBS_KEY / POST_IMAGES_KEY),纯 python。"""
+        holder = self._holder(scene, key)
+        if holder is None:
+            return {}
+        return _plain((holder.get(key) or {}).get(self.post['group'])) or {}
+
+    def _store(self, scene, key, entries):
+        holder = self._holder(scene, key)
+        if holder is None:
+            raise RuntimeError('[ruri-post] 场景 {0} 没有世界:关卡陈述的调色住在关卡的世界上'.format(scene.name))
+        table = _plain(holder.get(key)) or {}
+        table[self.post['group']] = entries
+        holder[key] = table
+
+    @staticmethod
+    def _components(value):
+        return [float(component) for component in value] if hasattr(value, '__len__') else [float(value)]
+
+    def _expected_socket_values(self, scene, stage):
+        """主入口各口按「接口缺省 → 关卡写的宿主输入」该有的值 {口名: 分量} —— 面板没拧过时口上就是它。
+        宿主输入按 _write_input 的载体约定落口:四维 = 向量口 + _w 口,二维 = z 恒 0 的向量口。"""
+        expected = {}
+        for item in stage.node_tree.interface.items_tree:
+            if getattr(item, 'in_out', '') == 'INPUT' and hasattr(item, 'default_value'):
+                expected[item.name] = self._components(item.default_value)
+        sizes = self.post['sizes']
+        for name, components in self._stored(scene, self.POST_VALUES_KEY).items():
+            socket = stage.inputs.get(name)
+            if socket is None:
+                continue
+            if socket.type == 'VECTOR':
+                expected[name] = (list(components[:3]) + [0.0] * 3)[:3]
+                if sizes.get(name) == 4 and stage.inputs.get(name + '_w') is not None:
+                    expected[name + '_w'] = [components[3]]
+            else:
+                expected[name] = [components[0]]
+        return expected
+
+    def _capture_knobs(self, scene):
+        """面板直接拧的是运行时树上主入口的口:把拧得与「接口缺省 → 关卡输入」不一样的那些记回场景
+        (POST_KNOBS_KEY),建树时写回。值没变不写 —— 写场景会让它变脏。"""
+        stage = self.stage_node(scene)
+        if stage is None:
+            return False
+        expected = self._expected_socket_values(scene, stage)
+        knobs = {}
+        for socket in stage.inputs:
+            if socket.is_linked or not hasattr(socket, 'default_value'):
+                continue
+            try:
+                value = self._components(socket.default_value)
+            except (TypeError, ValueError):
+                continue
+            want = expected.get(socket.name)
+            if want is None or len(want) != len(value) or any(
+                    abs(have - should) > 1e-6 * max(1.0, abs(should)) for have, should in zip(value, want)):
+                knobs[socket.name] = value
+        if knobs == self._stored(scene, self.POST_KNOBS_KEY):
+            return False
+        self._store(scene, self.POST_KNOBS_KEY, knobs)
+        return True
+    POST_LEVEL_KEY = 'ruri_post_level'
+
+    def _stage_nodes(self, tree):
+        """本级在场景树里的全部组实例:主入口与图链里的各趟。"""
+        names = {self.post['group']} | {entry['group'] for entry in (self.post.get('passes') or {}).values()}
+        return [node for node in tree.nodes
+                if node.bl_idname == 'CompositorNodeGroup' and node.node_tree is not None and node.node_tree.name in names]
+
+    @staticmethod
+    def _write_input(node, name, value, size):
+        """往一个组实例写一个数值口。四维形参由向量口加 _w 口承载、二维由 z 恒 0 的向量口承载(生成器的载体约定);
+        分量数照清单声明校验,对不上就拒绝。组上没有这个口(或四维口没有 _w)= 生成器把没人读的那部分剪掉了。
+        值没变不写:这一条也跑在依赖图处理器里(_derive_passes),无条件写会自激。"""
+        components = tuple(float(component) for component in value) if hasattr(value, '__len__') else (float(value),)
+        if len(components) != size:
+            raise ValueError('[ruri-post] {0} 声明 {1} 个分量,给了 {2} 个'.format(name, size, len(components)))
+        socket = node.inputs.get(name)
+        if socket is None:
+            return False
+        if socket.type == 'VECTOR':
+            fourth = node.inputs.get(name + '_w')
+            if size == 4 and fourth is not None and not Stack._same_components([fourth.default_value], components[3:4]):
+                fourth.default_value = components[3]
+            vector = (components[:3] + (0.0,) * 3)[:3]
+            if not Stack._same_components(socket.default_value, vector):
+                socket.default_value = vector
+        elif not Stack._same_components([socket.default_value], components[:1]):
+            socket.default_value = components[0]
+        return True
+
+    @staticmethod
+    def _same_components(have, want):
+        """口上的分量(单精度)与要写的值是不是同一个数:与 _capture_knobs 同一把尺。"""
+        return len(have) == len(want) and all(abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+                                              for a, b in zip(have, want))
+
+    def _chain_inputs(self):
+        """只由图链或宿主读、不进任何内核的宿主输入(各链的分辨率档、自动曝光的适应速度)。"""
+        chains = self.post.get('chains') or []
+        return {chain['resolution_input'] for chain in chains} | {chain['adaptation_input'] for chain in chains}
+
+    def exposure_adaptation(self, scene):
+        """(上调, 下调)每秒:关卡陈述的自动曝光适应速度(真源 autoExposureLerpUpSpeed / LerpDownSpeed),宿主逐帧出图
+        按它把曝光从上一帧的值向测到的目标插过去;本级没有自动曝光链或关卡没陈述答 None。"""
+        names = {chain['adaptation_input'] for chain in (self.post.get('chains') or [])
+                 if chain['kind'] == 'auto_exposure'} - {''}
+        if len(names) != 1:
+            return None
+        value = self._stored(scene, self.POST_VALUES_KEY).get(names.pop())
+        return (float(value[0]), float(value[1])) if value else None
+
+    def _unbuilt_inputs(self, tree):
+        """此刻没建在树上的图链:只长在它各趟上的输入口无处可写(写下的值记在树上,链建出来时照原样写回)。
+        判据是树上有没有记着这条链种类的趟(几条链可以共用一个趟组,按组认链会把没建的链当成建了),不是链该不该开
+        —— 值先写、链后判的那一拍里,关卡刚打开的链还没建。"""
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        built = {node.get(self.POST_CHAIN_KEY) for node in self._stage_nodes(tree)}
+        names = set()
+        for chain in self.post.get('chains') or []:
+            if chain['kind'] not in built:
+                for group in chain['roles'].values():
+                    names.update(passes[group]['inputs'])
+        return names
+
+    def _write_values(self, tree, values):
+        """把 {名: 分量} 写进本级各组实例上的同名口(主入口与图链各趟一并写)。只有关卡陈述它的调色那一刻(set_extra)
+        与建树时写回场景记下的值(_apply_stored)走这一条。"""
+        nodes = self._stage_nodes(tree)
+        unplaced = self._chain_inputs() | self._unbuilt_inputs(tree)
+        sizes = self.post['sizes']
+        for name, value in values.items():
+            if not any([self._write_input(node, name, value, sizes[name]) for node in nodes]) and name not in unplaced:
+                raise KeyError('[ruri-post] 本级各组上都没有输入口 {0}'.format(name))
+
+    def _derive_passes(self, scene, tree):
+        """图链各趟上的宿主输入:主入口上有同名口的取主入口此刻的值(面板拧过的就是拧过的那个),主入口上没有的取关卡
+        记下的值。主入口自己一格不写 —— 它的口是用户拧的那一面,关卡的值只在关卡陈述它的那一刻(set_extra)写上去,
+        建树、图链重建、开文件都不许拿记下的关卡值盖掉拧过的口。"""
+        stage = self._stage_in(tree)
+        passes = [node for node in self._stage_nodes(tree) if stage is None or node.name != stage.name]
+        if not passes:
+            return
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        sizes = self.post['sizes']
+        for name in self.extra_inputs():
+            value = self._entry_value(stage, name, sizes[name], remembered.get(name))
+            if value is None:
+                continue
+            for node in passes:
+                self._write_input(node, name, value, sizes[name])
+
+    @staticmethod
+    def _entry_value(stage, name, size, remembered):
+        """主入口上这一个宿主输入此刻的分量,按 _write_input 的载体约定读回(四维是向量口加 _w 口,没有 _w 口取记下的
+        第四分量);主入口没有这一口取关卡记下的值;口被图链接着(算值的链驱动它)就不归这里写。"""
+        socket = stage.inputs.get(name) if stage is not None else None
+        if socket is None:
+            return remembered
+        if socket.is_linked:
+            return None
+        components = [float(component) for component in socket.default_value] \
+            if hasattr(socket.default_value, '__len__') else [float(socket.default_value)]
+        if size == 4:
+            fourth = stage.inputs.get(name + '_w')
+            if fourth is not None:
+                return components[:3] + [float(fourth.default_value)]
+            return components[:3] + [float(remembered[3]) if remembered else 0.0]
+        return components[:size]
+
+    def set_extra(self, scene, values):
+        """按 extra_inputs() 的顺序写宿主驱动的输入口:同名口在主入口与图链各趟上是同一个值,一并写;写下的值记在
+        关卡的世界上(内容,随文件走),建树时照原样写回主入口(面板拧过的旋钮再盖上),图链各趟按主入口此刻的值取。
+        缺一口就拒绝 —— 半份参数比不接更坏(漏掉的那一口会悄悄回到缺省,画面差一点点而没人知道)。"""
+        names = self.extra_inputs()
+        if len(values) != len(names):
+            raise ValueError('[ruri-post] 本级要 {0} 个宿主输入 {1},收到 {2} 个'.format(
+                len(names), names, len(values)))
+        if not self.installed(scene):
+            raise RuntimeError('[ruri-post] 场景上没装本级 {0}:先装本级再写输入,写进空处 = 这份调色静默丢失'.format(
+                self.post['group']))
+        tree = scene.compositing_node_group
+        remembered = {name: [float(component) for component in value] if hasattr(value, '__len__') else [float(value)]
+                      for name, value in zip(names, values)}
+        self._store(scene, self.POST_VALUES_KEY, remembered)
+        # 先写后判:开关口长在主入口上的链按主入口此刻的值开关,判之前值得已经在口上;重建出来的各趟照主入口取值。
+        self._write_values(tree, remembered)
+        self.refresh_chains(scene)
+        # 关卡刚写的这几格从此就是主入口「该有」的值,面板旋钮的记账跟着换基准。
+        self._capture_knobs(scene)
+        return len(names)
+
+    @staticmethod
+    def _output_size(scene):
+        render = scene.render
+        return (max(1, render.resolution_x * render.resolution_percentage // 100),
+                max(1, render.resolution_y * render.resolution_percentage // 100))
+
+    def _chain_signature(self, scene, tree):
+        """图链的拓扑由出图尺寸、各链的分辨率档、开关与视口预览、测光记录与曝光状态在不在定;没写过分辨率档时按半分辨率
+        (真源 BloomResolution.Half = 2)。"""
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        width, height = self._output_size(scene)
+        chains = self.post.get('chains') or []
+        signature = [width, height] + [float(remembered[name][0]) if name in remembered else 2.0
+                                       for name in sorted({chain['resolution_input'] for chain in chains})]
+        return signature + [1.0 if self._chain_enabled(scene, tree, chain) else 0.0
+                            for chain in chains if chain.get('enable_input')] + [
+            1.0 if self._viewport_preview(scene, chain) else 0.0 for chain in chains
+            if chain['kind'] in self.RENDER_ONLY_KINDS] + [
+            float(len(self._water_objects(scene, chain))) for chain in chains if chain['kind'] == 'water_lighting'] + [
+            1.0 if self._exposure_record(scene) else 0.0, 1.0 if self.exposure_state_present(scene) else 0.0,
+            1.0 if self._temporal_record(scene) else 0.0, 1.0 if self.temporal_state_present(scene) else 0.0]
+
+    POST_EXPOSURE_RECORD_KEY = 'ruri_post_exposure_record'
+    EXPOSURE_RECORD_NAME = 'Exposure'
+    # 拒绝时送进主入口的场景色:一眼认得出的错,不是任何画面会有的颜色。
+    EXPOSURE_REFUSED_COLOR = (1.0, 0.0, 1.0)
+
+    @staticmethod
+    def exposure_state_name():
+        """各材质栈从世界读的曝光状态(陈述者 post_exposure)的名字:真源渲染管线每帧把乘在画面上的曝光 E 写成
+        x = E、y = 1/E,角色与不吃曝光的发光拿 1/E 抵掉。没有栈读它答 None;只能有一份。"""
+        names = sorted({name for stack in STACKS for name, (statement, _base) in stack.level_global_bases().items()
+                        if statement == 'post_exposure'})
+        if len(names) > 1:
+            raise RuntimeError('[ruri-post] 曝光状态只能有一份,各栈读的是 {0}'.format(names))
+        return names[0] if names else None
+
+    def exposure_state_present(self, scene):
+        """场景上有没有曝光状态:有没有决定乘在画面上的曝光读不读它、守卫拒不拒绝(见 _applied_exposure 与
+        _refuse_unstated),所以它进图链签名。"""
+        name = self.exposure_state_name()
+        return name is not None and name in scene
+
+    def _applied_exposure(self, tree, scene, metered):
+        """乘在画面上的曝光(档),接到自动曝光链 Drives 指名的口:场景上有宿主陈述的曝光状态就读它 —— 真源每帧乘的是
+        向测到的目标适应过来的那个值(AutoExposureUpdateData 写回相机的 exposureAdaptation),材质读的曝光状态也是它,
+        宿主逐帧出图照关卡的适应速度把它从上一帧的值插过去;没有状态(视口预览、没经宿主出图)就是本帧测到的目标。
+        读状态的驱动只在状态在场时建:目标属性不在时建的驱动,之后属性出现了最终渲染里也一直读 0(实测),所以状态
+        一出现图链就按签名重建。"""
+        name = self.exposure_state_name()
+        if name is None or not self.exposure_state_present(scene):
+            return metered
+        base = next(base for stack in STACKS for global_name, (_statement, base) in stack.level_global_bases().items()
+                    if global_name == name)
+        stated = tree.nodes.new('ShaderNodeMath')
+        stated[self.POST_CHAIN_KEY] = 'auto_exposure'
+        stated.operation = 'ADD'
+        stated.inputs[1].default_value = float(base[0])
+        driver = stated.inputs[0].driver_add('default_value').driver
+        driver.type = 'AVERAGE'
+        variable = driver.variables.new()
+        variable.type = 'SINGLE_PROP'
+        target = variable.targets[0]
+        target.id_type = 'SCENE'
+        target.id = scene
+        target.data_path = '["{0}"][0]'.format(name)
+        stops = tree.nodes.new('ShaderNodeMath')
+        stops[self.POST_CHAIN_KEY] = 'auto_exposure'
+        stops.operation = 'LOGARITHM'
+        tree.links.new(stated.outputs[0], stops.inputs[0])
+        stops.inputs[1].default_value = 2.0
+        return stops.outputs[0]
+
+    def _refuse_unstated(self, tree, scene, delivered):
+        """最终渲染里,自动曝光在测光、场景上却没有宿主陈述的曝光状态,就整帧送品红拒绝出图。材质拿不到本帧的 E,只能
+        由宿主逐帧出图把它写成场景上的曝光状态(这一次出图的状态,不是关卡的内容,材质经视图层属性先找场景);没有它
+        材质落在缺省 E = 1,画面就是错的。有状态时不比较:曝光是前几帧向测到的目标适应过来的,本来就不等于本帧测到的
+        目标。视口照常(它从不出片)。"""
+        if self.exposure_state_name() is None or self.exposure_state_present(scene):
+            return delivered
+        colour = tree.nodes.new('ShaderNodeCombineXYZ')
+        colour[self.POST_CHAIN_KEY] = 'auto_exposure'
+        for axis, component in zip(('X', 'Y', 'Z'), self.EXPOSURE_REFUSED_COLOR):
+            colour.inputs[axis].default_value = component
+        return self._render_only(tree, 'auto_exposure', colour.outputs['Vector'], delivered)
+
+    def _exposure_record(self, scene):
+        return str(scene.get(self.POST_EXPOSURE_RECORD_KEY) or '')
+
+    def record_exposure(self, scene, folder):
+        """开关测光记录:folder 非空时自动曝光链把每一帧测到的档位(单值)写进该目录,宿主读回去写下一帧的曝光状态;
+        空 = 关。记录口长在图链上,开关即重建图链。"""
+        if folder:
+            scene[self.POST_EXPOSURE_RECORD_KEY] = folder
+        elif self.POST_EXPOSURE_RECORD_KEY in scene:
+            del scene[self.POST_EXPOSURE_RECORD_KEY]
+        tree = scene.compositing_node_group
+        if tree is not None and self.POST_SIZE_KEY in tree:
+            del tree[self.POST_SIZE_KEY]
+        return self.refresh_chains(scene)
+
+    def metering_record(self, scene, frame):
+        """宿主读回第 frame 帧测光档位的文件;没开记录答 None。命名只在这里与 _record_metering 两处成对。"""
+        folder = self._exposure_record(scene)
+        return os.path.join(folder, '{0:04d}_{1}.exr'.format(frame, self.EXPOSURE_RECORD_NAME)) if folder else None
+
+    def _record_metering(self, tree, scene, value, folder):
+        """测到的档位写成一像素 EXR。输出文件节点只写图、整个跳过单值口,所以先给档位一张 1×1 的域(域坐标乘零加档位,
+        值逐位不变);文件名里的 #### 静帧渲染也代换成帧号。"""
+        field = self._level_domain(tree, scene, 'auto_exposure', 'record', (1, 1))
+        separate = tree.nodes.new('ShaderNodeSeparateXYZ')
+        separate[self.POST_CHAIN_KEY] = 'auto_exposure'
+        tree.links.new(field, separate.inputs[0])
+        held = tree.nodes.new('ShaderNodeMath')
+        held[self.POST_CHAIN_KEY] = 'auto_exposure'
+        held.operation = 'MULTIPLY_ADD'
+        tree.links.new(separate.outputs['X'], held.inputs[0])
+        held.inputs[1].default_value = 0.0
+        tree.links.new(value, held.inputs[2])
+        output = tree.nodes.new('CompositorNodeOutputFile')
+        output[self.POST_CHAIN_KEY] = 'auto_exposure'
+        output.directory = folder
+        output.file_name = '####_'
+        output.format.media_type = 'IMAGE'
+        output.format.file_format = 'OPEN_EXR'
+        output.format.color_depth = '32'
+        output.format.color_mode = 'BW'
+        item = output.file_output_items.new('FLOAT', self.EXPOSURE_RECORD_NAME)
+        tree.links.new(held.outputs[0], output.inputs[item.name])
+
+    POST_VIEWPORT_KEY = 'ruri_post_viewport'
+    # 替换场景色的链:视口里不算它 = 视口直接看没补过的渲染结果,是精确的「这条链不在」。
+    # 泛光是主入口按强度插过去的一张图,喂什么都不是恒等,只能整条开关(强度 0 就不建,见 _chain_enabled)。
+    RENDER_ONLY_KINDS = ('screen_space_reflection', 'water_lighting', 'temporal_anti_aliasing')
+    # 能在视口里预览的那几种:水面要第二个视图层,视口的合成器只看得到活动视图层。
+    PREVIEWABLE_KINDS = ('screen_space_reflection',)
+
+    def viewport_preview_kinds(self):
+        """能在视口里按需开关的链(面板照它画开关)。"""
+        return [chain['kind'] for chain in (self.post.get('chains') or []) if chain['kind'] in self.PREVIEWABLE_KINDS]
+
+    def viewport_previewed(self, scene, kind):
+        """这条链在视口里也算吗:缺省只在最终渲染里算(视口的合成器每画一帧就把整条链从头跑一遍,转视角、
+        采样收敛的每一拍都在付);面板上点了「视口预览」才在视口里算。记在场景上,随文件走。"""
+        return kind in self.PREVIEWABLE_KINDS and bool(self._stored(scene, self.POST_VIEWPORT_KEY).get(kind))
+
+    def _viewport_preview(self, scene, chain):
+        return self.viewport_previewed(scene, chain['kind'])
+
+    def set_viewport_preview(self, scene, kind, enabled):
+        if kind not in self.PREVIEWABLE_KINDS:
+            raise ValueError('[ruri-post] 图链 {0} 不能单在视口里开关(只有 {1} 能)'.format(kind, self.PREVIEWABLE_KINDS))
+        stored = self._stored(scene, self.POST_VIEWPORT_KEY)
+        if enabled:
+            stored[kind] = 1
+        else:
+            stored.pop(kind, None)
+        self._store(scene, self.POST_VIEWPORT_KEY, stored)
+        return self.refresh_chains(scene)
+
+    def _render_only(self, tree, label, rendered, viewed):
+        """只在最终渲染里走 rendered,视口走 viewed。合成器编排时按 Is Viewport 静态剪掉没走的那一支,
+        视口里 rendered 那条链一个节点都不跑。"""
+        switch = tree.nodes.new('GeometryNodeSwitch')
+        switch.input_type = 'VECTOR'
+        switch[self.POST_CHAIN_KEY] = label
+        viewport = tree.nodes.new('GeometryNodeIsViewport')
+        viewport[self.POST_CHAIN_KEY] = label
+        tree.links.new(viewport.outputs[0], switch.inputs['Switch'])
+        tree.links.new(rendered, switch.inputs['False'])
+        tree.links.new(viewed, switch.inputs['True'])
+        return switch.outputs[0]
+
+    def _chain_enabled(self, scene, tree, chain):
+        """链的开关:没有开关口的链恒开;有开关口的首分量大于 0 才开 —— 真源的 IsActive(泛光强度 > 0、反射开关为真)。
+        开关口在主入口上时按主入口此刻的值(面板拧的就是这一口),只长在链自己各趟上时按关卡写下的值(没写过 = 关)。
+        泛光强度为 0 时主入口的合成是恒等(按强度从原色插过去,因子 0),金字塔建出来也只是逐帧白算。"""
+        name = chain.get('enable_input')
+        if not name:
+            return True
+        # 主入口建在树头几枚,找到就停;别走 _stage_nodes —— 那是把上万枚图链节点整个扫一遍。
+        stage = self._stage_in(tree)
+        socket = stage.inputs.get(name) if stage is not None else None
+        if socket is not None:
+            value = socket.default_value
+            return float(value[0] if hasattr(value, '__len__') else value) > 0.0
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        return name in remembered and float(remembered[name][0]) > 0.0
+
+    def _drop_level_domains(self, scene):
+        """清掉本场景各图链的级域图(它们只被本级场景树里的图链节点用)。"""
+        for image in [candidate for candidate in bpy.data.images if candidate.get(self.POST_LEVEL_KEY) == scene.name
+                      and candidate.name.startswith(self.post['group'] + ' ')]:
+            bpy.data.images.remove(image)
+
+    def _level_domain(self, tree, scene, label, level, size):
+        """一级金字塔的出图域:按该级尺寸建一张生成图,取它的坐标场。合成器的 Scale 只改变换、共享源像素、推迟到
+        实化才重采样,拿它当域每一级都还在全分辨率网格上跑;生成图是恒等变换的真 w×h 网格,MapUV 只实化图像的
+        变换、在图自己的归一化空间取样,跨级取样因此成立。"""
+        image = _host().scratch(bpy.data.images.new(
+            '{0} {1} level {2} {3}'.format(self.post['group'], label, level, scene.name),
+            size[0], size[1], alpha=False, float_buffer=False, is_data=True))
+        image[self.POST_LEVEL_KEY] = scene.name
+        domain = tree.nodes.new('CompositorNodeImage')
+        domain.image = image
+        coordinates = tree.nodes.new('CompositorNodeImageCoordinates')
+        tree.links.new(domain.outputs['Image'], coordinates.inputs['Image'])
+        domain[self.POST_CHAIN_KEY] = label
+        coordinates[self.POST_CHAIN_KEY] = label
+        return coordinates.outputs['Normalized']
+
+    CHAIN_KINDS = ('bloom_pyramid', 'screen_space_reflection', 'water_lighting', 'auto_exposure',
+                   'temporal_anti_aliasing')
+
+    def _build_chains(self, scene, tree, render, stage):
+        """场景树里现建各图链。替换场景色的链(屏幕空间反射)先建:它合成后的颜色才是主入口与泛光看到的场景色。
+        建之前先记下这一版的签名:建链途中宿主会同步地发依赖图更新,sync_post_chains 由此重入 refresh_chains,
+        见签名已是当前的就什么都不做 —— 不会中途拆掉外层攥着的节点;建到一半抛错也照样抛给调用方,但不会让之后
+        每一拍依赖图更新都再建一遍(那是一个永不收敛的循环,导入整个挂死)。"""
+        tree[self.POST_SIZE_KEY] = self._chain_signature(scene, tree)
+        width, height = self._output_size(scene)
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        self._drop_level_domains(scene)
+        chains = self.post.get('chains') or []
+        for chain in chains:
+            if chain['kind'] not in self.CHAIN_KINDS:
+                raise RuntimeError('[ruri-post] 图链种类 {0} 本运行时不会建'.format(chain['kind']))
+        packed = next(node for node in tree.nodes if node.get(self.POST_PACK_KEY))
+        scene_color = None
+        for chain in chains:
+            if chain['kind'] == 'screen_space_reflection' and not self._chain_enabled(scene, tree, chain):
+                self._drop_ssr_view_layers(scene, chain)
+                render.update()
+            elif chain['kind'] == 'screen_space_reflection':
+                preview = self._viewport_preview(scene, chain)
+                scene_color = self._screen_space_reflection(tree, scene, render, chain, width, height, preview)
+                if not preview:
+                    scene_color = self._render_only(tree, chain['kind'], scene_color, packed.outputs['Vector'])
+        for chain in chains:
+            if chain['kind'] != 'water_lighting' or not self._chain_enabled(scene, tree, chain):
+                continue
+            beneath = scene_color if scene_color is not None else packed.outputs['Vector']
+            composed = self._water_lighting(tree, scene, render, chain, width, height, beneath)
+            if composed is not None:
+                scene_color = self._render_only(tree, chain['kind'], composed, beneath)
+        for chain in chains:
+            if chain['kind'] != 'temporal_anti_aliasing':
+                continue
+            folder = self._temporal_record(scene)
+            if not folder or not self.temporal_state_present(scene):
+                self._drop_temporal_view_layers(scene, chain)
+                render.update()
+                continue
+            beneath = scene_color if scene_color is not None else packed.outputs['Vector']
+            resolved = self._temporal_anti_aliasing(tree, scene, render, chain, width, height, beneath, folder)
+            scene_color = self._render_only(tree, chain['kind'], resolved, beneath)
+        metering = [chain for chain in chains if chain['kind'] == 'auto_exposure' and self._chain_enabled(scene, tree, chain)]
+        if len(metering) > 1:
+            raise RuntimeError('[ruri-post] 一帧只有一个曝光,开着的自动曝光链有 {0} 条'.format(len(metering)))
+        folder = self._exposure_record(scene)
+        delivered = scene_color if scene_color is not None else packed.outputs['Vector']
+        driven = []
+        for chain in metering:
+            source = scene_color if scene_color is not None else render.outputs['Image']
+            value = self._auto_exposure(tree, scene, chain, source, width, height)
+            driven.append((chain, self._applied_exposure(tree, scene, value)))
+            if folder:
+                self._record_metering(tree, scene, value, folder)
+            delivered = self._refuse_unstated(tree, scene, delivered)
+        tree.links.new(delivered, stage.inputs[self.post['color_in']])
+        for chain in chains:
+            if chain['kind'] != 'bloom_pyramid' or not self._chain_enabled(scene, tree, chain):
+                continue
+            resolution = float(remembered[chain['resolution_input']][0]) if chain['resolution_input'] in remembered else 2.0
+            source = scene_color if scene_color is not None else render.outputs['Image']
+            tree.links.new(self._bloom_pyramid(tree, scene, source, chain, width, height, resolution),
+                           stage.inputs[chain['image']])
+        # 算值的链最后接线:接收它的口长在主入口与各趟上(泛光预滤也读曝光),各趟都建完才找得全。
+        for chain, value in driven:
+            for name in chain['drives']:
+                for node in self._stage_nodes(tree):
+                    socket = node.inputs.get(name)
+                    if socket is not None:
+                        tree.links.new(value, socket)
+
+    SSR_LEVELS = 7
+
+    def _screen_space_reflection(self, tree, scene, render, chain, width, height, viewport):
+        """屏幕空间反射(真源 V2 管线的调度,桌面档全分辨率):宿主深度 → 设备深度 → 六级最大值深度金字塔;追踪
+        (分类 + 步进 + 锥)出反射色、锥 mip 与可信度;颜色与可信度按深度双边逐级降六级;解析取两级插值与可信度;
+        最后按覆盖的规则把那一份补到渲染结果上,返回补过的颜色。各级尺寸 = 上一级整除 2(真源带 mip 的 RT)。
+        相机量由场景树里现答的相机子树给;材质按覆盖询问存的 AOV 由渲染层节点按名取。真源 maxMipCount =
+        min(log2(边) + 1, 7),出图不到 64 像素见方就不满七级 —— 那样的出图本栈不建这条链。"""
+        if max(width, height) < 64:
+            raise RuntimeError('[ruri-post] 屏幕空间反射的七级金字塔要出图至少 64 像素,实得 {0}x{1}'.format(width, height))
+        label = chain['kind']
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        roles = {role: passes[group] for role, group in chain['roles'].items()}
+        self._ssr_view_layers(scene, chain, render.layer)
+        render.update()
+        sizes = [(width, height)]
+        for _level in range(1, self.SSR_LEVELS):
+            sizes.append((max(1, sizes[-1][0] // 2), max(1, sizes[-1][1] // 2)))
+        full = tree.nodes.new('CompositorNodeImageCoordinates')
+        full[self.POST_CHAIN_KEY] = label
+        tree.links.new(render.outputs['Image'], full.inputs['Image'])
+        fields = [full.outputs['Normalized']] + [self._level_domain(tree, scene, label, level, sizes[level])
+                                                 for level in range(1, self.SSR_LEVELS)]
+        camera = self._ssr_camera(tree, render, label, viewport)
+        overlays = {}
+        for image, aov in chain['overlays'].items():
+            socket = render.outputs.get(aov)
+            if socket is None:
+                raise RuntimeError('[ruri-post] 渲染层没有 AOV {0}(视层登记之后渲染层节点仍不出这个口)'.format(aov))
+            overlays[image] = socket
+
+        def extent(size):
+            return (float(size[0]), float(size[1]), 1.0 / size[0], 1.0 / size[1])
+
+        def run(role, coordinate, images, values=None):
+            entry = roles[role]
+            node = tree.nodes.new('CompositorNodeGroup')
+            node.node_tree = self.group(entry['group'])
+            node[self.POST_CHAIN_KEY] = label
+            tree.links.new(coordinate, node.inputs[entry['coords'][0]])
+            if set(images) != set(entry['images']):
+                raise RuntimeError('[ruri-post] {0} 要图 {1},链给了 {2}'.format(
+                    entry['group'], sorted(entry['images']), sorted(images)))
+            for name, image in images.items():
+                tree.links.new(image, node.inputs[name])
+            for name, value in (values or {}).items():
+                if not self._write_input(node, name, value, entry['sizes'][name]):
+                    raise KeyError('[ruri-post] {0} 上没有按级给的口 {1}'.format(entry['group'], name))
+            for name, answer in camera.items():
+                self._link_answer(tree, node, name, answer)
+            if 'ssrFrameIndex' in entry['sizes'] and node.inputs.get('ssrFrameIndex') is not None:
+                curve = node.inputs['ssrFrameIndex'].driver_add('default_value')
+                curve.driver.expression = 'frame'
+            return node
+
+        def only(node, role):
+            return node.outputs[roles[role]['out']]
+
+        depths = [only(run('device_depth', fields[0], {'sceneDepth': render.outputs['Depth']}), 'device_depth')]
+        for level in range(1, self.SSR_LEVELS):
+            depths.append(only(run('depth_pyramid', fields[level], {'previousLevel': depths[-1]},
+                                   {'previousSize': extent(sizes[level - 1]), 'levelSize': extent(sizes[level])}),
+                               'depth_pyramid'))
+        trace_images = {'deviceDepth': depths[0], 'sceneColor': render.outputs['Image']}
+        trace_images.update({name: socket for name, socket in overlays.items() if name in roles['trace']['images']})
+        trace = run('trace', fields[0], trace_images)
+        colors = [trace.outputs['ret_color']]
+        fades = [trace.outputs['ret_fade']]
+        for level in range(1, self.SSR_LEVELS):
+            reduced = run('color_pyramid', fields[level],
+                          {'previousColor': colors[-1], 'previousFade': fades[-1], 'previousDepth': depths[level - 1],
+                           'levelDepth': depths[level]},
+                          {'previousSize': extent(sizes[level - 1]), 'levelSize': extent(sizes[level])})
+            colors.append(reduced.outputs['ret_color'])
+            fades.append(reduced.outputs['ret_fade'])
+        resolve_images = {'coneMip': trace.outputs['ret_coneMip']}
+        for level in range(self.SSR_LEVELS):
+            resolve_images['depth{0}'.format(level)] = depths[level]
+            resolve_images['color{0}'.format(level)] = colors[level]
+            resolve_images['fade{0}'.format(level)] = fades[level]
+        resolved = run('resolve', fields[0], resolve_images)
+        composite_images = {'sceneColor': render.outputs['Image'], 'ssrLighting': resolved.outputs['ret_lighting'],
+                            'ssrFade': resolved.outputs['ret_fade']}
+        composite_images.update({name: socket for name, socket in overlays.items()
+                                 if name in roles['composite']['images']})
+        return only(run('composite', fields[0], composite_images), 'composite')
+
+    WATER_LAYER = 'Ruri Water'
+
+    def _water_objects(self, scene, chain):
+        """水面物体:材质顶层树里写着这条链全部覆盖询问 AOV 的那些(询问落成同名 AOV,见 _wire_overlays)。"""
+        wanted = set(chain['overlays'].values())
+        materials = {material for material in bpy.data.materials if material.node_tree is not None and wanted <= {
+            node.aov_name for node in material.node_tree.nodes if node.bl_idname == 'ShaderNodeOutputAOV'}}
+        return [obj for obj in scene.objects if any(slot.material in materials for slot in obj.material_slots)]
+
+    @staticmethod
+    def _water_collections(scene, objects):
+        """水面物体各自所在的集合:别的视图层要排除它们,所以它们只能装水面物体。"""
+        members = set(objects)
+        collections = {collection for obj in objects for collection in obj.users_collection}
+        for collection in collections:
+            if collection == scene.collection or not set(collection.all_objects) <= members:
+                raise RuntimeError('[ruri-post] 水面物体要收在只装水面的集合里(场景层排除它,水面层画它):'
+                                   '{0} 里还装着别的物体'.format(collection.name))
+        return collections
+
+    @staticmethod
+    def _layer_entry(entry, collection):
+        if entry.collection == collection:
+            return entry
+        for child in entry.children:
+            found = Stack._layer_entry(child, collection)
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _mirror_layer_collections(source, target, skip):
+        """target 层的集合开关(排除、挖空、只间接)照抄 source 层,skip 里的集合不动。"""
+        for source_child, target_child in zip(source.children, target.children):
+            if source_child.collection not in skip:
+                for flag in ('exclude', 'holdout', 'indirect_only'):
+                    value = getattr(source_child, flag)
+                    if getattr(target_child, flag) != value:
+                        setattr(target_child, flag, value)
+            Stack._mirror_layer_collections(source_child, target_child, skip)
+
+    def _water_view_layer(self, scene, chain, collections, beneath):
+        """水面层画链读那一层(beneath)画的全部内容再加上水面 —— 水面像素上的深度、各通道与覆盖询问就是水面自己的,
+        别的像素不读 —— 另开这条链读的通道与覆盖询问的 AOV。所以水面层的集合开关照抄 beneath,只有水面集合相反:
+        其余视图层一律排除水面的集合,它们的颜色与深度就是真源不含水的场景色与深度;两层的依赖图也就只差水面,
+        每帧切层时没有别的物体进出。beneath 因此也要出深度,和把混合物体单独交出来的透明通道。"""
+        water = scene.view_layers.get(self.WATER_LAYER)
+        if water is None:
+            water = scene.view_layers.new(self.WATER_LAYER)
+        scene.view_layers[beneath].use_pass_z = True
+        scene.view_layers[beneath].eevee.use_pass_transparent = True
+        for layer in scene.view_layers:
+            for collection in collections:
+                entry = self._layer_entry(layer.layer_collection, collection)
+                if entry is None:
+                    raise RuntimeError('[ruri-post] 视图层 {0} 里没有水面集合 {1}'.format(layer.name, collection.name))
+                excluded = layer != water
+                if entry.exclude != excluded:
+                    entry.exclude = excluded
+        self._mirror_layer_collections(scene.view_layers[beneath].layer_collection, water.layer_collection, collections)
+        water.use = True
+        water.use_pass_z = True
+        for spec in chain['layer_passes'].values():
+            if not spec['enable']:
+                continue
+            owner = water
+            path = spec['enable'].split('.')
+            for part in path[:-1]:
+                owner = getattr(owner, part)
+            setattr(owner, path[-1], True)
+        present = {aov.name for aov in water.aovs}
+        for name in sorted(set(chain['overlays'].values())):
+            if name not in present:
+                aov = water.aovs.add()
+                aov.name = name
+                aov.type = 'COLOR'
+        return water
+
+    def _wire_level_inputs(self, tree, scene, node, label):
+        """一趟组上读关卡的口:关卡全局(口名 = 全局名,四维的第四分量在 _w 口)按宿主写在关卡世界上的「值 - 缺省」用驱动灌
+        —— 组里再加缺省,与着色树读视图层属性同一条编码,没写过的全局读 0 落在缺省本身;场景没有世界就是没有关卡,口停在 0。
+        关卡图的口(取点落成的组图口,口名 = 槽名)接宿主按关卡建的那一张。"""
+        world = scene.world
+        holders = [(name, 'WORLD', world) for name in (self.level_global_bases() if world is not None else ())]
+        holders.extend((name, 'SCENE', scene) for name in self.scene_time)
+        for name, holder_type, holder in holders:
+            for socket, components in ((node.inputs.get(name), (0, 1, 2)), (node.inputs.get(name + '_w'), (3,))):
+                if socket is None:
+                    continue
+                for index, component in enumerate(components):
+                    curve = socket.driver_add('default_value', index) if len(components) > 1 \
+                        else socket.driver_add('default_value')
+                    driver = curve.driver
+                    driver.type = 'AVERAGE'
+                    variable = driver.variables.new()
+                    variable.type = 'SINGLE_PROP'
+                    target = variable.targets[0]
+                    target.id_type = holder_type
+                    target.id = holder
+                    target.data_path = '["{0}"][{1}]'.format(name, component)
+        for slot in self.level_images:
+            socket = node.inputs.get(slot)
+            if socket is None or socket.is_linked:
+                continue
+            source = tree.nodes.new('CompositorNodeImage')
+            source[self.POST_CHAIN_KEY] = label
+            source.image = self._level_image(slot)
+            tree.links.new(source.outputs['Image'], socket)
+
+    WATER_REFLECT_CYCLE = 8
+    # 透射率低到看不见身后时,拆不透明色只是在放大噪声:这个像素的不透明色只有水面的反射与折射读,不许放大到盖过场景。
+    WATER_TRANSMITTANCE_FLOOR = 0.0625
+
+    def _water_lighting(self, tree, scene, render, chain, width, height, beneath):
+        """水面(HG 的水面屏幕空间反射与 WaterLighting 读屏幕的后半段):没有水面物体时这条链不建,返回 None。场景层的
+        深度与颜色是不含水的那份;水面层按同一台相机再画一遍,读它的深度、各通道与覆盖询问。两份深度各转设备深度,
+        场景那份降成半分辨率低深度,反射在半分辨率上追踪,合成在出图分辨率上,返回合成后的场景色。
+
+        反射的时间性:真源本帧 = lerp(追踪, 上一帧, 0.7),抖动八帧一周期,再经 TAA 按周期摊平。八个相位的不动点再取均值,
+        每次追踪的权重都是 1/8(0.7 的历史只决定相位之间怎么分,加起来是一样的),亮度与可信度同样取八次的均值;
+        只取某一相位的不动点,半分辨率的抖动花纹就留在水面反射里。
+
+        先后:真源先合水面再画透明物体,宿主把混合物体直接画进了场景层的颜色。场景层的透明通道交出它们(预乘的颜色,
+        α 是不透明度,没盖到的像素是 0):场景色 = 通道色 + (1 − α) · 不透明色。从场景色里拆出不透明的那份给水面读,水面改了
+        多少再按 (1 − α) 加回场景色:水面外的像素一个字节不变,水面上的雾与特效留在水面之上。"""
+        objects = self._water_objects(scene, chain)
+        if not objects:
+            return None
+        label = chain['kind']
+        layer = self._water_view_layer(scene, chain, self._water_collections(scene, objects), render.layer)
+        water = tree.nodes.new('CompositorNodeRLayers')
+        water[self.POST_CHAIN_KEY] = label
+        water.scene = scene
+        water.layer = layer.name
+        render.update()
+        water.update()
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        roles = {role: passes[group] for role, group in chain['roles'].items()}
+        half = (max(1, width // 2), max(1, height // 2))
+        full = tree.nodes.new('CompositorNodeImageCoordinates')
+        full[self.POST_CHAIN_KEY] = label
+        tree.links.new(render.outputs['Image'], full.inputs['Image'])
+        full_field = full.outputs['Normalized']
+        half_field = self._level_domain(tree, scene, label, 1, half)
+        camera = self._ssr_camera(tree, render, label, False)
+
+        def output(owner, name, what):
+            found = owner.outputs.get(name)
+            if found is None:
+                raise RuntimeError('[ruri-post] 水面层的渲染层节点没有{0} {1}(视图层登记之后仍不出这个口)'.format(what, name))
+            return found
+
+        layer_images = {image: output(water, aov, 'AOV') for image, aov in chain['overlays'].items()}
+        layer_images.update({image: output(water, spec['output'], '通道')
+                             for image, spec in chain['layer_passes'].items()})
+
+        def extent(size):
+            return (float(size[0]), float(size[1]), 1.0 / size[0], 1.0 / size[1])
+
+        def run(role, coordinate, images, values=None, frames_back=0):
+            entry = roles[role]
+            node = tree.nodes.new('CompositorNodeGroup')
+            node.node_tree = self.group(entry['group'])
+            node[self.POST_CHAIN_KEY] = label
+            tree.links.new(coordinate, node.inputs[entry['coords'][0]])
+            provided = dict(images)
+            provided.update({name: layer_images[name] for name in entry['images'] if name in layer_images})
+            if set(provided) != set(entry['images']):
+                raise RuntimeError('[ruri-post] {0} 要图 {1},链给了 {2}'.format(
+                    entry['group'], sorted(entry['images']), sorted(provided)))
+            for name, image in provided.items():
+                tree.links.new(image, node.inputs[name])
+            for name, value in (values or {}).items():
+                if not self._write_input(node, name, value, entry['sizes'][name]):
+                    raise KeyError('[ruri-post] {0} 上没有按级给的口 {1}'.format(entry['group'], name))
+            for name, answer in camera.items():
+                self._link_answer(tree, node, name, answer)
+            if 'ssrFrameIndex' in entry['sizes'] and node.inputs.get('ssrFrameIndex') is not None:
+                curve = node.inputs['ssrFrameIndex'].driver_add('default_value')
+                curve.driver.expression = 'frame + {0}'.format(self.WATER_REFLECT_CYCLE - frames_back)
+            self._wire_level_inputs(tree, scene, node, label)
+            return node
+
+        def only(node, role):
+            return node.outputs[roles[role]['out']]
+
+        scene_depth = only(run('device_depth', full_field, {'sceneDepth': render.outputs['Depth']}), 'device_depth')
+        water_depth = only(run('device_depth', full_field, {'sceneDepth': water.outputs['Depth']}), 'device_depth')
+        low = only(run('low_depth', half_field, {'sceneDeviceDepth': scene_depth},
+                       {'previousSize': extent((width, height))}), 'low_depth')
+
+        def computed(kind, operation, first, second):
+            node = tree.nodes.new(kind)
+            node[self.POST_CHAIN_KEY] = label
+            node.operation = operation
+            tree.links.new(first, node.inputs[0])
+            if isinstance(second, float):
+                node.inputs['Scale' if operation == 'SCALE' else 1].default_value = second
+            else:
+                tree.links.new(second, node.inputs[1])
+            return node.outputs[0]
+
+        def scaled(vector, factor):
+            node = tree.nodes.new('ShaderNodeVectorMath')
+            node[self.POST_CHAIN_KEY] = label
+            node.operation = 'SCALE'
+            tree.links.new(vector, node.inputs[0])
+            tree.links.new(factor, node.inputs['Scale'])
+            return node.outputs[0]
+
+        blended = output(render, 'Transparent', '通道')
+        blended_parts = tree.nodes.new('CompositorNodeSeparateColor')
+        blended_parts[self.POST_CHAIN_KEY] = label
+        tree.links.new(blended, blended_parts.inputs['Image'])
+        passing = tree.nodes.new('ShaderNodeMath')
+        passing[self.POST_CHAIN_KEY] = label
+        passing.operation = 'SUBTRACT'
+        passing.inputs[0].default_value = 1.0
+        tree.links.new(blended_parts.outputs['Alpha'], passing.inputs[1])
+        transmittance = passing.outputs[0]
+        uncovered = tree.nodes.new('ShaderNodeVectorMath')
+        uncovered[self.POST_CHAIN_KEY] = label
+        uncovered.operation = 'MAXIMUM'
+        tree.links.new(computed('ShaderNodeVectorMath', 'SUBTRACT', beneath, blended), uncovered.inputs[0])
+        opaque = scaled(uncovered.outputs[0],
+                        computed('ShaderNodeMath', 'POWER',
+                                 computed('ShaderNodeMath', 'MAXIMUM', transmittance, self.WATER_TRANSMITTANCE_FLOOR), -1.0))
+
+        cycle = self.WATER_REFLECT_CYCLE
+        reflect_lighting = reflect_fade = None
+        for frames_back in range(cycle):
+            traced = run('reflect', half_field, {'waterDeviceDepth': water_depth, 'lowDepth': low, 'sceneColor': opaque},
+                         {'levelSize': extent(half)}, frames_back)
+            lighting = computed('ShaderNodeVectorMath', 'SCALE', traced.outputs['ret_lighting'], 1.0 / cycle)
+            fade = computed('ShaderNodeMath', 'MULTIPLY', traced.outputs['ret_fade'], 1.0 / cycle)
+            reflect_lighting = lighting if reflect_lighting is None else computed(
+                'ShaderNodeVectorMath', 'ADD', reflect_lighting, lighting)
+            reflect_fade = fade if reflect_fade is None else computed('ShaderNodeMath', 'ADD', reflect_fade, fade)
+        composite = run('composite', full_field, {
+            'sceneColor': opaque, 'sceneDeviceDepth': scene_depth, 'waterDeviceDepth': water_depth,
+            'reflectLighting': reflect_lighting, 'reflectFade': reflect_fade})
+        changed = computed('ShaderNodeVectorMath', 'SUBTRACT', only(composite, 'composite'), opaque)
+        return computed('ShaderNodeVectorMath', 'ADD', beneath, scaled(changed, transmittance))
+
+    @staticmethod
+    def _ssr_view_layers(scene, chain, read):
+        """反射链读的渲染通道只登记在链读的那一层(read):深度与材质存的覆盖询问(一律按颜色 AOV 存,标量询问读它的
+        第一个通道)。别的视图层撤下这几格:材质照旧写,渲染器却每采样多累加、回读、再上传给合成器一份没人读的通道。"""
+        names = set(chain['overlays'].values())
+        for layer in scene.view_layers:
+            if layer.name != read:
+                for aov in [aov for aov in layer.aovs if aov.name in names]:
+                    layer.aovs.remove(aov)
+                continue
+            layer.use_pass_z = True
+            present = {aov.name for aov in layer.aovs}
+            for name in sorted(names):
+                if name not in present:
+                    aov = layer.aovs.add()
+                    aov.name = name
+                    aov.type = 'COLOR'
+
+    @staticmethod
+    def _drop_ssr_view_layers(scene, chain):
+        """反射链不建时撤下它登记的覆盖询问 AOV:材质照旧写这几格,渲染器却每帧多累加、回读、再上传给合成器一份没人读的
+        通道。深度通道留着(别处也可能要)。"""
+        names = set(chain['overlays'].values())
+        for layer in scene.view_layers:
+            for aov in [aov for aov in layer.aovs if aov.name in names]:
+                layer.aovs.remove(aov)
+
+    @staticmethod
+    def _link_answer(tree, node, name, answer):
+        """把相机子树的一个答案接到组的同名口:四维口 = 向量口 + _w 口;组上没有这个口 = 生成器把没人读的剪掉了。"""
+        socket = node.inputs.get(name)
+        if socket is None:
+            return
+        vector, fourth = answer
+        tree.links.new(vector, socket)
+        if fourth is not None and node.inputs.get(name + '_w') is not None:
+            tree.links.new(fourth, node.inputs[name + '_w'])
+
+    def _ssr_camera(self, tree, render, label, viewport):
+        """反射链的相机量,在场景树里现答:渲染时是活动相机(Camera Info 的投影与物体变换),
+        视口里是宿主的视点(物体变换 + 驱动读它身上记着的投影)—— 合成树只有 Is Viewport 分得清两者。
+        视口那一支只在这条链开了视口预览时才建:没开时视口里整条链被剪掉,不建视点也不挂驱动 —— 视点每跟一步
+        视图,驱动就把整棵合成树弄脏一次。
+        投影按真源的 GPU 投影改写:反向 Z(第 3 行 ← −0.5·第 3 行 + 0.5·第 4 行),y 不翻(真源在乘前乘后自己翻);
+        视旋转 = (相机到世界的旋转)ᵀ · 世界基(宿主世界 = 基 · 源世界);裁剪面按宿主投影反解(透视 near = B/(A−1)、
+        far = B/(A+1),正交 near = (B+1)/A、far = (B−1)/A);出图尺寸取渲染结果自己的分辨率。
+        返回 {组输入名: (向量或标量口, 第四分量口或 None)}。"""
+        nodes = tree.nodes
+        links = tree.links
+
+        def nd(kind):
+            node = nodes.new(kind)
+            node[self.POST_CHAIN_KEY] = label
+            return node
+
+        def link_or_set(value, socket):
+            if isinstance(value, (int, float)):
+                socket.default_value = float(value)
+            else:
+                links.new(value, socket)
+
+        def math(operation, a, b=None):
+            node = nd('ShaderNodeMath')
+            node.operation = operation
+            link_or_set(a, node.inputs[0])
+            if b is not None:
+                link_or_set(b, node.inputs[1])
+            return node.outputs[0]
+
+        def combine(x, y, z):
+            node = nd('ShaderNodeCombineXYZ')
+            for axis, value in zip(('X', 'Y', 'Z'), (x, y, z)):
+                link_or_set(value, node.inputs[axis])
+            return node.outputs['Vector']
+
+        def entry(node, column, row):
+            return node.outputs['Column {0} Row {1}'.format(column + 1, row + 1)]
+
+        def split(matrix):
+            node = nd('FunctionNodeSeparateMatrix')
+            links.new(matrix, node.inputs['Matrix'])
+            return node
+
+        def pick(kind, rendered, viewed):
+            node = nd('GeometryNodeSwitch')
+            node.input_type = kind
+            links.new(nd('GeometryNodeIsViewport').outputs[0], node.inputs['Switch'])
+            links.new(rendered, node.inputs['False'])
+            links.new(viewed, node.inputs['True'])
+            return node.outputs[0]
+
+        active = nd('GeometryNodeInputActiveCamera').outputs[0]
+        info = nd('GeometryNodeCameraInfo')
+        links.new(active, info.inputs['Camera'])
+        placed = nd('GeometryNodeObjectInfo')
+        placed.transform_space = 'ORIGINAL'
+        links.new(active, placed.inputs['Object'])
+        transform = placed.outputs['Transform']
+        projection_matrix = info.outputs['Projection Matrix']
+        if viewport:
+            view = self._host_module().viewpoint()
+            viewed = nd('GeometryNodeObjectInfo')
+            viewed.transform_space = 'ORIGINAL'
+            viewed.inputs['Object'].default_value = view.object
+            carried = nd('FunctionNodeCombineMatrix')
+            for column in range(4):
+                for row in range(4):
+                    curve = carried.inputs['Column {0} Row {1}'.format(column + 1, row + 1)].driver_add('default_value')
+                    driver = curve.driver
+                    driver.type = 'AVERAGE'
+                    variable = driver.variables.new()
+                    variable.type = 'SINGLE_PROP'
+                    target = variable.targets[0]
+                    target.id_type = 'OBJECT'
+                    target.id = view.object
+                    target.data_path = '["{0}"][{1}]'.format(view.projection_property, row * 4 + column)
+            transform = pick('MATRIX', transform, viewed.outputs['Transform'])
+            projection_matrix = pick('MATRIX', projection_matrix, carried.outputs['Matrix'])
+        host_projection = split(projection_matrix)
+
+        gpu = nd('FunctionNodeCombineMatrix')
+        for column in range(4):
+            for row in range(4):
+                value = entry(host_projection, column, row)
+                if row == 2:
+                    value = math('ADD', math('MULTIPLY', entry(host_projection, column, 2), -0.5),
+                                 math('MULTIPLY', entry(host_projection, column, 3), 0.5))
+                links.new(value, gpu.inputs['Column {0} Row {1}'.format(column + 1, row + 1)])
+        inverse = nd('FunctionNodeInvertMatrix')
+        links.new(gpu.outputs['Matrix'], inverse.inputs['Matrix'])
+        projection = split(gpu.outputs['Matrix'])
+        inverse_projection = split(inverse.outputs['Matrix'])
+
+        parts = nd('FunctionNodeSeparateTransform')
+        links.new(transform, parts.inputs['Transform'])
+        rotation = nd('FunctionNodeCombineTransform')
+        links.new(parts.outputs['Rotation'], rotation.inputs['Rotation'])
+        transposed = nd('FunctionNodeTransposeMatrix')
+        links.new(rotation.outputs['Transform'], transposed.inputs['Matrix'])
+        basis = nd('FunctionNodeCombineMatrix')
+        stated = self.host['world_basis']
+        for column in range(4):
+            for row in range(4):
+                value = float(stated[row][column]) if row < 3 and column < 3 else (1.0 if row == column else 0.0)
+                basis.inputs['Column {0} Row {1}'.format(column + 1, row + 1)].default_value = value
+        multiplied = nd('FunctionNodeMatrixMultiply')
+        links.new(transposed.outputs['Matrix'], multiplied.inputs[0])
+        links.new(basis.outputs['Matrix'], multiplied.inputs[1])
+        view_rotation = split(multiplied.outputs['Matrix'])
+
+        a = entry(host_projection, 2, 2)
+        b = entry(host_projection, 3, 2)
+        orthographic = entry(host_projection, 3, 3)
+        perspective = math('SUBTRACT', 1.0, orthographic)
+        near_switch = nd('GeometryNodeSwitch')
+        near_switch.input_type = 'FLOAT'
+        links.new(math('GREATER_THAN', orthographic, 0.5), near_switch.inputs['Switch'])
+        links.new(math('DIVIDE', b, math('SUBTRACT', a, 1.0)), near_switch.inputs['False'])
+        links.new(math('DIVIDE', math('ADD', b, 1.0), a), near_switch.inputs['True'])
+        far_switch = nd('GeometryNodeSwitch')
+        far_switch.input_type = 'FLOAT'
+        links.new(math('GREATER_THAN', orthographic, 0.5), far_switch.inputs['Switch'])
+        links.new(math('DIVIDE', b, math('ADD', a, 1.0)), far_switch.inputs['False'])
+        links.new(math('DIVIDE', math('SUBTRACT', b, 1.0), a), far_switch.inputs['True'])
+        near = near_switch.outputs[0]
+        far = far_switch.outputs[0]
+        depth_scale = math('SUBTRACT', math('DIVIDE', far, near), 1.0)
+
+        resolution_info = nd('CompositorNodeImageInfo')
+        links.new(render.outputs['Image'], resolution_info.inputs['Image'])
+        resolution = nd('ShaderNodeSeparateXYZ')
+        links.new(resolution_info.outputs['Resolution'], resolution.inputs[0])
+        width = resolution.outputs['X']
+        height = resolution.outputs['Y']
+
+        unbased = nd('FunctionNodeTransposeMatrix')
+        links.new(basis.outputs['Matrix'], unbased.inputs['Matrix'])
+        located = nd('FunctionNodeTransformPoint')
+        links.new(parts.outputs['Translation'], located.inputs['Vector'])
+        links.new(unbased.outputs['Matrix'], located.inputs['Transform'])
+
+        answers = {
+            'ssrCameraPosition': (located.outputs['Vector'], None),
+            'ssrZBufferParams': (combine(depth_scale, 1.0, math('DIVIDE', depth_scale, far)), math('DIVIDE', 1.0, far)),
+            'ssrScreenSize': (combine(width, height, math('DIVIDE', 1.0, width)), math('DIVIDE', 1.0, height)),
+            'ssrPerspective': (perspective, None),
+        }
+        for column in range(4):
+            answers['ssrProjection{0}'.format(column)] = (
+                combine(entry(projection, column, 0), entry(projection, column, 1), entry(projection, column, 2)),
+                entry(projection, column, 3))
+            answers['ssrInverseProjection{0}'.format(column)] = (
+                combine(entry(inverse_projection, column, 0), entry(inverse_projection, column, 1),
+                        entry(inverse_projection, column, 2)),
+                entry(inverse_projection, column, 3))
+        for row in range(3):
+            answers['ssrViewRotation{0}'.format(row)] = (
+                combine(entry(view_rotation, 0, row), entry(view_rotation, 1, row), entry(view_rotation, 2, row)), None)
+        return answers
+
+    def _bloom_pyramid(self, tree, scene, source, chain, width, height, resolution):
+        """泛光金字塔(HDRP DoBloom 的调度,本管线 UberPostPassUtils.PrepareBloomData 的尺寸,GameAssembly 逐指令对过):
+        出图高于基准高度时整座金字塔按 基准 / 高 缩;级数 = clamp(FloorToInt(log2(max(截断(宽·缩), 截断(高·缩))) - 1
+        - (分辨率档不是半分辨率 ? 1 : 0)), 1, 上限);第 i 级 = RoundToInt(边 · 缩 / 2^(i+1)),至少 1(四舍六入五成双)。
+        预滤出第 0 级;每一级先横后纵各模糊一趟(第 0 级在预滤结果上,其余在上一级上按本级纹素中心取 = 2×2 降采样);
+        再自底向上,本级模糊结果与下一级(最底一级用它自己的模糊结果,其余用上采样结果)按散射插值。只有一级时出图就是
+        预滤结果。每一级的尺寸由喂给该趟的坐标场定(见 _level_domain)。"""
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        prefilter = passes[chain['roles']['prefilter']]
+        blur = passes[chain['roles']['blur']]
+        upsample = passes[chain['roles']['upsample']]
+        fed = {'sourceTexel', 'texel', 'direction', 'bicubic'}
+        if fed != set(chain['geometry']):
+            raise RuntimeError('[ruri-post] 泛光金字塔按级给的是 {0},清单声明的是 {1}'.format(sorted(fed), sorted(chain['geometry'])))
+        reference = float(chain['height_reference'])
+        scale = reference / height if height > reference else 1.0
+        largest = max(int(width * scale), int(height * scale))
+        levels = int(math.floor(math.log2(largest) - 1.0 - (0.0 if int(round(resolution)) == 2 else 1.0)))
+        levels = min(max(levels, 1), int(chain['max_levels']))
+        sizes = [(max(1, int(round(width * scale / 2.0 ** (level + 1)))),
+                  max(1, int(round(height * scale / 2.0 ** (level + 1))))) for level in range(levels)]
+
+        def run(entry, coordinate, images, geometry):
+            node = tree.nodes.new('CompositorNodeGroup')
+            node.node_tree = self.group(entry['group'])
+            node[self.POST_CHAIN_KEY] = chain['kind']
+            tree.links.new(coordinate, node.inputs[entry['coords'][0]])
+            if len(images) != len(entry['images']):
+                raise RuntimeError('[ruri-post] {0} 要 {1} 张图,链给了 {2} 张'.format(
+                    entry['group'], entry['images'], len(images)))
+            for name, image in zip(entry['images'], images):
+                tree.links.new(image, node.inputs[name])
+            for name, value in geometry.items():
+                if not self._write_input(node, name, value, entry['sizes'][name]):
+                    raise KeyError('[ruri-post] {0} 上没有按级给的口 {1}'.format(entry['group'], name))
+            return node.outputs[entry['out']]
+
+        fields = [self._level_domain(tree, scene, chain['kind'], level, size) for level, size in enumerate(sizes)]
+        texels = [(1.0 / size[0], 1.0 / size[1]) for size in sizes]
+        prefiltered = run(prefilter, fields[0], [source], {'sourceTexel': (1.0 / width, 1.0 / height)})
+        if levels == 1:
+            return prefiltered
+        down = []
+        for level in range(levels):
+            upper = prefiltered if level == 0 else down[level - 1]
+            across = run(blur, fields[level], [upper], {'texel': texels[level], 'direction': (1.0, 0.0)})
+            down.append(run(blur, fields[level], [across], {'texel': texels[level], 'direction': (0.0, 1.0)}))
+        up = down[levels - 1]
+        for level in range(levels - 2, -1, -1):
+            lower = sizes[level + 1]
+            up = run(upsample, fields[level], [down[level], up],
+                     {'texel': texels[level], 'bicubic': (lower[0], lower[1], 1.0 / lower[0], 1.0 / lower[1])})
+        return up
+
+    def _auto_exposure(self, tree, scene, chain, source, width, height):
+        """自动曝光的测光(真源 HGLuminanceHistogramCS 与 UberPostPassUtils 的 CalculateAverageLogLuminance /
+        CalculateTargetExposure,算法在生成的内核里):场景色在采样格上(每 sample_stride 个像素取一个,真源的线程步长)
+        逐采样点交出十六个槽的权重;每个槽过一枚 Levels 取整张图的均值 —— 真源「每个线程组累加、CPU 按槽对所有组求和」
+        再除以采样数;十六个均值进 resolve 一趟,它没有坐标场、输入全是单值,出的曝光档位也是单值。返回那个出口,
+        由 _build_chains 接到清单声明的口上。槽的下标 = 内核输出结构里第 slot // 3 张图的第 slot % 3 个通道。"""
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        histogram = passes[chain['roles']['histogram']]
+        resolve = passes[chain['roles']['resolve']]
+        stride = int(chain['sample_stride'])
+        grid = (-(-width // stride), -(-height // stride))
+        geometry = {'exposureSourceSize': (float(width), float(height)),
+                    'exposureSampleGrid': (float(grid[0]), float(grid[1])), 'exposureSampleStride': float(stride)}
+        if set(geometry) - set(chain['geometry']):
+            raise RuntimeError('[ruri-post] 自动曝光链按采样格给的是 {0},清单声明的是 {1}'.format(
+                sorted(geometry), sorted(chain['geometry'])))
+        slot_inputs = [name for name in resolve['inputs'] if name in chain['geometry'] and resolve['sizes'][name] == 1]
+        channels = ('Red', 'Green', 'Blue')
+        if len(slot_inputs) > len(channels) * len(histogram['outs']):
+            raise RuntimeError('[ruri-post] 自动曝光 {0} 个槽装不进直方图一趟的 {1} 张图'.format(
+                len(slot_inputs), len(histogram['outs'])))
+        field = self._level_domain(tree, scene, chain['kind'], 0, grid)
+        counted = tree.nodes.new('CompositorNodeGroup')
+        counted.node_tree = self.group(histogram['group'])
+        counted[self.POST_CHAIN_KEY] = chain['kind']
+        tree.links.new(field, counted.inputs[histogram['coords'][0]])
+        tree.links.new(source, counted.inputs[histogram['images'][0]])
+        resolved = tree.nodes.new('CompositorNodeGroup')
+        resolved.node_tree = self.group(resolve['group'])
+        resolved[self.POST_CHAIN_KEY] = chain['kind']
+        for node, entry in ((counted, histogram), (resolved, resolve)):
+            for name, value in geometry.items():
+                if name in entry['sizes']:
+                    self._write_input(node, name, value, entry['sizes'][name])
+        for slot, name in enumerate(slot_inputs):
+            levels = tree.nodes.new('CompositorNodeLevels')
+            levels[self.POST_CHAIN_KEY] = chain['kind']
+            levels.inputs['Channel'].default_value = channels[slot % len(channels)]
+            tree.links.new(counted.outputs[histogram['outs'][slot // len(channels)]], levels.inputs['Image'])
+            tree.links.new(levels.outputs['Mean'], resolved.inputs[name])
+        return resolved.outputs[resolve['out']]
+
+    POST_TEMPORAL_RECORD_KEY = 'ruri_post_temporal_record'
+    # 宿主逐帧陈述在场景上的时间性状态(这一次出图的,不是关卡的内容):抖动 (x, y)、首帧、快速收敛,再按列的重投影矩阵。
+    TEMPORAL_STATE_NAME = 'ruri_post_temporal_state'
+    TEMPORAL_STATE_LAYOUT = (('taauJitter', 0, 2), ('taauFirstFrame', 2, 1), ('taauFastConverge', 3, 1),
+                             ('taauReprojection0', 4, 4), ('taauReprojection1', 8, 4), ('taauReprojection2', 12, 4),
+                             ('taauReprojection3', 16, 4))
+    TEMPORAL_STATE_LENGTH = 20
+    # 每帧存下、下一帧读回的三份历史:颜色(a 是稳定度)、膨胀后的设备深度、膨胀后的运动向量(a 是物体类别)。
+    TEMPORAL_RECORDS = (('TaaColor', 'RGBA'), ('TaaDepth', 'BW'), ('TaaMotion', 'RGBA'))
+    # 视图层上由本链打开的通道:链不建时只关自己开的那些。
+    TEMPORAL_PASS_KEY = 'ruri_post_temporal_passes'
+
+    # 带历史的图链:每帧读上一帧自己的出图,宿主按帧陈述时间性状态与历史目录(见 record_history)。
+    HISTORY_KINDS = ('temporal_anti_aliasing',)
+
+    def keeps_history(self):
+        """本级有没有带历史的图链:没有就没有谁读宿主陈述的时间性状态,宿主不该陈述它。"""
+        return any(chain['kind'] in self.HISTORY_KINDS for chain in self.post.get('chains') or [])
+
+    def _temporal_record(self, scene):
+        return str(scene.get(self.POST_TEMPORAL_RECORD_KEY) or '')
+
+    def temporal_state_present(self, scene):
+        """场景上有没有宿主陈述的时间性状态:驱动只在状态在时建(目标属性不在时建的驱动,之后属性出现了最终渲染里也一直
+        读 0),所以它进图链签名。"""
+        return self.TEMPORAL_STATE_NAME in scene
+
+    def record_history(self, scene, folder):
+        """开关时间性抗锯齿的历史记录:folder 非空时链把每一帧的历史写进该目录、下一帧按帧号读回;空 = 关,链不建。
+        记录口长在图链上,开关即重建图链。"""
+        if folder:
+            scene[self.POST_TEMPORAL_RECORD_KEY] = folder
+        elif self.POST_TEMPORAL_RECORD_KEY in scene:
+            del scene[self.POST_TEMPORAL_RECORD_KEY]
+        tree = scene.compositing_node_group
+        if tree is not None and self.POST_SIZE_KEY in tree:
+            del tree[self.POST_SIZE_KEY]
+        return self.refresh_chains(scene)
+
+    def history_record(self, scene, frame, name):
+        """第 frame 帧的一份历史文件;没开记录答 None。命名只在这里与 _temporal_anti_aliasing 两处成对。"""
+        folder = self._temporal_record(scene)
+        return os.path.join(folder, '{0:04d}_{1}.exr'.format(frame, name)) if folder else None
+
+    @staticmethod
+    def _temporal_view_layers(scene, chain):
+        """时间性链读的渲染通道:深度、清单声明的通道(运动向量)与材质存的覆盖询问(按颜色 AOV 存);由本链打开的通道
+        记在视图层上。"""
+        for layer in scene.view_layers:
+            layer.use_pass_z = True
+            opened = list(layer.get(Stack.TEMPORAL_PASS_KEY) or [])
+            for spec in chain['layer_passes'].values():
+                if spec['enable'] and not getattr(layer, spec['enable']):
+                    setattr(layer, spec['enable'], True)
+                    opened.append(spec['enable'])
+            if opened:
+                layer[Stack.TEMPORAL_PASS_KEY] = opened
+            present = {aov.name for aov in layer.aovs}
+            for name in sorted(set(chain['overlays'].values())):
+                if name not in present:
+                    aov = layer.aovs.add()
+                    aov.name = name
+                    aov.type = 'COLOR'
+
+    @staticmethod
+    def _drop_temporal_view_layers(scene, chain):
+        """时间性链不建时关掉它打开的通道、撤下它登记的覆盖询问 AOV:向量通道要求渲染器逐帧多求两次前后帧的位置,
+        AOV 是每帧多累加、回读、上传的一份。"""
+        names = set(chain['overlays'].values())
+        for layer in scene.view_layers:
+            opened = list(layer.get(Stack.TEMPORAL_PASS_KEY) or [])
+            for name in opened:
+                setattr(layer, name, False)
+            if Stack.TEMPORAL_PASS_KEY in layer:
+                del layer[Stack.TEMPORAL_PASS_KEY]
+            for aov in [aov for aov in layer.aovs if aov.name in names]:
+                layer.aovs.remove(aov)
+
+    def _state_driver(self, scene, socket, component, index):
+        curve = socket.driver_add('default_value', component) if component is not None else socket.driver_add('default_value')
+        driver = curve.driver
+        driver.type = 'AVERAGE'
+        variable = driver.variables.new()
+        variable.type = 'SINGLE_PROP'
+        target = variable.targets[0]
+        target.id_type = 'SCENE'
+        target.id = scene
+        target.data_path = '["{0}"][{1}]'.format(self.TEMPORAL_STATE_NAME, index)
+
+    def _drive_temporal_state(self, scene, node, entry):
+        """一趟组上由宿主逐帧陈述的口,按载体约定(四维 = 向量口 + _w 口,二维 = z 恒 0 的向量口)逐分量挂驱动读回。"""
+        for name, start, count in self.TEMPORAL_STATE_LAYOUT:
+            socket = node.inputs.get(name) if name in entry['sizes'] else None
+            if socket is None:
+                continue
+            if count == 1:
+                self._state_driver(scene, socket, None, start)
+                continue
+            for component in range(min(count, 3)):
+                self._state_driver(scene, socket, component, start + component)
+            if count == 4 and node.inputs.get(name + '_w') is not None:
+                self._state_driver(scene, node.inputs[name + '_w'], None, start + 3)
+
+    def _history_image(self, tree, scene, label, folder, name):
+        """上一帧的一份历史:半精度 EXR 的图像序列(数据,不做色彩变换;a 与颜色各自独立),合成器图像节点按帧偏移 -1
+        取 —— 第 f 帧读第 f-1 帧写下的那一份;文件不在(这一次出图的首帧)时节点出 0。"""
+        image = _host().scratch(bpy.data.images.new('{0} {1} {2}'.format(self.post['group'], name, scene.name),
+                                                    1, 1, alpha=True, float_buffer=True, is_data=True))
+        image[self.POST_LEVEL_KEY] = scene.name
+        image.source = 'SEQUENCE'
+        image.filepath = os.path.join(folder, '{0:04d}_{1}.exr'.format(1, name))
+        image.colorspace_settings.name = 'Non-Color'
+        image.alpha_mode = 'CHANNEL_PACKED'
+        node = tree.nodes.new('CompositorNodeImage')
+        node[self.POST_CHAIN_KEY] = label
+        node.image = image
+        node.frame_start = 1
+        node.frame_offset = -1
+        node.frame_duration = 1048574
+        node.use_auto_refresh = True
+        return node.outputs['Image']
+
+    def _temporal_anti_aliasing(self, tree, scene, render, chain, width, height, beneath, folder):
+        """时间性抗锯齿(真源桌面档 TAAU 的三趟,算法在生成的内核里):宿主深度转设备深度,宿主的运动向量转真源那张 RT;
+        膨胀读上一帧膨胀后的深度与运动向量,遮罩膨胀,解析读上一帧的历史颜色。上一帧的三份由本链上一帧的输出文件节点
+        写成半精度 EXR,这一帧按帧偏移 -1 读回;首帧没有历史,历史颜色取本帧的场景色(首帧的静止历史权重与稳定度都是 0)。
+        抖动、首帧、快速收敛与重投影矩阵由宿主逐帧陈述在场景上,驱动读回。返回解析后的场景色。"""
+        label = chain['kind']
+        passes = {entry['group']: entry for entry in (self.post.get('passes') or {}).values()}
+        roles = {role: passes[group] for role, group in chain['roles'].items()}
+        self._temporal_view_layers(scene, chain)
+        render.update()
+        layer_inputs = {}
+        for image, spec in chain['layer_passes'].items():
+            socket = render.outputs.get(spec['output'])
+            if socket is None:
+                raise RuntimeError('[ruri-post] 渲染层没有 {0} 通道(视图层打开之后渲染层节点仍不出这个口)'.format(spec['output']))
+            layer_inputs[image] = socket
+        for image, aov in chain['overlays'].items():
+            socket = render.outputs.get(aov)
+            if socket is None:
+                raise RuntimeError('[ruri-post] 渲染层没有 AOV {0}(视层登记之后渲染层节点仍不出这个口)'.format(aov))
+            layer_inputs[image] = socket
+        coordinates = tree.nodes.new('CompositorNodeImageCoordinates')
+        coordinates[self.POST_CHAIN_KEY] = label
+        tree.links.new(render.outputs['Image'], coordinates.inputs['Image'])
+        field = coordinates.outputs['Normalized']
+        camera = self._ssr_camera(tree, render, label, False)
+        fixed = {'taauScreenSize': (float(width), float(height), 1.0 / width, 1.0 / height),
+                 'taauFrameAspect': float(height) / float(width)}
+        stated = {name for name, _start, _count in self.TEMPORAL_STATE_LAYOUT}
+        if set(fixed) | stated | {'ssrZBufferParams'} != set(chain['geometry']):
+            raise RuntimeError('[ruri-post] 时间性链按帧给的是 {0},清单声明的是 {1}'.format(
+                sorted(set(fixed) | stated | {'ssrZBufferParams'}), sorted(chain['geometry'])))
+
+        def nd(kind):
+            node = tree.nodes.new(kind)
+            node[self.POST_CHAIN_KEY] = label
+            return node
+
+        def run(role, images):
+            entry = roles[role]
+            node = nd('CompositorNodeGroup')
+            node.node_tree = self.group(entry['group'])
+            tree.links.new(field, node.inputs[entry['coords'][0]])
+            if set(images) != set(entry['images']):
+                raise RuntimeError('[ruri-post] {0} 要图 {1},链给了 {2}'.format(
+                    entry['group'], sorted(entry['images']), sorted(images)))
+            for name, image in images.items():
+                tree.links.new(image, node.inputs[name])
+            for name, value in fixed.items():
+                if name in entry['sizes']:
+                    self._write_input(node, name, value, entry['sizes'][name])
+            for name, answer in camera.items():
+                self._link_answer(tree, node, name, answer)
+            self._drive_temporal_state(scene, node, entry)
+            return node
+
+        def only(node, role):
+            return node.outputs[roles[role]['out']]
+
+        def packed(rgb, alpha):
+            node = nd('CompositorNodeSetAlpha')
+            node.inputs['Type'].default_value = 'Replace Alpha'
+            tree.links.new(rgb, node.inputs['Image'])
+            tree.links.new(alpha, node.inputs['Alpha'])
+            return node.outputs['Image']
+
+        histories = {name: self._history_image(tree, scene, label, folder, name) for name, _mode in self.TEMPORAL_RECORDS}
+        first_index = next(start for name, start, _count in self.TEMPORAL_STATE_LAYOUT if name == 'taauFirstFrame')
+        first = nd('ShaderNodeMath')
+        first.operation = 'GREATER_THAN'
+        first.inputs[1].default_value = 0.5
+        self._state_driver(scene, first.inputs[0], None, first_index)
+        chooser = nd('GeometryNodeSwitch')
+        chooser.input_type = 'RGBA'
+        tree.links.new(first.outputs[0], chooser.inputs['Switch'])
+        tree.links.new(histories['TaaColor'], chooser.inputs['False'])
+        tree.links.new(beneath, chooser.inputs['True'])
+        device = only(run('device_depth', {'sceneDepth': render.outputs['Depth']}), 'device_depth')
+        motion = run('motion', {name: layer_inputs[name] for name in roles['motion']['images']})
+        motion_image = packed(motion.outputs['ret_motion'], motion.outputs['ret_tag'])
+        dilated = run('dilation', {'deviceDepth': device, 'sceneMotion': motion_image,
+                                   'previousDepth': histories['TaaDepth'], 'previousMotion': histories['TaaMotion']})
+        dilated_image = packed(dilated.outputs['ret_motion'], dilated.outputs['ret_tag'])
+        mask = only(run('mask_dilation', {'dilatedMotion': dilated_image}), 'mask_dilation')
+        resolved = run('resolve', {'sceneColor': beneath, 'deviceDepth': device, 'dilatedMotion': dilated_image,
+                                   'dilatedMask': mask, 'historyColor': chooser.outputs[0]})
+        written = {'TaaColor': packed(resolved.outputs['ret_color'], resolved.outputs['ret_stability']),
+                   'TaaDepth': dilated.outputs['ret_depth'], 'TaaMotion': dilated_image}
+        output = nd('CompositorNodeOutputFile')
+        output.directory = folder
+        output.file_name = '####_'
+        output.format.media_type = 'IMAGE'
+        output.format.file_format = 'OPEN_EXR'
+        output.format.color_depth = '16'
+        output.format.color_mode = 'RGBA'
+        output.format.exr_codec = 'NONE'
+        for name, mode in self.TEMPORAL_RECORDS:
+            item = output.file_output_items.new('RGBA' if mode == 'RGBA' else 'FLOAT', name)
+            if mode != 'RGBA':
+                item.override_node_format = True
+                item.format.media_type = 'IMAGE'
+                item.format.file_format = 'OPEN_EXR'
+                item.format.color_depth = '16'
+                item.format.color_mode = mode
+                item.format.exr_codec = 'NONE'
+            tree.links.new(written[name], output.inputs[item.name])
+        return resolved.outputs['ret_color']
+
+    def refresh_chains(self, scene):
+        """出图尺寸、分辨率档或哪条链该开变了就重建图链(级数与各级尺寸都随它们);主入口不动,新建的各趟照主入口此刻的值
+        取它们的宿主输入(_derive_passes)。"""
+        if not self.post.get('chains') or not self.installed(scene):
+            return False
+        tree = scene.compositing_node_group
+        stage = self.stage_node(scene)
+        signature = self._chain_signature(scene, tree)
+        if list(tree.get(self.POST_SIZE_KEY) or []) == signature:
+            return False
+        tree[self.POST_SIZE_KEY] = signature
+        for node in [candidate for candidate in tree.nodes if candidate.get(self.POST_CHAIN_KEY) is not None]:
+            self._drop_drivers(tree, node)
+            tree.nodes.remove(node)
+        render = next(node for node in tree.nodes if node.bl_idname == 'CompositorNodeRLayers')
+        self._build_chains(scene, tree, render, stage)
+        self._derive_passes(scene, tree)
+        _frame_generated(tree)
+        return True
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def refresh_chains_for_render(scene, *_arguments):
+        """后台会话没有计时器:脚本改了出图尺寸,图链的各级尺寸就还是旧的,渲出来静默地错。开渲这一刻宿主还没读合成树,
+        重判一次(签名没变就是一次比较);这次渲染不合成就不读合成树,也就不判(工作台出不了图链要读的 AOV)。重建了 ——
+        建到一半抛错也算 —— 就在这里让依赖图落定:留给渲染流程那次刷新,它重建求值场景时读到空的原件 Base,当场崩。"""
+        if not scene.render.use_compositing:
+            return
+        rebuilt = False
+        try:
+            for stack in STACKS:
+                if stack.post is not None:
+                    rebuilt = stack.refresh_chains(scene) or rebuilt
+        except Exception:
+            rebuilt = True
+            raise
+        finally:
+            if rebuilt:
+                bpy.context.view_layer.update()
+
+    @staticmethod
+    @bpy.app.handlers.persistent
+    def sync_post_chains(scene, depsgraph):
+        """场景合成树被改过 → 把面板上拧过的旋钮记回场景(合成树是临时数据、存盘不带,旋钮只有记在场景上才随文件走),
+        旋钮变了就让图链各趟上的同名口跟上主入口(_derive_passes),各后处理级的图链重判排到下一拍。面板拧的是主入口
+        上的口,Blender 不给回调,只能依赖图落定后看这一拍更新的数据块里有没有这棵树;没被改就一行都不多付。
+
+        图链不在这里重建:重建会删掉级域图,而同一轮依赖图更新里排在后面的处理器还在逐条读这一轮的更新,读到的
+        是已释放的原件(实测开文件后第一拍当场崩)。交给计时器,落在依赖图更新之外;后台没有事件循环,由
+        refresh_chains_for_render 在开渲时重判。"""
+        tree = scene.compositing_node_group
+        if tree is None or not any(isinstance(update.id, bpy.types.CompositorNodeTree) and update.id.original == tree
+                                   for update in depsgraph.updates):
+            return
+        for stack in STACKS:
+            if stack.post is not None and stack.installed(scene) and stack._capture_knobs(scene):
+                stack._derive_passes(scene, tree)
+        if not bpy.app.background and not bpy.app.timers.is_registered(Stack._refresh_post_chains):
+            bpy.app.timers.register(Stack._refresh_post_chains, first_interval=0.0)
+
+    @staticmethod
+    def _refresh_post_chains():
+        scene = bpy.context.scene
+        if scene is not None:
+            for stack in STACKS:
+                if stack.post is not None and stack.installed(scene):
+                    stack.refresh_chains(scene)
+        return None
+
+    @staticmethod
+    def _drop_drivers(tree, node):
+        """节点删了驱动不会跟着走(驱动住在树的动画数据上,按路径指向节点):先把指向它的那些删掉。"""
+        animation = tree.animation_data
+        if animation is None:
+            return
+        prefix = 'nodes["{0}"]'.format(node.name)
+        for curve in [curve for curve in animation.drivers if curve.data_path.startswith(prefix)]:
+            animation.drivers.remove(curve)
+
+    def install(self, scene):
+        self._post_remember(scene)
+        group = self.group(self.post['group'])
+        stale = bpy.data.node_groups.get(self.post['scene_tree'])
+        if stale is not None:
+            bpy.data.node_groups.remove(stale)
+        tree = _host().scratch(bpy.data.node_groups.new(self.post['scene_tree'], 'CompositorNodeTree'))
+        tree.interface.new_socket(name='Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+        render = tree.nodes.new('CompositorNodeRLayers')
+        split = tree.nodes.new('CompositorNodeSeparateColor')
+        pack = tree.nodes.new('ShaderNodeCombineXYZ')
+        pack[self.POST_PACK_KEY] = 1
+        stage = tree.nodes.new('CompositorNodeGroup')
+        stage.node_tree = group
+        unpack = tree.nodes.new('ShaderNodeSeparateXYZ')
+        join = tree.nodes.new('CompositorNodeCombineColor')
+        output = tree.nodes.new('NodeGroupOutput')
+        tree.links.new(render.outputs['Image'], split.inputs['Image'])
+        for channel, axis in (('Red', 'X'), ('Green', 'Y'), ('Blue', 'Z')):
+            tree.links.new(split.outputs[channel], pack.inputs[axis])
+        tree.links.new(pack.outputs['Vector'], stage.inputs[self.post['color_in']])
+        tree.links.new(stage.outputs[self.post['color_out']], unpack.inputs['Vector'])
+        for channel, axis in (('Red', 'X'), ('Green', 'Y'), ('Blue', 'Z')):
+            tree.links.new(unpack.outputs[axis], join.inputs[channel])
+        tree.links.new(render.outputs['Alpha'], join.inputs['Alpha'])
+        tree.links.new(join.outputs['Image'], output.inputs['Image'])
+        if self.post.get('coords'):
+            coordinates = tree.nodes.new('CompositorNodeImageCoordinates')
+            tree.links.new(render.outputs['Image'], coordinates.inputs['Image'])
+            for name in self.post['coords']:
+                tree.links.new(coordinates.outputs['Normalized'], stage.inputs[name])
+        scene.compositing_node_group = tree
+        # 场景记下的输入先写上主入口,再建图链:链开不开读的就是主入口此刻的值。先建后写 = 第一版链按接口缺省判,
+        # 下一拍依赖图更新里签名一变又整条重建 —— 那一遍删掉的级域图,同一轮后面的处理器还在读(读已释放的原件,崩)。
+        self._apply_stored(scene)
+        self._build_chains(scene, tree, render, stage)
+        self._derive_passes(scene, tree)
+        _frame_generated(tree)
+        scene.render.use_compositing = True
+        scene.view_settings.view_transform = 'Standard'
+        scene.view_settings.look = 'None'
+        for screen in bpy.data.screens:
+            for area in screen.areas:
+                if area.type != 'VIEW_3D':
+                    continue
+                for space in area.spaces:
+                    if space.type == 'VIEW_3D':
+                        space.shading.use_compositor = 'ALWAYS'
+                        # 生成栈的材质全部光照来自原生光循环,一盏灯都没有就一片黑;Material Preview
+                        # 出厂关着 Scene Lights(只用工作室 HDRI),所以装后处理链时一并打开,
+                        # 否则默认视口里游戏内容黑一片、只有 Rendered 才亮(实测视口 34% 纯黑)。
+                        space.shading.use_scene_lights = True
+        return tree
+
+    def _apply_stored(self, scene):
+        """刚建好的树按场景记下的输入写回:关卡的宿主输入写进各组实例的同名口,面板旋钮写回主入口,图像口按记下的
+        纹素现建。记下的某一格在当前产物里已经没有口了 —— 说出来并丢掉:它哪儿都写不进去,留着每次开文件都再喊一遍。"""
+        tree = scene.compositing_node_group
+        remembered = self._stored(scene, self.POST_VALUES_KEY)
+        extra = set(self.extra_inputs())
+        orphans = sorted(name for name in remembered if name not in extra)
+        if orphans:
+            print('[ruri-post] !! 场景记下的关卡输入 {0} 在本级 {1} 里已经没有了,丢掉'.format(
+                orphans, self.post['group']), flush=True)
+            remembered = {name: value for name, value in remembered.items() if name in extra}
+            self._store(scene, self.POST_VALUES_KEY, remembered)
+        if remembered:
+            self._write_values(tree, remembered)
+        stage = self.stage_node(scene)
+        knobs = self._stored(scene, self.POST_KNOBS_KEY)
+        kept = {}
+        for name, components in knobs.items():
+            socket = stage.inputs.get(name)
+            if socket is None or socket.is_linked or not hasattr(socket, 'default_value'):
+                print('[ruri-post] !! 场景记下的旋钮 {0} 在本级 {1} 的主入口上已经没有了,丢掉'.format(
+                    name, self.post['group']), flush=True)
+                continue
+            if socket.type == 'INT':
+                socket.default_value = int(round(components[0]))
+            elif socket.type == 'BOOLEAN':
+                socket.default_value = components[0] > 0.5
+            else:
+                socket.default_value = components[0] if len(components) == 1 else components
+            kept[name] = components
+        if kept != knobs:
+            self._store(scene, self.POST_KNOBS_KEY, kept)
+        self._wire_images(scene)
+
+    def uninstall(self, scene):
+        saved = scene.get(self.POST_SAVED_KEY)
+        scene_tree = bpy.data.node_groups.get(self.post['scene_tree'])
+        if scene.compositing_node_group is scene_tree:
+            scene.compositing_node_group = None
+        if scene_tree is not None:
+            bpy.data.node_groups.remove(scene_tree)
+        self._drop_level_domains(scene)
+        if saved is None:
+            return False
+        restored = bpy.data.node_groups.get(saved.get('group') or '')
+        if restored is not None:
+            scene.compositing_node_group = restored
+        scene.render.use_compositing = bool(saved.get('use_compositing', True))
+        scene.view_settings.view_transform = saved.get('view_transform', 'Standard')
+        scene.view_settings.look = saved.get('look', 'None')
+        del scene[self.POST_SAVED_KEY]
+        return True
+
+    # ==================== 宿主注册 ====================
+
+    def _host_module(self):
+        return _import_host(self.host['registry_module'])
+
+    def register_host(self):
+        host = self._host_module()
+        stated = self.host.get('world_basis')
+        if stated:
+            answer = [[float(value) for value in row]
+                      for row in getattr(host, self.host.get('world_basis_fn') or 'world_basis')()]
+            if any(abs(answer[i][j] - float(stated[i][j])) > 1e-6 for i in range(3) for j in range(3)):
+                raise RuntimeError('[Ruri] 宿主世界基与生成期声明的不一致:宿主 {0},清单 {1}。'
+                                   '模板组按清单那份物化,照这样挂上去世界量全按错轴算 -- 拒绝加载,'
+                                   '改配方的 Host.WorldBasis 后重新生成。'.format(answer, stated))
+        if self.sky is not None:
+            getattr(host, self.host['register_sky_stage_fn'])(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.register_scene_time(self.scene_time_scales)
+            if self.texel_sizes:
+                host.register_texel_sizes(self.texel_size_bases)
+            if self.render_footprint_attributes():
+                host.register_render_footprints(self.render_footprint_attributes)
+            if self.level_images:
+                getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
+            return
+        if self.post is not None:
+            fn = self.host.get('register_post_stage_fn')
+            if fn:
+                getattr(host, fn)(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.register_scene_time(self.scene_time_scales)
+            if self.level_images:
+                getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
+            if self.sync_post_chains not in bpy.app.handlers.depsgraph_update_post:
+                bpy.app.handlers.depsgraph_update_post.append(self.sync_post_chains)
+            if bpy.app.background and self.refresh_chains_for_render not in bpy.app.handlers.render_init:
+                bpy.app.handlers.render_init.append(self.refresh_chains_for_render)
+            return
+        getattr(host, self.host['register_fn'])(self.provider)
+        host.register_material_compile(self.compile_all)
+        getattr(host, self.host['register_vertex_stage_fn'])(self.apply_vertex_stage)
+        # 顶点腿拆成三段落在三个事实上:建树只认导入,输出像素数只重灌那两格,骨名只重接基座。
+        # 合在一条上的代价是推一下镜头就按材质现值重判一次描边 —— 用户删掉的修改器会自己回来。
+        host.register_camera_stage(self.push_screen_size)
+        host.register_rig_stage(self.apply_rig_basis)
+        host.register_capability_rewire(self.rewire_capabilities)
+        host.register_capability_reads(self.capability_reads)
+        getattr(host, self.host['register_level_globals_fn'])(self.level_global_bases)
+        getattr(host, self.host['register_volume_textures_fn'])(self.level_image_layouts)
+        host.register_scene_time(self.scene_time_scales)
+        host.register_object_attributes(self.object_attribute_bases)
+        host.register_texel_sizes(self.texel_size_bases)
+        host.register_light_parameters(self.light_parameter_attributes)
+        host.register_render_footprints(self.render_footprint_attributes)
+        host.register_view_windows(self.view_window_attributes)
+        host.register_view_window_readers(self.view_window_readers)
+        host.register_material_panel(self)
+        # 基座每帧要跟着骨骼走。帧变化与交互摆姿两条都要挂:前者放动画,后者拖骨头。
+        # 写的是**对象自定义属性**(逐对象 UBO),不碰材质树;值没变就不写,所以挂在
+        # depsgraph 后面也不会自激。
+        for handlers in (bpy.app.handlers.frame_change_post,
+                         bpy.app.handlers.depsgraph_update_post):
+            if self.push_rig_basis not in handlers:
+                handlers.append(self.push_rig_basis)
+        # 修改器面板是这批 uniform 的第二个编辑面;Blender 不给它改动回调,只能依赖图落定后比对。
+        if self.sync_vertex_knobs not in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.append(self.sync_vertex_knobs)
+        # 材质的输入有两个写入口:编辑器里直接改口与图,别的插件改记录。Blender 两样都不给回调,只能依赖图落定后与镜像比对。
+        if self.sync_material_inputs not in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.append(self.sync_material_inputs)
+
+    def unregister_host(self):
+        host = self._host_module()
+        if self.sky is not None:
+            getattr(host, self.host['unregister_sky_stage_fn'])(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.unregister_scene_time(self.scene_time_scales)
+            if self.texel_sizes:
+                host.unregister_texel_sizes(self.texel_size_bases)
+            if self.render_footprint_attributes():
+                host.unregister_render_footprints(self.render_footprint_attributes)
+            if self.level_images:
+                getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
+            return
+        if self.post is not None:
+            if self.sync_post_chains in bpy.app.handlers.depsgraph_update_post:
+                bpy.app.handlers.depsgraph_update_post.remove(self.sync_post_chains)
+            if self.refresh_chains_for_render in bpy.app.handlers.render_init:
+                bpy.app.handlers.render_init.remove(self.refresh_chains_for_render)
+            fn = self.host.get('unregister_post_stage_fn')
+            if fn:
+                getattr(host, fn)(self)
+            if self.engine_global_sources:
+                getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
+            if self.scene_time:
+                host.unregister_scene_time(self.scene_time_scales)
+            if self.level_images:
+                getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
+            return
+        for handlers in (bpy.app.handlers.frame_change_post,
+                         bpy.app.handlers.depsgraph_update_post):
+            if self.push_rig_basis in handlers:
+                handlers.remove(self.push_rig_basis)
+        if self.sync_vertex_knobs in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.remove(self.sync_vertex_knobs)
+        if self.sync_material_inputs in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.remove(self.sync_material_inputs)
+        host.unregister_material_panel(self)
+        getattr(host, self.host['unregister_fn'])(self.provider)
+        host.unregister_material_compile(self.compile_all)
+        getattr(host, self.host['unregister_vertex_stage_fn'])(self.apply_vertex_stage)
+        host.unregister_camera_stage(self.push_screen_size)
+        host.unregister_rig_stage(self.apply_rig_basis)
+        host.unregister_capability_rewire(self.rewire_capabilities)
+        host.unregister_capability_reads(self.capability_reads)
+        getattr(host, self.host['unregister_level_globals_fn'])(self.level_global_bases)
+        getattr(host, self.host['unregister_volume_textures_fn'])(self.level_image_layouts)
+        host.unregister_scene_time(self.scene_time_scales)
+        host.unregister_object_attributes(self.object_attribute_bases)
+        host.unregister_texel_sizes(self.texel_size_bases)
+        host.unregister_light_parameters(self.light_parameter_attributes)
+        host.unregister_render_footprints(self.render_footprint_attributes)
+        host.unregister_view_windows(self.view_window_attributes)
+        host.unregister_view_window_readers(self.view_window_readers)
+
+
+# ==================== 栈发现(同目录 .blend 即产物;清单不符响亮拒绝) ====================
+
+STACKS = []
+
+
+def _build_stacks():
+    """清单在模块导入时已从同目录的 json 载入,所以建栈是纯 python —— 插件 register() 跑在 Blender 的受限上下文
+    (`bpy.data` 此刻是 _RestrictData),那时读不了 .blend 里的任何东西,而宿主又要在注册期
+    拿 INTERFACE 建 PropertyGroup。模板 link 因此推迟到第一次真用,见 _linked_group。"""
+    folder = os.path.dirname(os.path.abspath(__file__))
+    stacks = []
+    for manifest in MANIFESTS:
+        path = os.path.join(folder, manifest['blend'])
+        if not os.path.isfile(path):
+            raise RuntimeError('[ruri-uber] 缺配套产物 {0}:全部产物必须同批出货,请重新 codegen'.format(path))
+        stacks.append(Stack(folder, manifest))
+    return stacks
+
+
+def retire_generation():
+    """换代:清掉本平台各栈这一代留在文件里的东西,随后由 compile_all 照记录重编材质、顶点阶段对挂着旧树的对象重生成顶点腿。
+    认人只用本平台自己的词汇:带本平台各栈栈键(ruri_stack)的数据块(模板组与随组带进来的图、材质、物体……;换代前的
+    各代都按栈键认,不论 stamp)、点着本平台组名的带 stamp 的组、顶点腿的树名前缀、后处理级的合成树名与图名前缀、
+    模板材质的键。别的平台的组一个不碰。本文件拥有、却画着别的文件里别代模板组的材质(link 材质的本地拷贝)一并放开那几张组,
+    与画着本文件模板组的一样照记录重编;组节点一没树宿主就按口序删口上的动画,所以先把这些材质的动画改按口名写
+    (_name_socket_animation,重编时 Stack.recompile 再接回),NLA 轨道带不过去就在动任何东西之前拒绝。材质的记录与口上的值
+    一概不碰(调用方先 settle_inputs 把口上的值记回记录)。天空栈在世界上建的相机支先按口名记下(Stack.sky_branches),
+    旧一代清掉之后用这一代的模板组照着重建。进程态随之作废。返回清掉几个。"""
+    skies = [(stack, stack.sky_branches()) for stack in STACKS if stack.sky is not None]
+    RIG_DRIVEN.clear()
+    RIG_SCANNED[0] = False
+    vertex_prefixes = tuple(stack.VTX_TREE_PREFIX for stack in STACKS if stack.post is None)
+    scene_trees = {stack.post['scene_tree'] for stack in STACKS if stack.post is not None}
+    post_prefixes = tuple(stack.post['group'] + ' ' for stack in STACKS if stack.post is not None)
+    owners = {stack.PANEL_KEY for stack in STACKS}
+    stamps = {stack.PANEL_KEY: stack.STAMP for stack in STACKS if stack.post is None}
+    group_names = {name for stack in STACKS for name in stack.group_names}
+    doomed = {}
+    for kind in _APPENDED_KINDS:
+        for block in getattr(bpy.data, kind):
+            if block.library is None and block.get('ruri_stack') in owners:
+                doomed[block.as_pointer()] = block
+    for group in bpy.data.node_groups:
+        if group.library is None and group.name in group_names and group.get('ruri_stamp') is not None:
+            doomed[group.as_pointer()] = group
+    for group in bpy.data.node_groups:
+        if group.library is None and (group.name in scene_trees or group.name.startswith(vertex_prefixes)):
+            doomed[group.as_pointer()] = group
+    for material in bpy.data.materials:
+        if material.library is None and material.get(Stack.TEMPLATE_KEY) is not None:
+            doomed[material.as_pointer()] = material
+    for image in bpy.data.images:
+        if image.library is None and image.name.startswith(post_prefixes):
+            doomed[image.as_pointer()] = image
+    recompiled = []
+    released = []
+    for material in bpy.data.materials:
+        if material.library is not None or material.node_tree is None or material.get(Stack.TEMPLATE_KEY) is not None \
+                or material.get('ruri_uber_stack') not in stamps:
+            continue
+        instances = [node for node in material.node_tree.nodes if Stack._generated(node)]
+        foreign = [node for node in instances if node.node_tree.library is not None
+                   and node.node_tree.get('ruri_stamp') != stamps[material['ruri_uber_stack']]]
+        if foreign or any(node.node_tree.as_pointer() in doomed for node in instances):
+            recompiled.append(material)
+            released.extend(foreign)
+    _refuse_nla(recompiled)
+    for material in recompiled:
+        _name_socket_animation(material)
+    for node in released:
+        node.node_tree = None
+    if doomed:
+        bpy.data.batch_remove(list(doomed.values()))
+    for stack, found in skies:
+        stack.rebuild_sky_branches(found)
+    return len(doomed)
+
+
+@bpy.app.handlers.persistent
+def settle_inputs(*_args):
+    """存盘前(save_pre)、宿主换代前、本平台注销前:各材质栈把编辑器里改过、这一拍还没记回记录的口与图记回去
+    (Stack.settle_inputs)—— 记录是口的镜像,换代时新一代照它重编、口上的值按参数名原样留下。"""
+    for stack in STACKS:
+        if stack.post is None:
+            stack.settle_inputs()
+
+
+def register():
+    STACKS.clear()
+    STACKS.extend(_build_stacks())
+    hosts = {manifest['host']['registry_module'] for manifest in MANIFESTS}
+    if len(hosts) != 1:
+        raise RuntimeError('[ruri-uber] 本平台各栈清单声明的宿主不止一个:{0}'.format(sorted(hosts)))
+    for stack in STACKS:
+        stack.register_host()
+    if settle_inputs not in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.append(settle_inputs)
+
+
+def unregister():
+    if settle_inputs in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(settle_inputs)
+    try:
+        if isinstance(bpy.data, bpy.types.BlendData):
+            settle_inputs()
+    except Exception as exc:
+        print('[ruri-uber] 注销前记回材质输入失败: {0}'.format(exc), flush=True)
+    for stack in reversed(STACKS):
+        try:
+            stack.unregister_host()
+        except Exception as exc:
+            print('[ruri-uber] 注销失败: {0}'.format(exc), flush=True)
+    STACKS.clear()

@@ -41,7 +41,7 @@ _BIN_DIR_HINT = "Set it in the RuriRipper panel's 'RipperHook bin' field."
 
 
 class SubstanceHost(host_port.Host, host_port.TextureCache, host_port.TextureSets,
-                    host_port.DisplaySettings):
+                    host_port.DisplaySettings, host_port.ThumbnailPreviews, host_port.CommandDispatch):
     """What Painter can do, and where Painter keeps what the user typed.
 
     The three below are the ones something actually asks about: its texture
@@ -135,6 +135,19 @@ class SubstanceHost(host_port.Host, host_port.TextureCache, host_port.TextureSet
         app_bag.restore(made, settings.recalled_panel(name))
         _STATES[name] = made
         return made
+
+    def invoke_command(self, command_id, arguments):
+        from ...Kernel.app.command import COMMANDS
+        if _panel is not None:
+            _panel.invoke_command(COMMANDS.get(command_id), arguments)
+
+    def publish_thumbnail(self, key, encoded):
+        from . import thumbnails
+        return thumbnails.publish(key, encoded)
+
+    def release_thumbnails(self, keys):
+        from . import thumbnails
+        thumbnails.release(keys)
 
     def unregister_state(self, name):
         _STATES.pop(name, None)
@@ -247,6 +260,8 @@ def close_plugin():
     from ... import Game
     from . import display_panel
     _REPAINT.clear()
+    if _panel is not None:
+        _panel.shutdown_commands()
     for widget in _plugin_widgets:
         substance_painter.ui.delete_ui_element(widget)
     _plugin_widgets.clear()

@@ -22,6 +22,14 @@ def _reader():
     return cabmap_state.BRIDGE
 
 
+def ensure_session():
+    """Open a map-free session only if none exists; never replace an install."""
+    from . import cabmap_state
+    if cabmap_state.BRIDGE is None:
+        cabmap_state.ensure_bridge("", "")
+    return cabmap_state.BRIDGE
+
+
 def table(dataset_id, cancellation=None, **args):
     """One published dataset, as a :class:`Kernel.table.ColumnTable`.
 

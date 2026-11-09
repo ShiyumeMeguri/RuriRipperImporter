@@ -518,6 +518,80 @@ def _named_args(args):
     return _string_array(flat)
 
 
+def source_error(exception):
+    """Project a sanitized typed source failure into plain Python data.
+
+    Only the public SourceRequestException family promises sanitized Message.
+    Never stringify arbitrary CLR/transport exceptions or their request data.
+    Reflection wrappers and subclasses are handled without source identities.
+    """
+    current = exception
+    for _ in range(6):
+        try:
+            kind = current.GetType()
+            for _ in range(10):
+                if kind is None:
+                    break
+                name = str(kind.FullName)
+                if name == "Ruri.RipperHook.BlenderBridge.Data.SourceRequestException":
+                    retry = current.RetryAfterSeconds
+                    status = current.HttpStatus
+                    return {"error_code": str(current.Code), "error_message": str(current.Message),
+                            "retry_after": int(retry) if retry is not None else -1,
+                            "http_status": int(status) if status is not None else -1}
+                if name == "System.OperationCanceledException":
+                    return {"error_code": "cancelled", "error_message": "Request cancelled.",
+                            "retry_after": -1, "http_status": -1}
+                kind = kind.BaseType
+            inner = getattr(current, "InnerException", None)
+            if inner is None:
+                break
+            current = inner
+        except Exception:
+            break
+    return {"error_code": "unexpected", "error_message":
+            "Request did not complete ({0}).".format(type(exception).__name__),
+            "retry_after": -1, "http_status": -1}
+
+
+class Cancellation:
+    """A lazy cancellation source; CLR objects stay inside this bridge module."""
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self._source = None
+        self._cancelled = False
+
+    @property
+    def token(self):
+        with self._lock:
+            if self._source is None:
+                _ensure_runtime()
+                import System.Threading
+                self._source = System.Threading.CancellationTokenSource()
+                if self._cancelled:
+                    self._source.Cancel()
+            return self._source.Token
+
+    def cancel(self):
+        with self._lock:
+            self._cancelled = True
+            if self._source is not None:
+                self._source.Cancel()
+
+    @property
+    def cancelled(self):
+        with self._lock:
+            return self._cancelled
+
+    def close(self):
+        with self._lock:
+            if self._source is not None:
+                self._source.Dispose()
+                self._source = None
+
+
 class RipperBridge:
     """One bridge session: Initialize once with the target install's decoder id,
     then Build/Load a cabmap, browse rows, and pull a selection into memory.
@@ -556,6 +630,7 @@ class RipperBridge:
         # one decoder is ever active, which is what use_session switches.
         self.maps_by_key = {}
         self._decoder_by_key = {}
+        self._active_key = None
 
     @property
     def decoder_id(self):
@@ -578,22 +653,28 @@ class RipperBridge:
         is unchanged. Callers should still skip the call when it is, to avoid the log spam
         ApplyHooks prints per hook transition."""
         root = self._game_root if game_root is None else str(game_root or "")
-        if source_options is not None:
-            self._source_options = dict(source_options)
-        set_source_options(self._source_options)
-        self._bridge.Initialize(str(decoder_id or ""), root)
-        self._decoder_id = str(decoder_id or "")
+        options = self._source_options if source_options is None else dict(source_options)
+        decoder = str(decoder_id or "")
+        key = self._active_key
+        owns_slot = key is not None and self._roots_by_key.get(key) == root
+        previous_options = self._source_options
+        try:
+            if owns_slot:
+                flat = [str(value) for pair in options.items() for value in pair]
+                self._bridge.OpenInstall(str(key), root, decoder, _string_array(flat))
+            else:
+                set_source_options(options)
+                self._bridge.Initialize(decoder, root)
+        except Exception:
+            set_source_options(previous_options)
+            raise
+        self._source_options = dict(options)
+        self._decoder_id = decoder
         self._game_root = root
-        # The per-install slots restate what an install was LAST opened with, not what
-        # it was opened with when its cabmap loaded: a value stated afterwards (a schema
-        # file set once the form warned it was missing) has to survive switching away
-        # from the install and back, so every slot at this root follows the values just
-        # applied. Without this, use_session restated the stale snapshot and the kernel
-        # silently lost the value the moment the tab was re-selected.
-        for key, slot_root in self._roots_by_key.items():
-            if slot_root == root:
-                self._decoder_by_key[key] = self._decoder_id
-                self._options_by_key[key] = dict(self._source_options)
+        # Only the selected install follows an explicit option/decoder change.
+        if owns_slot:
+            self._decoder_by_key[key] = self._decoder_id
+            self._options_by_key[key] = dict(self._source_options)
 
     @property
     def source_options(self):
@@ -614,13 +695,67 @@ class RipperBridge:
         (the single-install path, unchanged). Passing an install key ALSO registers
         the map in this session's per-install slot, capturing the decoder that read
         it, so use_session(key) can switch back to it later without reloading."""
-        handle = self._bridge.LoadCabMap(cab_map_path)
-        self._map = handle
-        if key is not None:
+        if key is None:
+            handle = self._bridge.LoadCabMap(cab_map_path)
+        else:
+            flat = [str(value) for pair in self._source_options.items() for value in pair]
+            self._bridge.OpenInstall(str(key), self._game_root, self._decoder_id, _string_array(flat))
+            self._bridge.UseInstall(str(key))
+            handle = self._bridge.LoadInstallCabMap(str(key), cab_map_path)
             self.maps_by_key[key] = handle
             self._decoder_by_key[key] = self._decoder_id
             self._roots_by_key[key] = self._game_root
             self._options_by_key[key] = dict(self._source_options)
+        self._map = handle
+        self._active_key = key
+
+    def select_source_install(self, key, root, decoder, source_options=None):
+        """Pin a source operation to its profile, including one with no map yet.
+
+        A map-free profile must not inherit the previous tab's loaded map.
+        Existing read options and map handles remain owned by their original key.
+        """
+        options = dict(self._options_by_key.get(key, {}) if source_options is None else source_options)
+        flat = [str(value) for pair in options.items() for value in pair]
+        self._bridge.OpenInstall(str(key), str(root), str(decoder), _string_array(flat))
+        self._bridge.UseInstall(str(key))
+        self._decoder_id, self._game_root, self._source_options = str(decoder), str(root), options
+        self._decoder_by_key[key], self._roots_by_key[key], self._options_by_key[key] = str(decoder), str(root), dict(options)
+        self._active_key = key
+        self._map = self.maps_by_key.get(key)
+
+    def adopt_install(self, key):
+        """Select a reader-prepared in-memory install through the existing map/session protocol."""
+        table = self.game_data("core.installs")
+        try:
+            entry = next((table.row(i) for i in range(table.row_count)
+                          if table.cell(i, "key") == key), None)
+            if entry is None:
+                raise RuntimeError("No reader-prepared install under that key.")
+            root, decoder = str(entry["root"]), str(entry["decoder"])
+        finally:
+            table.close()
+        handle = self._bridge.GetInstallMap(str(key))
+        flat = list(self._bridge.GetInstallOptions(str(key)))
+        options = {str(flat[i]): str(flat[i + 1]) for i in range(0, len(flat), 2)}
+        self._bridge.UseInstall(str(key))
+        self.maps_by_key[key] = handle
+        self._decoder_by_key[key] = decoder
+        self._roots_by_key[key] = root
+        self._options_by_key[key] = options
+        self._map, self._decoder_id, self._game_root, self._source_options = handle, decoder, root, options
+        self._active_key = key
+
+    def close_session(self, key):
+        """Release the reader slot and its map as well as this bridge's handle."""
+        self._bridge.CloseInstall(str(key))
+        handle = self.maps_by_key.pop(key, None)
+        if self._map is handle:
+            self._map = None
+        for slots in (self._decoder_by_key, self._roots_by_key, self._options_by_key):
+            slots.pop(key, None)
+        if self._active_key == key:
+            self._active_key = None
 
     def rename_session(self, old_key, new_key):
         """Refile every per-install slot from ``old_key`` to ``new_key`` -- the
@@ -628,10 +763,13 @@ class RipperBridge:
         install that only just learned its own name keeps the map it paid for."""
         if old_key == new_key:
             return
+        self._bridge.RenameInstall(str(old_key), str(new_key))
         for slot in (self.maps_by_key, self._decoder_by_key, self._roots_by_key,
                      self._options_by_key):
             if old_key in slot:
                 slot[new_key] = slot.pop(old_key)
+        if self._active_key == old_key:
+            self._active_key = new_key
 
     def use_session(self, key):
         """Select a previously loaded install's cabmap (load_cab_map(path, key=...))
@@ -644,12 +782,13 @@ class RipperBridge:
         if key not in self.maps_by_key:
             raise RuntimeError(
                 f"No cabmap loaded for install {key!r} -- call load_cab_map(path, key={key!r}) first.")
-        self._map = self.maps_by_key[key]
         decoder = self._decoder_by_key.get(key, self._decoder_id)
         root = self._roots_by_key.get(key, self._game_root)
         options = self._options_by_key.get(key, self._source_options)
-        if decoder != self._decoder_id or root != self._game_root or options != self._source_options:
-            self.reinitialize(decoder, root, options)
+        self._bridge.UseInstall(str(key))
+        self._map = self.maps_by_key[key]
+        self._active_key = key
+        self._decoder_id, self._game_root, self._source_options = decoder, root, dict(options)
 
     #: The loaded map's own rows, as published. Every search and every folder listing
     #: indexes into these row ids, so whoever asked for them keeps the table it got.

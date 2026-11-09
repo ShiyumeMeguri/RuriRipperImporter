@@ -72,7 +72,7 @@ class GameSession:
 
     __slots__ = ("key", "game", "ROWS", "VISIBLE", "CURRENT_DIR", "CURRENT_SUBFOLDERS",
                  "SELECTED_CABS", "SELECT_ANCHOR",
-                 "_CAB_INDEX", "_FLAGGED", "_sort_column", "_sort_dir", "_active_rules", "attachment")
+                 "_CAB_INDEX", "_FLAGGED", "_sort_column", "_sort_dir", "_active_rules", "attachment", "source_ui")
 
     def __init__(self, key, game=""):
         self.key = key
@@ -89,6 +89,7 @@ class GameSession:
         self._sort_dir = 0            # 0 = unsorted (load order), 1 = ascending, 2 = descending
         self._active_rules = ()       # whatever was last passed to apply_filter()'s `rules` arg
         self.attachment = None       # optional binding answer for this browser/install
+        self.source_ui = None       # source controls follow this install's lifecycle
 
 
 # install key (or None for the session a host uses before it has named one) -> GameSession.
@@ -120,9 +121,12 @@ def activate(key, game=None):
     install with no loaded map yet (session created, cabmap not built/loaded) just
     switches the Python view."""
     global ACTIVE
-    ACTIVE = session_for(key, game)
+    selected = session_for(key, game)
+    if ACTIVE is not None and ACTIVE is not selected and ACTIVE.source_ui is not None:
+        ACTIVE.source_ui.suspend()
     if BRIDGE is not None and key in BRIDGE.maps_by_key:
         BRIDGE.use_session(key)
+    ACTIVE = selected
     return ACTIVE
 
 
@@ -135,6 +139,11 @@ def drop(key):
     resolves."""
     global ACTIVE
     session = SESSIONS.pop(key, None)
+    if session is not None and session.source_ui is not None:
+        session.source_ui.close()
+        session.source_ui = None
+    if BRIDGE is not None:
+        BRIDGE.close_session(key)
     if session is None:
         return
     if ACTIVE is session:
@@ -152,6 +161,9 @@ def rename(old_key, new_key):
     session = SESSIONS.pop(old_key, None)
     if session is None:
         return
+    if session.source_ui is not None:
+        session.source_ui.close()
+        session.source_ui = None
     session.key = new_key
     SESSIONS[new_key] = session
     if BRIDGE is not None:

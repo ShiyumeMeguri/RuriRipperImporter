@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt
 from ...Kernel.app import command as app_command
 from ...Kernel.app import layout as app_layout
 from ...Kernel.app import state as app_state
+from . import thumbnails
 
 #: Blender icon names that map onto something Qt ships. Icons are advisory: an
 #: unmapped one simply is not drawn, which costs nothing a caption does not
@@ -284,6 +285,7 @@ class Renderer:
         self.context = context
         self.invoke = invoke
         self.on_error = on_error or (lambda label, detail: None)
+        self._popovers = []
 
     # -- entry -------------------------------------------------------------
     def draw(self, description, target):
@@ -330,6 +332,9 @@ class Renderer:
             spec["draw"](target, self._context)
         elif kind == app_layout.LIST:
             self._list(spec, target, enabled)
+            return
+        elif kind == app_layout.THUMBNAIL_GRID:
+            self._thumbnail_grid(spec, target, enabled)
             return
         else:
             raise TypeError("no Qt rendering for layout node {0!r}".format(kind))
@@ -435,6 +440,11 @@ class Renderer:
                 lambda _index, w=widget: self._write(bag, key, w.currentData()))
             return widget
         widget = QtWidgets.QLineEdit(str(value))
+        if field.sensitive:
+            widget.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            widget.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        if field.transient:
+            widget.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, False)
         if field.live:
             widget.textChanged.connect(lambda text: self._write(bag, key, text))
         else:
@@ -467,6 +477,26 @@ class Renderer:
         self.invoke(None, {})
 
     # -- commands ----------------------------------------------------------
+    def _thumbnail_grid(self, spec, target, enabled):
+        flow = _Flow(spec["columns"])
+        target.addLayout(flow)
+        command = app_command.COMMANDS.get(spec["command"])
+        for entry in spec["entries"]:
+            button = QtWidgets.QToolButton()
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setText(entry["label"])
+            button.setToolTip(entry.get("detail", entry["label"]))
+            button.setIcon(thumbnails.icon(entry["key"]) or
+                           self.host_widget.style().standardIcon(QtWidgets.QStyle.SP_FileIcon))
+            button.setIconSize(QtCore.QSize(128, 128))
+            button.setMinimumSize(144, 160)
+            button.setCheckable(True)
+            button.setChecked(entry["key"] == spec["selected"])
+            button.setEnabled(enabled and command.poll(self.context))
+            values = dict(entry.get("values", {}))
+            button.clicked.connect(lambda _checked=False, v=values: self.invoke(command, v))
+            flow.addWidget(button)
+
     def _operator(self, spec, target, enabled):
         command = app_command.COMMANDS.get(spec["command"])
         text = spec["text"] if spec["text"] is not None else command.label
@@ -530,8 +560,31 @@ class Renderer:
         dialog = QtWidgets.QDialog(self.host_widget)
         dialog.setWindowTitle(surface.label)
         body = QtWidgets.QVBoxLayout(dialog)
-        self.draw(app_layout.describe(surface.draw, self.context), body)
-        dialog.exec()
+        opened = (dialog, surface, body)
+        self._popovers.append(opened)
+        try:
+            self.draw(app_layout.describe(surface.draw, self.context), body)
+            dialog.exec()
+        finally:
+            if opened in self._popovers:
+                self._popovers.remove(opened)
+            dialog.deleteLater()
+
+    def refresh_popovers(self):
+        """Retained popup widgets follow the same live description as the dock."""
+        for dialog, surface, body in tuple(self._popovers):
+            if not dialog.isVisible():
+                continue
+            self._clear_layout(body)
+            self.draw(app_layout.describe(surface.draw, self.context), body)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
 
     def _progress(self, spec, target):
         bar = QtWidgets.QProgressBar()

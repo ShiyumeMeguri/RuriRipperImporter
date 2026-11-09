@@ -20,6 +20,8 @@ version" of a load would destroy.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from .. import extensions
 
 #: The registry IS process state. A development reload re-executes modules in
@@ -28,6 +30,31 @@ from .. import extensions
 #: had just re-registered, and the sweep that wraps them would find nothing.
 HOLDS_PROCESS_STATE = True
 
+# An opt-in lease for a command that prepares/replaces the shared reader map.
+# With no lease the historical command poll/run paths are unchanged.
+_EXCLUSIVE = None
+
+
+def exclusive_active():
+    return _EXCLUSIVE is not None
+
+
+def exclusive_allows(command_id):
+    return _EXCLUSIVE is None or command_id in _EXCLUSIVE
+
+
+@contextmanager
+def exclusive(owner, allowed=()):
+    """Exclude other commands until a reader lifecycle operation has settled."""
+    global _EXCLUSIVE
+    if _EXCLUSIVE is not None:
+        raise RuntimeError("A reader lifecycle operation is already running.")
+    _EXCLUSIVE = frozenset((owner, *allowed))
+    try:
+        yield
+    finally:
+        _EXCLUSIVE = None
+
 
 class Read:
     """A step that is a pure cross-boundary read -- bridge traffic and plain
@@ -35,11 +62,12 @@ class Read:
     thread) and sends the result back into the generator, so one sequence serves
     both. ``progress`` is a 0..1 hint for the bar, ignored by an inline driver."""
 
-    __slots__ = ("fn", "progress")
+    __slots__ = ("fn", "progress", "cancel")
 
-    def __init__(self, fn, progress=None):
+    def __init__(self, fn, progress=None, cancel=None):
         self.fn = fn
         self.progress = progress
+        self.cancel = cancel
 
 
 class Mark:
@@ -78,12 +106,12 @@ class Command:
 
     __slots__ = ("id", "label", "description", "icon", "arguments", "_run",
                  "_poll", "requires", "internal", "steps", "status_state",
-                 "_settle", "failure", "source", "modifiers")
+                 "_settle", "failure", "source", "modifiers", "cancel_message")
 
     def __init__(self, id, label, run, description="", icon="", arguments=(),
                  poll=None, requires=None, internal=False,
                  steps=False, status_state="", settle=None, failure="",
-                 modifiers=False):
+                 modifiers=False, cancel_message=""):
         #: The identity the layout references, and the bl_idname Blender keeps.
         self.id = id
         self.label = label
@@ -95,6 +123,8 @@ class Command:
         self.modifiers = modifiers
         #: :class:`Kernel.app.state.Field` per argument the button writes.
         self.arguments = tuple(arguments) + (modifier_fields() if modifiers else ())
+        if any(field.sensitive or field.transient for field in self.arguments):
+            raise ValueError("transient input belongs to panel memory, not command arguments")
         self._run = run
         self._poll = poll
         #: Host capability this needs, or None. A host that cannot answer never
@@ -116,15 +146,20 @@ class Command:
         self._settle = settle
         #: How to word a failure, in this command's own terms.
         self.failure = failure or ("{0} failed".format(label))
+        self.cancel_message = cancel_message
         #: Which module declared it -- what tells a reload apart from a genuine
         #: collision.
         self.source = getattr(run, "__module__", "")
 
     def poll(self, context):
+        if not exclusive_allows(self.id):
+            return False
         return True if self._poll is None else bool(self._poll(context))
 
     def run(self, context, arguments):
         """Do the work, or hand back a generator of steps for the host to drive."""
+        if not exclusive_allows(self.id):
+            raise RuntimeError("Wait for the reader lifecycle operation to finish.")
         return self._run(context, self.filled(arguments))
 
     def filled(self, arguments):

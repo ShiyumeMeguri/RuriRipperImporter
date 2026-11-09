@@ -27,7 +27,7 @@ import time
 from .. import host as host_port
 from .. import options as kernel_options
 from . import command as app_command
-from . import attachments, filtering, loading, look, schemas, texturing
+from . import attachments, filtering, loading, look, schemas, texturing, remote_sources
 from . import layout as vocabulary
 from . import state as app_state
 from ...Kernel.bridge import bootstrap, pythonnet_bridge, workspace
@@ -289,7 +289,12 @@ def _module_of(config):
     published, else by the engine family it runs on -- or None."""
     if config is None:
         return None
-    return Game.module_for(config.game_name, config.engine_family)
+    if config.game_name:
+        return Game.module_for(config.game_name, config.engine_family)
+    for entry in _decoders():
+        if config.decoder_id == _decoder_id(entry):
+            return Game.module_for(entry[0], config.engine_family)
+    return Game.module_for("", config.engine_family)
 
 
 def _module_game_name(config):
@@ -302,7 +307,7 @@ def _module_game_name(config):
     return config.game_name if config is not None else ""
 
 
-def _source_options(config):
+def source_options(config):
     """This tab's source options as a dict -- how its install is read beyond its
     folder, stored as JSON on the tab (see RURI_PG_install_config.source_options)."""
     if config is None or not config.source_options:
@@ -346,7 +351,8 @@ def _content_tabs(state):
     not every open tab's, or two games' Scene/Character tabs would stack into one row --
     then the document's."""
     config = active_config(state)
-    owned = Game.tabs_of(config.game_name, config.engine_family) if config is not None else []
+    module = _module_of(config)
+    owned = [tab for tab in module.tabs if tab.available] if module is not None else []
     return owned + [LOOK_TAB]
 
 
@@ -393,6 +399,26 @@ def active_config(state):
     return _find_config(state, state.current_tab)
 
 
+def install_root_key(path):
+    return os.path.normcase(os.path.normpath(host_port.current().absolute_path(path))) if path else ""
+
+
+def adopt_install(context, key):
+    """Adopt the exact reader-prepared map; no probe or second disk load."""
+    bridge = cabmap_state.BRIDGE
+    if bridge is None:
+        raise RuntimeError("No reader session is open.")
+    bridge.adopt_install(key)
+    state = state_of(context)
+    config = _ensure_tab(state, key)
+    config.game_root = bridge.game_root
+    config.decoder_id = bridge.decoder_id
+    _set_current_tab(state, key)
+    cabmap_state.load_rows()
+    _reapply_and_refresh(context)
+    return config
+
+
 def _tab_keys(state):
     return [config.key for config in state.games]
 
@@ -431,10 +457,11 @@ def _tab_on_root(state, root, excluding_key=None):
     two tabs on one folder are one install listed twice -- and the second would mint
     a "<name>_2" key that reads as a different copy of the game when it is the very
     same one."""
+    root = install_root_key(root)
     for config in state.games:
         if config.key == excluding_key or not config.game_root:
             continue
-        if os.path.normcase(os.path.normpath(host_port.current().absolute_path(config.game_root))) == root:
+        if install_root_key(config.game_root) == root:
             return config
     return None
 
@@ -551,7 +578,7 @@ def _decoders_of(product):
 def _decoder_id(entry):
     """A decoder's id is its product and its version, joined -- the same string the
     kernel builds, so nothing here parses one apart."""
-    return "{0}_{1}".format(entry[0], entry[1])
+    return "{0}_{1}".format(entry[0], entry[1]) if entry[1] else entry[0]
 
 
 def _resolve_decoder(identity):
@@ -575,7 +602,7 @@ def _adopt_identity(state, config):
     the CLR boundary nor write scene data. A folder that is no Unity install (or a
     DLL that is not up yet) clears the identity rather than keeping a stale one."""
     identity = _install_identity(host_port.current().absolute_path(config.game_root) if config.game_root else "",
-                                 _source_options(config))
+                                 source_options(config))
     if identity is None:
         config.game_name = ""
         config.game_version = ""
@@ -662,7 +689,7 @@ def _options_to_rows(config, options):
 def _fill_source_option_rows(config, table, dataset_id):
     """The decoder's published schema becomes the tab's form rows, keeping the values the
     tab already stores; a schema that states which options are required marks them."""
-    current = _source_options(config)
+    current = source_options(config)
     config.source_option_rows.clear()
     names = set(table.names)
     for index in range(len(table)):
@@ -682,7 +709,7 @@ def _load_source_option_rows(config, dataset_id):
     """Read the decoder's schema for this tab's install and fill the form from it -- what
     the Load Options Form button does, run for a tab the moment its decoder resolves."""
     root = host_port.current().absolute_path(config.game_root) if config.game_root else ""
-    bridge = cabmap_state.ensure_bridge(config.decoder_id, root, _source_options(config))
+    bridge = cabmap_state.ensure_bridge(config.decoder_id, root, source_options(config))
     _fill_source_option_rows(config, bridge.game_data(dataset_id), dataset_id)
 
 
@@ -705,7 +732,7 @@ def _missing_required_options(config):
     the kernel still had no schema, and the import then failed deep in the decoder instead
     of being refused here. A flag is never missing; a path or a text is missing while the
     applied value is blank."""
-    applied = _source_options(config)
+    applied = source_options(config)
     missing = []
     for row in config.source_option_rows:
         if not row.required or row.kind == "flag":
@@ -742,7 +769,7 @@ def _sync_bridge_to_tab(config):
     if not config.game_root:
         return
     cabmap_state.ensure_bridge(config.decoder_id, host_port.current().absolute_path(config.game_root),
-                              _source_options(config))
+                              source_options(config))
 
 
 def _blocking_required_options(config):
@@ -902,7 +929,7 @@ def _on_game_root_set(state):
     root = host_port.current().absolute_path(config.game_root) if config.game_root else ""
     _INSTALL_IDENTITY.pop(root, None)
     if root:
-        already = _tab_on_root(state, os.path.normcase(os.path.normpath(root)),
+        already = _tab_on_root(state, root,
                               excluding_key=config.key)
         if already is not None:
             config.game_root = ""
@@ -1540,7 +1567,7 @@ fields. Decoders are only for games with custom encryption/VFS/typetree drift.""
             os.path.dirname(out), exc), host_port.ERROR)
         return
     config = _ensure_active_config(state)
-    options = _source_options(config)
+    options = source_options(config)
     bridge = yield app_command.Read(
         lambda: cabmap_state.ensure_bridge(config.decoder_id, root, options), 0.05)
     code = yield app_command.Read(lambda: bridge.build_cab_map(root, out), 0.7)
@@ -1581,7 +1608,7 @@ def _load_cabmap(context, arguments):
         return
     config = _ensure_active_config(state)
     root = host_port.current().absolute_path(state.game_root) if state.game_root else ""
-    options = _source_options(config)
+    options = source_options(config)
     bridge = yield app_command.Read(
         lambda: cabmap_state.ensure_bridge(config.decoder_id, root, options), 0.05)
     yield app_command.Read(lambda: bridge.load_cab_map(path, key=config.key), 0.5)
@@ -2393,10 +2420,15 @@ def draw(layout, context):
     tabs = layout.row(align=True)
     for key, label in _tab_bar(state):
         button = tabs.row(align=True)
-        button.enabled = state.loaded or key == LOOK_TAB.key
+        tab = next((one for one in _content_tabs(state) if one.key == key), None)
+        button.enabled = state.loaded or key == LOOK_TAB.key or (tab is not None and not tab.requires_map)
         button.operator(SELECT_TAB.id, text=label, depress=(key == active_key)).tab = key
 
     if active is LOOK_TAB:
+        active.draw(layout, context)
+        return
+
+    if active is not None and not active.requires_map:
         active.draw(layout, context)
         return
 
@@ -2577,12 +2609,14 @@ def register():
     """Put the browser's state where this host keeps panel state, and tell the
     rule editor how to find whichever list is on screen."""
     filtering.ACTIVE_SPEC_KEY = _active_filter_spec_key
+    remote_sources.register()
     return host_port.current().register_state(
         STATE, schemas.BROWSER, HANDLERS,
         extra={"FILTER_SPEC_KEY": BROWSER_TAB_ID, "as_options": as_options})
 
 
 def unregister():
+    remote_sources.unregister()
     host_port.current().unregister_state(STATE)
     filtering.ACTIVE_SPEC_KEY = None
     cabmap_state.reset()

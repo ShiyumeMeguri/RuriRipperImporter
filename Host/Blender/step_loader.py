@@ -48,6 +48,8 @@ def run(steps):
             sent = step.fn() if isinstance(step, Read) else None
     except StopIteration as stop:
         return stop.value
+    finally:
+        steps.close()
 
 
 class ModalSteps:
@@ -72,6 +74,7 @@ class ModalSteps:
         self._error = None
         self._committed = False
         self._timer = None
+        self._cancel_read = None
         console_tail.start()
         context.window_manager.progress_begin(0.0, 1.0)
         state = self.status(context)
@@ -93,6 +96,7 @@ class ModalSteps:
             if self._thread.is_alive():
                 return {"RUNNING_MODAL"}   # a bridge read is still crossing -- stay live
             self._thread = None
+            self._cancel_read = None
             if self._error is not None:
                 return self._on_error(context, self._error)
             sent, self._result = self._result, None
@@ -109,11 +113,15 @@ class ModalSteps:
         try:
             step = self._steps.send(sent)
         except StopIteration as stop:
-            self._teardown(context)
-            return self.settle(context, stop.value)
+            try:
+                self._teardown(context)
+                return self.settle(context, stop.value)
+            except Exception as exc:
+                return self._on_error(context, exc)
         except Exception as exc:
             return self._on_error(context, exc)
         if isinstance(step, Read):
+            self._cancel_read = step.cancel
             self._offload(step.fn)
         if step.progress is not None:
             context.window_manager.progress_update(step.progress)
@@ -155,10 +163,15 @@ class ModalSteps:
                     area.tag_redraw()
 
     def _on_cancel(self, context):
-        if getattr(self, "_steps", None) is not None:
-            self._steps.close()
-        self._teardown(context)
-        if self._committed:
+        if getattr(self, "_cancel_read", None) is not None:
+            self._cancel_read()
+        try:
+            self._teardown(context)
+        except Exception as exc:
+            return self._on_error(context, exc)
+        if getattr(self, "cancel_message", ""):
+            self.report({"INFO"}, self.cancel_message)
+        elif self._committed:
             self.report({"WARNING"},
                         "Cancelled mid-load -- the scene holds a partial result. Clear it "
                         "and load again for a clean one.")
@@ -167,31 +180,41 @@ class ModalSteps:
         return {"CANCELLED"}
 
     def _on_error(self, context, exc):
-        self._teardown(context)
         import traceback
+        try:
+            self._teardown(context)
+        except Exception as cleanup:
+            traceback.print_exception(type(cleanup), cleanup, cleanup.__traceback__)
+            self.report({"ERROR"}, "{0} cleanup: {1}: {2}".format(
+                self.failure, type(cleanup).__name__, cleanup))
         traceback.print_exception(type(exc), exc, exc.__traceback__)
         self.report({"ERROR"}, "{0}: {1}: {2}".format(self.failure, type(exc).__name__, exc))
         return {"CANCELLED"}
 
     def _teardown(self, context):
-        # A bridge crossing cannot be interrupted; wait an in-flight one out so no
-        # orphaned thread is left inside the single-session bridge for the next load
-        # to collide with.
+        # Cancellable reads have already signalled their token before joining;
+        # non-cancellable legacy reads retain the old single-session guarantee.
         thread = getattr(self, "_thread", None)
         if thread is not None and thread.is_alive():
             thread.join()
         self._thread = None
-        if getattr(self, "_timer", None) is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-        state = self.status(context)
-        if state is not None:
-            state.loading = False
-        console_tail.stop()
+        self._cancel_read = None
         try:
-            context.window_manager.progress_end()
-        except Exception:
-            pass
+            if getattr(self, "_timer", None) is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+            state = self.status(context)
+            if state is not None:
+                state.loading = False
+            console_tail.stop()
+            try:
+                context.window_manager.progress_end()
+            except Exception:
+                pass
+        finally:
+            steps, self._steps = getattr(self, "_steps", None), None
+            if steps is not None:
+                steps.close()
 
 
 # The bar a steps command in flight is shown with. Written against the neutral

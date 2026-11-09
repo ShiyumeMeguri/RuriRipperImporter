@@ -49,7 +49,7 @@ def _preferences():
 
 class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, host_port.Rig, host_port.RigAttachment,
                   host_port.Timeline, host_port.Retarget, host_port.MorphTargets, host_port.NodeMaterials,
-                  host_port.RegionPicking):
+                  host_port.RegionPicking, host_port.ThumbnailPreviews, host_port.CommandDispatch):
     """What Blender can do, and where Blender keeps the one path that differs
     per machine. A skeleton, an animation surface and morph targets, a scene of
     separate objects with a compositor behind it, node-graph materials, and a 3D
@@ -113,6 +113,18 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
             for area in window.screen.areas:
                 area.tag_redraw()
 
+    def invoke_command(self, command_id, arguments):
+        namespace, _, name = command_id.partition(".")
+        return getattr(getattr(bpy.ops, namespace), name)("INVOKE_DEFAULT", **arguments)
+
+    def publish_thumbnail(self, key, encoded):
+        from . import thumbnails
+        return thumbnails.publish(key, encoded)
+
+    def release_thumbnails(self, keys):
+        from . import thumbnails
+        thumbnails.release(keys)
+
     def selected_rig(self, context):
         """The rig the active object stands for (a mesh stands for the armature its
         modifier binds), else the one rig the selection resolves to, else the
@@ -171,8 +183,10 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         from . import texture_fit
         return texture_fit.fit(context.scene, sampling["slots"], sampling["clip_switches"], sampling["shadow_slots"])
 
-    def apply_environment(self, context, environment):
+    def apply_environment(self, context, environment, images=None):
         from . import renderer, ui_stage, world_builder
+        if "channels" in environment:
+            return world_builder.build_channels(context, environment, images)
         ambient = environment["ambient"]
         answered = world_builder.build(context, ambient["coefficients"], ambient["label"])
         sun = ui_stage.apply_environment(context, environment["light"], LEVEL_SUN)

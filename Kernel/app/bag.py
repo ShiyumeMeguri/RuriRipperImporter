@@ -192,7 +192,7 @@ def remembered_values(bag):
     next time, while WHICH INSTALL it was showing them from is the answer nobody
     should have to give twice."""
     return {field.key: _stored(bag, field)
-            for field in bag.schema.fields if field.remembered}
+            for field in bag.schema.fields if field.remembered and not field.transient}
 
 
 def restore(bag, values):
@@ -224,14 +224,14 @@ def restore(bag, values):
 def _stored(bag, field):
     if field.kind == app_state.COLLECTION:
         return [{inner.key: _stored(entry, inner)
-                 for inner in entry.schema.fields if not inner.virtual}
+                 for inner in entry.schema.fields if not inner.virtual and not inner.transient}
                 for entry in getattr(bag, field.key)]
     return getattr(bag, field.key)
 
 
 def _fill(bag, values, fields):
     for field in fields:
-        if field.key not in values or field.virtual:
+        if field.key not in values or field.virtual or field.transient:
             continue
         value = values[field.key]
         if field.kind == app_state.COLLECTION:

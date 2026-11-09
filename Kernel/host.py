@@ -189,7 +189,7 @@ class SceneGraph(abc.ABC):
         explicit level), ``clip_switches`` and ``shadow_slots``. Returns the lines to report."""
 
     @abc.abstractmethod
-    def apply_environment(self, context, environment):
+    def apply_environment(self, context, environment, images=None):
         """Stand the environment a level puts its viewer under up in the document,
         replacing any stood up before. ``environment`` is ``{"label", "ambient",
         "light"}``: ``ambient`` is ``{"label", "coefficients"}``, the sky irradiance as
@@ -197,6 +197,11 @@ class SceneGraph(abc.ABC):
         channel, stood up as the document's world; ``light`` is the level's main light
         as ``[(target, value)]`` over the :mod:`Kernel.app.staging` LIGHT_* targets.
         Returns how many already-built materials were re-answered against the world.
+
+        A resolved environment may instead state ``channels`` for camera, diffuse
+        and glossy rays. Each names an image or six ordered cube faces with already
+        resolved rotation, linear multiplier and strength. ``images`` loads these
+        keys through the material builder that also owns the scene's textures.
 
         Called BEFORE the level's content is built: a material samples the world
         that exists when it is built, and one built against a default world keeps
@@ -522,8 +527,28 @@ class RegionPicking(abc.ABC):
 
 
 #: Every protocol a driver can answer, in the order a diagnostics surface lists them.
+class CommandDispatch(abc.ABC):
+    """Dispatch declared commands through the host's normal step runner."""
+
+    @abc.abstractmethod
+    def invoke_command(self, command_id, arguments):
+        """Invoke a declared command on the UI thread."""
+
+
+class ThumbnailPreviews(abc.ABC):
+    """Process-local UI previews, separate from document textures."""
+
+    @abc.abstractmethod
+    def publish_thumbnail(self, key, encoded):
+        """Decode bounded image bytes on the UI thread; return success."""
+
+    @abc.abstractmethod
+    def release_thumbnails(self, keys):
+        """Release the listed owned preview keys."""
+
+
 PROTOCOLS = (SceneGraph, Compositor, Rig, RigAttachment, Timeline, Retarget, MorphTargets, NodeMaterials,
-             TextureCache, TextureSets, DisplaySettings, RegionPicking)
+             TextureCache, TextureSets, DisplaySettings, RegionPicking, ThumbnailPreviews, CommandDispatch)
 
 _BOUND = []
 
