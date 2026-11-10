@@ -2,12 +2,15 @@
 
 USD has no schema for a controller or a timeline, and this package does not make one up: a record is cut into prims
 that carry nothing but ``ruri:`` attributes of basic types, the way every other thing the source says is carried.
-Five rules are the whole format, and ``Ruri.SceneContentCompile``'s record reader is their inverse:
+Five rules are the whole format, and ``Ruri.Scenes.Editor``'s record reader (``UsdRecordTreeReader``) is their inverse:
 
-* a scalar member (bool, int, float, str) is the attribute ``ruri:<member>``;
+* a scalar member (bool, int, float, str) is the attribute ``ruri:<member>``; an int and a float are different
+  attribute types and are read back as the different kinds they are;
 * a list of scalars is the array attribute of the same name (an empty list is not written: absent means empty);
 * an object member is a child ``Scope`` prim of the member's name;
-* a list of objects is a child ``Scope`` of the member's name holding one ``Scope`` per element, named ``i0``, ``i1``...;
+* a list of objects is a child ``Scope`` of the member's name, marked by its ``ruri:list:count`` attribute (the number of
+  elements), holding one ``Scope`` per element, named ``i0``, ``i1``...: the marker is what tells a list from an object
+  whose members happen to be named like elements, and a member name never holds a colon, so it cannot be one;
 * ``None`` is not written: absent means none.
 
 A list that mixes scalars and objects, or scalars of different kinds, is refused rather than guessed at.
@@ -21,6 +24,7 @@ from .. import statement as kernel_statement
 from . import stages
 from .names import file_stem, identifier
 
+LIST_COUNT = "ruri:list:count"
 _INT32_LIMIT = 2 ** 31
 _SCALAR_TYPES = {bool: (Sdf.ValueTypeNames.Bool, Sdf.ValueTypeNames.BoolArray, Vt.BoolArray),
                  float: (Sdf.ValueTypeNames.Double, Sdf.ValueTypeNames.DoubleArray, Vt.DoubleArray),
@@ -52,7 +56,9 @@ def _write_list(stage, prim, key, values, counts, path):
         return
     if all(isinstance(value, dict) for value in values):
         holder = stage.DefinePrim(prim.GetPath().AppendChild(key), "Scope")
+        holder.CreateAttribute(LIST_COUNT, Sdf.ValueTypeNames.Int, custom=True).Set(len(values))
         counts["prims"] += 1
+        counts["attributes"] += 1
         for index, value in enumerate(values):
             element = stage.DefinePrim(holder.GetPath().AppendChild("i{0}".format(index)), "Scope")
             counts["prims"] += 1
