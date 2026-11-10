@@ -29,11 +29,17 @@ def describe(prim, node, source_path):
     if node.camera is not None:
         _camera(prim, node)
     if node.light is not None:
-        _light(prim, node.light)
+        _light(prim, node)
+
+
+def renderer_state(prim, node):
+    """Whether the renderer ``prim`` stands for is itself enabled, apart from the activity of the object it sits on."""
+    _attribute(prim, "ruri:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
 
 
 def _camera(prim, node):
     camera = node.camera
+    _attribute(prim, "ruri:camera:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
     _attribute(prim, "ruri:camera:fieldOfView", Sdf.ValueTypeNames.Float, float(camera["fov"]))
     _attribute(prim, "ruri:camera:near", Sdf.ValueTypeNames.Float, float(camera["near"]))
     _attribute(prim, "ruri:camera:far", Sdf.ValueTypeNames.Float, float(camera["far"]))
@@ -42,7 +48,9 @@ def _camera(prim, node):
     _attribute(prim, "ruri:tag", Sdf.ValueTypeNames.String, node.tag)
 
 
-def _light(prim, light):
+def _light(prim, node):
+    light = node.light
+    _attribute(prim, "ruri:light:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
     _attribute(prim, "ruri:light:type", Sdf.ValueTypeNames.Int, int(light["kind"]))
     _attribute(prim, "ruri:light:color", Sdf.ValueTypeNames.FloatArray,
                Vt.FloatArray([float(component) for component in light["color"]]))

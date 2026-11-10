@@ -72,6 +72,7 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
         elif index in pieces:
             piece = pieces[index]
             renderer = UsdGeom.Xform.Define(stage, path.AppendChild(names.claim(str(path), RENDERER))).GetPrim()
+            sources.renderer_state(renderer, node)
             _refer(renderer, layer_path, piece.layer_path, piece.root)
             renderer.SetInstanceable(True)
             counts["prims"] += 1

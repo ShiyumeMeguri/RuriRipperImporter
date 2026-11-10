@@ -160,7 +160,7 @@ def _floats(raw, width):
 class Node:
     """One transform of one seed: what sits on it, where it sits, what it draws."""
 
-    __slots__ = ("index", "parent", "name", "path", "kind", "active", "active_self", "mesh",
+    __slots__ = ("index", "parent", "name", "path", "kind", "active", "active_self", "component_enabled", "mesh",
                  "skeleton", "materials", "anchor", "position", "rotation", "scale",
                  "light", "camera", "tag", "shadows", "main_light_shadows", "two_sided_shadows", "object_parameters",
                  "collection", "layer", "avatar", "source_object")
@@ -173,6 +173,9 @@ class Node:
         self.kind = row["kind"]
         self.active = bool(row["active"])
         self.active_self = bool(int(row["active_self"]))
+        #: Whether the component the node's kind stands for (renderer, light or camera) is itself enabled, whatever the
+        #: object's activity is; a node with no such component is enabled.
+        self.component_enabled = bool(int(row["component_enabled"]))
         self.mesh = row["mesh"]
         self.skeleton = row["skeleton"]
         self.materials = [entry for entry in row["materials"].split(SEPARATOR) if entry]
