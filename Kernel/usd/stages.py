@@ -11,7 +11,7 @@ import os
 
 from pxr import Usd, UsdGeom
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def create(path, basis, description):

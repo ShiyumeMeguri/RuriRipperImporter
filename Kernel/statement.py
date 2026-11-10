@@ -44,6 +44,7 @@ CONTROLLERS = "core.statement.controllers"
 ANIMATORS = "core.statement.animators"
 TIMELINES = "core.statement.timelines"
 CINEMACHINE = "core.statement.cinemachine"
+SCRIPTS = "core.statement.scripts"
 SOURCE_SKELETON = "core.clip.source_skeleton"
 REPORT = "core.statement.report"
 SCENE_LIGHTING = "core.statement.scene_lighting"
@@ -159,7 +160,7 @@ def _floats(raw, width):
 class Node:
     """One transform of one seed: what sits on it, where it sits, what it draws."""
 
-    __slots__ = ("index", "parent", "name", "path", "kind", "active", "mesh",
+    __slots__ = ("index", "parent", "name", "path", "kind", "active", "active_self", "mesh",
                  "skeleton", "materials", "anchor", "position", "rotation", "scale",
                  "light", "camera", "tag", "shadows", "main_light_shadows", "two_sided_shadows", "object_parameters",
                  "collection", "layer", "avatar", "source_object")
@@ -171,6 +172,7 @@ class Node:
         self.path = row["path"]
         self.kind = row["kind"]
         self.active = bool(row["active"])
+        self.active_self = bool(int(row["active_self"]))
         self.mesh = row["mesh"]
         self.skeleton = row["skeleton"]
         self.materials = [entry for entry in row["materials"].split(SEPARATOR) if entry]
@@ -793,6 +795,25 @@ class CinemachineComponent:
         return "<CinemachineComponent {0} on {1}>".format(self.class_name, self.path)
 
 
+class Script:
+    """A script component of a node, or a scriptable object, as the record the reader states for it: ``archive`` is the
+    archive it is read from, ``kind`` is ``component`` or ``asset``, ``key`` its identity, ``path`` the source path of the
+    node it sits on (empty for an asset), ``class_name`` the class of its script, ``record`` the parsed JSON."""
+
+    __slots__ = ("archive", "kind", "key", "path", "class_name", "record")
+
+    def __init__(self, row):
+        self.archive = row["archive"]
+        self.kind = row["kind"]
+        self.key = row["key"]
+        self.path = row["path"]
+        self.class_name = row["class"]
+        self.record = json.loads(row["record"])
+
+    def __repr__(self):
+        return "<Script {0} {1}>".format(self.class_name, self.key)
+
+
 class Report:
     __slots__ = ("seed", "what", "count", "detail")
 
@@ -871,7 +892,7 @@ class Statement:
 
     @classmethod
     def of(cls, seeds, basis=UNITY, detail=0, inactive=True, shadow_proxies=False,
-           roles=(), containers=(), colliders=False, scripts=False):
+           roles=(), containers=(), colliders=False, scripts=False, classes=(), unreadable=False):
         """Ask what these seeds are.
 
         ``detail`` is the level to keep and -1 every level; ``inactive`` keeps
@@ -880,13 +901,16 @@ class Statement:
         layer files, later overriding earlier; ``containers`` are the image
         containers this host loads directly; ``colliders`` states the collision
         volumes of the objects, which are otherwise left out; ``scripts`` reads the layouts of the game's own
-        scripts, without which a timeline (a MonoBehaviour) has no fields to state."""
+        scripts, without which a timeline (a MonoBehaviour) has no fields to state; ``classes`` are the engine component
+        classes (not scripts) the scripts table states beside the scripts; ``unreadable`` states a script whose layout cannot be
+        read as a record that says so, instead of refusing the table."""
         seeds = [str(seed) for seed in (seeds if isinstance(seeds, (list, tuple, set))
                                         else [seeds]) if str(seed)]
         if not seeds:
             raise ValueError("a statement needs at least one seed")
         return cls({"seed": seeds, "basis": basis, "detail": detail,
                     "inactive": inactive, "shadow_proxies": shadow_proxies, "colliders": colliders, "scripts": scripts,
+                    "classes": list(classes), "unreadable": unreadable,
                     "roles": list(roles), "containers": list(containers)})
 
     @property
@@ -1003,6 +1027,13 @@ class Statement:
         was asked with ``scripts``; the reader refuses the table rather than leave a component out of it."""
         return self._rows(CINEMACHINE, lambda table: [
             CinemachineComponent(table.row(index)) for index in range(table.row_count)])
+
+    @property
+    def scripts(self):
+        """The script components these seeds place and the scriptable objects their archives carry, stated only when the
+        statement was asked with ``scripts``; the reader refuses the table rather than leave one out of it."""
+        return self._rows(SCRIPTS, lambda table: [
+            Script(table.row(index)) for index in range(table.row_count)])
 
     @property
     def report(self):

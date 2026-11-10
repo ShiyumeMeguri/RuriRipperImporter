@@ -17,12 +17,12 @@ def _attribute(prim, name, kind, value):
 
 
 def describe(prim, node, source_path):
-    """The node's place in its source, whether it draws now, and what it is."""
+    """The node's place in its source, whether its own object is active (activeSelf, whatever its ancestors are), and what it is."""
     _attribute(prim, "ruri:sourcePath", Sdf.ValueTypeNames.String, source_path)
     _attribute(prim, "ruri:layer", Sdf.ValueTypeNames.Int, int(node.layer))
-    _attribute(prim, "ruri:active", Sdf.ValueTypeNames.Bool, bool(node.active))
+    _attribute(prim, "ruri:activeSelf", Sdf.ValueTypeNames.Bool, bool(node.active_self))
     _attribute(prim, "ruri:nodeKind", Sdf.ValueTypeNames.Token, node.kind)
-    if not node.active:
+    if not node.active_self:
         UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
     if node.kind in (kernel_statement.MESH, kernel_statement.SKINNED):
         _attribute(prim, "ruri:castShadows", Sdf.ValueTypeNames.Int, int(node.shadows))

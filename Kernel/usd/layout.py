@@ -21,6 +21,7 @@ CLIPS = "dynamicassets/gameplay/animations/clips"
 AUDIO_CLIPS = "dynamicassets/gameplay/audioclips"
 CONTROLLERS = "dynamicassets/gameplay/animatorcontrollers"
 CUTSCENES = "dynamicassets/cutscene"
+SCRIPTS = "dynamicassets/gameplay/scripts"
 
 #: The two file formats a layer is written in, by extension.
 TEXT = "usda"
@@ -69,6 +70,10 @@ class Layout:
     def timeline(self, scene, stem):
         folder = os.path.join(self.base, *CUTSCENES.split("/"), scene, stem)
         return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def scripts(self, label):
+        folder = os.path.join(self.base, *SCRIPTS.split("/"), label)
+        return os.path.join(folder, "{0}.{1}".format(label, self.extension))
 
     def scene_record(self, scene, name):
         folder = os.path.join(self.base, *SCENES.split("/"), scene, name)
