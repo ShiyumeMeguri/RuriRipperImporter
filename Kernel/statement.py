@@ -895,7 +895,7 @@ class Statement:
 
     @classmethod
     def of(cls, seeds, basis=UNITY, detail=0, inactive=True, shadow_proxies=False,
-           roles=(), containers=(), colliders=False, scripts=False, classes=(), unreadable=False):
+           roles=(), containers=(), colliders=False, scripts=False, classes=(), members=(), unreadable=False):
         """Ask what these seeds are.
 
         ``detail`` is the level to keep and -1 every level; ``inactive`` keeps
@@ -904,16 +904,17 @@ class Statement:
         layer files, later overriding earlier; ``containers`` are the image
         containers this host loads directly; ``colliders`` states the collision
         volumes of the objects, which are otherwise left out; ``scripts`` reads the layouts of the game's own
-        scripts, without which a timeline (a MonoBehaviour) has no fields to state; ``classes`` are the engine component
-        classes (not scripts) the scripts table states beside the scripts; ``unreadable`` states a script whose layout cannot be
-        read as a record that says so, instead of refusing the table."""
+        scripts, without which a timeline (a MonoBehaviour) has no fields to state; ``classes`` are the engine classes
+        (components and assets, not scripts) the scripts table states beside the scripts; ``members`` are the members of
+        those classes the request wants, each ``Class.member.path``, a class with none stated whole; ``unreadable`` states a
+        script whose layout cannot be read as a record that says so, instead of refusing the table."""
         seeds = [str(seed) for seed in (seeds if isinstance(seeds, (list, tuple, set))
                                         else [seeds]) if str(seed)]
         if not seeds:
             raise ValueError("a statement needs at least one seed")
         return cls({"seed": seeds, "basis": basis, "detail": detail,
                     "inactive": inactive, "shadow_proxies": shadow_proxies, "colliders": colliders, "scripts": scripts,
-                    "classes": list(classes), "unreadable": unreadable,
+                    "classes": list(classes), "members": list(members), "unreadable": unreadable,
                     "roles": list(roles), "containers": list(containers)})
 
     @property
