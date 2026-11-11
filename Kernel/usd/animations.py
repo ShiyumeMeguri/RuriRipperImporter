@@ -12,7 +12,7 @@ import numpy as np
 from pxr import Gf, Sdf, Usd, UsdSkel, Vt
 
 from .. import statement as kernel_statement
-from . import stages
+from . import records, stages
 from .names import Namer, file_stem, identifier
 
 #: The rate a clip is sampled at when it states none.
@@ -21,6 +21,12 @@ DEFAULT_RATE = 30.0
 #: How blend shape curves are named in a clip, and what their weight is measured in against the target's.
 BLEND_SHAPE_PREFIX = "blendShape."
 BLEND_SHAPE_UNIT = 100.0
+
+#: The class id of a humanoid animator: its float curves are muscles, which the statement solves into bone curves.
+ANIMATOR_CLASS_ID = 95
+
+#: The child of a clip's prim that states the curves driving a property of a component or an object.
+PROPERTY_CURVES = "propertyCurves"
 
 
 def _reflection():
@@ -78,8 +84,8 @@ def author(layer_path, name, rig, hierarchy, clip):
     shapes = {}
     for channel in clip.of_kind("float"):
         if not channel.attribute.startswith(BLEND_SHAPE_PREFIX):
-            reason = "float:{0}".format(channel.class_id)
-            unplaced[reason] = unplaced.get(reason, 0) + 1
+            if channel.class_id == ANIMATOR_CLASS_ID:
+                unplaced["float:{0}".format(channel.class_id)] = unplaced.get("float:{0}".format(channel.class_id), 0) + 1
         elif channel.path in joint_of_source:
             shapes[(channel.path, channel.attribute[len(BLEND_SHAPE_PREFIX):])] = (
                 channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT)
@@ -133,9 +139,10 @@ def author(layer_path, name, rig, hierarchy, clip):
                                      for x, y, z, w in columns_r[frame]]), code)
         scales.Set(Vt.Vec3hArray.FromNumpy(np.ascontiguousarray(columns_s[frame], dtype=np.float16)), code)
     _write_shapes(animation, shapes, frames)
+    properties = _write_property_curves(stage, animation, clip)
     stage.GetRootLayer().Save()
     return {"written": True, "unplaced": unplaced, "joints": len(joints), "frames": frames, "blend_shapes": len(shapes),
-            "rate": rate}
+            "rate": rate, "property_curves": properties}
 
 
 def _sampling(clip):
@@ -167,6 +174,31 @@ def _write_shapes(animation, shapes, frames):
         weights.Set(Vt.FloatArray.FromNumpy(np.ascontiguousarray(stacked[frame], dtype=np.float32)), Usd.TimeCode(frame))
 
 
+def _write_property_curves(stage, animation, clip):
+    """The float curves of ``clip`` that drive a property of a component or an object, as the child ``propertyCurves`` of the
+    clip's prim: for each, the class of the component it drives, the path of the object it sits on and the property's name as the
+    source states them, the script a script component runs, and the keys exactly as the source holds them -- times, values and both
+    tangents of a cubic Hermite curve, unsampled. A blend shape weight is the layer's own, and a humanoid muscle is solved into
+    bone curves, so neither is one. Returns how many curves there are."""
+    curves = []
+    for channel in clip.of_kind("float"):
+        if channel.attribute.startswith(BLEND_SHAPE_PREFIX) or channel.class_id == ANIMATOR_CLASS_ID or not len(channel.times):
+            continue
+        curve = {"classId": channel.class_id, "path": channel.path, "attribute": channel.attribute}
+        if channel.script_class:
+            curve["scriptAssembly"] = channel.script_assembly
+            curve["scriptNamespace"] = channel.script_namespace
+            curve["scriptClass"] = channel.script_class
+        curve["times"] = [float(value) for value in channel.times]
+        curve["values"] = [float(value) for value in channel.values[:, 0]]
+        curve["inSlopes"] = [float(value) for value in channel.in_slopes[:, 0]]
+        curve["outSlopes"] = [float(value) for value in channel.out_slopes[:, 0]]
+        curves.append(curve)
+    if curves:
+        records.attach(stage, animation.GetPrim(), PROPERTY_CURVES, {"curves": curves}, {"prims": 0, "attributes": 0})
+    return len(curves)
+
+
 def author_carrier(layer_path, name, clip):
     """Write ``clip`` once, on no rig, for a clip that no rig could place anything of: what it says without a skeleton --
     its identity, loop flag, length and blend shape curves with the renderer paths it authored them against -- and, as
@@ -184,9 +216,8 @@ def author_carrier(layer_path, name, clip):
         if channel.attribute.startswith(BLEND_SHAPE_PREFIX):
             shapes[(channel.path, channel.attribute[len(BLEND_SHAPE_PREFIX):])] = (
                 channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT)
-        else:
-            reason = "float:{0}".format(channel.class_id)
-            unplaced[reason] = unplaced.get(reason, 0) + 1
+        elif channel.class_id == ANIMATOR_CLASS_ID:
+            unplaced["float:{0}".format(channel.class_id)] = unplaced.get("float:{0}".format(channel.class_id), 0) + 1
     stage = stages.create(layer_path, kernel_statement.USD, "Clip {0} on no rig".format(name))
     stage.SetTimeCodesPerSecond(rate)
     stage.SetStartTimeCode(0)
@@ -200,11 +231,13 @@ def author_carrier(layer_path, name, clip):
     prim.CreateAttribute("ruri:clipDuration", Sdf.ValueTypeNames.Double, custom=True).Set(float(duration))
     animation.CreateJointsAttr(Vt.TokenArray([]))
     _write_shapes(animation, shapes, frames)
+    properties = _write_property_curves(stage, animation, clip)
     if unplaced:
         prim.CreateAttribute("ruri:unplaced", Sdf.ValueTypeNames.StringArray, custom=True).Set(
             Vt.StringArray(["{0}={1}".format(reason, unplaced[reason]) for reason in sorted(unplaced)]))
     stage.GetRootLayer().Save()
-    return {"written": True, "unplaced": unplaced, "joints": 0, "frames": frames, "blend_shapes": len(shapes), "rate": rate}
+    return {"written": True, "unplaced": unplaced, "joints": 0, "frames": frames, "blend_shapes": len(shapes), "rate": rate,
+            "property_curves": properties}
 
 
 def layer_stem(clip):

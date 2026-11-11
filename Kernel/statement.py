@@ -584,14 +584,17 @@ class Channel:
     layout every clip producer writes, so a repaired clip reads exactly like a
     raw one."""
 
-    __slots__ = ("kind", "path", "attribute", "class_id", "times", "values",
-                 "in_slopes", "out_slopes")
+    __slots__ = ("kind", "path", "attribute", "class_id", "script_assembly", "script_namespace", "script_class", "times",
+                 "values", "in_slopes", "out_slopes")
 
     def __init__(self, entry, floats):
         self.kind = entry["kind"]
         self.path = entry["path"]
         self.attribute = entry.get("attr") or ""
         self.class_id = int(entry.get("classId") or 0)
+        self.script_assembly = entry.get("scriptAssembly") or ""
+        self.script_namespace = entry.get("scriptNamespace") or ""
+        self.script_class = entry.get("scriptClass") or ""
         keys = int(entry["keys"])
         width = _CURVE_DIMENSIONS.get(self.kind, 1)
         start = int(entry["off"])
