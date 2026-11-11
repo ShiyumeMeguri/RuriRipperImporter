@@ -72,7 +72,7 @@ def _continuous(quaternions):
     return out
 
 
-def author(layer_path, name, rig, hierarchy, clip, owners=()):
+def author(layer_path, name, rig, hierarchy, clip, owners=(), by_owner=False):
     """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns ``{"written", "unplaced", ...}``: whether a
     layer was written, how many of the clip's curves the layer cannot carry by kind (counted here rather than dropped silently),
     and when written the counts of what it moves. A transform curve that lands on no joint of the rig -- an object outside the rig,
@@ -83,7 +83,10 @@ def author(layer_path, name, rig, hierarchy, clip, owners=()):
     owner that is a joint of the rig, as every other curve is anchored onto the rig's paths: a transform curve moves that joint, a
     blend shape curve names it as its renderer, a property curve states it as its path; where an owner is the rig's root (an empty
     path) the curve stays as it is, a transform curve of the root among the property curves. The clip is a layer of this rig when
-    some curve of it anchors by its own path; the curves of an empty path complete that layer and never make one."""
+    some curve of it anchors by its own path; the curves of an empty path complete that layer and never make one -- except for a
+    clip the host says is played by its own Animators (``by_owner``: it has curves that anchor by their paths on other rigs), whose
+    curves of an empty path make the layer when an owner of this rig is a joint of it, so that every rig with such an Animator
+    has the clip."""
     matrix, vector_sign = _reflection()
     magnitude = np.abs(matrix)
     rate, duration, times = _sampling(clip)
@@ -120,7 +123,7 @@ def author(layer_path, name, rig, hierarchy, clip, owners=()):
         else:
             reason = "blend_shape:self" if not channel.path else "blend_shape:unmatched"
             unplaced[reason] = unplaced.get(reason, 0) + 1
-    if not moved and not shapes:
+    if not moved and not shapes and not (by_owner and homes and (own_transforms or own_shapes)):
         if own_shapes:
             unplaced["blend_shape:self"] = unplaced.get("blend_shape:self", 0) + len(own_shapes)
         return {"written": False, "unplaced": unplaced, "transform_curves": 0}

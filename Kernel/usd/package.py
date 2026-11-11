@@ -69,7 +69,10 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     statement must have been read in the usd basis. ``performances``, when given, is asked for the clips each new
     character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's; ``owners``,
     when given, is asked where each is played -- ``owners(rig, root_node, clip) -> [path in the rig of the object of an Animator
-    that plays the clip]`` -- which is what a curve of an empty path is anchored to (``animations.author``).
+    that plays the clip]`` -- which is what a curve of an empty path is anchored to (``animations.author``). The host answers
+    for a clip whose own curves have an empty path as the source states them, and with nothing for any other: the root curves a
+    humanoid clip's solve states with an empty path belong to the rig's root, not to a nested Animator that plays the clip too.
+    The answer's ``make_layer`` attribute, when true, makes those curves a layer of the rig by themselves (``animations.author``).
     ``cinemachine``, when given, are the components of the camera package the scene carries (``Statement.cinemachine``, read
     with ``scripts``), each written under the node it sits on in the scene layer, or, for a node inside a rig, in the rig's
     layer (``attachments``). ``taken_characters`` are the names (before the ``_postmodel`` suffix) the tree under ``root`` and
@@ -154,11 +157,13 @@ def export(statement, scene_name, root, product, families, extension, textures=N
             rest = _rest_of(rig, hierarchy)
             for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
                 layer = layout.animation(name, animations.layer_stem(clip))
-                where = tuple(dict.fromkeys(owners(rig, hierarchy.nodes[index], clip))) if owners is not None else ()
-                known = performed.get((rest, clip.key, where))
+                found = owners(rig, hierarchy.nodes[index], clip) if owners is not None else ()
+                where = tuple(dict.fromkeys(found))
+                by_owner = bool(getattr(found, "make_layer", False))
+                known = performed.get((rest, clip.key, where, by_owner))
                 if known is None:
-                    made = animations.author(layer, identifier(clip.name), rig, hierarchy, clip, where)
-                    performed[(rest, clip.key, where)] = (layer, made)
+                    made = animations.author(layer, identifier(clip.name), rig, hierarchy, clip, where, by_owner)
+                    performed[(rest, clip.key, where, by_owner)] = (layer, made)
                 else:
                     first, made = known
                     if made["written"]:

@@ -807,10 +807,12 @@ class Timeline:
 class Animator:
     """An Animator component on a node: where it sits (the node's path), the controller it plays and the avatar it was
     built with, by key, empty when it has none. ``keep_controller_state`` is whether the controller keeps its state when
-    the object is disabled and enabled again; false is the engine's default."""
+    the object is disabled and enabled again; false is the engine's default. ``path_ordinal`` is how many nodes of ``path``
+    come before the node the Animator sits on (a script record's ``pathOrdinal``), which tells apart the Animators of two
+    nodes that share a path."""
 
     __slots__ = ("path", "controller", "avatar", "enabled", "root_motion", "update_mode", "culling_mode",
-                 "keep_controller_state")
+                 "keep_controller_state", "path_ordinal")
 
     def __init__(self, row):
         self.path = row["path"]
@@ -821,6 +823,7 @@ class Animator:
         self.update_mode = row["update_mode"]
         self.culling_mode = row["culling_mode"]
         self.keep_controller_state = bool(int(row["keep_controller_state"]))
+        self.path_ordinal = int(row["path_ordinal"])
 
     def __repr__(self):
         return "<Animator {0}>".format(self.path)
