@@ -76,7 +76,9 @@ def author(layer_path, name, rig, hierarchy, clip, owners=(), by_owner=False):
     """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns ``{"written", "unplaced", ...}``: whether a
     layer was written, how many of the clip's curves the layer cannot carry by kind (counted here rather than dropped silently),
     and when written the counts of what it moves. A transform curve that lands on no joint of the rig -- an object outside the rig,
-    or the rig's own root -- is not one of these: it is stated among the property curves (``transform_curves`` counts its axes).
+    or the rig's own root -- is not one of these: it is stated among the property curves (``transform_curves`` counts its axes). The
+    one that is one of these is a bone the solve of a muscle clip states for the avatar's skeleton that the rig has no node for: it
+    drives nothing, so it is counted (``unplaced["solved:unmatched"]``) and not written.
 
     ``owners`` are the paths in the rig of the objects of the Animators that play the clip for this rig (empty for an Animator on
     the rig's root). A curve whose path is empty drives the object of the Animator that plays the clip, so it is anchored to each
@@ -107,6 +109,10 @@ def author(layer_path, name, rig, hierarchy, clip, owners=(), by_owner=False):
                 own_transforms.append(channel)
                 if at_root:
                     loose.append(channel)
+            elif channel.in_weights is None and channel.path:
+                # A bone the solve of a muscle clip states for the avatar's skeleton and that is no node of this rig (the avatar maps a
+                # finger the scene's prefab does not have): there is nothing for it to drive, so it is counted and not written.
+                unplaced["solved:unmatched"] = unplaced.get("solved:unmatched", 0) + 1
             else:
                 loose.append(channel)
     shapes = {}
@@ -219,14 +225,21 @@ def _write_shapes(animation, shapes, frames):
         weights.Set(Vt.FloatArray.FromNumpy(np.ascontiguousarray(stacked[frame], dtype=np.float32)), Usd.TimeCode(frame))
 
 
+#: What a curve no clip held -- the root's transform a humanoid solve states -- has where a clip's own curve states its own: keys that
+#: are not weighted (mode 0, each handle a third of the way to the neighbouring key, the source engine's own default, with which a
+#: weighted Bezier segment is exactly the cubic Hermite segment) and a clamp before the first key and after the last (2 in the source
+#: engine's own value domain, how the importer samples such a curve).
+UNHELD_WEIGHT = float(np.float32(1.0 / 3.0))
+UNHELD_WEIGHTED_MODE = 0
+UNHELD_WRAP_MODE = 2
+
+
 def _scalar_curve(channel, column, curve):
     """The keys of one axis of ``channel`` as the members of ``curve``: times, values and both tangents of a cubic Hermite curve,
-    unsampled, each key's in weight, out weight and weighted mode, and the curve's pre and post wrap mode, where the source
-    states them."""
-    if channel.pre_wrap_mode is not None:
-        curve["preWrapMode"] = channel.pre_wrap_mode
-    if channel.post_wrap_mode is not None:
-        curve["postWrapMode"] = channel.post_wrap_mode
+    unsampled, each key's in weight, out weight and weighted mode, and the curve's pre and post wrap mode -- the source's own, or for
+    a curve no clip held (it states none) the unweighted, clamped statement of ``UNHELD_*``, so that every curve states all of them."""
+    curve["preWrapMode"] = UNHELD_WRAP_MODE if channel.pre_wrap_mode is None else channel.pre_wrap_mode
+    curve["postWrapMode"] = UNHELD_WRAP_MODE if channel.post_wrap_mode is None else channel.post_wrap_mode
     curve["times"] = [float(value) for value in channel.times]
     curve["values"] = [float(value) for value in channel.values[:, column]]
     curve["inSlopes"] = [float(value) for value in channel.in_slopes[:, column]]
@@ -235,6 +248,11 @@ def _scalar_curve(channel, column, curve):
         curve["inWeights"] = [float(value) for value in channel.in_weights[:, column]]
         curve["outWeights"] = [float(value) for value in channel.out_weights[:, column]]
         curve["weightedModes"] = [int(value) for value in channel.weighted_modes]
+    else:
+        keys = len(channel.times)
+        curve["inWeights"] = [UNHELD_WEIGHT] * keys
+        curve["outWeights"] = [UNHELD_WEIGHT] * keys
+        curve["weightedModes"] = [UNHELD_WEIGHTED_MODE] * keys
     return curve
 
 
