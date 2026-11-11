@@ -12,16 +12,21 @@ from pxr import Sdf, UsdGeom, Vt
 from .. import statement as kernel_statement
 
 
+UNTAGGED = "Untagged"
+
+
 def _attribute(prim, name, kind, value):
     prim.CreateAttribute(name, kind, custom=True).Set(value)
 
 
 def describe(prim, node, source_path):
-    """The node's place in its source, whether its own object is active (activeSelf, whatever its ancestors are), and what it is."""
+    """The node's place in its source, whether its own object is active (activeSelf, whatever its ancestors are), what it is, and its tag unless that is the default."""
     _attribute(prim, "ruri:sourcePath", Sdf.ValueTypeNames.String, source_path)
     _attribute(prim, "ruri:layer", Sdf.ValueTypeNames.Int, int(node.layer))
     _attribute(prim, "ruri:activeSelf", Sdf.ValueTypeNames.Bool, bool(node.active_self))
     _attribute(prim, "ruri:nodeKind", Sdf.ValueTypeNames.Token, node.kind)
+    if node.tag and node.tag != UNTAGGED:
+        _attribute(prim, "ruri:tag", Sdf.ValueTypeNames.String, node.tag)
     if not node.active_self:
         UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
     if node.kind in (kernel_statement.MESH, kernel_statement.SKINNED):
@@ -45,7 +50,6 @@ def _camera(prim, node):
     _attribute(prim, "ruri:camera:far", Sdf.ValueTypeNames.Float, float(camera["far"]))
     _attribute(prim, "ruri:camera:orthographic", Sdf.ValueTypeNames.Bool, bool(camera["orthographic"]))
     _attribute(prim, "ruri:camera:orthographicSize", Sdf.ValueTypeNames.Float, float(camera["ortho_size"]))
-    _attribute(prim, "ruri:tag", Sdf.ValueTypeNames.String, node.tag)
 
 
 def _light(prim, node):
