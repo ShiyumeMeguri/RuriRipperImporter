@@ -28,6 +28,16 @@ ANIMATOR_CLASS_ID = 95
 #: The child of a clip's prim that states the curves driving a property of a component or an object.
 PROPERTY_CURVES = "propertyCurves"
 
+#: The child of a clip's prim that states the animation events the source puts on the clip.
+EVENTS = "events"
+
+#: The class id of a Transform, and the property each kind of transform curve drives on it, with the axes of its components, under
+#: the names the source's own bindings give them. A transform curve no joint of the rig takes is stated as one scalar curve per axis of
+#: these properties.
+TRANSFORM_CLASS_ID = 4
+TRANSFORM_PROPERTIES = {"pos": ("m_LocalPosition", "xyz"), "rot": ("m_LocalRotation", "xyzw"),
+                        "euler": ("m_LocalEulerAnglesRaw", "xyz"), "scale": ("m_LocalScale", "xyz")}
+
 
 def _reflection():
     """The basis' reflection as a 3x3, and the sign a quaternion's vector part takes crossing it."""
@@ -64,8 +74,9 @@ def _continuous(quaternions):
 
 def author(layer_path, name, rig, hierarchy, clip):
     """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns ``{"written", "unplaced", ...}``: whether a
-    layer was written, how many of the clip's curves landed on no joint of the rig by kind (a curve the layer cannot carry
-    is counted here rather than dropped silently), and when written the counts of what it moves."""
+    layer was written, how many of the clip's curves the layer cannot carry by kind (counted here rather than dropped silently),
+    and when written the counts of what it moves. A transform curve that lands on no joint of the rig -- an object outside the rig,
+    or the rig's own root -- is not one of these: it is stated among the property curves (``transform_curves`` counts its axes)."""
     matrix, vector_sign = _reflection()
     magnitude = np.abs(matrix)
     rate, duration, times = _sampling(clip)
@@ -73,14 +84,14 @@ def author(layer_path, name, rig, hierarchy, clip):
     joint_of_source = {source: joint for joint, source in enumerate(rig.sources)}
     moved = {}
     unplaced = {}
+    loose = []
     for kind in ("pos", "rot", "euler", "scale"):
         for channel in clip.of_kind(kind):
             joint = joint_of_source.get(channel.path)
             if joint is not None:
                 moved.setdefault(joint, {})[kind] = channel.sample(times)
             else:
-                reason = kind if channel.path else kind + ":root"
-                unplaced[reason] = unplaced.get(reason, 0) + 1
+                loose.append(channel)
     shapes = {}
     for channel in clip.of_kind("float"):
         if not channel.attribute.startswith(BLEND_SHAPE_PREFIX):
@@ -93,7 +104,7 @@ def author(layer_path, name, rig, hierarchy, clip):
             reason = "blend_shape:self" if not channel.path else "blend_shape:unmatched"
             unplaced[reason] = unplaced.get(reason, 0) + 1
     if not moved and not shapes:
-        return {"written": False, "unplaced": unplaced}
+        return {"written": False, "unplaced": unplaced, "transform_curves": 0}
     stage = stages.create(layer_path, kernel_statement.USD, "Clip {0} on {1}".format(name, rig.sources[0] if rig.sources else ""))
     stage.SetTimeCodesPerSecond(rate)
     stage.SetStartTimeCode(0)
@@ -139,10 +150,11 @@ def author(layer_path, name, rig, hierarchy, clip):
                                      for x, y, z, w in columns_r[frame]]), code)
         scales.Set(Vt.Vec3hArray.FromNumpy(np.ascontiguousarray(columns_s[frame], dtype=np.float16)), code)
     _write_shapes(animation, shapes, frames)
-    properties = _write_property_curves(stage, animation, clip)
+    properties, transforms = _write_property_curves(stage, animation, clip, loose)
+    events = write_events(stage, animation.GetPrim(), clip.events)
     stage.GetRootLayer().Save()
     return {"written": True, "unplaced": unplaced, "joints": len(joints), "frames": frames, "blend_shapes": len(shapes),
-            "rate": rate, "property_curves": properties}
+            "rate": rate, "property_curves": properties, "transform_curves": transforms, "events": events}
 
 
 def _sampling(clip):
@@ -174,43 +186,97 @@ def _write_shapes(animation, shapes, frames):
         weights.Set(Vt.FloatArray.FromNumpy(np.ascontiguousarray(stacked[frame], dtype=np.float32)), Usd.TimeCode(frame))
 
 
-def _write_property_curves(stage, animation, clip):
-    """The float curves of ``clip`` that drive a property of a component or an object, as the child ``propertyCurves`` of the
-    clip's prim: for each, the class of the component it drives, the path of the object it sits on and the property's name as the
-    source states them, the script a script component runs, and the keys exactly as the source holds them -- times, values and both
-    tangents of a cubic Hermite curve, unsampled. A blend shape weight is the layer's own, and a humanoid muscle is solved into
-    bone curves, so neither is one. Returns how many curves there are."""
+def _scalar_curve(channel, column, curve):
+    """The keys of one axis of ``channel`` as the members of ``curve``: times, values and both tangents of a cubic Hermite curve,
+    unsampled, each key's in weight, out weight and weighted mode, and the curve's pre and post wrap mode, where the source
+    states them."""
+    if channel.pre_wrap_mode is not None:
+        curve["preWrapMode"] = channel.pre_wrap_mode
+    if channel.post_wrap_mode is not None:
+        curve["postWrapMode"] = channel.post_wrap_mode
+    curve["times"] = [float(value) for value in channel.times]
+    curve["values"] = [float(value) for value in channel.values[:, column]]
+    curve["inSlopes"] = [float(value) for value in channel.in_slopes[:, column]]
+    curve["outSlopes"] = [float(value) for value in channel.out_slopes[:, column]]
+    if channel.in_weights is not None:
+        curve["inWeights"] = [float(value) for value in channel.in_weights[:, column]]
+        curve["outWeights"] = [float(value) for value in channel.out_weights[:, column]]
+        curve["weightedModes"] = [int(value) for value in channel.weighted_modes]
+    return curve
+
+
+def _transform_curves(channels):
+    """The transform curves ``channels`` (each a vector across its axes) as one scalar curve per axis, driving the property of a
+    Transform the source's own binding names (``TRANSFORM_PROPERTIES``) at the path the clip states, in the source's own space and
+    units."""
+    curves = []
+    for channel in channels:
+        if not len(channel.times):
+            continue
+        base, axes = TRANSFORM_PROPERTIES[channel.kind]
+        for column, axis in enumerate(axes):
+            curves.append(_scalar_curve(channel, column, {
+                "classId": TRANSFORM_CLASS_ID, "className": "Transform", "path": channel.path,
+                "attribute": "{0}.{1}".format(base, axis)}))
+    return curves
+
+
+def _write_property_curves(stage, animation, clip, loose=()):
+    """The curves of ``clip`` that drive a property of a component or an object, as the child ``propertyCurves`` of the clip's
+    prim: the float curves, and the ``loose`` transform curves (the ones no joint takes). For each, the class of the component
+    it drives, the path of the object it sits on and the property's name as the source states them (the class name of a native
+    class, the script a script component runs), the curve's pre and post wrap mode, and the keys exactly as the source holds them
+    -- times, values and both tangents of a cubic Hermite curve, unsampled, and each key's in weight, out weight and weighted
+    mode. A blend shape weight is the layer's own, and a humanoid muscle is solved into bone curves, so neither is one. Returns
+    ``(how many curves there are, how many of them are axes of a transform)``."""
     curves = []
     for channel in clip.of_kind("float"):
         if channel.attribute.startswith(BLEND_SHAPE_PREFIX) or channel.class_id == ANIMATOR_CLASS_ID or not len(channel.times):
             continue
         curve = {"classId": channel.class_id, "path": channel.path, "attribute": channel.attribute}
+        if channel.class_name:
+            curve["className"] = channel.class_name
         if channel.script_class:
             curve["scriptAssembly"] = channel.script_assembly
             curve["scriptNamespace"] = channel.script_namespace
             curve["scriptClass"] = channel.script_class
-        curve["times"] = [float(value) for value in channel.times]
-        curve["values"] = [float(value) for value in channel.values[:, 0]]
-        curve["inSlopes"] = [float(value) for value in channel.in_slopes[:, 0]]
-        curve["outSlopes"] = [float(value) for value in channel.out_slopes[:, 0]]
-        curves.append(curve)
+        curves.append(_scalar_curve(channel, 0, curve))
+    transforms = _transform_curves(loose)
+    curves.extend(transforms)
     if curves:
         records.attach(stage, animation.GetPrim(), PROPERTY_CURVES, {"curves": curves}, {"prims": 0, "attributes": 0})
-    return len(curves)
+    return len(curves), len(transforms)
+
+
+def write_events(stage, prim, events):
+    """The animation ``events`` of a clip (``Clip.events``) as the child ``events`` of the clip's ``prim``: a list ``events`` of
+    objects, in the order the source holds them, each with ``time`` (seconds), ``functionName``, ``stringParameter``,
+    ``floatParameter``, ``intParameter``, ``messageOptions`` and, for an event that passes an object,
+    ``objectReferenceParameter`` (the asset reference the script records use). Returns how many there are."""
+    if not events:
+        return 0
+    listing = []
+    for event in events:
+        item = {"time": float(event["time"]), "functionName": event["functionName"],
+                "stringParameter": event["stringParameter"], "floatParameter": float(event["floatParameter"]),
+                "intParameter": int(event["intParameter"]), "messageOptions": int(event["messageOptions"])}
+        if event.get("objectReference"):
+            item["objectReferenceParameter"] = event["objectReference"]
+        listing.append(item)
+    records.attach(stage, prim, EVENTS, {"events": listing}, {"prims": 0, "attributes": 0})
+    return len(listing)
 
 
 def author_carrier(layer_path, name, clip):
     """Write ``clip`` once, on no rig, for a clip that no rig could place anything of: what it says without a skeleton --
-    its identity, loop flag, length and blend shape curves with the renderer paths it authored them against -- and, as
-    ``ruri:unplaced``, how many curves it has that need a skeleton or a component this layer cannot carry (``kind=count``).
-    A clip with no curves at all is a pose of nothing and still has an identity a controller refers to."""
+    its identity, loop flag, length, blend shape curves with the renderer paths it authored them against, and its curves as the
+    property curves they are (a transform curve as one scalar curve per axis) -- and, as ``ruri:unplaced``, how many curves it has
+    that this layer cannot carry (``kind=count``). A clip with no curves at all is a pose of nothing and still has an identity a
+    controller refers to."""
     rate, duration, times = _sampling(clip)
     frames = len(times)
     unplaced = {}
-    for kind in ("pos", "rot", "euler", "scale"):
-        for channel in clip.of_kind(kind):
-            reason = kind if channel.path else kind + ":root"
-            unplaced[reason] = unplaced.get(reason, 0) + 1
+    loose = [channel for kind in ("pos", "rot", "euler", "scale") for channel in clip.of_kind(kind)]
     shapes = {}
     for channel in clip.of_kind("float"):
         if channel.attribute.startswith(BLEND_SHAPE_PREFIX):
@@ -231,13 +297,14 @@ def author_carrier(layer_path, name, clip):
     prim.CreateAttribute("ruri:clipDuration", Sdf.ValueTypeNames.Double, custom=True).Set(float(duration))
     animation.CreateJointsAttr(Vt.TokenArray([]))
     _write_shapes(animation, shapes, frames)
-    properties = _write_property_curves(stage, animation, clip)
+    properties, transforms = _write_property_curves(stage, animation, clip, loose)
+    events = write_events(stage, prim, clip.events)
     if unplaced:
         prim.CreateAttribute("ruri:unplaced", Sdf.ValueTypeNames.StringArray, custom=True).Set(
             Vt.StringArray(["{0}={1}".format(reason, unplaced[reason]) for reason in sorted(unplaced)]))
     stage.GetRootLayer().Save()
     return {"written": True, "unplaced": unplaced, "joints": 0, "frames": frames, "blend_shapes": len(shapes), "rate": rate,
-            "property_curves": properties}
+            "property_curves": properties, "transform_curves": transforms, "events": events}
 
 
 def layer_stem(clip):

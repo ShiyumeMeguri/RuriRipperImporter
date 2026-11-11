@@ -582,19 +582,31 @@ class Channel:
 
     Times, values and both tangents, each key-major across components -- the
     layout every clip producer writes, so a repaired clip reads exactly like a
-    raw one."""
+    raw one. A curve read from a clip also has its in weights and out weights, as
+    wide as the values, and its weighted modes, one per key (all three ``None``
+    for a curve no clip held), and the serialized pre- and post-infinity of the
+    curve (``pre_wrap_mode`` and ``post_wrap_mode``: the two integers the source
+    stores on the curve, as they are, in the source engine's own value domain;
+    ``None`` where the producer states none). ``class_name`` is the native class a
+    float curve drives, where it is not a script's."""
 
-    __slots__ = ("kind", "path", "attribute", "class_id", "script_assembly", "script_namespace", "script_class", "times",
-                 "values", "in_slopes", "out_slopes")
+    __slots__ = ("kind", "path", "attribute", "class_id", "class_name", "script_assembly", "script_namespace", "script_class",
+                 "pre_wrap_mode", "post_wrap_mode", "times", "values", "in_slopes", "out_slopes", "in_weights", "out_weights",
+                 "weighted_modes")
 
     def __init__(self, entry, floats):
         self.kind = entry["kind"]
         self.path = entry["path"]
         self.attribute = entry.get("attr") or ""
         self.class_id = int(entry.get("classId") or 0)
+        self.class_name = entry.get("className") or ""
         self.script_assembly = entry.get("scriptAssembly") or ""
         self.script_namespace = entry.get("scriptNamespace") or ""
         self.script_class = entry.get("scriptClass") or ""
+        pre_wrap = entry.get("preWrap")
+        post_wrap = entry.get("postWrap")
+        self.pre_wrap_mode = None if pre_wrap is None else int(pre_wrap)
+        self.post_wrap_mode = None if post_wrap is None else int(post_wrap)
         keys = int(entry["keys"])
         width = _CURVE_DIMENSIONS.get(self.kind, 1)
         start = int(entry["off"])
@@ -604,6 +616,13 @@ class Channel:
         self.values = floats[values:values + block].reshape(keys, width)
         self.in_slopes = floats[values + block:values + 2 * block].reshape(keys, width)
         self.out_slopes = floats[values + 2 * block:values + 3 * block].reshape(keys, width)
+        if entry.get("weighted"):
+            weights = values + 3 * block
+            self.in_weights = floats[weights:weights + block].reshape(keys, width)
+            self.out_weights = floats[weights + block:weights + 2 * block].reshape(keys, width)
+            self.weighted_modes = floats[weights + 2 * block:weights + 2 * block + keys]
+        else:
+            self.in_weights = self.out_weights = self.weighted_modes = None
 
     @property
     def duration(self):
@@ -657,6 +676,14 @@ class Clip:
     def loop(self):
         """Whether the source states the clip loops (its muscle clip's loop-time flag)."""
         return bool(self.meta.get("loopTime"))
+
+    @property
+    def events(self):
+        """The animation events the source states on the clip, in order: each a dict of ``time`` (seconds), ``functionName``,
+        ``stringParameter``, ``floatParameter``, ``intParameter``, ``messageOptions`` (``SendMessageOptions`` as the source
+        serializes it) and, for an event that passes an object, ``objectReference`` (the asset reference the script records use:
+        ``kind``, ``key``, ``class``, ``name``)."""
+        return self.meta.get("events") or []
 
     @property
     def channels(self):
