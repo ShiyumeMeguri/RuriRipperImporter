@@ -174,6 +174,7 @@ def export(statement, scene_name, root, product, families, extension, textures=N
                     placed_keys.add(clip.key)
                 report.setdefault("animations" if made["written"] else "animation_misses", []).append(entry)
         placed[index] = match
+        report.setdefault("rig_characters", {})[str(index)] = os.path.basename(os.path.dirname(match.layer_path))
     report["character_layers"] = len(written)
     for key, clip in offered.items():
         if key not in placed_keys:

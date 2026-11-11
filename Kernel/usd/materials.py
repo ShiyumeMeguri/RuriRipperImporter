@@ -63,6 +63,12 @@ class TextureStore:
         """The statement's texture ``key``, or None."""
         return self._textures.get(key)
 
+    def named_slots(self, shader_name):
+        """The texture slots of a material of the shader ``shader_name`` that the host's mapping names (none here: a host that has a
+        mapping answers). A material states each of them: the file where the source has a texture there, an empty path where it has
+        none."""
+        return frozenset()
+
     def _duplicate(self, first, target):
         """The file ``target`` with the content of ``first``: a hard link where the volume has them, so a texture
         every layer owns is stored once, else a copy."""
@@ -174,8 +180,10 @@ def _preview(stage, material_path, stated, base_file, texture):
     return surface.CreateOutput("surface", Sdf.ValueTypeNames.Token)
 
 
-def _source(prim, stated, families, place):
-    """Everything the source states about the material, as ``ruri:`` attributes of basic types."""
+def _source(prim, stated, families, place, named=()):
+    """Everything the source states about the material, as ``ruri:`` attributes of basic types. A texture slot the host names
+    (``named``) is always said: with the file where the source has a texture there, with an empty path where it has none; a texture
+    the source has in a slot nobody named and that was not written is not said at all."""
     _text(prim, "ruri:sourceName", stated.name)
     _text(prim, "ruri:sourceKey", stated.key)
     _text(prim, "ruri:sourceShader", stated.shader_name)
@@ -201,6 +209,10 @@ def _source(prim, stated, families, place):
         if tiling is not None:
             prim.CreateAttribute("ruri:properties:" + identifier(name) + "_ST", Sdf.ValueTypeNames.FloatArray,
                                  custom=True).Set(Vt.FloatArray([float(component) for component in tiling]))
+    for name in sorted(named):
+        if not stated.textures.get(name):
+            prim.CreateAttribute("ruri:properties:" + identifier(name), Sdf.ValueTypeNames.Asset, custom=True).Set(
+                Sdf.AssetPath(""))
 
 
 def scope(stage, parent_path):
@@ -222,5 +234,5 @@ def author(stage, scope_path, stated, textures, layer_path, families, names):
     texture = textures.get(base.guid) if base is not None else None
     output = _preview(stage, material.GetPath(), stated, base_file, texture)
     material.CreateSurfaceOutput().ConnectToSource(output)
-    _source(material.GetPrim(), stated, families, place)
+    _source(material.GetPrim(), stated, families, place, textures.named_slots(stated.shader_name))
     return material
