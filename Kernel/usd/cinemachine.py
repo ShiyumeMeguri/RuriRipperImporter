@@ -1,7 +1,8 @@
 """The components of the camera package that sit on the nodes of a scene, as records under the nodes that carry them.
 
 A node that carries any of them gets one child ``Scope`` named ``Cinemachine``, and under it one ``Scope`` per component,
-named after the class of the component's script, holding the component's serialized members by the five rules of
+named after the class of the component's script (the second of one class on a node takes the numbered name, ``_2``, and so
+on, in the order the node holds its components), holding the component's serialized members by the five rules of
 ``records``. Nothing here decides what a member means: the source states every field under the name its script gives it, a
 reference to another node as that node's source path, and a reader that models a component reads the members it uses and
 refuses the ones it does not. What this module decides is only where each component goes, and it decides it
@@ -43,10 +44,5 @@ def author(stage, prim, components, names, counts):
                          "that name.".format(prim.GetPath(), NAME))
     holder = stage.DefinePrim(prim.GetPath().AppendChild(NAME), "Scope")
     counts["prims"] += 1
-    taken = set()
     for component in components:
-        name = identifier(component.class_name)
-        if name in taken:
-            raise ValueError("'{0}' carries more than one {1}.".format(prim.GetPath(), component.class_name))
-        taken.add(name)
-        records.attach(stage, holder, name, component.record, counts)
+        records.attach(stage, holder, names.claim(str(holder.GetPath()), identifier(component.class_name)), component.record, counts)

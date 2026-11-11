@@ -32,9 +32,9 @@ def describe(prim, node, source_path):
     if node.kind in (kernel_statement.MESH, kernel_statement.SKINNED):
         _attribute(prim, "ruri:castShadows", Sdf.ValueTypeNames.Int, int(node.shadows))
     if node.camera is not None:
-        _camera(prim, node)
+        camera(prim, node)
     if node.light is not None:
-        _light(prim, node)
+        light(prim, node)
 
 
 def renderer_state(prim, node):
@@ -42,26 +42,28 @@ def renderer_state(prim, node):
     _attribute(prim, "ruri:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
 
 
-def _camera(prim, node):
-    camera = node.camera
+def camera(prim, node):
+    """The state of the camera ``node`` carries, as ``ruri:camera:`` attributes of ``prim``."""
+    state = node.camera
     _attribute(prim, "ruri:camera:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
-    _attribute(prim, "ruri:camera:fieldOfView", Sdf.ValueTypeNames.Float, float(camera["fov"]))
-    _attribute(prim, "ruri:camera:near", Sdf.ValueTypeNames.Float, float(camera["near"]))
-    _attribute(prim, "ruri:camera:far", Sdf.ValueTypeNames.Float, float(camera["far"]))
-    _attribute(prim, "ruri:camera:orthographic", Sdf.ValueTypeNames.Bool, bool(camera["orthographic"]))
-    _attribute(prim, "ruri:camera:orthographicSize", Sdf.ValueTypeNames.Float, float(camera["ortho_size"]))
+    _attribute(prim, "ruri:camera:fieldOfView", Sdf.ValueTypeNames.Float, float(state["fov"]))
+    _attribute(prim, "ruri:camera:near", Sdf.ValueTypeNames.Float, float(state["near"]))
+    _attribute(prim, "ruri:camera:far", Sdf.ValueTypeNames.Float, float(state["far"]))
+    _attribute(prim, "ruri:camera:orthographic", Sdf.ValueTypeNames.Bool, bool(state["orthographic"]))
+    _attribute(prim, "ruri:camera:orthographicSize", Sdf.ValueTypeNames.Float, float(state["ortho_size"]))
 
 
-def _light(prim, node):
-    light = node.light
+def light(prim, node):
+    """The state of the light ``node`` carries, as ``ruri:light:`` attributes of ``prim``."""
+    state = node.light
     _attribute(prim, "ruri:light:enabled", Sdf.ValueTypeNames.Bool, bool(node.component_enabled))
-    _attribute(prim, "ruri:light:type", Sdf.ValueTypeNames.Int, int(light["kind"]))
+    _attribute(prim, "ruri:light:type", Sdf.ValueTypeNames.Int, int(state["kind"]))
     _attribute(prim, "ruri:light:color", Sdf.ValueTypeNames.FloatArray,
-               Vt.FloatArray([float(component) for component in light["color"]]))
+               Vt.FloatArray([float(component) for component in state["color"]]))
     for key in ("intensity", "range", "reach", "angle", "inner_angle", "width", "height", "volume", "specular"):
-        _attribute(prim, "ruri:light:" + _camel(key), Sdf.ValueTypeNames.Float, float(light[key]))
-    _attribute(prim, "ruri:light:shadows", Sdf.ValueTypeNames.Bool, bool(light["shadows"]))
-    _attribute(prim, "ruri:light:shadowResolution", Sdf.ValueTypeNames.Int, int(light["shadow_resolution"]))
+        _attribute(prim, "ruri:light:" + _camel(key), Sdf.ValueTypeNames.Float, float(state[key]))
+    _attribute(prim, "ruri:light:shadows", Sdf.ValueTypeNames.Bool, bool(state["shadows"]))
+    _attribute(prim, "ruri:light:shadowResolution", Sdf.ValueTypeNames.Int, int(state["shadow_resolution"]))
 
 
 def _camel(key):

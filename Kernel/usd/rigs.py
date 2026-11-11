@@ -66,6 +66,19 @@ def find(hierarchy, meshes):
     return sorted(roots), covered
 
 
+def active_within(hierarchy, rig, index):
+    """Whether the object at ``index`` and every object between it and the rig's root is itself active. The root's own
+    state, and whatever sits above it, belongs to the scene that places the rig."""
+    while index != rig.root:
+        if index < 0:
+            raise ValueError("the ancestors of a joint do not reach the root of its rig.")
+        node = hierarchy.nodes[index]
+        if not node.active_self:
+            return False
+        index = node.parent
+    return True
+
+
 class Rig:
     """The skeleton below one rig root.
 

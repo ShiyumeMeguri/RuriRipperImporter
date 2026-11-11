@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pxr import Gf, Sdf, UsdGeom
 
-from . import transforms
+from . import sources, transforms
 from .layout import Layout
 
 #: The child prim of a node that states one of its volumes, and the one of a rig that states a volume of one of its joints --
@@ -42,12 +42,15 @@ def _place(prim, center, scale, frame):
         transforms.to_usd(frame @ transforms.local_matrix(center, _IDENTITY, scale)))
 
 
-def author(stage, layer_path, parent_path, collider, names, piece=None, frame=None, joint=None, active=None):
+def author(stage, layer_path, parent_path, collider, names, piece=None, frame=None, joint=None, active=None, tag=None,
+           layer=None):
     """The volume ``collider`` as a child of the prim at ``parent_path``. A mesh collider needs the ``piece`` that holds
     its mesh; one on a joint (``frame`` and ``joint`` given) is not written. ``active`` is, for a volume on a joint, whether
     the object it sits on is active as far as the rig goes, and is stated as ``ruri:activeSelf`` -- the prim stands for that
-    object, and the joints between it and the rig's root are not prims to carry the state down. Returns whether anything
-    was written."""
+    object, and the joints between it and the rig's root are not prims to carry the state down. For the same reason the object's
+    own ``layer`` and ``tag`` (unless it is the default) are stated on the prim as ``ruri:layer`` and ``ruri:tag``, the way a
+    node of the scene states them; a volume on a node of the scene has them on the node's prim. Returns whether anything was
+    written."""
     path = parent_path.AppendChild(names.claim(str(parent_path), JOINT_NAME if joint else NAME))
     if collider.kind == "mesh":
         if piece is None or frame is not None:
@@ -83,6 +86,10 @@ def author(stage, layer_path, parent_path, collider, names, piece=None, frame=No
         _state(prim, "joint", Sdf.ValueTypeNames.Token, joint)
     if active is not None:
         prim.CreateAttribute("ruri:activeSelf", Sdf.ValueTypeNames.Bool, custom=True).Set(bool(active))
+    if layer is not None:
+        prim.CreateAttribute("ruri:layer", Sdf.ValueTypeNames.Int, custom=True).Set(int(layer))
+    if tag and tag != sources.UNTAGGED:
+        prim.CreateAttribute("ruri:tag", Sdf.ValueTypeNames.String, custom=True).Set(tag)
     if collider.material:
         _state(prim, "material", Sdf.ValueTypeNames.Token, collider.material)
     if collider.kind == "mesh":

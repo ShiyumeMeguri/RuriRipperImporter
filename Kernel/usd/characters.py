@@ -12,8 +12,9 @@ import numpy as np
 from pxr import Sdf, UsdSkel, Vt
 
 from .. import statement as kernel_statement
+from . import attachments as attachment_module
 from . import colliders as collider_module
-from . import geometry, materials, sources, stages
+from . import geometry, materials, rigs, sources, stages
 from .names import Namer, identifier
 from .transforms import move_normals, move_points, to_usd
 
@@ -85,16 +86,19 @@ def parts_of(statement, hierarchy, rig):
     return parts, notes
 
 
-def fingerprint(rig, parts, volumes=()):
-    """What two rigs must share to be the same character: the same joints, the same meshes bound the same way and the
-    same volumes on the same joints."""
+def fingerprint(rig, parts, volumes=(), attached=(), hierarchy=None):
+    """What two rigs must share to be the same character: the same joints, the same meshes bound the same way, the
+    same volumes on the same joints (with the tag of the object each sits on, where ``hierarchy`` says it) and the same
+    cameras and lights on the same joints."""
     return (tuple(rig.sources),
             tuple((part.node.name, part.node.kind, part.mesh.name, len(part.positions), len(part.mesh.triangles),
                    tuple(part.node.materials)) for part in parts),
             tuple(sorted((rig.joint_of[volume.node], volume.kind, tuple(round(float(v), 5) for v in volume.center),
                           tuple(round(float(v), 5) for v in volume.size), round(float(volume.radius), 5),
                           round(float(volume.height), 5), volume.axis, volume.trigger, volume.enabled, volume.layer,
-                          volume.material) for volume in volumes)))
+                          volume.material, "" if hierarchy is None else hierarchy.nodes[volume.node].tag)
+                         for volume in volumes)),
+            tuple(carried.key for carried in attached))
 
 
 def same_points(rig, parts, other_rig, other_parts):
@@ -112,22 +116,9 @@ def _material(stage, scope_path, key, statement, textures, layer_path, families,
     return made[key]
 
 
-def _active_within(hierarchy, rig, index):
-    """Whether the object at ``index`` and every object between it and the rig's root is itself active. The root's own
-    state, and whatever sits above it, belongs to the scene that places the rig."""
-    while index != rig.root:
-        if index < 0:
-            raise ValueError("the ancestors of a joint do not reach the root of its rig.")
-        node = hierarchy.nodes[index]
-        if not node.active_self:
-            return False
-        index = node.parent
-    return True
-
-
-def author(layer_path, name, rig, parts, hierarchy, statement, textures, families, volumes=()):
-    """Write the character ``name`` to ``layer_path``, with the ``volumes`` that sit on its joints. Returns the root
-    prim's path."""
+def author(layer_path, name, rig, parts, hierarchy, statement, textures, families, volumes=(), attached=()):
+    """Write the character ``name`` to ``layer_path``, with the ``volumes`` that sit on its joints and the ``attached``
+    cameras, camera-package components and lights that do (``attachments.find``). Returns the root prim's path."""
     stage = stages.create(layer_path, kernel_statement.USD, "Rig {0}".format(name))
     names = Namer()
     root = UsdSkel.Root.Define(stage, "/" + name)
@@ -167,7 +158,10 @@ def author(layer_path, name, rig, parts, hierarchy, statement, textures, familie
         sources.describe(geom.GetPrim(), node, relative)
     for volume in volumes:
         joint = rig.joint_of[volume.node]
+        node = hierarchy.nodes[volume.node]
         collider_module.author(stage, layer_path, root_path, volume, names, frame=rig.bind[joint], joint=rig.tokens[joint],
-                               active=_active_within(hierarchy, rig, volume.node))
+                               active=rigs.active_within(hierarchy, rig, volume.node), tag=node.tag, layer=node.layer)
+    for carried in attached:
+        attachment_module.author(stage, root_path, rig, carried, hierarchy, names)
     stage.GetRootLayer().Save()
     return root_path

@@ -31,8 +31,8 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
     written character, ``pieces`` a node index to the written piece it draws, ``colliders`` a node index to the
     volumes it carries (a node below a rig root has none here: its rig holds them), ``collision_pieces`` a
     mesh key to the written piece holding it and ``cinemachine`` a node index to the components of the camera package
-    it carries (``cinemachine.by_node``; a node inside a rig cannot hold them, and one is refused). Returns counts of what
-    was written."""
+    it carries (``cinemachine.by_node``, less the nodes inside a rig, whose rig's layer states them as ``attachments``; one
+    that reaches here for a node this layer does not write is refused). Returns counts of what was written."""
     stage = stages.create(layer_path, kernel_statement.USD, "Scene {0}".format(scene_name))
     top_path = Sdf.Path("/" + identifier(scene_name))
     top = UsdGeom.Xform.Define(stage, top_path)
@@ -88,8 +88,8 @@ def author(layer_path, scene_name, statement, hierarchy, rig_roots, covered, cha
                 counts["colliders_without_geometry"] += 1
     lost = sorted(hierarchy.source_paths[index] for index in cinemachine if index not in paths)
     if lost:
-        raise ValueError("components of the camera package sit on nodes inside a rig, which the scene layer does not write: "
-                         "{0}.".format(", ".join(lost)))
+        raise ValueError("components of the camera package sit on nodes the scene layer does not write and no rig's layer "
+                         "states: {0}.".format(", ".join(lost)))
     counts["cinemachine_prims"] = stated["prims"]
     counts["cinemachine_attributes"] = stated["attributes"]
     stage.GetRootLayer().Save()

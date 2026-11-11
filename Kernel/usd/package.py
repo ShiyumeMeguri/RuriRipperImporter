@@ -9,12 +9,14 @@ formats are two complete trees; they share the textures beside the layers.
 from __future__ import annotations
 
 import copy
+import os
+import shutil
 import time
 
 import numpy as np
 
 from .. import statement as kernel_statement
-from . import animations, characters, rigs, scene, statics
+from . import animations, attachments, characters, rigs, scene, statics
 from . import cinemachine as cinemachine_module
 from .hierarchy import Hierarchy
 from .layout import Layout
@@ -45,18 +47,40 @@ def _carried(mesh, matrix):
     return moved
 
 
-def export(statement, scene_name, root, product, families, extension, textures=None, performances=None, cinemachine=None):
+def _rest_of(rig, hierarchy):
+    """What a clip's layer of ``rig`` depends on besides the clip: its joints, and the rest each joint falls back to where the clip
+    has no curve of a kind for it. Two rigs with one answer get one layer of a clip, byte for byte."""
+    return (tuple(rig.sources), tuple(rig.tokens),
+            tuple((node.position, node.rotation, node.scale) for node in (hierarchy.nodes[index] for index in rig.members)))
+
+
+def _link(first, layer):
+    """``layer`` as a second name for the file ``first``, which is what it would be written as."""
+    os.makedirs(os.path.dirname(layer), exist_ok=True)
+    try:
+        os.link(first, layer)
+    except OSError:
+        shutil.copyfile(first, layer)
+
+
+def export(statement, scene_name, root, product, families, extension, textures=None, performances=None, cinemachine=None,
+          taken_characters=()):
     """Write the statement as the tree of layers of ``extension`` under ``root``/assets/``product``. The
     statement must have been read in the usd basis. ``performances``, when given, is asked for the clips each new
     character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's.
     ``cinemachine``, when given, are the components of the camera package the scene carries (``Statement.cinemachine``, read
-    with ``scripts``), each written under the node it sits on in the scene layer. Returns a dict of what was written."""
+    with ``scripts``), each written under the node it sits on in the scene layer, or, for a node inside a rig, in the rig's
+    layer (``attachments``). ``taken_characters`` are the names (before the ``_postmodel`` suffix) the tree under ``root`` and
+    the live tree already hold for other characters, which no character of this scene takes. Returns a dict of what was
+    written."""
     if statement.basis != kernel_statement.USD:
         raise ValueError("a statement is written to USD in the {0} basis, and this one is in {1}.".format(
             kernel_statement.USD, statement.basis))
     started = time.time()
     layout = Layout(root, product, extension)
     folders = Namer()
+    for taken in taken_characters:
+        folders.claim("characters", taken)
     textures = textures if textures is not None else TextureStore(statement)
     hierarchy = Hierarchy(statement.nodes)
     components = cinemachine_module.by_node(cinemachine or (), hierarchy)
@@ -68,11 +92,16 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     stated = statement.colliders
     written = []
     offered = {}
+    performed = {}
     placed_keys = set()
     placed = {}
     on_joints = set()
+    on_rigs = set()
     report["colliders_on_joints"] = 0
     report["colliders_on_joints_unwritten"] = 0
+    report["camera_joints"] = 0
+    report["camera_joint_components"] = 0
+    report["light_joints"] = 0
     for index in rig_roots:
         rig = rigs.Rig(hierarchy, index, Namer())
         parts, notes = characters.parts_of(statement, hierarchy, rig)
@@ -83,19 +112,34 @@ def export(statement, scene_name, root, product, families, extension, textures=N
         on_joints.update(volume.node for volume in carried_volumes)
         report["colliders_on_joints"] += len(volumes)
         report["colliders_on_joints_unwritten"] += len(carried_volumes) - len(volumes)
-        print_key = characters.fingerprint(rig, parts, volumes)
+        attached = attachments.find(rig, hierarchy, components)
+        on_rigs.update(carried.node for carried in attached)
+        for carried in attached:
+            node = hierarchy.nodes[carried.node]
+            report["camera_joints"] += bool(carried.components or node.camera is not None)
+            report["camera_joint_components"] += len(carried.components)
+            report["light_joints"] += node.light is not None
+        print_key = characters.fingerprint(rig, parts, volumes, attached, hierarchy)
         match = next((entry for entry in written if entry.fingerprint == print_key
                       and characters.same_points(rig, parts, entry.rig, entry.parts)), None)
         if match is None:
             name = folders.claim("characters", file_stem(hierarchy.nodes[index].name))
             layer_path = layout.character(name)
             match = _Character(layer_path, characters.author(layer_path, name + "_postmodel", rig, parts, hierarchy,
-                                                             statement, textures, families, volumes),
+                                                             statement, textures, families, volumes, attached),
                                print_key, rig, parts)
             written.append(match)
+            rest = _rest_of(rig, hierarchy)
             for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
-                made = animations.author(layout.animation(name, animations.layer_stem(clip)), identifier(clip.name), rig,
-                                         hierarchy, clip)
+                layer = layout.animation(name, animations.layer_stem(clip))
+                known = performed.get((rest, clip.key))
+                if known is None:
+                    made = animations.author(layer, identifier(clip.name), rig, hierarchy, clip)
+                    performed[(rest, clip.key)] = (layer, made)
+                else:
+                    first, made = known
+                    if made["written"]:
+                        _link(first, layer)
                 entry = dict(made, character=name, clip=clip.name, key=clip.key)
                 offered.setdefault(clip.key, clip)
                 if made["written"]:
@@ -151,8 +195,9 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     for collider in stated:
         if collider.node not in on_joints:
             placements.setdefault(collider.node, []).append(collider)
+    in_scene = {node: held for node, held in components.items() if node not in on_rigs}
     report.update(scene.author(layout.scene(scene_name), scene_name, statement, hierarchy, set(rig_roots), covered,
-                               placed, pieces, placements, {**collision, **drawn}, components))
+                               placed, pieces, placements, {**collision, **drawn}, in_scene))
     report["textures_written"] = textures.written
     report["textures_linked"] = textures.linked
     report["textures_copied"] = textures.copied

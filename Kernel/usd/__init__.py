@@ -15,6 +15,8 @@ refer to each other.
 ``records``    a controller or any other record the source states about one asset, as the prims and ``ruri:`` attributes
                of one layer
 ``cinemachine`` the components of the camera package a scene's nodes carry, as records under those nodes of the scene layer
+``attachments`` what the joints of a rig carry besides being joints (a camera, components of the camera package, a light), as
+               child prims of the rig's root in the rig's layer
 ``audio``      an audio clip as one record layer and the Ogg Vorbis file beside it
 ``materials``  a material as a preview surface and the source's own properties, and its textures
 ``names``      legal prim and file names, unique where they are looked up
