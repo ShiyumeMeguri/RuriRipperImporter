@@ -112,6 +112,19 @@ def _material(stage, scope_path, key, statement, textures, layer_path, families,
     return made[key]
 
 
+def _active_within(hierarchy, rig, index):
+    """Whether the object at ``index`` and every object between it and the rig's root is itself active. The root's own
+    state, and whatever sits above it, belongs to the scene that places the rig."""
+    while index != rig.root:
+        if index < 0:
+            raise ValueError("the ancestors of a joint do not reach the root of its rig.")
+        node = hierarchy.nodes[index]
+        if not node.active_self:
+            return False
+        index = node.parent
+    return True
+
+
 def author(layer_path, name, rig, parts, hierarchy, statement, textures, families, volumes=()):
     """Write the character ``name`` to ``layer_path``, with the ``volumes`` that sit on its joints. Returns the root
     prim's path."""
@@ -154,6 +167,7 @@ def author(layer_path, name, rig, parts, hierarchy, statement, textures, familie
         sources.describe(geom.GetPrim(), node, relative)
     for volume in volumes:
         joint = rig.joint_of[volume.node]
-        collider_module.author(stage, layer_path, root_path, volume, names, frame=rig.bind[joint], joint=rig.tokens[joint])
+        collider_module.author(stage, layer_path, root_path, volume, names, frame=rig.bind[joint], joint=rig.tokens[joint],
+                               active=_active_within(hierarchy, rig, volume.node))
     stage.GetRootLayer().Save()
     return root_path

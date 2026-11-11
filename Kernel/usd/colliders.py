@@ -42,9 +42,12 @@ def _place(prim, center, scale, frame):
         transforms.to_usd(frame @ transforms.local_matrix(center, _IDENTITY, scale)))
 
 
-def author(stage, layer_path, parent_path, collider, names, piece=None, frame=None, joint=None):
+def author(stage, layer_path, parent_path, collider, names, piece=None, frame=None, joint=None, active=None):
     """The volume ``collider`` as a child of the prim at ``parent_path``. A mesh collider needs the ``piece`` that holds
-    its mesh; one on a joint (``frame`` and ``joint`` given) is not written. Returns whether anything was written."""
+    its mesh; one on a joint (``frame`` and ``joint`` given) is not written. ``active`` is, for a volume on a joint, whether
+    the object it sits on is active as far as the rig goes, and is stated as ``ruri:activeSelf`` -- the prim stands for that
+    object, and the joints between it and the rig's root are not prims to carry the state down. Returns whether anything
+    was written."""
     path = parent_path.AppendChild(names.claim(str(parent_path), JOINT_NAME if joint else NAME))
     if collider.kind == "mesh":
         if piece is None or frame is not None:
@@ -78,6 +81,8 @@ def author(stage, layer_path, parent_path, collider, names, piece=None, frame=No
     _state(prim, "layer", Sdf.ValueTypeNames.Int, int(collider.layer))
     if joint:
         _state(prim, "joint", Sdf.ValueTypeNames.Token, joint)
+    if active is not None:
+        prim.CreateAttribute("ruri:activeSelf", Sdf.ValueTypeNames.Bool, custom=True).Set(bool(active))
     if collider.material:
         _state(prim, "material", Sdf.ValueTypeNames.Token, collider.material)
     if collider.kind == "mesh":
