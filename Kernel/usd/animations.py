@@ -72,27 +72,42 @@ def _continuous(quaternions):
     return out
 
 
-def author(layer_path, name, rig, hierarchy, clip):
+def author(layer_path, name, rig, hierarchy, clip, owners=()):
     """Write ``clip`` as the performance of ``rig`` to ``layer_path``. Returns ``{"written", "unplaced", ...}``: whether a
     layer was written, how many of the clip's curves the layer cannot carry by kind (counted here rather than dropped silently),
     and when written the counts of what it moves. A transform curve that lands on no joint of the rig -- an object outside the rig,
-    or the rig's own root -- is not one of these: it is stated among the property curves (``transform_curves`` counts its axes)."""
+    or the rig's own root -- is not one of these: it is stated among the property curves (``transform_curves`` counts its axes).
+
+    ``owners`` are the paths in the rig of the objects of the Animators that play the clip for this rig (empty for an Animator on
+    the rig's root). A curve whose path is empty drives the object of the Animator that plays the clip, so it is anchored to each
+    owner that is a joint of the rig, as every other curve is anchored onto the rig's paths: a transform curve moves that joint, a
+    blend shape curve names it as its renderer, a property curve states it as its path; where an owner is the rig's root (an empty
+    path) the curve stays as it is, a transform curve of the root among the property curves. The clip is a layer of this rig when
+    some curve of it anchors by its own path; the curves of an empty path complete that layer and never make one."""
     matrix, vector_sign = _reflection()
     magnitude = np.abs(matrix)
     rate, duration, times = _sampling(clip)
     frames = len(times)
     joint_of_source = {source: joint for joint, source in enumerate(rig.sources)}
+    homes = [owner for owner in dict.fromkeys(owners) if owner in joint_of_source]
+    at_root = "" in owners
     moved = {}
     unplaced = {}
     loose = []
+    own_transforms = []
     for kind in ("pos", "rot", "euler", "scale"):
         for channel in clip.of_kind(kind):
             joint = joint_of_source.get(channel.path)
             if joint is not None:
                 moved.setdefault(joint, {})[kind] = channel.sample(times)
+            elif not channel.path and homes:
+                own_transforms.append(channel)
+                if at_root:
+                    loose.append(channel)
             else:
                 loose.append(channel)
     shapes = {}
+    own_shapes = []
     for channel in clip.of_kind("float"):
         if not channel.attribute.startswith(BLEND_SHAPE_PREFIX):
             if channel.class_id == ANIMATOR_CLASS_ID:
@@ -100,11 +115,25 @@ def author(layer_path, name, rig, hierarchy, clip):
         elif channel.path in joint_of_source:
             shapes[(channel.path, channel.attribute[len(BLEND_SHAPE_PREFIX):])] = (
                 channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT)
+        elif not channel.path and homes:
+            own_shapes.append(channel)
         else:
             reason = "blend_shape:self" if not channel.path else "blend_shape:unmatched"
             unplaced[reason] = unplaced.get(reason, 0) + 1
     if not moved and not shapes:
+        if own_shapes:
+            unplaced["blend_shape:self"] = unplaced.get("blend_shape:self", 0) + len(own_shapes)
         return {"written": False, "unplaced": unplaced, "transform_curves": 0}
+    for channel in own_transforms:
+        for owner in homes:
+            curves = moved.setdefault(joint_of_source[owner], {})
+            if channel.kind not in curves:
+                curves[channel.kind] = channel.sample(times)
+    for channel in own_shapes:
+        for owner in homes:
+            key = (owner, channel.attribute[len(BLEND_SHAPE_PREFIX):])
+            if key not in shapes:
+                shapes[key] = channel.sample(times)[:, 0] / BLEND_SHAPE_UNIT
     stage = stages.create(layer_path, kernel_statement.USD, "Clip {0} on {1}".format(name, rig.sources[0] if rig.sources else ""))
     stage.SetTimeCodesPerSecond(rate)
     stage.SetStartTimeCode(0)
@@ -150,11 +179,12 @@ def author(layer_path, name, rig, hierarchy, clip):
                                      for x, y, z, w in columns_r[frame]]), code)
         scales.Set(Vt.Vec3hArray.FromNumpy(np.ascontiguousarray(columns_s[frame], dtype=np.float16)), code)
     _write_shapes(animation, shapes, frames)
-    properties, transforms = _write_property_curves(stage, animation, clip, loose)
+    properties, transforms = _write_property_curves(stage, animation, clip, loose, homes + [""] if at_root else homes)
     events = write_events(stage, animation.GetPrim(), clip.events)
     stage.GetRootLayer().Save()
     return {"written": True, "unplaced": unplaced, "joints": len(joints), "frames": frames, "blend_shapes": len(shapes),
-            "rate": rate, "property_curves": properties, "transform_curves": transforms, "events": events}
+            "rate": rate, "property_curves": properties, "transform_curves": transforms, "events": events,
+            "anchored_to_owners": len(own_transforms) + len(own_shapes)}
 
 
 def _sampling(clip):
@@ -221,26 +251,29 @@ def _transform_curves(channels):
     return curves
 
 
-def _write_property_curves(stage, animation, clip, loose=()):
+def _write_property_curves(stage, animation, clip, loose=(), homes=()):
     """The curves of ``clip`` that drive a property of a component or an object, as the child ``propertyCurves`` of the clip's
     prim: the float curves, and the ``loose`` transform curves (the ones no joint takes). For each, the class of the component
     it drives, the path of the object it sits on and the property's name as the source states them (the class name of a native
     class, the script a script component runs), the curve's pre and post wrap mode, and the keys exactly as the source holds them
     -- times, values and both tangents of a cubic Hermite curve, unsampled, and each key's in weight, out weight and weighted
-    mode. A blend shape weight is the layer's own, and a humanoid muscle is solved into bone curves, so neither is one. Returns
-    ``(how many curves there are, how many of them are axes of a transform)``."""
+    mode. A blend shape weight is the layer's own, and a humanoid muscle is solved into bone curves, so neither is one. A float
+    curve of an empty path is stated once for each of the ``homes`` (the paths in the rig of the objects of the Animators that play
+    the clip, an empty one for an Animator on the rig's root), as the curve of that object. Returns ``(how many curves there are,
+    how many of them are axes of a transform)``."""
     curves = []
     for channel in clip.of_kind("float"):
         if channel.attribute.startswith(BLEND_SHAPE_PREFIX) or channel.class_id == ANIMATOR_CLASS_ID or not len(channel.times):
             continue
-        curve = {"classId": channel.class_id, "path": channel.path, "attribute": channel.attribute}
-        if channel.class_name:
-            curve["className"] = channel.class_name
-        if channel.script_class:
-            curve["scriptAssembly"] = channel.script_assembly
-            curve["scriptNamespace"] = channel.script_namespace
-            curve["scriptClass"] = channel.script_class
-        curves.append(_scalar_curve(channel, 0, curve))
+        for path in (homes if homes and not channel.path else [channel.path]):
+            curve = {"classId": channel.class_id, "path": path, "attribute": channel.attribute}
+            if channel.class_name:
+                curve["className"] = channel.class_name
+            if channel.script_class:
+                curve["scriptAssembly"] = channel.script_assembly
+                curve["scriptNamespace"] = channel.script_namespace
+                curve["scriptClass"] = channel.script_class
+            curves.append(_scalar_curve(channel, 0, curve))
     transforms = _transform_curves(loose)
     curves.extend(transforms)
     if curves:

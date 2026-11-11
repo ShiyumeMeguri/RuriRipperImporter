@@ -22,6 +22,7 @@ spells a seed -- it hands over the payload of the row the user picked.
 from __future__ import annotations
 
 import json
+import re
 
 import numpy as np
 
@@ -577,6 +578,16 @@ class Texture:
 _CURVE_DIMENSIONS = {"rot": 4, "pos": 3, "scale": 3, "euler": 3}
 
 
+#: A bone or property name the clip does not name, as the reader states it: ``path_0x<crc>_<suffix>``. The reader of a clip takes the crc
+#: from exactly eight hex digits, so one of fewer (a crc below 0x10000000) is stated with its leading zeros.
+_PLACEHOLDER = re.compile(r"path_0x([0-9A-Fa-f]{1,7})_")
+
+
+def _eight_digits(text):
+    """``text`` with the crc of every ``path_0x<crc>_`` placeholder in it written as eight hex digits."""
+    return _PLACEHOLDER.sub(lambda found: "path_0x{0}_".format(found.group(1).rjust(8, "0")), text)
+
+
 class Channel:
     """One curve of one clip: what it drives, and its keys.
 
@@ -596,8 +607,8 @@ class Channel:
 
     def __init__(self, entry, floats):
         self.kind = entry["kind"]
-        self.path = entry["path"]
-        self.attribute = entry.get("attr") or ""
+        self.path = _eight_digits(entry["path"])
+        self.attribute = _eight_digits(entry.get("attr") or "")
         self.class_id = int(entry.get("classId") or 0)
         self.class_name = entry.get("className") or ""
         self.script_assembly = entry.get("scriptAssembly") or ""
@@ -795,9 +806,11 @@ class Timeline:
 
 class Animator:
     """An Animator component on a node: where it sits (the node's path), the controller it plays and the avatar it was
-    built with, by key, empty when it has none."""
+    built with, by key, empty when it has none. ``keep_controller_state`` is whether the controller keeps its state when
+    the object is disabled and enabled again; false is the engine's default."""
 
-    __slots__ = ("path", "controller", "avatar", "enabled", "root_motion", "update_mode", "culling_mode")
+    __slots__ = ("path", "controller", "avatar", "enabled", "root_motion", "update_mode", "culling_mode",
+                 "keep_controller_state")
 
     def __init__(self, row):
         self.path = row["path"]
@@ -807,6 +820,7 @@ class Animator:
         self.root_motion = bool(int(row["root_motion"]))
         self.update_mode = row["update_mode"]
         self.culling_mode = row["culling_mode"]
+        self.keep_controller_state = bool(int(row["keep_controller_state"]))
 
     def __repr__(self):
         return "<Animator {0}>".format(self.path)

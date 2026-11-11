@@ -88,9 +88,10 @@ def parts_of(statement, hierarchy, rig):
 
 def fingerprint(rig, parts, volumes=(), attached=(), hierarchy=None):
     """What two rigs must share to be the same character: the same joints, the same meshes bound the same way, the
-    same volumes on the same joints (with the tag of the object each sits on, where ``hierarchy`` says it) and the same
-    cameras and lights on the same joints."""
+    same volumes on the same joints (with the tag of the object each sits on, where ``hierarchy`` says it), the same cameras
+    and lights on the same joints and, where ``hierarchy`` says it, the same joints active."""
     return (tuple(rig.sources),
+            () if hierarchy is None else tuple(bool(hierarchy.nodes[index].active_self) for index in rig.members),
             tuple((part.node.name, part.node.kind, part.mesh.name, len(part.positions), len(part.mesh.triangles),
                    tuple(part.node.materials)) for part in parts),
             tuple(sorted((rig.joint_of[volume.node], volume.kind, tuple(round(float(v), 5) for v in volume.center),
@@ -132,6 +133,10 @@ def author(layer_path, name, rig, parts, hierarchy, statement, textures, familie
     skeleton.CreateRestTransformsAttr(Vt.Matrix4dArray([to_usd(matrix) for matrix in rig.rest]))
     skeleton.GetPrim().CreateAttribute("ruri:jointSourcePaths", Sdf.ValueTypeNames.StringArray, custom=True).Set(
         Vt.StringArray(rig.sources))
+    # Each joint's own activeSelf, in the order of the joints and without the ancestors' states folded in: a joint is not a
+    # prim to carry it, and an object the prefab leaves inactive (a canvas, a pivot) is inactive when the rig is placed.
+    skeleton.GetPrim().CreateAttribute("ruri:jointActiveSelf", Sdf.ValueTypeNames.BoolArray, custom=True).Set(
+        Vt.BoolArray([bool(hierarchy.nodes[index].active_self) for index in rig.members]))
     root_node = hierarchy.nodes[rig.root]
     root.GetPrim().CreateAttribute("ruri:sourceName", Sdf.ValueTypeNames.String, custom=True).Set(root_node.name)
     if root_node.avatar:

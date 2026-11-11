@@ -64,15 +64,23 @@ def _link(first, layer):
 
 
 def export(statement, scene_name, root, product, families, extension, textures=None, performances=None, cinemachine=None,
-          taken_characters=()):
+          taken_characters=(), named_characters=None, owners=None):
     """Write the statement as the tree of layers of ``extension`` under ``root``/assets/``product``. The
     statement must have been read in the usd basis. ``performances``, when given, is asked for the clips each new
-    character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's.
+    character plays -- ``performances(rig, root_node) -> [clip]`` -- and each is written as a layer of the character's; ``owners``,
+    when given, is asked where each is played -- ``owners(rig, root_node, clip) -> [path in the rig of the object of an Animator
+    that plays the clip]`` -- which is what a curve of an empty path is anchored to (``animations.author``).
     ``cinemachine``, when given, are the components of the camera package the scene carries (``Statement.cinemachine``, read
     with ``scripts``), each written under the node it sits on in the scene layer, or, for a node inside a rig, in the rig's
     layer (``attachments``). ``taken_characters`` are the names (before the ``_postmodel`` suffix) the tree under ``root`` and
-    the live tree already hold for other characters, which no character of this scene takes. Returns a dict of what was
-    written."""
+    the live tree already hold for other characters, which no character of this scene takes. ``named_characters`` maps the
+    source path of a rig root to the names its characters already have, in the order the scene refers its rigs of that path
+    (several rigs of one scene can have one path: siblings of one name), so that writing the scene again gives the same
+    characters the same names whatever else changed: the first character written for a name keeps it (the name must be in
+    ``taken_characters`` too, so that no other character takes it), and a second character a name would go to -- a rig
+    that shared the first one's layer before and no longer does -- is named as a new one. Returns a dict of what was written,
+    with ``character_names``: for each character layer written, its name, the source path and node index of the rig root it
+    was written for, and the name that rig had (``named_characters``, empty for a rig without one)."""
     if statement.basis != kernel_statement.USD:
         raise ValueError("a statement is written to USD in the {0} basis, and this one is in {1}.".format(
             kernel_statement.USD, statement.basis))
@@ -81,6 +89,9 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     folders = Namer()
     for taken in taken_characters:
         folders.claim("characters", taken)
+    named = dict(named_characters or {})
+    occurrences = {}
+    assigned = set()
     textures = textures if textures is not None else TextureStore(statement)
     hierarchy = Hierarchy(statement.nodes)
     components = cinemachine_module.by_node(cinemachine or (), hierarchy)
@@ -103,6 +114,10 @@ def export(statement, scene_name, root, product, families, extension, textures=N
     report["camera_joint_components"] = 0
     report["light_joints"] = 0
     for index in rig_roots:
+        root_path = hierarchy.source_paths[index]
+        nth = occurrences.get(root_path, 0)
+        occurrences[root_path] = nth + 1
+        kept = named.get(root_path, ())[nth] if nth < len(named.get(root_path, ())) else ""
         rig = rigs.Rig(hierarchy, index, Namer())
         parts, notes = characters.parts_of(statement, hierarchy, rig)
         report["rig_missing_meshes"] += notes["missing"]
@@ -123,7 +138,14 @@ def export(statement, scene_name, root, product, families, extension, textures=N
         match = next((entry for entry in written if entry.fingerprint == print_key
                       and characters.same_points(rig, parts, entry.rig, entry.parts)), None)
         if match is None:
-            name = folders.claim("characters", file_stem(hierarchy.nodes[index].name))
+            if kept and kept.lower() not in assigned:
+                name = kept
+                if not folders.holds("characters", name):
+                    folders.claim("characters", name)
+            else:
+                name = folders.claim("characters", file_stem(hierarchy.nodes[index].name))
+            assigned.add(name.lower())
+            report.setdefault("character_names", []).append({"name": name, "root": root_path, "index": index, "was": kept})
             layer_path = layout.character(name)
             match = _Character(layer_path, characters.author(layer_path, name + "_postmodel", rig, parts, hierarchy,
                                                              statement, textures, families, volumes, attached),
@@ -132,10 +154,11 @@ def export(statement, scene_name, root, product, families, extension, textures=N
             rest = _rest_of(rig, hierarchy)
             for clip in (performances(rig, hierarchy.nodes[index]) if performances is not None else ()):
                 layer = layout.animation(name, animations.layer_stem(clip))
-                known = performed.get((rest, clip.key))
+                where = tuple(dict.fromkeys(owners(rig, hierarchy.nodes[index], clip))) if owners is not None else ()
+                known = performed.get((rest, clip.key, where))
                 if known is None:
-                    made = animations.author(layer, identifier(clip.name), rig, hierarchy, clip)
-                    performed[(rest, clip.key)] = (layer, made)
+                    made = animations.author(layer, identifier(clip.name), rig, hierarchy, clip, where)
+                    performed[(rest, clip.key, where)] = (layer, made)
                 else:
                     first, made = known
                     if made["written"]:
