@@ -180,7 +180,6 @@ class ClipCurves:
     """A whole clip: identity/settings scalars plus per-kind Channel lists."""
 
     __slots__ = ("name", "sample_rate", "start_time", "stop_time",
-                 "keep_position_xz", "keep_position_y", "keep_orientation",
                  "rotations", "positions", "scales", "eulers", "floats")
 
     def __init__(self):
@@ -188,9 +187,6 @@ class ClipCurves:
         self.sample_rate = 60.0
         self.start_time = 0.0
         self.stop_time = 0.0
-        self.keep_position_xz = True
-        self.keep_position_y = True
-        self.keep_orientation = True
         self.rotations = []
         self.positions = []
         self.scales = []
@@ -225,9 +221,6 @@ class ClipCurves:
         clip.sample_rate = float(meta.get("sampleRate") or 60.0)
         clip.start_time = float(meta.get("startTime") or 0.0)
         clip.stop_time = float(meta.get("stopTime") or 0.0)
-        clip.keep_position_xz = bool(meta.get("keepPositionXZ", True))
-        clip.keep_position_y = bool(meta.get("keepPositionY", True))
-        clip.keep_orientation = bool(meta.get("keepOrientation", True))
 
         target = {"rot": clip.rotations, "pos": clip.positions, "scale": clip.scales,
                   "euler": clip.eulers, "float": clip.floats}
@@ -291,15 +284,6 @@ class ClipCurves:
             stop_value = _scalar_line(text, "m_StopTime:", settings_at, settings_end)
             if stop_value is not None:
                 clip.stop_time = float(stop_value)
-            orient_value = _scalar_line(text, "m_KeepOriginalOrientation:", settings_at, settings_end)
-            if orient_value is not None and orient_value.isdigit():
-                clip.keep_orientation = bool(int(orient_value))
-            y_value = _scalar_line(text, "m_KeepOriginalPositionY:", settings_at, settings_end)
-            if y_value is not None and y_value.isdigit():
-                clip.keep_position_y = bool(int(y_value))
-            xz_value = _scalar_line(text, "m_KeepOriginalPositionXZ:", settings_at, settings_end)
-            if xz_value is not None and xz_value.isdigit():
-                clip.keep_position_xz = bool(int(xz_value))
 
         target = {"rot": clip.rotations, "pos": clip.positions, "scale": clip.scales,
                   "euler": clip.eulers, "float": clip.floats}
