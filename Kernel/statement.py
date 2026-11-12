@@ -809,10 +809,11 @@ class Animator:
     built with, by key, empty when it has none. ``keep_controller_state`` is whether the controller keeps its state when
     the object is disabled and enabled again; false is the engine's default. ``path_ordinal`` is how many nodes of ``path``
     come before the node the Animator sits on (a script record's ``pathOrdinal``), which tells apart the Animators of two
-    nodes that share a path."""
+    nodes that share a path. ``avatar_kind`` is what its avatar is, ``Humanoid`` or ``Generic`` (empty without an avatar),
+    and ``human_scale`` the scale the engine's Animator.humanScale states: that of a humanoid avatar's human, 1 otherwise."""
 
     __slots__ = ("path", "controller", "avatar", "enabled", "root_motion", "update_mode", "culling_mode",
-                 "keep_controller_state", "path_ordinal")
+                 "keep_controller_state", "path_ordinal", "avatar_kind", "human_scale")
 
     def __init__(self, row):
         self.path = row["path"]
@@ -824,6 +825,8 @@ class Animator:
         self.culling_mode = row["culling_mode"]
         self.keep_controller_state = bool(int(row["keep_controller_state"]))
         self.path_ordinal = int(row["path_ordinal"])
+        self.avatar_kind = row["avatar_kind"]
+        self.human_scale = float(row["human_scale"])
 
     def __repr__(self):
         return "<Animator {0}>".format(self.path)
