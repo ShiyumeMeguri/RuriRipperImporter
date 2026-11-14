@@ -53,6 +53,7 @@ SECTIONS = (
     GameSection("scene"),
     GameSection("ui_scene", host_port.SceneGraph),
     GameSection("story", host_port.Timeline),
+    GameSection("animation_chain", host_port.Timeline),
     GameSection("face", host_port.MorphTargets),
 )
 

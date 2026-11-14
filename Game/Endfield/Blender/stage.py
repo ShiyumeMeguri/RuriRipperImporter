@@ -45,7 +45,7 @@ import re
 import bpy
 from bpy_extras import anim_utils
 
-from ....Host.Blender import rig_identity, step_loader
+from ....Host.Blender import nla, rig_identity, step_loader
 from ....Kernel import extensions
 from ....Kernel import statement as kernel_statement
 from ....Kernel.app import loading
@@ -951,24 +951,6 @@ def _action_rate(action, row, fps):
     return row["rate"] if row["rate"] > 0 else fps
 
 
-def _free_track(animation, name, start, end):
-    """The NLA track this clip goes on. Timeline lets two clips of one track
-    overlap (that is how it cross-blends); Blender does not, so an overlap becomes
-    another layer of the same track rather than a dropped or moved clip."""
-    layer = 0
-    while True:
-        layered = name if layer == 0 else "{0}.{1}".format(name, layer + 1)
-        track = next((entry for entry in animation.nla_tracks if entry.name == layered), None)
-        if track is None:
-            track = animation.nla_tracks.new()
-            track.name = layered
-            return track
-        if all(strip.frame_end <= start + 1e-3 or strip.frame_start >= end - 1e-3
-               for strip in track.strips):
-            return track
-        layer += 1
-
-
 def _place_strip(rig, row, action, fps):
     """Put one action where the timeline puts it. Timeline states a clip in SECONDS
     against its own sample rate; a strip states a frame span plus the action frames
@@ -976,19 +958,14 @@ def _place_strip(rig, row, action, fps):
     animation = rig.animation_data or rig.animation_data_create()
     start = row["at"] * fps
     span = max((row["until"] - row["at"]) * fps, 1.0)
-    track = _free_track(animation, row["track"] or "Timeline", start, start + span)
-    parking = max(int(round(start)),
-                  int(max((strip.frame_end for strip in track.strips), default=0.0)) + 1)
-    strip = track.strips.new(action.name, parking, action)
+    track = nla.free_track(animation, row["track"] or "Timeline", start, start + span)
     sample = _action_rate(action, row, fps)
     consumed = max((row["until"] - row["at"]) * (row["speed"] or 1.0) * sample, 1.0 / sample)
-    strip.action_frame_start = row["clipIn"] * sample
-    strip.action_frame_end = strip.action_frame_start + consumed
-    strip.scale = span / consumed
-    strip.frame_start_ui = start
-    strip.blend_in = min(row["blendIn"] * fps, span)
-    strip.blend_out = min(row["blendOut"] * fps, span)
-    strip.extrapolation = "NOTHING"
+    source_start = row["clipIn"] * sample
+    slot = action.slots[0] if len(action.slots) else None
+    strip = nla.place_strip(track, action, slot, start, start + span,
+                            source_start, source_start + consumed,
+                            min(row["blendIn"] * fps, span), min(row["blendOut"] * fps, span))
     # A clip the timeline tags with a branch plays only while that branch is the
     # chosen option, and nothing is chosen until the reader chooses.
     strip.mute = row["muted"] > 0 or row["branch"] != 0

@@ -10,6 +10,8 @@ retarget's host rig all load by handing over seeds, and nothing here names a gam
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from .. import host as host_port
 from .. import statement as kernel_statement
 from . import texturing
@@ -98,7 +100,7 @@ def _split_by_binding(clips, paths):
     return own, foreign
 
 
-def perform(context, seeds, rig=None, options=None, activate=False):
+def perform(context, seeds, rig=None, options=None, activate=False, sequence=None):
     """Put the performances these seeds carry onto a rig -- the one the caller names, else the one
     in front of the user. The curves arrive re-anchored on that rig's own bones and solved against
     the avatar it carries, so what the host does is key them. A clip written for a skeleton the rig
@@ -107,7 +109,8 @@ def perform(context, seeds, rig=None, options=None, activate=False):
     A face baked into a clip's bone tracks means nothing on another character's rig, so when the
     options ask for it and the game that owns the clips restates faces
     (``Game.GameModule.face_retarget``), each clip that landed is handed to that game with where
-    it landed, and the face is written into that same performance. Returns (built, lines)."""
+    it landed, and the face is written into that same performance. ``sequence`` places reader-timed
+    spans of those performances, atomically, instead of activating a single action. Returns (built, lines)."""
     from ... import Game
 
     host = host_port.current()
@@ -118,23 +121,28 @@ def perform(context, seeds, rig=None, options=None, activate=False):
         return 0, ["Nothing to play: the selection states no seed."]
     if target is None:
         return 0, ["Select the rig to play onto first."]
-    with statement(seeds, values) as stated:
-        paths = host.rig_paths(target)
-        clips = stated.clips(paths=paths, avatar=host.rig_avatar(target))
-        own, foreign = _split_by_binding(clips, set(paths))
-        landed, lines = host.play(context, target, own, values, activate) if own or not foreign else ({}, [])
-        if foreign:
-            carried, said = _carry(context, stated, target, foreign, values, activate and not landed)
-            landed.update(carried)
-            lines.extend(said)
-    restate = Game.face_retarget_of(values.get("source_game", "")) if values.get("retarget_face") else None
-    if restate is not None:
-        for clip in clips:
-            if clip.key in landed:
-                said = restate(context, target, clip, values, landed[clip.key])
-                if said:
-                    lines.append(said)
-    return len(landed), lines
+    activate = activate and sequence is None
+    transaction = host.performance_transaction(context, target) if sequence is not None else nullcontext()
+    with transaction:
+        with statement(seeds, values) as stated:
+            paths = host.rig_paths(target)
+            clips = stated.clips(paths=paths, avatar=host.rig_avatar(target))
+            own, foreign = _split_by_binding(clips, set(paths))
+            landed, lines = host.play(context, target, own, values, activate) if own or not foreign else ({}, [])
+            if foreign:
+                carried, said = _carry(context, stated, target, foreign, values, activate and not landed)
+                landed.update(carried)
+                lines.extend(said)
+        restate = Game.face_retarget_of(values.get("source_game", "")) if values.get("retarget_face") else None
+        if restate is not None:
+            for clip in clips:
+                if clip.key in landed:
+                    said = restate(context, target, clip, values, landed[clip.key])
+                    if said:
+                        lines.append(said)
+        if sequence is not None:
+            lines.extend(host.arrange(context, target, landed, sequence))
+        return len(landed), lines
 
 
 def _carry(context, stated, target, clips, values, activate):

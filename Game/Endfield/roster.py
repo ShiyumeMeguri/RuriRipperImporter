@@ -211,9 +211,16 @@ def _draw_library(layout, context):
     face.draw(layout, context)
 
 
+def _open_animation_chain(context, state, entry):
+    if host_port.supports(host_port.Timeline):
+        from . import animation_chain
+        animation_chain.PANEL.open(context, entry.payload)
+
+
 PANEL = cast_panel.Panel(
     BOUND, _COLUMNS, "roster", REFRESH.id, state_of, STATE,
     animation_rules=_animation_rules, actions=(LOAD_EXPRESSIONS.id, weapons.FIND.id), facet=CHARACTERS,
+    animation_open=_open_animation_chain,
     # 这个游戏自己写下来的两份目录,与引擎自己答得出的那两份并列在同一格里 ——
     # 「统一」不是把它们摊平成一份,是它们在同一个地方,并说清各自出自哪儿。
     animations=(cast_panel.Source("story", "Story",

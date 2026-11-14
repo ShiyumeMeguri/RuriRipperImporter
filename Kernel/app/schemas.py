@@ -271,12 +271,12 @@ BROWSER = Schema("Browser", """The cabmap browser's whole state.""", (
           getter="get_browsed_dir", setter="set_browsed_dir"),
     Field("status", state.STRING, "No cabmap loaded."),
     Field("window", state.COLLECTION, element=CABMAP_ROW),
-    Field("active_index", state.INT, 0),
+    Field("active_index", state.INT, 0, update="on_resource_selection"),
     # WHICH row the cursor is on, by identity. active_index is a position into a
     # filtered, capped window, so a search edit or a folder change moves what sits
     # under it; this is what the window is re-pointed at afterwards, and it survives
     # the row being filtered out and coming back.
-    Field("cursor_cab", state.STRING, ""),
+    Field("cursor_cab", state.STRING, "", update="on_resource_selection"),
 
     # Row column widths. Each factor is relative to the space LEFT after the previous
     # column (nested split semantics). Container/Type/Deps keep the WinForms reference
@@ -314,6 +314,7 @@ BROWSER = Schema("Browser", """The cabmap browser's whole state.""", (
           "Filter the discovered clips by name or by the game's own folder",
           update="on_animation_search", live=True),
     Field("available_clips", state.COLLECTION, element=ANIMATION_CLIP),
-    Field("available_clips_active_index", state.INT, 0),
+    Field("available_clips_active_index", state.INT, 0, update="on_clip_selection"),
+    Field("animation_selected_seed", state.STRING, "", transient=True),
     Field("texture_roles", state.COLLECTION, element=TEXTURE_ROLE),
 ), include=(FILTER_STATE, LOADING_STATE))

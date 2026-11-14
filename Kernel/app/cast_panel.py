@@ -155,12 +155,12 @@ class Panel:
 
     __slots__ = ("bound", "columns", "identifier", "refresh", "group_column", "rows",
                  "options", "seed", "actions", "shaders", "state_for", "state_name",
-                 "animations", "expressions", "animation_rules", "face_dataset", "facet")
+                 "animations", "expressions", "animation_rules", "animation_open", "face_dataset", "facet")
 
     def __init__(self, bound, columns, identifier, refresh, state_for, state_name,
                  group_column=None, rows=10, options=None, seed=None, actions=(),
                  shaders=None, animations=(), expressions=(ENGINE_SHAPES,),
-                 animation_rules=None, face_dataset=BLEND_SHAPES_DATASET, facet=""):
+                 animation_rules=None, face_dataset=BLEND_SHAPES_DATASET, facet="", animation_open=None):
         self.bound = bound
         #: The panel state a shared button writes its progress and status into.
         self.state_name = state_name
@@ -195,6 +195,7 @@ class Panel:
         #: button: it hands the browser this one's own query and goes there, which
         #: costs a cabmap search rather than a closure load.
         self.animation_rules = animation_rules
+        self.animation_open = animation_open
         #: WHICH dataset the engine source asks, and what it calls the selection.
         self.face_dataset = face_dataset
         #: The kind this list opens on before the user has picked one.
@@ -317,6 +318,8 @@ def _find_animations(context, arguments):
     state.status = said
     from . import browser as app_browser
     app_browser.show_rules(context, list(rules))
+    if panel.animation_open is not None:
+        panel.animation_open(context, state, entry)
     return None
 
 

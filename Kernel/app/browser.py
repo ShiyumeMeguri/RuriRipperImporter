@@ -26,6 +26,7 @@ import time
 
 from .. import host as host_port
 from .. import options as kernel_options
+from .. import extensions
 from . import command as app_command
 from . import attachments, filtering, loading, look, schemas, texturing, remote_sources
 from . import layout as vocabulary
@@ -56,6 +57,28 @@ _DECODERS = None
 _pending_query = ""
 _last_edit_time = 0.0
 _timer_registered = False
+
+ANIMATION_SECTIONS = extensions.point("browser.animation_sections", "Animation selection consumers and their panels.")
+
+
+def _set_animation_selection(state, seed, context):
+    if state.animation_selected_seed == seed:
+        return
+    state.animation_selected_seed = seed
+    for section in ANIMATION_SECTIONS:
+        section.select(context, seed)
+
+
+def _on_resource_selection(self, context):
+    item = _selected_row(self)
+    seed = item.cab if item is not None and "AnimationClip" in item.type_names else ""
+    _set_animation_selection(self, seed, context)
+
+
+def _on_clip_selection(self, context):
+    index = self.available_clips_active_index
+    seed = self.available_clips[index].seed if 0 <= index < len(self.available_clips) else ""
+    _set_animation_selection(self, seed, context)
 
 
 def state_of(context):
@@ -502,6 +525,7 @@ def _set_current_tab(state, key):
 
 
 def _switch_current_tab(state, key, context):
+    _set_animation_selection(state, "", context)
     changed = state.current_tab != (key or "")
     _set_current_tab(state, key)
     if changed:
@@ -1202,6 +1226,7 @@ def _drop_tab(state, key, context):
     """Close one tab -- remove its config entry, release its browser session, and
     hand focus to a remaining tab (a fresh unnamed one when none is left, so the
     panel is never tabless)."""
+    _set_animation_selection(state, "", context)
     for index, config in enumerate(state.games):
         if config.key == key:
             state.games.remove(index)
@@ -1743,6 +1768,7 @@ def _cabmap_click(context, arguments):
     state.active_index = index
     state.cursor_cab = item.cab
     _sync_window_selection(state)
+    _on_resource_selection(state, context)
     _redraw()
     return None
 
@@ -1854,6 +1880,7 @@ def _open_location(context, query, cab):
     thing that found the row thrown away, so that too leaves the search standing."""
     state = state_of(context)
     state.active_tab = BROWSER_TAB_ID
+    _set_animation_selection(state, "", context)
     for rule in state.filter_rules:
         rule.enabled = False
     cabmap_state.apply_filter(query)
@@ -2203,6 +2230,7 @@ def _discover_animations(context, arguments):
         state.animation_seeds = loading.seed_lines(seeds)
         state.animation_character_name = bound["label"]
         _apply_animation_filter(state)
+        _on_clip_selection(state, context)
         _redraw()
         return
     by_cab = cabmap_state.rows_by_cab()
@@ -2219,6 +2247,7 @@ def _discover_animations(context, arguments):
     state.animation_character_name = (rows[0]["name"] if len(rows) == 1
                                       else "{0} selected rows".format(len(rows)))
     _apply_animation_filter(state)
+    _on_clip_selection(state, context)
     _announce(context, "Found {0} clip(s) -- check the ones to play.".format(len(clips)) if clips
               else "No animation clips in this selection's dependency closure.")
     _redraw()
@@ -2551,6 +2580,8 @@ def _draw_attachment_and_animations(layout, context, state):
         if answered:
             box.separator()
         _draw_animations(box, state)
+        for section in ANIMATION_SECTIONS:
+            section.draw(box, context)
 
 
 #: One discovered clip: its checkbox, its name, and the game's own folder for it -- dimmed,
@@ -2602,6 +2633,7 @@ HANDLERS = app_state.Handlers(
     get_loaded=_get_loaded,
     get_browsed_dir=_get_browsed_dir, set_browsed_dir=_set_browsed_dir,
     on_search_edit=_on_search_edit, on_animation_search=_on_animation_search,
+    on_resource_selection=_on_resource_selection, on_clip_selection=_on_clip_selection,
     source_option_choices=_source_option_choices)
 
 

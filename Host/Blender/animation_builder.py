@@ -479,6 +479,62 @@ def adopt_action(owner, action, slot=None, scene=None, frame_range=True):
     return action
 
 
+class PerformanceSession:
+    def __init__(self, context, owners):
+        self.context = context
+        self.before = set(bpy.data.actions)
+        self.seen = set(self.before)
+        self.previous = [(owner, owner.animation_data is not None,
+                          owner.animation_data.action if owner.animation_data else None,
+                          owner.animation_data.action_slot if owner.animation_data else None,
+                          owner.animation_data.action.use_fake_user
+                          if owner.animation_data and owner.animation_data.action else False,
+                          owner.animation_data.use_nla if owner.animation_data else True,
+                          set(owner.animation_data.nla_tracks) if owner.animation_data else set())
+                         for owner in owners]
+        scene = context.scene
+        self.time = scene.frame_start, scene.frame_end, scene.frame_current, scene.frame_subframe
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        if kind is not None:
+            self.rollback()
+        return False
+
+    def capture(self):
+        actions = [action for action in bpy.data.actions if action not in self.seen]
+        self.seen.update(actions)
+        return actions
+
+    def rollback(self):
+        for owner, existed, action, slot, fake_user, use_nla, tracks in self.previous:
+            animation = owner.animation_data
+            if animation is not None:
+                for track in list(animation.nla_tracks):
+                    if track not in tracks:
+                        animation.nla_tracks.remove(track)
+                if not existed:
+                    owner.animation_data_clear()
+                elif action is None:
+                    animation.action = None
+                if existed:
+                    animation.use_nla = use_nla
+            if existed and action is not None:
+                action.use_fake_user = fake_user
+                adopt_action(owner, action, slot, self.context.scene, False)
+        for action in set(bpy.data.actions) - self.before:
+            bpy.data.actions.remove(action)
+        scene = self.context.scene
+        scene.frame_start, scene.frame_end = self.time[:2]
+        scene.frame_set(self.time[2], subframe=self.time[3])
+
+
+def performance_transaction(context, owners):
+    return PerformanceSession(context, owners)
+
+
 # ── slotted-action assignment repair ─────────────────────────────────────────
 #
 # Blender 4.4+ slotted actions: assigning ``animation_data.action`` alone plays

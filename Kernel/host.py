@@ -409,6 +409,18 @@ class Timeline(abc.ABC):
         same performance -- and the lines to word."""
 
     @abc.abstractmethod
+    def performance_transaction(self, context, rig):
+        """A context manager restoring the document's animation state when a performance fails."""
+
+    @abc.abstractmethod
+    def arrange(self, context, rig, performances, sequence):
+        """Place reader-timed spans of keyed performances on the document's animation surface.
+
+        ``sequence`` names performances by clip key and states ``at``, ``until``, ``clip_in``,
+        ``blend_in`` and ``blend_out`` in seconds, with ``speed`` as the playback multiplier.
+        Times are relative to the current playhead. Returns the lines to report."""
+
+    @abc.abstractmethod
     def bake_bone_poses(self, context, rig, source_names, frame_count, payload,
                         name, into=None):
         """Key a block of per-frame source-space locals onto this rig's bones.

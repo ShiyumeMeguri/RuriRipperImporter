@@ -322,6 +322,14 @@ class BlenderHost(host_port.Host, host_port.SceneGraph, host_port.Compositor, ho
         from . import animation_builder
         return animation_builder.play(context, rig, clips, options, activate)
 
+    def performance_transaction(self, context, rig):
+        from . import animation_builder
+        return animation_builder.performance_transaction(context, (rig,))
+
+    def arrange(self, context, rig, performances, sequence):
+        from . import nla
+        return nla.arrange(context, rig, performances, sequence)
+
     def stand_in_rig(self, context, statement, skeleton_key, options):
         from . import materialise
         return materialise.build_rig(context, statement, skeleton_key, options)

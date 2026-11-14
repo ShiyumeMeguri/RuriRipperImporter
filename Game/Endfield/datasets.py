@@ -18,6 +18,8 @@ under its own handle and already cached by (id, args).
 
 from __future__ import annotations
 
+from contextlib import closing
+
 from ...Kernel.app import picture, staging
 from ...Kernel.bridge import cabmap_state
 
@@ -41,6 +43,8 @@ PART = "endfield.asset.part"
 NAMED = "endfield.asset.named"
 MODEL_ASSETS = "endfield.character.model_assets"
 ANIMATIONS = "endfield.character.animations"
+ANIMATION_CHAIN = "endfield.animation.chain"
+ANIMATION_SEQUENCE = "endfield.animation.sequence"
 MORPH_LIBRARY = "endfield.morph.library"
 MORPH_ASSETS = "endfield.morph.assets"
 MORPH_DRIVERS = "endfield.morph.drivers"
@@ -105,6 +109,21 @@ def weapon_bindings(seed, target, paths, basis):
 def weapon_animation_plan(seed, weapon):
     """A weapon's own clips and each one's exact counterpart on the character."""
     return _table(WEAPON_ANIMATION_PLAN, seed=seed, weapon=weapon)
+
+
+def animation_chain(seed, clip):
+    with closing(_table(ANIMATION_CHAIN, seed=seed, clip=clip)) as table:
+        return [table.row(index) for index in range(table.row_count)]
+
+
+def animation_sequence(seed, clip, selected):
+    with closing(_table(ANIMATION_SEQUENCE, seed=seed, clip=clip, selected=selected)) as table:
+        rows = [table.row(index) for index in range(table.row_count)]
+    for row in rows:
+        for name in ("at", "until", "clip_in", "speed", "blend_in", "blend_out", "clip_length"):
+            row[name] = float(row[name])
+        row["loop"] = bool(int(row["loop"]))
+    return rows
 
 
 def _rows(dataset_id, **args):
