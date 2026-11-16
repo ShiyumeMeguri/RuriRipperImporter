@@ -153,7 +153,7 @@ def _carry(context, stated, target, clips, values, activate):
     lines = []
     for seed, group in sources.items():
         with statement([seed], values) as source:
-            (key,) = source.skeletons
+            key = next(iter(source.skeletons))
             stand_in = host.stand_in_rig(context, source, key, values)
         try:
             keys = {clip.key for clip in group}
