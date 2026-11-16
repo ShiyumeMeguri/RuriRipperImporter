@@ -41,6 +41,7 @@ TEXTURE = "core.statement.texture"
 CLIPS = "core.statement.clips"
 AUDIOCLIPS = "core.statement.audioclips"
 AUDIOCLIP = "core.statement.audioclip"
+RENDERTEXTURES = "core.statement.rendertextures"
 CONTROLLERS = "core.statement.controllers"
 ANIMATORS = "core.statement.animators"
 TIMELINES = "core.statement.timelines"
@@ -204,7 +205,8 @@ class Node:
             "parameters": _floats(row["light_parameters"], 4)})
         self.camera = (None if row["ortho"] < 0 else {
             "fov": row["fov"], "near": row["near"], "far": row["far"],
-            "orthographic": bool(row["ortho"]), "ortho_size": row["ortho_size"]})
+            "orthographic": bool(row["ortho"]), "ortho_size": row["ortho_size"],
+            "culling_mask": int(row["cull_mask"]), "depth": float(row["depth"]), "target_texture": row["target_texture"]})
         self.tag = row["tag"]
         #: How the node's renderer draws into shadow maps (SHADOWS_*): the renderer's
         #: fact, not its mesh's. SHADOWS_UNSTATED where the source states nothing.
@@ -757,6 +759,45 @@ class AudioClip:
         return "<AudioClip {0} ({1} Hz, {2} ch, {3} samples)>".format(self.name, self.frequency, self.channels, self.samples)
 
 
+class RenderTexture:
+    """One render texture asset of a selection as the descriptor the source serializes: size, dimension, anti-aliasing, the colour
+    and depth-stencil graphics formats (the source's own enum values), the mip, colour-space, dynamic-scale and multisample-binding
+    flags and the sampler settings. A camera or an image states the texture it targets by ``key``."""
+
+    __slots__ = ("key", "name", "archive", "width", "height", "volume_depth", "dimension", "anti_aliasing", "mip_count",
+                 "color_format", "depth_stencil_format", "shadow_sampling_mode", "mip_map", "generate_mips", "srgb",
+                 "dynamic_scale", "bind_ms", "filter_mode", "aniso", "mip_bias", "wrap_u", "wrap_v", "wrap_w")
+
+    def __init__(self, row):
+        self.key = row["rendertexture"]
+        self.name = row["name"]
+        #: The archive the texture came out of, as the reader states it.
+        self.archive = row["cab"]
+        self.width = int(row["width"])
+        self.height = int(row["height"])
+        self.volume_depth = int(row["volume_depth"])
+        self.dimension = int(row["dimension"])
+        self.anti_aliasing = int(row["anti_aliasing"])
+        self.mip_count = int(row["mip_count"])
+        self.color_format = int(row["color_format"])
+        self.depth_stencil_format = int(row["depth_stencil_format"])
+        self.shadow_sampling_mode = int(row["shadow_sampling_mode"])
+        self.mip_map = bool(row["mip_map"])
+        self.generate_mips = bool(row["generate_mips"])
+        self.srgb = bool(row["srgb"])
+        self.dynamic_scale = bool(row["dynamic_scale"])
+        self.bind_ms = bool(row["bind_ms"])
+        self.filter_mode = int(row["filter_mode"])
+        self.aniso = int(row["aniso"])
+        self.mip_bias = float(row["mip_bias"])
+        self.wrap_u = int(row["wrap_u"])
+        self.wrap_v = int(row["wrap_v"])
+        self.wrap_w = int(row["wrap_w"])
+
+    def __repr__(self):
+        return "<RenderTexture {0} ({1}x{2})>".format(self.name, self.width, self.height)
+
+
 def source_host(paths, near=""):
     """The seed of the prefab rooted on the skeleton whose transform table covers these clip bindings
     best, or "" when none does. ``near`` is the archive the clips came from."""
@@ -1056,6 +1097,12 @@ class Statement:
         """The audio clips these seeds carry."""
         return self._rows(AUDIOCLIPS, lambda table: [
             AudioClip(table.row(index), self) for index in range(table.row_count)])
+
+    @property
+    def render_textures(self):
+        """The render texture assets these seeds carry."""
+        return self._rows(RENDERTEXTURES, lambda table: [
+            RenderTexture(table.row(index)) for index in range(table.row_count)])
 
     @property
     def controllers(self):

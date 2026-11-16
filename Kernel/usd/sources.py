@@ -51,6 +51,9 @@ def camera(prim, node):
     _attribute(prim, "ruri:camera:far", Sdf.ValueTypeNames.Float, float(state["far"]))
     _attribute(prim, "ruri:camera:orthographic", Sdf.ValueTypeNames.Bool, bool(state["orthographic"]))
     _attribute(prim, "ruri:camera:orthographicSize", Sdf.ValueTypeNames.Float, float(state["ortho_size"]))
+    _attribute(prim, "ruri:camera:cullingMask", Sdf.ValueTypeNames.Int, int(state["culling_mask"]))
+    _attribute(prim, "ruri:camera:depth", Sdf.ValueTypeNames.Float, float(state["depth"]))
+    _attribute(prim, "ruri:camera:targetTexture", Sdf.ValueTypeNames.String, str(state["target_texture"]))
 
 
 def light(prim, node):

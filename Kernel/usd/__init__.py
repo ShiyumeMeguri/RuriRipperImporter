@@ -18,6 +18,7 @@ refer to each other.
 ``attachments`` what the joints of a rig carry besides being joints (a camera, components of the camera package, a light), as
                child prims of the rig's root in the rig's layer
 ``audio``      an audio clip as one record layer and the Ogg Vorbis file beside it
+``render_textures`` a render texture as one record layer of its descriptor
 ``materials``  a material as a preview surface and the source's own properties, and its textures
 ``names``      legal prim and file names, unique where they are looked up
 ``layout``     where each kind of layer lives on disk and how one layer reaches another
