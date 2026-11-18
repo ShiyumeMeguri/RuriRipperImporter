@@ -13,7 +13,7 @@ def _owner(context):
 PANEL = animation_chain.Panel(
     "Endfield", "ruri_animation_chain", _owner,
     datasets.animation_chain, datasets.animation_sequence,
-    notes=("Continuously request the next checked attack.",
+    notes=("No-buff baseline: continuously request the next checked attack.",
            "Offline preview uses native interruption timing and blends."))
 
 
