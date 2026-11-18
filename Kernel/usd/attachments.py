@@ -41,7 +41,7 @@ class Carried:
 
 
 def _key(node, joint, active, components):
-    return (joint, active, bool(node.component_enabled),
+    return (joint, active, bool(node.component_enabled), int(node.layer),
             None if node.camera is None else json.dumps(node.camera, sort_keys=True, default=str),
             None if node.light is None else json.dumps(node.light, sort_keys=True, default=str),
             tuple((component.class_name, json.dumps(component.record, sort_keys=True, ensure_ascii=False))
@@ -76,6 +76,7 @@ def author(stage, root_path, rig, carried, hierarchy, names, counts=None):
     if carried.components or node.camera is not None:
         holder = stage.DefinePrim(root_path.AppendChild(names.claim(str(root_path), CAMERA_NAME)), "Scope")
         _joint(holder, token, carried.active)
+        holder.CreateAttribute("ruri:layer", Sdf.ValueTypeNames.Int, custom=True).Set(int(node.layer))
         if node.camera is not None:
             sources.camera(holder, node)
         if carried.components:

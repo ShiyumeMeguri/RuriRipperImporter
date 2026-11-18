@@ -19,6 +19,7 @@ TEXTURES = "textures"
 ANIMATIONS = "animations"
 CLIPS = "dynamicassets/gameplay/animations/clips"
 AUDIO_CLIPS = "dynamicassets/gameplay/audioclips"
+RENDER_TEXTURES = "dynamicassets/gameplay/rendertextures"
 CONTROLLERS = "dynamicassets/gameplay/animatorcontrollers"
 CUTSCENES = "dynamicassets/cutscene"
 SCRIPTS = "dynamicassets/gameplay/scripts"
@@ -61,6 +62,10 @@ class Layout:
 
     def audio_clip(self, stem):
         folder = os.path.join(self.base, *AUDIO_CLIPS.split("/"), stem)
+        return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
+
+    def render_texture(self, stem):
+        folder = os.path.join(self.base, *RENDER_TEXTURES.split("/"), stem)
         return os.path.join(folder, "{0}.{1}".format(stem, self.extension))
 
     def controller(self, stem):
