@@ -32,7 +32,7 @@ def offset_attribute(name):
 
 def annotations(kit, stack):
     a = {}
-    a['p_AlphaClipThreshold'] = bpy.props.FloatProperty(name='\'Clip Threshold\' {}', description='透明度裁切阈值(0 – 1):打开「Use Alpha Test」后,阴影强度低于它的像素直接丢弃,不再画。\n_AlphaClipThreshold', default=0.5, min=0.0, max=1.0, update=kit.writer(stack, '_AlphaClipThreshold'))
+    a['p_AlphaClipThreshold'] = bpy.props.FloatProperty(name='Alpha Clip Threshold', description='透明度裁切阈值(0 – 1):打开「Use Alpha Test」后,阴影强度低于它的像素直接丢弃,不再画。\n_AlphaClipThreshold', default=0.5, min=0.0, max=1.0, update=kit.writer(stack, '_AlphaClipThreshold'))
     a['p_UseAlphaTest'] = bpy.props.BoolProperty(name='Use Alpha Test', description='使用透明度裁切:打开后阴影强度低于「Clip Threshold」的像素被丢弃,阴影边缘变成硬边。\n_UseAlphaTest', default=False, update=kit.writer(stack, '_UseAlphaTest'))
     a['p_ShadowColor'] = bpy.props.FloatVectorProperty(name='Shadow Color', description='阴影颜色:RGB 是接收面上阴影处的染色,A 是阴影的最大浓度(乘进阴影强度,A = 0 则这个面完全不显示阴影)。\n_ShadowColor', size=4, subtype='COLOR_GAMMA', min=0.0, max=1.0, default=(0.0, 0.0, 0.0, 1.0,), update=kit.writer(stack, '_ShadowColor'))
     a['p_CircleFade'] = bpy.props.BoolProperty(name='Circle Fade', description='圆形淡出:打开后阴影只在以物体原点为圆心的圆内显示,圆外按「Circle Fade Smoothness」渐变到没有。\n_CircleFade', default=False, update=kit.writer(stack, '_CircleFade'))
@@ -46,7 +46,7 @@ def draw_ShadowReceiver(kit, layout, material, p):
     root = layout
     g0 = kit.group(root, p, '基础', '基础', 0, None, True)
     if g0 is not None:
-        kit.prop(g0, p, 'p_AlphaClipThreshold', '\'Clip Threshold\' {}')
+        kit.prop(g0, p, 'p_AlphaClipThreshold', 'Alpha Clip Threshold')
         kit.prop(g0, p, 'p_UseAlphaTest', 'Use Alpha Test')
         kit.prop(g0, p, 'p_ShadowColor', 'Shadow Color')
         kit.prop(g0, p, 'p_CircleFade', 'Circle Fade')
